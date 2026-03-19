@@ -813,6 +813,102 @@ fn _ke_cmd_mfree() {
     return 0;
 }
 
+// === Iteration 28: Cooperative Task Scheduler ===
+// Task table at 0x320000 (up to 16 tasks, 64 bytes each = 1024 bytes)
+// Per-task layout (64 bytes at 0x320000 + tid*64):
+//   [0..7]   : state (0=free, 1=ready, 2=running, 3=blocked)
+//   [8..15]  : rsp (saved stack pointer)
+//   [16..23] : rip (entry point / resume address)
+//   [24..31] : vruntime (virtual runtime counter)
+//   [32..39] : stack_base (allocated stack base address)
+//   [40..47] : name char 0-7
+// Current task ID at 0x320400 (u64)
+// Task count at 0x320408 (u64)
+
+fn _ke_task_init() {
+    let tbl = 3276800;  // 0x320000
+    // Zero task table (16 * 64 = 1024 bytes)
+    let mut i = 0;
+    while i < 1024 {
+        mem_write_u8(tbl + i, 0);
+        i = i + 1;
+    }
+    // Task 0 = idle/shell (state=2 running)
+    mem_write_u64(tbl, 2);        // state = running
+    mem_write_u64(tbl + 24, 0);   // vruntime = 0
+    // Name: "idle"
+    mem_write_u8(tbl + 40, 105); mem_write_u8(tbl + 41, 100);
+    mem_write_u8(tbl + 42, 108); mem_write_u8(tbl + 43, 101);
+
+    // Current task = 0, count = 1
+    mem_write_u64(3277828, 0);    // 0x320400 + 4 = current
+    mem_write_u64(3277832, 1);    // 0x320408: count
+    return 0;
+}
+
+// Create a new task (returns tid or -1)
+fn _ke_task_create(entry, name_ch) {
+    let tbl = 3276800;
+    let count = mem_read_u64(3277832);
+    if count >= 16 { return 0; }
+
+    let tid = count;
+    let base = tbl + tid * 64;
+
+    // Allocate 4KB stack
+    let stack = _ke_pa_alloc();
+    if stack == 0 { return 0; }
+
+    mem_write_u64(base, 1);              // state = ready
+    mem_write_u64(base + 8, stack + 4088); // rsp = top of 4KB stack (16-aligned)
+    mem_write_u64(base + 16, entry);     // rip = entry point
+    mem_write_u64(base + 24, 0);         // vruntime = 0
+    mem_write_u64(base + 32, stack);     // stack_base
+    mem_write_u8(base + 40, name_ch);    // single-char name
+
+    mem_write_u64(3277832, count + 1);
+    return tid;
+}
+
+// Command: ps — show task list
+fn _ke_cmd_ps() {
+    let tbl = 3276800;
+    let count = mem_read_u64(3277832);
+    let cur = mem_read_u64(3277828);
+    // "PID ST VRT  NAME\r\n"
+    _ke_putc(80); _ke_putc(73); _ke_putc(68); _ke_putc(32);
+    _ke_putc(83); _ke_putc(84); _ke_putc(32);
+    _ke_putc(86); _ke_putc(82); _ke_putc(84); _ke_putc(32); _ke_putc(32);
+    _ke_putc(78); _ke_putc(65); _ke_putc(77); _ke_putc(69);
+    _ke_putc(13); _ke_putc(10);
+
+    let mut tid = 0;
+    while tid < count {
+        let base = tbl + tid * 64;
+        let state = mem_read_u64(base);
+        if state > 0 {
+            // TID
+            _ke_put_dec(tid); _ke_putc(32); _ke_putc(32); _ke_putc(32);
+            // State
+            if state == 1 { _ke_putc(82); }       // R(eady)
+            else if state == 2 { _ke_putc(42); }  // * (running)
+            else if state == 3 { _ke_putc(66); }  // B(locked)
+            else { _ke_putc(63); }
+            _ke_putc(32); _ke_putc(32);
+            // vruntime
+            let vrt = mem_read_u64(base + 24);
+            _ke_put_dec(vrt);
+            _ke_putc(32); _ke_putc(32);
+            // Name (first char)
+            let nch = mem_read_u8(base + 40);
+            if nch > 0 { _ke_putc(nch); }
+            _ke_putc(13); _ke_putc(10);
+        }
+        tid = tid + 1;
+    }
+    return 0;
+}
+
 // === Iteration 25: Scancode → ASCII + Interactive Shell ===
 
 // PS/2 set 1 scancode to ASCII (lowercase, common keys only)
@@ -887,6 +983,8 @@ fn _ke_cmd_help() {
     _ke_putc(109); _ke_putc(97); _ke_putc(108); _ke_putc(108); _ke_putc(111); _ke_putc(99); _ke_putc(32);
     // "mfree "
     _ke_putc(109); _ke_putc(102); _ke_putc(114); _ke_putc(101); _ke_putc(101); _ke_putc(32);
+    // "ps "
+    _ke_putc(112); _ke_putc(115); _ke_putc(32);
     // "reboot\r\n"
     _ke_putc(114); _ke_putc(101); _ke_putc(98); _ke_putc(111); _ke_putc(111); _ke_putc(116);
     _ke_putc(13); _ke_putc(10);
@@ -934,6 +1032,13 @@ fn _ke_dispatch(buf_addr, buf_len) {
         if c0 == 112 { if c1 == 99 { if c2 == 105 {
             _ke_pci_scan(); return 0;
         } } }
+    }
+
+    // "ps" = 112 115
+    if buf_len == 2 {
+        if c0 == 112 { if c1 == 115 {
+            _ke_cmd_ps(); return 0;
+        } }
     }
 
     // "palloc" (6) or "palloc N" (7+): 112 97 108 108 111 99
@@ -1075,6 +1180,9 @@ fn _start() {
 
     // Phase 6b: Heap allocator init (iteration 27)
     _ke_heap_init();
+
+    // Phase 6c: Task scheduler init (iteration 28)
+    _ke_task_init();
 
     // Phase 7: PCI bus scan (iteration 24)
     _ke_pci_scan();
