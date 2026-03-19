@@ -136,6 +136,7 @@ $script:IR_PRINT=36
 $script:IR_PORT_OUT=38
 $script:IR_PORT_IN=39;   $script:IR_CLI=40;     $script:IR_STI=41;     $script:IR_HLT=42
 $script:IR_MEM_STORE8=43; $script:IR_MEM_LOAD64=44; $script:IR_MEM_STORE64=45; $script:IR_LIDT=46
+$script:IR_PORT_OUT32=47; $script:IR_PORT_IN32=48; $script:IR_MEM_STORE32=49; $script:IR_MEM_LOAD32=50; $script:IR_MEM_LOAD8=51
 
 $script:ir_op = $null
 $script:ir_dead = $null; $script:ir_count = 0; $script:ir_next_tmp = 0
@@ -203,10 +204,35 @@ function IR-LowerExpr($node) {
         if ($fn -eq 'sti') { $t = IR-Tmp; IR-Emit $IR_STI $t 0 0 | Out-Null; return $t }
         # Intrinsic: hlt() -> IR_HLT
         if ($fn -eq 'hlt') { $t = IR-Tmp; IR-Emit $IR_HLT $t 0 0 | Out-Null; return $t }
+        # Intrinsic: port_out_u32(port, val) -> IR_PORT_OUT32
+        if ($fn -eq 'port_out_u32' -and $args.Count -ge 2) {
+            $portReg = IR-LowerExpr $args[0]; $valReg = IR-LowerExpr $args[1]
+            $t = IR-Tmp; IR-Emit $IR_PORT_OUT32 $t $portReg $valReg | Out-Null; return $t
+        }
+        # Intrinsic: port_in_u32(port) -> IR_PORT_IN32
+        if ($fn -eq 'port_in_u32' -and $args.Count -ge 1) {
+            $portReg = IR-LowerExpr $args[0]
+            $t = IR-Tmp; IR-Emit $IR_PORT_IN32 $t $portReg 0 | Out-Null; return $t
+        }
         # Intrinsic: mem_write_u8(addr, val) -> IR_MEM_STORE8
         if ($fn -eq 'mem_write_u8' -and $args.Count -ge 2) {
             $addrReg = IR-LowerExpr $args[0]; $valReg = IR-LowerExpr $args[1]
             $t = IR-Tmp; IR-Emit $IR_MEM_STORE8 $t $addrReg $valReg | Out-Null; return $t
+        }
+        # Intrinsic: mem_write_u32(addr, val) -> IR_MEM_STORE32
+        if ($fn -eq 'mem_write_u32' -and $args.Count -ge 2) {
+            $addrReg = IR-LowerExpr $args[0]; $valReg = IR-LowerExpr $args[1]
+            $t = IR-Tmp; IR-Emit $IR_MEM_STORE32 $t $addrReg $valReg | Out-Null; return $t
+        }
+        # Intrinsic: mem_read_u8(addr) -> IR_MEM_LOAD8
+        if ($fn -eq 'mem_read_u8' -and $args.Count -ge 1) {
+            $addrReg = IR-LowerExpr $args[0]
+            $t = IR-Tmp; IR-Emit $IR_MEM_LOAD8 $t $addrReg 0 | Out-Null; return $t
+        }
+        # Intrinsic: mem_read_u32(addr) -> IR_MEM_LOAD32
+        if ($fn -eq 'mem_read_u32' -and $args.Count -ge 1) {
+            $addrReg = IR-LowerExpr $args[0]
+            $t = IR-Tmp; IR-Emit $IR_MEM_LOAD32 $t $addrReg 0 | Out-Null; return $t
         }
         # Intrinsic: mem_read_u64(addr) -> IR_MEM_LOAD64
         if ($fn -eq 'mem_read_u64' -and $args.Count -ge 1) {
@@ -292,7 +318,7 @@ function IR-OptConstFold {
 # Optimization: dead code elimination
 function IR-OptDCE {
     $changed = 0
-    $skip = @($IR_JMP,$IR_JZ,$IR_JNZ,$IR_LABEL,$IR_CALL,$IR_RET,$IR_STORE,$IR_ARG,$IR_NOP,$IR_PRINT,$IR_PORT_OUT,$IR_PORT_IN,$IR_CLI,$IR_STI,$IR_HLT,$IR_MEM_STORE8,$IR_MEM_LOAD64,$IR_MEM_STORE64,$IR_LIDT)
+    $skip = @($IR_JMP,$IR_JZ,$IR_JNZ,$IR_LABEL,$IR_CALL,$IR_RET,$IR_STORE,$IR_ARG,$IR_NOP,$IR_PRINT,$IR_PORT_OUT,$IR_PORT_IN,$IR_CLI,$IR_STI,$IR_HLT,$IR_MEM_STORE8,$IR_MEM_LOAD64,$IR_MEM_STORE64,$IR_LIDT,$IR_PORT_OUT32,$IR_PORT_IN32,$IR_MEM_STORE32,$IR_MEM_LOAD32,$IR_MEM_LOAD8)
     for ($i = $script:ir_count - 1; $i -ge 0; $i--) {
         if ($script:ir_dead[$i] -ne 0) { continue }
         if ($script:ir_op[$i] -in $skip) { continue }
@@ -539,11 +565,56 @@ function X86-EmitIR([int]$idx) {
                 X86-Byte 0x0F; X86-Byte 0x01; X86-Byte 0x1F  # lidt [rdi]
             }
         }
+        $IR_PORT_OUT32 {
+            # port_out_u32: mov edx, port_reg; mov eax, val_reg; out dx, eax
+            $rPort = RA-Alloc $s1; $rVal = RA-Alloc $s2
+            if ($rPort -ge 0 -and $rVal -ge 0) {
+                if ($rPort -ne 2) { X86-MovRR 2 $rPort }
+                if ($rVal -ne 0) { X86-MovRR 0 $rVal }
+                X86-Byte 0xEF  # out dx, eax
+            }
+        }
+        $IR_PORT_IN32 {
+            # port_in_u32: mov edx, port_reg; in eax, dx (zero-extends to rax)
+            $rPort = RA-Alloc $s1
+            if ($rPort -ge 0) {
+                if ($rPort -ne 2) { X86-MovRR 2 $rPort }
+                X86-Byte 0xED  # in eax, dx
+                if ($rd -ge 0 -and $rd -ne 0) { X86-MovRR $rd 0 }
+            }
+        }
+        $IR_MEM_STORE32 {
+            # mem_write_u32(addr, val): mov [rdi], eax (32-bit store)
+            $rAddr = RA-Alloc $s1; $rVal = RA-Alloc $s2
+            if ($rAddr -ge 0 -and $rVal -ge 0) {
+                if ($rAddr -ne 7) { X86-MovRR 7 $rAddr }
+                if ($rVal -ne 0) { X86-MovRR 0 $rVal }
+                X86-Byte 0x89; X86-Byte 0x07  # mov [rdi], eax
+            }
+        }
+        $IR_MEM_LOAD32 {
+            # mem_read_u32(addr): mov eax, [rdi] (zero-extends to rax)
+            $rAddr = RA-Alloc $s1
+            if ($rAddr -ge 0) {
+                if ($rAddr -ne 7) { X86-MovRR 7 $rAddr }
+                X86-Byte 0x8B; X86-Byte 0x07  # mov eax, [rdi]
+                if ($rd -ge 0 -and $rd -ne 0) { X86-MovRR $rd 0 }
+            }
+        }
+        $IR_MEM_LOAD8 {
+            # mem_read_u8(addr): movzx eax, byte [rdi]
+            $rAddr = RA-Alloc $s1
+            if ($rAddr -ge 0) {
+                if ($rAddr -ne 7) { X86-MovRR 7 $rAddr }
+                X86-Byte 0x0F; X86-Byte 0xB6; X86-Byte 0x07  # movzx eax, byte [rdi]
+                if ($rd -ge 0 -and $rd -ne 0) { X86-MovRR $rd 0 }
+            }
+        }
         $IR_NOP    { X86-Byte 0x90 }
     }
 }
 
-# Compile a module's live IR ¡ú x86_64 machine code, collect symbols
+# Compile a module's live IR
 function X86-CompileModule {
     RA-Init; X86-Init; X86-Prologue
     $script:mod_symbols = [System.Collections.ArrayList]::new()

@@ -353,6 +353,106 @@ fn _ke_idt_build() {
     return 0;
 }
 
+// === Iteration 24: PCI Bus Scan ===
+// PCI config space via I/O ports 0xCF8 (address) / 0xCFC (data)
+
+fn _ke_pci_read32(bus, dev, func, offset) {
+    let addr = 2147483648       // bit 31 = enable (0x80000000)
+             + bus * 65536      // bits 23:16
+             + dev * 2048       // bits 15:11
+             + func * 256       // bits 10:8
+             + (offset / 4) * 4; // bits 7:2
+    port_out_u32(3320, addr);   // 0xCF8
+    return port_in_u32(3324);   // 0xCFC
+}
+
+fn _ke_pci_vendor(bus, dev, func) {
+    let dword = _ke_pci_read32(bus, dev, func, 0);
+    return dword % 65536;       // lower 16 bits
+}
+
+fn _ke_pci_device(bus, dev, func) {
+    let dword = _ke_pci_read32(bus, dev, func, 0);
+    return (dword / 65536) % 65536;
+}
+
+fn _ke_pci_class(bus, dev, func) {
+    let reg = _ke_pci_read32(bus, dev, func, 8);
+    return (reg / 16777216) % 256;  // bits 31:24
+}
+
+fn _ke_pci_subclass(bus, dev, func) {
+    let reg = _ke_pci_read32(bus, dev, func, 8);
+    return (reg / 65536) % 256;     // bits 23:16
+}
+
+// Print hex nibble (0-F) via serial
+fn _ke_put_hex4(val) {
+    let n = val % 16;
+    if n < 10 {
+        _ke_putc(48 + n);      // '0'-'9'
+    } else {
+        _ke_putc(55 + n);      // 'A'-'F'
+    }
+    return 0;
+}
+
+// Print 16-bit hex value via serial
+fn _ke_put_hex16(val) {
+    _ke_put_hex4(val / 4096);
+    _ke_put_hex4(val / 256);
+    _ke_put_hex4(val / 16);
+    _ke_put_hex4(val);
+    return 0;
+}
+
+fn _ke_puts_pci_ok(count) {
+    // "PCI: " + count + " dev\r\n"
+    _ke_putc(80); _ke_putc(67); _ke_putc(73); _ke_putc(58); _ke_putc(32);
+    // print count as decimal (0-99)
+    if count >= 10 { _ke_putc(48 + count / 10); }
+    _ke_putc(48 + count % 10);
+    // " dev\r\n"
+    _ke_putc(32); _ke_putc(100); _ke_putc(101); _ke_putc(118);
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
+// Print one PCI device: "  DD: VVVV:DDDD cls=CC.SS\r\n"
+fn _ke_pci_print_dev(dev, vendor, devid, cls, sub) {
+    _ke_putc(32); _ke_putc(32);              // "  "
+    _ke_put_hex4(dev / 16); _ke_put_hex4(dev); // device slot
+    _ke_putc(58); _ke_putc(32);              // ": "
+    _ke_put_hex16(vendor);                    // vendor ID
+    _ke_putc(58);                             // ":"
+    _ke_put_hex16(devid);                     // device ID
+    _ke_putc(32);                             // " "
+    _ke_put_hex4(cls / 16); _ke_put_hex4(cls); // class
+    _ke_putc(46);                             // "."
+    _ke_put_hex4(sub / 16); _ke_put_hex4(sub); // subclass
+    _ke_putc(13); _ke_putc(10);              // "\r\n"
+    return 0;
+}
+
+// Scan PCI bus 0, report devices via serial
+fn _ke_pci_scan() {
+    let mut count = 0;
+    let mut dev = 0;
+    while dev < 32 {
+        let vendor = _ke_pci_vendor(0, dev, 0);
+        if vendor != 65535 {     // 0xFFFF = no device
+            let devid = _ke_pci_device(0, dev, 0);
+            let cls = _ke_pci_class(0, dev, 0);
+            let sub = _ke_pci_subclass(0, dev, 0);
+            _ke_pci_print_dev(dev, vendor, devid, cls, sub);
+            count = count + 1;
+        }
+        dev = dev + 1;
+    }
+    _ke_puts_pci_ok(count);
+    return count;
+}
+
 fn _start() {
     // Phase 1: Serial init (COM1 38400 8N1)
     port_out_u8(1017, 0);    // COM1+1: disable interrupts
@@ -380,7 +480,10 @@ fn _start() {
     sti();
     _ke_puts_int_ok();
 
-    // Phase 6: Main loop — HLT, check tick + keyboard
+    // Phase 6: PCI bus scan (iteration 24)
+    _ke_pci_scan();
+
+    // Phase 7: Main loop — HLT, check tick + keyboard
     let mut last_tick = 0;
     while 1 == 1 {
         hlt();
