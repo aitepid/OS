@@ -453,6 +453,216 @@ fn _ke_pci_scan() {
     return count;
 }
 
+// === Iteration 26: Physical Page Allocator ===
+// Bitmap at 0x400000, 4KB pages, reserved 0..1535 (0x000000-0x5FFFFF)
+
+fn _ke_pa_init() {
+    let bm = 4194304;           // 0x400000: bitmap addr
+    let total = 32768;          // 128MB / 4KB = 32768 pages
+    let bm_bytes = 4096;        // 32768 / 8 = 4096 bytes
+    let reserved = 1536;        // pages 0..1535 reserved
+
+    // Zero entire bitmap
+    let mut i = 0;
+    while i < bm_bytes {
+        mem_write_u8(bm + i, 0);
+        i = i + 1;
+    }
+    // Mark reserved pages as used (192 full bytes = 1536 bits = 1536 pages)
+    let full = reserved / 8;
+    i = 0;
+    while i < full {
+        mem_write_u8(bm + i, 255);
+        i = i + 1;
+    }
+    // Store total pages at 0x400FFC and free count at 0x400FF8
+    _ke_mem_w32(4198396, total);            // 0x400FFC: total pages
+    _ke_mem_w32(4198392, total - reserved); // 0x400FF8: free count
+    return 0;
+}
+
+// Allocate one 4KB page, return physical address or 0
+fn _ke_pa_alloc() {
+    let bm = 4194304;
+    let total = mem_read_u32(4198396);  // read total from 0x400FFC
+    let mut page = 1536;                // start at first free page
+    while page < total {
+        let bidx = page / 8;
+        let boff = page % 8;
+        let bval = mem_read_u8(bm + bidx);
+        // Check bit: (bval >> boff) & 1
+        let mut shift = 1;
+        let mut s = 0;
+        while s < boff { shift = shift * 2; s = s + 1; }
+        if bval / shift % 2 == 0 {
+            // Free — mark used
+            mem_write_u8(bm + bidx, bval + shift);
+            // Decrement free count
+            let fc = mem_read_u32(4198392);
+            _ke_mem_w32(4198392, fc - 1);
+            return page * 4096;
+        }
+        page = page + 1;
+    }
+    return 0;
+}
+
+// Allocate N contiguous pages, return base physical address or 0
+fn _ke_pa_alloc_n(count) {
+    let bm = 4194304;
+    let total = mem_read_u32(4198396);
+    let mut start = 1536;
+    while start + count <= total {
+        let mut ok = 1;
+        let mut i = 0;
+        while i < count {
+            let page = start + i;
+            let bidx = page / 8;
+            let boff = page % 8;
+            let bval = mem_read_u8(bm + bidx);
+            let mut shift = 1;
+            let mut s = 0;
+            while s < boff { shift = shift * 2; s = s + 1; }
+            if bval / shift % 2 == 1 {
+                ok = 0;
+                i = count; // break
+            }
+            i = i + 1;
+        }
+        if ok == 1 {
+            i = 0;
+            while i < count {
+                let page = start + i;
+                let bidx = page / 8;
+                let boff = page % 8;
+                let bval = mem_read_u8(bm + bidx);
+                let mut shift = 1;
+                let mut s = 0;
+                while s < boff { shift = shift * 2; s = s + 1; }
+                mem_write_u8(bm + bidx, bval + shift);
+                i = i + 1;
+            }
+            let fc = mem_read_u32(4198392);
+            _ke_mem_w32(4198392, fc - count);
+            return start * 4096;
+        }
+        start = start + 1;
+    }
+    return 0;
+}
+
+// Free a page by physical address
+fn _ke_pa_free(addr) {
+    let page = addr / 4096;
+    if page < 1536 { return 0; }
+    let total = mem_read_u32(4198396);
+    if page >= total { return 0; }
+    let bm = 4194304;
+    let bidx = page / 8;
+    let boff = page % 8;
+    let bval = mem_read_u8(bm + bidx);
+    let mut shift = 1;
+    let mut s = 0;
+    while s < boff { shift = shift * 2; s = s + 1; }
+    if bval / shift % 2 == 1 {
+        mem_write_u8(bm + bidx, bval - shift);
+        let fc = mem_read_u32(4198392);
+        _ke_mem_w32(4198392, fc + 1);
+        return 1;
+    }
+    return 0;
+}
+
+// Count free pages
+fn _ke_pa_free_count() {
+    return mem_read_u32(4198392);
+}
+
+// Print memory status
+fn _ke_cmd_pmem() {
+    let total = mem_read_u32(4198396);
+    let free = mem_read_u32(4198392);
+    let used = total - free;
+    // "MEM: T=NNNNN F=NNNNN U=NNNNN\r\n"
+    _ke_putc(77); _ke_putc(69); _ke_putc(77); _ke_putc(58); _ke_putc(32);
+    // T=
+    _ke_putc(84); _ke_putc(61);
+    _ke_put_dec(total);
+    _ke_putc(32);
+    // F=
+    _ke_putc(70); _ke_putc(61);
+    _ke_put_dec(free);
+    _ke_putc(32);
+    // U=
+    _ke_putc(85); _ke_putc(61);
+    _ke_put_dec(used);
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
+// Print decimal number (generic, up to 10 digits)
+fn _ke_put_dec(val) {
+    if val == 0 { _ke_putc(48); return 0; }
+    let mut d9 = val / 1000000000;
+    let mut rem = val % 1000000000;
+    let mut d8 = rem / 100000000; rem = rem % 100000000;
+    let mut d7 = rem / 10000000; rem = rem % 10000000;
+    let mut d6 = rem / 1000000; rem = rem % 1000000;
+    let mut d5 = rem / 100000; rem = rem % 100000;
+    let mut d4 = rem / 10000; rem = rem % 10000;
+    let mut d3 = rem / 1000; rem = rem % 1000;
+    let mut d2 = rem / 100; rem = rem % 100;
+    let mut d1 = rem / 10;
+    let mut d0 = rem % 10;
+    let mut started = 0;
+    if d9 > 0 { _ke_putc(48 + d9); started = 1; }
+    if d8 > 0 { _ke_putc(48 + d8); started = 1; } else if started != 0 { _ke_putc(48); }
+    if d7 > 0 { _ke_putc(48 + d7); started = 1; } else if started != 0 { _ke_putc(48); }
+    if d6 > 0 { _ke_putc(48 + d6); started = 1; } else if started != 0 { _ke_putc(48); }
+    if d5 > 0 { _ke_putc(48 + d5); started = 1; } else if started != 0 { _ke_putc(48); }
+    if d4 > 0 { _ke_putc(48 + d4); started = 1; } else if started != 0 { _ke_putc(48); }
+    if d3 > 0 { _ke_putc(48 + d3); started = 1; } else if started != 0 { _ke_putc(48); }
+    if d2 > 0 { _ke_putc(48 + d2); started = 1; } else if started != 0 { _ke_putc(48); }
+    if d1 > 0 { _ke_putc(48 + d1); started = 1; } else if started != 0 { _ke_putc(48); }
+    _ke_putc(48 + d0);
+    return 0;
+}
+
+// Command: palloc N — allocate N pages, show address
+fn _ke_cmd_palloc(n) {
+    if n < 1 { n = 1; }
+    let addr = 0;
+    if n == 1 {
+        addr = _ke_pa_alloc();
+    } else {
+        addr = _ke_pa_alloc_n(n);
+    }
+    if addr == 0 {
+        // "OOM\r\n"
+        _ke_putc(79); _ke_putc(79); _ke_putc(77); _ke_putc(13); _ke_putc(10);
+    } else {
+        // Store last alloc addr at 0x310040 for pfree
+        mem_write_u64(3211328, addr);
+        // "0x" + hex address + "\r\n"
+        _ke_putc(48); _ke_putc(120);
+        _ke_put_hex16(addr / 65536);
+        _ke_put_hex16(addr);
+        _ke_putc(13); _ke_putc(10);
+    }
+    return 0;
+}
+
+// Command: pfree ADDR — free page (hex addr parsed from 2nd char onward)
+fn _ke_cmd_pfree(addr) {
+    let result = _ke_pa_free(addr);
+    if result == 1 {
+        _ke_putc(79); _ke_putc(75); _ke_putc(13); _ke_putc(10);
+    } else {
+        _ke_putc(69); _ke_putc(82); _ke_putc(82); _ke_putc(13); _ke_putc(10);
+    }
+    return 0;
+}
+
 // === Iteration 25: Scancode → ASCII + Interactive Shell ===
 
 // PS/2 set 1 scancode to ASCII (lowercase, common keys only)
@@ -516,7 +726,7 @@ fn _ke_prompt() {
 
 // Command: help
 fn _ke_cmd_help() {
-    // "Commands: help tick pci reboot\r\n"
+    // "Cmds: help tick pci pmem palloc pfree reboot\r\n"
     _ke_putc(67); _ke_putc(109); _ke_putc(100); _ke_putc(115); _ke_putc(58); _ke_putc(32);
     // "help "
     _ke_putc(104); _ke_putc(101); _ke_putc(108); _ke_putc(112); _ke_putc(32);
@@ -524,6 +734,12 @@ fn _ke_cmd_help() {
     _ke_putc(116); _ke_putc(105); _ke_putc(99); _ke_putc(107); _ke_putc(32);
     // "pci "
     _ke_putc(112); _ke_putc(99); _ke_putc(105); _ke_putc(32);
+    // "pmem "
+    _ke_putc(112); _ke_putc(109); _ke_putc(101); _ke_putc(109); _ke_putc(32);
+    // "palloc "
+    _ke_putc(112); _ke_putc(97); _ke_putc(108); _ke_putc(108); _ke_putc(111); _ke_putc(99); _ke_putc(32);
+    // "pfree "
+    _ke_putc(112); _ke_putc(102); _ke_putc(114); _ke_putc(101); _ke_putc(101); _ke_putc(32);
     // "reboot\r\n"
     _ke_putc(114); _ke_putc(101); _ke_putc(98); _ke_putc(111); _ke_putc(111); _ke_putc(116);
     _ke_putc(13); _ke_putc(10);
@@ -535,48 +751,24 @@ fn _ke_cmd_tick() {
     let tick = mem_read_u64(3145728);  // 0x300000
     // "Tick: " then decimal
     _ke_putc(84); _ke_putc(105); _ke_putc(99); _ke_putc(107); _ke_putc(58); _ke_putc(32);
-    // Print decimal (up to 10 digits)
-    if tick == 0 { _ke_putc(48); }
-    else {
-        // Extract digits via repeated division
-        let mut d9 = tick / 1000000000;
-        let mut rem = tick % 1000000000;
-        let mut d8 = rem / 100000000; rem = rem % 100000000;
-        let mut d7 = rem / 10000000; rem = rem % 10000000;
-        let mut d6 = rem / 1000000; rem = rem % 1000000;
-        let mut d5 = rem / 100000; rem = rem % 100000;
-        let mut d4 = rem / 10000; rem = rem % 10000;
-        let mut d3 = rem / 1000; rem = rem % 1000;
-        let mut d2 = rem / 100; rem = rem % 100;
-        let mut d1 = rem / 10;
-        let mut d0 = rem % 10;
-        let mut started = 0;
-        if d9 > 0 { _ke_putc(48 + d9); started = 1; }
-        if d8 > 0 { _ke_putc(48 + d8); started = 1; } else if started != 0 { _ke_putc(48); }
-        if d7 > 0 { _ke_putc(48 + d7); started = 1; } else if started != 0 { _ke_putc(48); }
-        if d6 > 0 { _ke_putc(48 + d6); started = 1; } else if started != 0 { _ke_putc(48); }
-        if d5 > 0 { _ke_putc(48 + d5); started = 1; } else if started != 0 { _ke_putc(48); }
-        if d4 > 0 { _ke_putc(48 + d4); started = 1; } else if started != 0 { _ke_putc(48); }
-        if d3 > 0 { _ke_putc(48 + d3); started = 1; } else if started != 0 { _ke_putc(48); }
-        if d2 > 0 { _ke_putc(48 + d2); started = 1; } else if started != 0 { _ke_putc(48); }
-        if d1 > 0 { _ke_putc(48 + d1); started = 1; } else if started != 0 { _ke_putc(48); }
-        _ke_putc(48 + d0);
-    }
+    _ke_put_dec(tick);
     _ke_putc(13); _ke_putc(10);
     return 0;
 }
 
-// Command dispatch: compare 4-byte command buffer
+// Command dispatch: compare command buffer bytes
 // Uses fixed memory at 0x310000-0x31003F as command buffer
 fn _ke_dispatch(buf_addr, buf_len) {
     if buf_len == 0 { return 0; }
+    let c0 = mem_read_u8(buf_addr);
+    let c1 = 0; if buf_len > 1 { c1 = mem_read_u8(buf_addr + 1); }
+    let c2 = 0; if buf_len > 2 { c2 = mem_read_u8(buf_addr + 2); }
+    let c3 = 0; if buf_len > 3 { c3 = mem_read_u8(buf_addr + 3); }
+    let c4 = 0; if buf_len > 4 { c4 = mem_read_u8(buf_addr + 4); }
+    let c5 = 0; if buf_len > 5 { c5 = mem_read_u8(buf_addr + 5); }
 
     // "help" = 104 101 108 112
     if buf_len == 4 {
-        let c0 = mem_read_u8(buf_addr);
-        let c1 = mem_read_u8(buf_addr + 1);
-        let c2 = mem_read_u8(buf_addr + 2);
-        let c3 = mem_read_u8(buf_addr + 3);
         if c0 == 104 { if c1 == 101 { if c2 == 108 { if c3 == 112 {
             _ke_cmd_help(); return 0;
         } } } }
@@ -584,28 +776,49 @@ fn _ke_dispatch(buf_addr, buf_len) {
         if c0 == 116 { if c1 == 105 { if c2 == 99 { if c3 == 107 {
             _ke_cmd_tick(); return 0;
         } } } }
+        // "pmem" = 112 109 101 109
+        if c0 == 112 { if c1 == 109 { if c2 == 101 { if c3 == 109 {
+            _ke_cmd_pmem(); return 0;
+        } } } }
     }
 
     // "pci" = 112 99 105
     if buf_len == 3 {
-        let c0 = mem_read_u8(buf_addr);
-        let c1 = mem_read_u8(buf_addr + 1);
-        let c2 = mem_read_u8(buf_addr + 2);
         if c0 == 112 { if c1 == 99 { if c2 == 105 {
             _ke_pci_scan(); return 0;
         } } }
     }
 
+    // "palloc" (6) or "palloc N" (7+): 112 97 108 108 111 99
+    if buf_len >= 6 {
+        if c0 == 112 { if c1 == 97 { if c2 == 108 { if c3 == 108 { if c4 == 111 { if c5 == 99 {
+            // Parse optional count after space
+            let mut n = 1;
+            if buf_len > 7 {
+                // "palloc N" — read single digit after space
+                let digit = mem_read_u8(buf_addr + 7);
+                if digit >= 48 { if digit <= 57 { n = digit - 48; } }
+                if n == 0 { n = 1; }
+            }
+            _ke_cmd_palloc(n); return 0;
+        } } } } } }
+    }
+
+    // "pfree" (5): 112 102 114 101 101
+    if buf_len == 5 {
+        if c0 == 112 { if c1 == 102 { if c2 == 114 { if c3 == 101 { if c4 == 101 {
+            // Free last allocated page (stored at 0x310040)
+            let last = mem_read_u64(3211328);  // 0x310040
+            _ke_cmd_pfree(last); return 0;
+        } } } } }
+    }
+
     // "reboot" = 114 101 98 111 111 116
     if buf_len == 6 {
-        let c0 = mem_read_u8(buf_addr);
-        let c1 = mem_read_u8(buf_addr + 1);
         if c0 == 114 { if c1 == 101 {
-            // Triple-fault reboot: load invalid IDT and trigger int
-            mem_write_u64(3211264, 0);     // 0x310000: zero IDTR
+            mem_write_u64(3211264, 0);
             mem_write_u64(3211272, 0);
             lidt(3211264);
-            // int 3 → triple fault → reboot
             return 0;
         } }
     }
@@ -687,10 +900,14 @@ fn _start() {
     sti();
     _ke_puts_int_ok();
 
-    // Phase 6: PCI bus scan (iteration 24)
+    // Phase 6: Physical page allocator init (iteration 26)
+    _ke_pa_init();
+    _ke_cmd_pmem();
+
+    // Phase 7: PCI bus scan (iteration 24)
     _ke_pci_scan();
 
-    // Phase 7: Interactive shell (iteration 25)
+    // Phase 8: Interactive shell (iteration 25)
     _ke_shell();
 
     return 0;
