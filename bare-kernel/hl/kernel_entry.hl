@@ -663,6 +663,156 @@ fn _ke_cmd_pfree(addr) {
     return 0;
 }
 
+// === Iteration 27: Heap Allocator (kmalloc/kfree) ===
+// Simple first-fit free-list allocator on top of page allocator.
+// Heap region: 0x700000 - 0x7FFFFF (1MB, 256 pages)
+// Each block header (16 bytes at block start):
+//   [0..7]  : size (u64) — usable size, not including header
+//   [8..15] : next_free (u64) — pointer to next free block, 0 = none
+// Allocated blocks: header.next_free = 0xDEAD (sentinel: in-use)
+// Free list head stored at 0x6FFFF0 (u64)
+// Heap initialized flag at 0x6FFFF8 (u64, 1 = initialized)
+
+fn _ke_heap_init() {
+    // Allocate 256 pages (1MB) starting at 0x700000
+    // Since this is within our known-free range, just mark pages used
+    let heap_base = 7340032;     // 0x700000
+    let heap_size = 1048576;     // 0x100000 = 1MB
+    let hdr_size = 16;
+
+    // Mark heap pages as used in page allocator
+    let mut pg = heap_base / 4096;
+    let pg_end = (heap_base + heap_size) / 4096;
+    while pg < pg_end {
+        // Just mark them used (they're in the free range)
+        let bm = 4194304;
+        let bidx = pg / 8;
+        let boff = pg % 8;
+        let bval = mem_read_u8(bm + bidx);
+        let mut shift = 1;
+        let mut s = 0;
+        while s < boff { shift = shift * 2; s = s + 1; }
+        if bval / shift % 2 == 0 {
+            mem_write_u8(bm + bidx, bval + shift);
+            let fc = mem_read_u32(4198392);
+            _ke_mem_w32(4198392, fc - 1);
+        }
+        pg = pg + 1;
+    }
+
+    // Initialize heap: one big free block spanning entire heap
+    // Block header at heap_base: size = heap_size - hdr_size, next_free = 0
+    mem_write_u64(heap_base, heap_size - hdr_size);
+    mem_write_u64(heap_base + 8, 0);
+
+    // Free list head → heap_base
+    mem_write_u64(7340016, heap_base);   // 0x6FFFF0: free list head
+    mem_write_u64(7340024, 1);           // 0x6FFFF8: initialized flag
+    return 0;
+}
+
+// kmalloc: allocate 'size' bytes, return pointer or 0
+fn _ke_kmalloc(size) {
+    let hdr_size = 16;
+    // Round size up to 16-byte alignment
+    let alloc_size = ((size + 15) / 16) * 16;
+    if alloc_size < 16 { alloc_size = 16; }
+
+    // Walk free list
+    let mut prev_ptr = 7340016;    // address that holds pointer to current block
+    let mut cur = mem_read_u64(7340016);  // free list head
+
+    while cur != 0 {
+        let blk_size = mem_read_u64(cur);
+        let blk_next = mem_read_u64(cur + 8);
+
+        if blk_size >= alloc_size {
+            // Found a fit
+            if blk_size >= alloc_size + hdr_size + 16 {
+                // Split: create new free block after allocated portion
+                let new_blk = cur + hdr_size + alloc_size;
+                let new_size = blk_size - alloc_size - hdr_size;
+                mem_write_u64(new_blk, new_size);
+                mem_write_u64(new_blk + 8, blk_next);
+
+                // Update current block
+                mem_write_u64(cur, alloc_size);
+                mem_write_u64(cur + 8, 57005);  // 0xDEAD = in-use sentinel
+
+                // Update prev pointer to skip current, point to new_blk
+                mem_write_u64(prev_ptr, new_blk);
+            } else {
+                // Use entire block (no split)
+                mem_write_u64(cur + 8, 57005);  // 0xDEAD
+                // Unlink from free list
+                mem_write_u64(prev_ptr, blk_next);
+            }
+            // Return pointer after header
+            return cur + hdr_size;
+        }
+
+        prev_ptr = cur + 8;
+        cur = blk_next;
+    }
+    return 0;  // out of memory
+}
+
+// kfree: free block at ptr (pointer returned by kmalloc)
+fn _ke_kfree(ptr) {
+    if ptr == 0 { return 0; }
+    let hdr_size = 16;
+    let blk = ptr - hdr_size;
+    let blk_size = mem_read_u64(blk);
+
+    // Sanity check: must have been allocated (sentinel 0xDEAD)
+    let sentinel = mem_read_u64(blk + 8);
+    if sentinel != 57005 { return 0; }
+
+    // Add to free list head
+    let old_head = mem_read_u64(7340016);
+    mem_write_u64(blk + 8, old_head);
+    mem_write_u64(7340016, blk);
+    return 1;
+}
+
+// Command: malloc N — allocate N bytes
+fn _ke_cmd_malloc(size) {
+    if size < 1 { size = 64; }
+    let ptr = _ke_kmalloc(size);
+    if ptr == 0 {
+        _ke_putc(79); _ke_putc(79); _ke_putc(77); _ke_putc(13); _ke_putc(10);
+    } else {
+        // Store last malloc ptr at 0x310048 for mfree
+        mem_write_u64(3211336, ptr);  // 0x310048
+        _ke_putc(48); _ke_putc(120);
+        _ke_put_hex16(ptr / 65536);
+        _ke_put_hex16(ptr);
+        _ke_putc(32);
+        // Show size
+        _ke_put_dec(size);
+        _ke_putc(66);  // 'B'
+        _ke_putc(13); _ke_putc(10);
+    }
+    return 0;
+}
+
+// Command: mfree — free last malloc'd block
+fn _ke_cmd_mfree() {
+    let ptr = mem_read_u64(3211336);  // 0x310048
+    if ptr == 0 {
+        _ke_putc(69); _ke_putc(82); _ke_putc(82); _ke_putc(13); _ke_putc(10);
+    } else {
+        let result = _ke_kfree(ptr);
+        mem_write_u64(3211336, 0);
+        if result == 1 {
+            _ke_putc(79); _ke_putc(75); _ke_putc(13); _ke_putc(10);
+        } else {
+            _ke_putc(69); _ke_putc(82); _ke_putc(82); _ke_putc(13); _ke_putc(10);
+        }
+    }
+    return 0;
+}
+
 // === Iteration 25: Scancode → ASCII + Interactive Shell ===
 
 // PS/2 set 1 scancode to ASCII (lowercase, common keys only)
@@ -726,20 +876,17 @@ fn _ke_prompt() {
 
 // Command: help
 fn _ke_cmd_help() {
-    // "Cmds: help tick pci pmem palloc pfree reboot\r\n"
+    // "Cmds: help tick pci pmem palloc malloc mfree reboot\r\n"
     _ke_putc(67); _ke_putc(109); _ke_putc(100); _ke_putc(115); _ke_putc(58); _ke_putc(32);
-    // "help "
     _ke_putc(104); _ke_putc(101); _ke_putc(108); _ke_putc(112); _ke_putc(32);
-    // "tick "
     _ke_putc(116); _ke_putc(105); _ke_putc(99); _ke_putc(107); _ke_putc(32);
-    // "pci "
     _ke_putc(112); _ke_putc(99); _ke_putc(105); _ke_putc(32);
-    // "pmem "
     _ke_putc(112); _ke_putc(109); _ke_putc(101); _ke_putc(109); _ke_putc(32);
-    // "palloc "
     _ke_putc(112); _ke_putc(97); _ke_putc(108); _ke_putc(108); _ke_putc(111); _ke_putc(99); _ke_putc(32);
-    // "pfree "
-    _ke_putc(112); _ke_putc(102); _ke_putc(114); _ke_putc(101); _ke_putc(101); _ke_putc(32);
+    // "malloc "
+    _ke_putc(109); _ke_putc(97); _ke_putc(108); _ke_putc(108); _ke_putc(111); _ke_putc(99); _ke_putc(32);
+    // "mfree "
+    _ke_putc(109); _ke_putc(102); _ke_putc(114); _ke_putc(101); _ke_putc(101); _ke_putc(32);
     // "reboot\r\n"
     _ke_putc(114); _ke_putc(101); _ke_putc(98); _ke_putc(111); _ke_putc(111); _ke_putc(116);
     _ke_putc(13); _ke_putc(10);
@@ -807,10 +954,32 @@ fn _ke_dispatch(buf_addr, buf_len) {
     // "pfree" (5): 112 102 114 101 101
     if buf_len == 5 {
         if c0 == 112 { if c1 == 102 { if c2 == 114 { if c3 == 101 { if c4 == 101 {
-            // Free last allocated page (stored at 0x310040)
             let last = mem_read_u64(3211328);  // 0x310040
             _ke_cmd_pfree(last); return 0;
         } } } } }
+        // "mfree" (5): 109 102 114 101 101
+        if c0 == 109 { if c1 == 102 { if c2 == 114 { if c3 == 101 { if c4 == 101 {
+            _ke_cmd_mfree(); return 0;
+        } } } } }
+    }
+
+    // "malloc" (6) or "malloc N" (7+): 109 97 108 108 111 99
+    if buf_len >= 6 {
+        if c0 == 109 { if c1 == 97 { if c2 == 108 { if c3 == 108 { if c4 == 111 { if c5 == 99 {
+            // Parse optional size after space
+            let mut sz = 64;
+            if buf_len > 7 {
+                sz = 0;
+                let mut di = 7;
+                while di < buf_len {
+                    let dch = mem_read_u8(buf_addr + di);
+                    if dch >= 48 { if dch <= 57 { sz = sz * 10 + dch - 48; } }
+                    di = di + 1;
+                }
+                if sz == 0 { sz = 64; }
+            }
+            _ke_cmd_malloc(sz); return 0;
+        } } } } } }
     }
 
     // "reboot" = 114 101 98 111 111 116
@@ -903,6 +1072,9 @@ fn _start() {
     // Phase 6: Physical page allocator init (iteration 26)
     _ke_pa_init();
     _ke_cmd_pmem();
+
+    // Phase 6b: Heap allocator init (iteration 27)
+    _ke_heap_init();
 
     // Phase 7: PCI bus scan (iteration 24)
     _ke_pci_scan();
