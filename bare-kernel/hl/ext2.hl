@@ -1,0 +1,281 @@
+// ext2.hl -- ext2 Filesystem Driver (Read-Only)
+//
+// Reads ext2/ext3 partitions from VirtIO-blk or USB mass storage.
+// Block size: 1024/2048/4096 bytes (from superblock).
+//
+// Layout:
+//   Block 0: boot sector (skip)
+//   Block 1: superblock (1024 bytes starting at offset 1024)
+//   Block 2+: block group descriptor table
+//   Each group: block bitmap, inode bitmap, inode table, data blocks
+//
+// Superblock (at byte 1024):
+//   +0:  s_inodes_count (4)
+//   +4:  s_blocks_count (4)
+//   +24: s_log_block_size (4) -- block_size = 1024 << value
+//   +32: s_blocks_per_group (4)
+//   +40: s_inodes_per_group (4)
+//   +56: s_magic (2) = 0xEF53
+//   +88: s_inode_size (2)
+//
+// Inode (128 or 256 bytes):
+//   +0:  i_mode (2) -- file type + permissions
+//   +2:  i_uid (2)
+//   +4:  i_size (4)
+//   +26: i_gid (2)
+//   +28: i_links_count (2)
+//   +40: i_block[0..11] -- direct block pointers (12 * 4 bytes)
+//   +88: i_block[12] -- indirect
+//   +92: i_block[13] -- double indirect
+//   +96: i_block[14] -- triple indirect
+//
+// Directory entry:
+//   +0:  inode (4)
+//   +4:  rec_len (2)
+//   +6:  name_len (1)
+//   +7:  file_type (1)
+//   +8:  name (name_len bytes)
+
+let EXT2_MAGIC = 61267;       // 0xEF53
+let EXT2_ROOT_INODE = 2;
+
+let mut ext2_block_size = 1024;
+let mut ext2_inodes_per_group = 0;
+let mut ext2_blocks_per_group = 0;
+let mut ext2_inode_size = 128;
+let mut ext2_bgdt_block = 0;  // block group descriptor table block
+
+fn ext2_init(partition_start_lba) {
+    // Superblock is at byte offset 1024 from partition start (= sector + 2)
+    let sb_sector = partition_start_lba + 2;
+    let cache_blk = sb_sector / 8;  // 4096-byte cache blocks = 8 sectors each
+    let sb_addr = bcache_read(0, cache_blk);
+    let sb_off_in_block = (sb_sector % 8) * 512;  // offset within cached block
+
+    // Verify magic at superblock +56
+    let magic = mem_read_u16(sb_addr + sb_off_in_block + 56);
+    if magic != EXT2_MAGIC {
+        print("ext2: bad magic 0x" + format_hex(magic, 4) + " (expected 0xEF53)");
+        return 0;
+    }
+
+    // Parse superblock fields
+    let s_inodes_count = mem_read_u32(sb_addr + sb_off_in_block + 0);
+    let s_blocks_count = mem_read_u32(sb_addr + sb_off_in_block + 4);
+    let s_log_block_size = mem_read_u32(sb_addr + sb_off_in_block + 24);
+    ext2_block_size = 1024;
+    let mut shift = 0;
+    while shift < s_log_block_size { ext2_block_size = ext2_block_size * 2; shift = shift + 1; }
+    ext2_blocks_per_group = mem_read_u32(sb_addr + sb_off_in_block + 32);
+    ext2_inodes_per_group = mem_read_u32(sb_addr + sb_off_in_block + 40);
+    ext2_inode_size = mem_read_u16(sb_addr + sb_off_in_block + 88);
+    if ext2_inode_size == 0 { ext2_inode_size = 128; }
+
+    // Block group descriptor table location
+    if ext2_block_size == 1024 {
+        ext2_bgdt_block = 2;
+    } else {
+        ext2_bgdt_block = 1;
+    }
+
+    _ext2_part_lba = partition_start_lba;
+
+    print("ext2: block_size=" + to_string(ext2_block_size) + " inodes=" + to_string(s_inodes_count) + " blocks=" + to_string(s_blocks_count));
+    print("ext2: inodes/group=" + to_string(ext2_inodes_per_group) + " inode_size=" + to_string(ext2_inode_size));
+    return 1;
+}
+
+let mut _ext2_part_lba = 0;
+
+// Helper: read a range of bytes from the partition via block cache
+// byte_offset is relative to partition start
+fn _ext2_disk_read(byte_offset, count) {
+    let sector = _ext2_part_lba + byte_offset / 512;
+    let cache_block = sector / 8;  // 4096-byte cache blocks
+    let addr = bcache_read(0, cache_block);
+    let off_in_block = (sector % 8) * 512 + byte_offset % 512;
+    let mut data = [];
+    let mut i = 0;
+    while i < count {
+        push(data, mem_read_u8(addr + off_in_block + i));
+        i = i + 1;
+    }
+    return data;
+}
+
+// Locate an inode on disk
+fn ext2_read_inode(inode_num) {
+    if inode_num == 0 { return []; }
+    let group = (inode_num - 1) / ext2_inodes_per_group;
+    let index = (inode_num - 1) % ext2_inodes_per_group;
+
+    // Read block group descriptor (32 bytes per group)
+    let bgdt_byte_off = ext2_bgdt_block * ext2_block_size + group * 32;
+    let bgdt_data = _ext2_disk_read(bgdt_byte_off, 32);
+    let inode_table_blk = ext2_read_u32(bgdt_data, 8);
+
+    // Read inode from inode table
+    let inode_byte_off = inode_table_blk * ext2_block_size + index * ext2_inode_size;
+    return _ext2_disk_read(inode_byte_off, ext2_inode_size);
+}
+
+// Helper: read u32 from byte array (little-endian)
+fn ext2_read_u32(arr, off) {
+    return arr[off] + arr[off+1] * 256 + arr[off+2] * 65536 + arr[off+3] * 16777216;
+}
+
+fn ext2_read_u16(arr, off) {
+    return arr[off] + arr[off+1] * 256;
+}
+
+// Read a disk block into a byte array
+fn ext2_read_block(blk_num) {
+    let byte_off = blk_num * ext2_block_size;
+    return _ext2_disk_read(byte_off, ext2_block_size);
+}
+
+// Read file data from an inode's block list
+fn ext2_read_file(inode_data, max_size) {
+    let mut data = [];
+    let file_size = ext2_read_u32(inode_data, 4);
+    let mut limit = file_size;
+    if max_size > 0 && max_size < limit { limit = max_size; }
+
+    // Direct blocks (i_block[0..11])
+    let mut i = 0;
+    while i < 12 && len(data) < limit {
+        let blk = ext2_read_u32(inode_data, 40 + i * 4);
+        if blk == 0 { i = 12; }
+        else {
+            let block_data = ext2_read_block(blk);
+            let mut j = 0;
+            while j < len(block_data) && len(data) < limit {
+                push(data, block_data[j]);
+                j = j + 1;
+            }
+        }
+        i = i + 1;
+    }
+    // Indirect block (i_block[12])
+    if len(data) < limit {
+        let ind_blk = ext2_read_u32(inode_data, 40 + 12 * 4);
+        if ind_blk != 0 {
+            let ind_data = ext2_read_block(ind_blk);
+            let mut k = 0;
+            while k < ext2_block_size / 4 && len(data) < limit {
+                let blk = ext2_read_u32(ind_data, k * 4);
+                if blk == 0 { k = ext2_block_size; }
+                else {
+                    let block_data = ext2_read_block(blk);
+                    let mut j = 0;
+                    while j < len(block_data) && len(data) < limit {
+                        push(data, block_data[j]);
+                        j = j + 1;
+                    }
+                }
+                k = k + 1;
+            }
+        }
+    }
+    return data;
+}
+
+// List directory entries
+fn ext2_list_dir(inode_num) {
+    let inode = ext2_read_inode(inode_num);
+    let dir_data = ext2_read_file(inode, 0);
+    let mut entries = [];
+    let mut off = 0;
+    while off < len(dir_data) {
+        let entry_inode = ext2_read_u32(dir_data, off);
+        let rec_len = ext2_read_u16(dir_data, off + 4);
+        let name_len = dir_data[off + 6];
+        if rec_len == 0 { off = len(dir_data); }
+        else {
+            if entry_inode != 0 {
+                let mut name = [];
+                let mut ni = 0;
+                while ni < name_len {
+                    push(name, dir_data[off + 8 + ni]);
+                    ni = ni + 1;
+                }
+                push(entries, [entry_inode, name]);
+            }
+            off = off + rec_len;
+        }
+    }
+    return entries;
+}
+
+// Lookup a path component in a directory
+fn ext2_lookup(dir_inode, name) {
+    let entries = ext2_list_dir(dir_inode);
+    let mut i = 0;
+    while i < len(entries) {
+        if entries[i][1] == name { return entries[i][0]; }
+        i = i + 1;
+    }
+    return 0; // not found
+}
+
+// Resolve full path to inode number
+fn ext2_resolve(path) {
+    let mut current = EXT2_ROOT_INODE;
+    // Split path by '/' and walk each component
+    let parts = str_split(path, "/");
+    let mut i = 0;
+    while i < len(parts) {
+        if len(parts[i]) > 0 {
+            // Convert string to byte array for ext2_lookup comparison
+            let name_str = parts[i];
+            let mut name_bytes = [];
+            let mut j = 0;
+            while j < len(name_str) {
+                push(name_bytes, name_str[j]);
+                j = j + 1;
+            }
+            let found = ext2_lookup(current, name_bytes);
+            if found == 0 { return 0; }  // not found
+            current = found;
+        }
+        i = i + 1;
+    }
+    return current;
+}
+
+// Read a file by path, return byte array
+fn ext2_read_path(path) {
+    let inode_num = ext2_resolve(path);
+    if inode_num == 0 { return []; }
+    let inode = ext2_read_inode(inode_num);
+    return ext2_read_file(inode, 0);
+}
+
+// Get file size from inode
+fn ext2_file_size(inode_data) {
+    return ext2_read_u32(inode_data, 4);
+}
+
+// Get file mode from inode (type + permissions)
+fn ext2_file_mode(inode_data) {
+    return ext2_read_u16(inode_data, 0);
+}
+
+// Check if inode is a directory (mode & 0xF000 == 0x4000)
+fn ext2_is_dir(inode_data) {
+    let mode = ext2_file_mode(inode_data);
+    let ftype = (mode / 4096) % 16;
+    return ftype == 4;  // S_IFDIR = 0x4000 → upper nibble = 4
+}
+
+// VFS-compatible mount for ext2
+fn ext2_vfs_mount(mount_point, partition_lba) {
+    let ok = ext2_init(partition_lba);
+    if ok == 0 { return 0; }
+    // Register with VFS as a mounted filesystem
+    print("ext2: mounted at " + mount_point);
+    return 1;
+}
+
+print("ext2.hl loaded");
+print("ext2: superblock parse, disk-backed read, path resolution, dir listing");

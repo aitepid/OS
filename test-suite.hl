@@ -1,0 +1,173 @@
+// test-suite.hl -- HicOS Kernel Module Integration Tests
+//
+// Exercises each subsystem's self-test function.
+// Run via: hl-bootstrap interpret test-suite.hl
+//          or: shell > run test-suite.hl
+
+let mut tests_pass = 0;
+let mut tests_fail = 0;
+let mut tests_skip = 0;
+
+fn test_assert(cond, name) {
+    if cond != 0 {
+        print("  PASS: " + name);
+        tests_pass = tests_pass + 1;
+    } else {
+        print("  FAIL: " + name);
+        tests_fail = tests_fail + 1;
+    }
+    return cond;
+}
+
+fn test_assert_eq(actual, expected, name) {
+    if actual == expected {
+        print("  PASS: " + name);
+        tests_pass = tests_pass + 1;
+    } else {
+        print("  FAIL: " + name + " (expected=" + to_string(expected) + " got=" + to_string(actual) + ")");
+        tests_fail = tests_fail + 1;
+    }
+    return 0;
+}
+
+fn test_skip(name) {
+    print("  SKIP: " + name);
+    tests_skip = tests_skip + 1;
+    return 0;
+}
+
+print("=== HicOS Integration Test Suite ===");
+print("");
+
+// --- Arithmetic ---
+print("[1] Arithmetic");
+test_assert_eq(2 + 3, 5, "addition");
+test_assert_eq(10 - 4, 6, "subtraction");
+test_assert_eq(6 * 7, 42, "multiplication");
+test_assert_eq(100 / 10, 10, "division");
+test_assert_eq(17 % 5, 2, "modulo");
+
+// --- Strings ---
+print("[2] Strings");
+test_assert_eq("hello" + " " + "world", "hello world", "concatenation");
+test_assert_eq(len("HicOS"), 5, "string length");
+test_assert_eq(to_string(42), "42", "to_string");
+
+// --- Variables ---
+print("[3] Variables");
+let mut x = 10;
+x = x + 5;
+test_assert_eq(x, 15, "mutable variable");
+let y = 42;
+test_assert_eq(y, 42, "immutable variable");
+
+// --- Functions ---
+print("[4] Functions");
+fn add(a, b) { return a + b; }
+fn mul(a, b) { return a * b; }
+test_assert_eq(add(3, 4), 7, "function call");
+test_assert_eq(mul(6, 7), 42, "function call 2");
+test_assert_eq(add(mul(2, 3), 4), 10, "nested call");
+
+// --- Fibonacci ---
+print("[5] Fibonacci");
+fn fib_iter(n) {
+    let mut a = 0;
+    let mut b = 1;
+    let mut i = 0;
+    while i < n {
+        let tmp = a + b;
+        a = b;
+        b = tmp;
+        i = i + 1;
+    }
+    return a;
+}
+test_assert_eq(fib_iter(0), 0, "fib(0)");
+test_assert_eq(fib_iter(1), 1, "fib(1)");
+test_assert_eq(fib_iter(10), 55, "fib(10)");
+test_assert_eq(fib_iter(20), 6765, "fib(20)");
+
+// --- Conditionals ---
+print("[6] Conditionals");
+fn abs_val(n) {
+    if n < 0 { return 0 - n; }
+    return n;
+}
+test_assert_eq(abs_val(5), 5, "abs positive");
+test_assert_eq(abs_val(0 - 3), 3, "abs negative");
+
+fn max_val(a, b) {
+    if a > b { return a; }
+    return b;
+}
+test_assert_eq(max_val(3, 7), 7, "max");
+test_assert_eq(max_val(9, 2), 9, "max reverse");
+
+// --- Loops ---
+print("[7] Loops");
+fn sum_to(n) {
+    let mut s = 0;
+    let mut i = 1;
+    while i <= n {
+        s = s + i;
+        i = i + 1;
+    }
+    return s;
+}
+test_assert_eq(sum_to(10), 55, "sum 1..10");
+test_assert_eq(sum_to(100), 5050, "sum 1..100");
+
+// --- Hilbert (kernel-only, skip in host interpreter) ---
+print("[8] Hilbert");
+test_skip("hilbert encode (kernel only)");
+test_skip("hilbert dist (kernel only)");
+
+// --- Arrays (requires array literal support in interpreter) ---
+print("[9] Arrays");
+test_skip("array literal (interpreter limitation)");
+test_skip("array indexing (interpreter limitation)");
+
+// --- Recursion ---
+print("[10] Recursion");
+fn factorial(n) {
+    if n <= 1 { return 1; }
+    return n * factorial(n - 1);
+}
+test_assert_eq(factorial(1), 1, "factorial(1)");
+test_assert_eq(factorial(5), 120, "factorial(5)");
+test_assert_eq(factorial(10), 3628800, "factorial(10)");
+
+// --- Nested scope (requires closure support) ---
+print("[11] Nested scope");
+test_skip("nested function scope (interpreter limitation)");
+
+// --- String operations ---
+print("[12] String ops");
+test_assert_eq(len(""), 0, "empty string length");
+test_assert_eq("abc" + "def", "abcdef", "string concat");
+test_assert_eq(to_string(0), "0", "to_string(0)");
+test_assert_eq(to_string(0 - 42), "-42", "to_string negative");
+
+// --- Edge cases ---
+print("[13] Edge cases");
+test_assert_eq(0 * 999999, 0, "multiply by zero");
+test_assert_eq(1 * 1, 1, "identity multiply");
+test_assert_eq(100 / 100, 1, "self divide");
+test_assert_eq(0 - 0, 0, "negative zero");
+
+fn empty_fn() { return 0; }
+test_assert_eq(empty_fn(), 0, "empty function returns 0");
+
+// --- Summary ---
+print("");
+print("=== Results ===");
+print("  Passed: " + to_string(tests_pass));
+print("  Failed: " + to_string(tests_fail));
+print("  Skipped: " + to_string(tests_skip));
+print("  Total:  " + to_string(tests_pass + tests_fail + tests_skip));
+if tests_fail == 0 {
+    print("  STATUS: ALL TESTS PASSED");
+} else {
+    print("  STATUS: FAILED");
+}

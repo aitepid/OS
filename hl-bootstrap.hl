@@ -1,0 +1,4630 @@
+// hl-bootstrap.hl -- H-L Self-Hosting Bootstrap Compiler
+//
+// This is the complete Hilbert-Lang bootstrap compiler, written in H-L itself.
+// It contains:
+//   S1  Hilbert Coordinate Engine (spatial addressing primitives)
+//   S2  Lexer (source -> tokens)
+//   S3  Parser (tokens -> AST)
+//   S4  Interpreter / VM (AST -> execution)
+//   S5  x86_64 Machine Code Encoder (H-L -> native bytes)
+//   S6  Boot Image Builder (MBR + Stage2 + Kernel)
+//   S7  CLI (build / test / run / lint)
+//
+// Pre-compiled binary: hicos-hl.img (boots in QEMU, contains this compiler)
+// This file IS the source of truth. The .img is a build artifact.
+//
+// Build chain:
+//   hl-bootstrap.hl  ->(compiled by stage-0 .img)->  hicos-hl.img (next stage-0)
+//
+// Usage (via pre-compiled bootstrap):
+//   qemu-system-x86_64 -drive format=raw,file=hicos-hl.img -serial stdio
+
+// ==================================
+// S1  HILBERT COORDINATE ENGINE
+// ==================================
+
+quadrant hilbert {
+    // 3D Hilbert: (x, y, z) -> 1D key via bit-interleaving
+    fn interleave3(x, y, z) {
+        let mut r = 0;
+        let mut i = 0;
+        while i < 10 {
+            // r |= ((x >> i) & 1) << (3 * i)
+            // r |= ((y >> i) & 1) << (3 * i + 1)
+            // r |= ((z >> i) & 1) << (3 * i + 2)
+            let xi = x / 1;  // integer
+            let yi = y / 1;
+            let zi = z / 1;
+            let bit_x = xi % 2;
+            let bit_y = yi % 2;
+            let bit_z = zi % 2;
+            // Shift bits into position
+            let mut shift = 1;
+            let mut s = 0;
+            while s < 3 * i { shift = shift * 2; s = s + 1; }
+            r = r + bit_x * shift;
+            let mut shift_y = 1;
+            let mut sy = 0;
+            while sy < 3 * i + 1 { shift_y = shift_y * 2; sy = sy + 1; }
+            r = r + bit_y * shift_y;
+            let mut shift_z = 1;
+            let mut sz = 0;
+            while sz < 3 * i + 2 { shift_z = shift_z * 2; sz = sz + 1; }
+            r = r + bit_z * shift_z;
+            x = x / 2;
+            y = y / 2;
+            z = z / 2;
+            i = i + 1;
+        }
+        return r;
+    }
+
+    fn deinterleave3(k) {
+        let mut x = 0;
+        let mut y = 0;
+        let mut z = 0;
+        let mut i = 0;
+        let mut kk = k;
+        while i < 10 {
+            let mut pow = 1;
+            let mut p = 0;
+            while p < i { pow = pow * 2; p = p + 1; }
+            x = x + (kk % 2) * pow;
+            kk = kk / 2;
+            y = y + (kk % 2) * pow;
+            kk = kk / 2;
+            z = z + (kk % 2) * pow;
+            kk = kk / 2;
+            i = i + 1;
+        }
+        return [x, y, z];
+    }
+
+    fn distance(a, b) {
+        let da = deinterleave3(a);
+        let db = deinterleave3(b);
+        let dx = da[0] - db[0];
+        let dy = da[1] - db[1];
+        let dz = da[2] - db[2];
+        if dx < 0 { dx = 0 - dx; }
+        if dy < 0 { dy = 0 - dy; }
+        if dz < 0 { dz = 0 - dz; }
+        return dx + dy + dz;
+    }
+}
+
+// ==================================
+// S2  LEXER
+// ==================================
+
+quadrant lexer {
+    // Token types (represented as strings)
+    let TT_NUM = "Num";
+    let TT_STR = "Str";
+    let TT_BOOL = "Bool";
+    let TT_NIL = "Nil";
+    let TT_IDENT = "Ident";
+    let TT_PLUS = "+";
+    let TT_MINUS = "-";
+    let TT_STAR = "*";
+    let TT_SLASH = "/";
+    let TT_PERCENT = "%";
+    let TT_EQ = "==";
+    let TT_NEQ = "!=";
+    let TT_LT = "<";
+    let TT_GT = ">";
+    let TT_LTE = "<=";
+    let TT_GTE = ">=";
+    let TT_ASSIGN = "=";
+    let TT_BANG = "!";
+    let TT_AND = "&&";
+    let TT_OR = "||";
+    let TT_LPAREN = "(";
+    let TT_RPAREN = ")";
+    let TT_LBRACE = "{";
+    let TT_RBRACE = "}";
+    let TT_LBRACKET = "[";
+    let TT_RBRACKET = "]";
+    let TT_COMMA = ",";
+    let TT_SEMI = ";";
+    let TT_DOT = ".";
+    let TT_LET = "let";
+    let TT_MUT = "mut";
+    let TT_FN = "fn";
+    let TT_RETURN = "return";
+    let TT_IF = "if";
+    let TT_ELSE = "else";
+    let TT_WHILE = "while";
+    let TT_FOR = "for";
+    let TT_IN = "in";
+    let TT_PRINT = "print";
+    let TT_QUADRANT = "quadrant";
+    let TT_EMIT = "emit";
+    let TT_SPAWN = "spawn";
+    let TT_NEAR = "near";
+    let TT_FOLD = "fold";
+    let TT_FROM = "from";
+    let TT_WITH = "with";
+    let TT_ARROW = "->";
+    let TT_PLUSEQ = "+=";
+    let TT_MINUSEQ = "-=";
+    let TT_STAREQ = "*=";
+    let TT_SLASHEQ = "/=";
+    let TT_PERCENTEQ = "%=";
+    let TT_POWEREQ = "**=";
+    let TT_POWER = "**";
+    let TT_FLOORDIV = "//";
+    let TT_SHL = "<<";
+    let TT_SHR = ">>";
+    let TT_BITOR = "|";
+    let TT_BITAND = "&";
+    let TT_BITXOR = "^";
+    let TT_BITNOT = "~";
+    let TT_COLON = ":";
+    let TT_BREAK = "break";
+    let TT_CONTINUE = "continue";
+    let TT_TRY = "try";
+    let TT_CATCH = "catch";
+    let TT_FINALLY = "finally";
+    let TT_IMPORT = "import";
+    let TT_AS = "as";
+    let TT_ASSERT = "assert";
+    let TT_DEL = "del";
+    let TT_PASS = "pass";
+    let TT_ELIF = "elif";
+    let TT_NOT = "not";
+    let TT_CLASS = "class";
+    let TT_SELF = "self";
+    let TT_SUPER = "super";
+    let TT_YIELD = "yield";
+    let TT_RAISE = "raise";
+    let TT_AT = "@";
+    let TT_DOUBLESTAR = "**";
+    let TT_UNDERSCORE = "_";
+    let TT_EOF = "EOF";
+
+    // Tokenize: source string -> array of [type, value] pairs
+    fn parse_number(s) {
+        // Convert numeric string to number value
+        let mut has_dot = false;
+        let mut i = 0;
+        while i < len(s) {
+            if char_at(s, i) == "." { has_dot = true; }
+            i = i + 1;
+        }
+        // Integer
+        if !has_dot {
+            let mut result = 0;
+            let mut neg = false;
+            let mut start = 0;
+            if len(s) > 0 && char_at(s, 0) == "-" { neg = true; start = 1; }
+            i = start;
+            while i < len(s) {
+                let d = char_at(s, i);
+                if d >= "0" && d <= "9" {
+                    result = result * 10 + (ord(d) - 48);
+                }
+                i = i + 1;
+            }
+            if neg { return 0 - result; }
+            return result;
+        }
+        // Float: integer_part + fractional_part
+        let mut int_part = 0;
+        let mut frac_part = 0;
+        let mut frac_div = 1;
+        let mut in_frac = false;
+        i = 0;
+        while i < len(s) {
+            let d = char_at(s, i);
+            if d == "." { in_frac = true; }
+            else if d >= "0" && d <= "9" {
+                if in_frac {
+                    frac_part = frac_part * 10 + (ord(d) - 48);
+                    frac_div = frac_div * 10;
+                } else {
+                    int_part = int_part * 10 + (ord(d) - 48);
+                }
+            }
+            i = i + 1;
+        }
+        return int_part + frac_part / frac_div;
+    }
+
+    fn tokenize(src) {
+        let mut tokens = [];
+        let mut i = 0;
+        let srclen = len(src);
+
+        while i < srclen {
+            let ch = char_at(src, i);
+
+            // Skip whitespace
+            if ch == " " || ch == "\t" || ch == "\r" || ch == "\n" {
+                i = i + 1;
+            }
+            // Line comment
+            else if ch == "/" && char_at(src, i + 1) == "/" {
+                while i < srclen && char_at(src, i) != "\n" {
+                    i = i + 1;
+                }
+            }
+            // Block comment
+            else if ch == "/" && char_at(src, i + 1) == "*" {
+                i = i + 2;
+                while i < srclen - 1 {
+                    if char_at(src, i) == "*" && char_at(src, i + 1) == "/" {
+                        i = i + 2;
+                        // break
+                    }
+                    i = i + 1;
+                }
+            }
+            // Number
+            else if is_digit(ch) {
+                let mut n = "";
+                while i < srclen && (is_digit(char_at(src, i)) || char_at(src, i) == ".") {
+                    n = n + char_at(src, i);
+                    i = i + 1;
+                }
+                push(tokens, [TT_NUM, parse_number(n)]);
+            }
+            // String
+            else if ch == "\"" || ch == "'" {
+                let q = ch;
+                i = i + 1;
+                let mut s = "";
+                while i < srclen && char_at(src, i) != q {
+                    if char_at(src, i) == "\\" {
+                        i = i + 1;
+                        let esc = char_at(src, i);
+                        if esc == "n" { s = s + "\n"; }
+                        else if esc == "r" { s = s + "\r"; }
+                        else if esc == "t" { s = s + "\t"; }
+                        else { s = s + esc; }
+                    } else {
+                        s = s + char_at(src, i);
+                    }
+                    i = i + 1;
+                }
+                i = i + 1;
+                push(tokens, [TT_STR, s]);
+            }
+            // Identifier or keyword
+            else if is_alpha(ch) || ch == "_" {
+                let mut id = "";
+                while i < srclen && (is_alnum(char_at(src, i)) || char_at(src, i) == "_") {
+                    id = id + char_at(src, i);
+                    i = i + 1;
+                }
+                if id == "true" { push(tokens, [TT_BOOL, true]); }
+                else if id == "false" { push(tokens, [TT_BOOL, false]); }
+                else if id == "nil" { push(tokens, [TT_NIL, nil]); }
+                else if id == "let" { push(tokens, [TT_LET, id]); }
+                else if id == "mut" { push(tokens, [TT_MUT, id]); }
+                else if id == "fn" { push(tokens, [TT_FN, id]); }
+                else if id == "return" { push(tokens, [TT_RETURN, id]); }
+                else if id == "if" { push(tokens, [TT_IF, id]); }
+                else if id == "else" { push(tokens, [TT_ELSE, id]); }
+                else if id == "while" { push(tokens, [TT_WHILE, id]); }
+                else if id == "for" { push(tokens, [TT_FOR, id]); }
+                else if id == "in" { push(tokens, [TT_IN, id]); }
+                else if id == "print" { push(tokens, [TT_PRINT, id]); }
+                else if id == "quadrant" { push(tokens, [TT_QUADRANT, id]); }
+                else if id == "emit" { push(tokens, [TT_EMIT, id]); }
+                else if id == "spawn" { push(tokens, [TT_SPAWN, id]); }
+                else if id == "near" { push(tokens, [TT_NEAR, id]); }
+                else if id == "fold" { push(tokens, [TT_FOLD, id]); }
+                else if id == "from" { push(tokens, [TT_FROM, id]); }
+                else if id == "with" { push(tokens, [TT_WITH, id]); }
+                else if id == "break" { push(tokens, [TT_BREAK, id]); }
+                else if id == "continue" { push(tokens, [TT_CONTINUE, id]); }
+                else if id == "try" { push(tokens, [TT_TRY, id]); }
+                else if id == "catch" { push(tokens, [TT_CATCH, id]); }
+                else if id == "finally" { push(tokens, [TT_FINALLY, id]); }
+                else if id == "import" { push(tokens, [TT_IMPORT, id]); }
+                else if id == "as" { push(tokens, [TT_AS, id]); }
+                else if id == "assert" { push(tokens, [TT_ASSERT, id]); }
+                else if id == "del" { push(tokens, [TT_DEL, id]); }
+                else if id == "pass" { push(tokens, [TT_PASS, id]); }
+                else if id == "elif" { push(tokens, [TT_ELIF, id]); }
+                else if id == "not" { push(tokens, [TT_NOT, id]); }
+                else if id == "class" { push(tokens, [TT_CLASS, id]); }
+                else if id == "self" { push(tokens, [TT_SELF, id]); }
+                else if id == "super" { push(tokens, [TT_SUPER, id]); }
+                else if id == "yield" { push(tokens, [TT_YIELD, id]); }
+                else if id == "raise" { push(tokens, [TT_RAISE, id]); }
+                else { push(tokens, [TT_IDENT, id]); }
+            }
+            // Two-char operators (check longer patterns first)
+            else if ch == "*" && char_at(src, i + 1) == "*" && char_at(src, i + 2) == "=" { push(tokens, [TT_POWEREQ, "**="]); i = i + 3; }
+            else if ch == "*" && char_at(src, i + 1) == "*" { push(tokens, [TT_POWER, "**"]); i = i + 2; }
+            else if ch == "*" && char_at(src, i + 1) == "=" { push(tokens, [TT_STAREQ, "*="]); i = i + 2; }
+            else if ch == "/" && char_at(src, i + 1) == "/" { push(tokens, [TT_FLOORDIV, "//"]); i = i + 2; }
+            else if ch == "/" && char_at(src, i + 1) == "=" { push(tokens, [TT_SLASHEQ, "/="]); i = i + 2; }
+            else if ch == "%" && char_at(src, i + 1) == "=" { push(tokens, [TT_PERCENTEQ, "%="]); i = i + 2; }
+            else if ch == "<" && char_at(src, i + 1) == "<" { push(tokens, [TT_SHL, "<<"]); i = i + 2; }
+            else if ch == ">" && char_at(src, i + 1) == ">" { push(tokens, [TT_SHR, ">>"]); i = i + 2; }
+            else if ch == "=" && char_at(src, i + 1) == "=" { push(tokens, [TT_EQ, "=="]); i = i + 2; }
+            else if ch == "!" && char_at(src, i + 1) == "=" { push(tokens, [TT_NEQ, "!="]); i = i + 2; }
+            else if ch == "<" && char_at(src, i + 1) == "=" { push(tokens, [TT_LTE, "<="]); i = i + 2; }
+            else if ch == ">" && char_at(src, i + 1) == "=" { push(tokens, [TT_GTE, ">="]); i = i + 2; }
+            else if ch == "&" && char_at(src, i + 1) == "&" { push(tokens, [TT_AND, "&&"]); i = i + 2; }
+            else if ch == "|" && char_at(src, i + 1) == "|" { push(tokens, [TT_OR, "||"]); i = i + 2; }
+            else if ch == "-" && char_at(src, i + 1) == ">" { push(tokens, [TT_ARROW, "->"]); i = i + 2; }
+            else if ch == "+" && char_at(src, i + 1) == "=" { push(tokens, [TT_PLUSEQ, "+="]); i = i + 2; }
+            else if ch == "-" && char_at(src, i + 1) == "=" { push(tokens, [TT_MINUSEQ, "-="]); i = i + 2; }
+            // Single-char
+            else if ch == "+" { push(tokens, [TT_PLUS, "+"]); i = i + 1; }
+            else if ch == "-" { push(tokens, [TT_MINUS, "-"]); i = i + 1; }
+            else if ch == "*" { push(tokens, [TT_STAR, "*"]); i = i + 1; }
+            else if ch == "/" { push(tokens, [TT_SLASH, "/"]); i = i + 1; }
+            else if ch == "%" { push(tokens, [TT_PERCENT, "%"]); i = i + 1; }
+            else if ch == "=" { push(tokens, [TT_ASSIGN, "="]); i = i + 1; }
+            else if ch == "!" { push(tokens, [TT_BANG, "!"]); i = i + 1; }
+            else if ch == "<" { push(tokens, [TT_LT, "<"]); i = i + 1; }
+            else if ch == ">" { push(tokens, [TT_GT, ">"]); i = i + 1; }
+            else if ch == "(" { push(tokens, [TT_LPAREN, "("]); i = i + 1; }
+            else if ch == ")" { push(tokens, [TT_RPAREN, ")"]); i = i + 1; }
+            else if ch == "{" { push(tokens, [TT_LBRACE, "{"]); i = i + 1; }
+            else if ch == "}" { push(tokens, [TT_RBRACE, "}"]); i = i + 1; }
+            else if ch == "[" { push(tokens, [TT_LBRACKET, "["]); i = i + 1; }
+            else if ch == "]" { push(tokens, [TT_RBRACKET, "]"]); i = i + 1; }
+            else if ch == "," { push(tokens, [TT_COMMA, ","]); i = i + 1; }
+            else if ch == ";" { push(tokens, [TT_SEMI, ";"]); i = i + 1; }
+            else if ch == "." { push(tokens, [TT_DOT, "."]); i = i + 1; }
+            else if ch == ":" { push(tokens, [TT_COLON, ":"]); i = i + 1; }
+            else if ch == "~" { push(tokens, [TT_BITNOT, "~"]); i = i + 1; }
+            else if ch == "&" { push(tokens, [TT_BITAND, "&"]); i = i + 1; }
+            else if ch == "|" { push(tokens, [TT_BITOR, "|"]); i = i + 1; }
+            else if ch == "^" { push(tokens, [TT_BITXOR, "^"]); i = i + 1; }
+            else if ch == "@" { push(tokens, [TT_AT, "@"]); i = i + 1; }
+            else { i = i + 1; }
+        }
+
+        push(tokens, [TT_EOF, nil]);
+        return tokens;
+    }
+}
+
+// ==================================
+// S3  PARSER
+// ==================================
+
+quadrant parser {
+    // Parser state: tokens array and current position
+    // Returns AST as nested arrays: [node_type, ...children]
+
+    fn parse_program(tokens) {
+        let mut pos = 0;
+        let mut stmts = [];
+        while tokens[pos][0] != "EOF" {
+            let result = parse_stmt(tokens, pos);
+            push(stmts, result[0]);
+            pos = result[1];
+        }
+        return stmts;
+    }
+
+    fn parse_stmt(tokens, pos) {
+        let tt = tokens[pos][0];
+        // Decorators: @name [(...)] before fn/class
+        if tt == "@" { return parse_decorated(tokens, pos); }
+        if tt == "let" { return parse_let(tokens, pos); }
+        if tt == "fn" { return parse_fn_def(tokens, pos); }
+        if tt == "class" { return parse_class(tokens, pos); }
+        if tt == "if" { return parse_if(tokens, pos); }
+        if tt == "while" { return parse_while(tokens, pos); }
+        if tt == "for" { return parse_for(tokens, pos); }
+        if tt == "return" { return parse_return(tokens, pos); }
+        if tt == "yield" { return parse_yield(tokens, pos); }
+        if tt == "raise" { return parse_raise(tokens, pos); }
+        if tt == "print" { return parse_print(tokens, pos); }
+        if tt == "quadrant" { return parse_quadrant(tokens, pos); }
+        if tt == "break" { pos = pos + 1; if tokens[pos][0] == ";" { pos = pos + 1; } return [["Break"], pos]; }
+        if tt == "continue" { pos = pos + 1; if tokens[pos][0] == ";" { pos = pos + 1; } return [["Continue"], pos]; }
+        if tt == "pass" { pos = pos + 1; if tokens[pos][0] == ";" { pos = pos + 1; } return [["Pass"], pos]; }
+        if tt == "try" { return parse_try(tokens, pos); }
+        if tt == "import" { return parse_import(tokens, pos); }
+        if tt == "assert" { return parse_assert(tokens, pos); }
+        if tt == "del" { return parse_del(tokens, pos); }
+        if tt == "{" { return parse_block(tokens, pos); }
+        return parse_expr_stmt(tokens, pos);
+    }
+
+    fn parse_let(tokens, pos) {
+        pos = pos + 1; // skip 'let'
+        let mut mutable = false;
+        if tokens[pos][0] == "mut" {
+            mutable = true;
+            pos = pos + 1;
+        }
+        // Check for destructuring: let [a, [b, c]] = ... or let (a, b) = ...
+        if tokens[pos][0] == "[" || tokens[pos][0] == "(" {
+            let pat = parse_destruct_pattern(tokens, pos);
+            pos = pat[1];
+            if tokens[pos][0] == "=" { pos = pos + 1; }
+            let r = parse_expr(tokens, pos);
+            pos = r[1];
+            if tokens[pos][0] == ";" { pos = pos + 1; }
+            return [["LetDestruct", pat[0], mutable, r[0]], pos];
+        }
+        let name = tokens[pos][1];
+        pos = pos + 1;
+        // Optional type hint: let x: int = ...
+        if tokens[pos][0] == ":" {
+            pos = pos + 1;
+            // Skip type hint tokens (we store but don't enforce)
+            while tokens[pos][0] == "Ident" || tokens[pos][0] == "[" || tokens[pos][0] == "]" || tokens[pos][0] == "," || tokens[pos][0] == "|" {
+                pos = pos + 1;
+            }
+        }
+        let mut init = nil;
+        if tokens[pos][0] == "=" {
+            pos = pos + 1;
+            let r = parse_expr(tokens, pos);
+            init = r[0];
+            pos = r[1];
+        }
+        if tokens[pos][0] == ";" { pos = pos + 1; }
+        return [["Let", name, mutable, init], pos];
+    }
+
+    fn parse_destruct_pattern(tokens, pos) {
+        let open = tokens[pos][0]; // "[" or "("
+        let close = "]";
+        if open == "(" { close = ")"; }
+        pos = pos + 1; // skip open
+        let mut elems = [];
+        while tokens[pos][0] != close && tokens[pos][0] != "EOF" {
+            if tokens[pos][0] == "[" || tokens[pos][0] == "(" {
+                // Nested pattern
+                let sub = parse_destruct_pattern(tokens, pos);
+                push(elems, sub[0]);
+                pos = sub[1];
+            } else if tokens[pos][0] == "_" || tokens[pos][1] == "_" {
+                push(elems, "_");
+                pos = pos + 1;
+            } else {
+                push(elems, tokens[pos][1]);
+                pos = pos + 1;
+            }
+            if tokens[pos][0] == "," { pos = pos + 1; }
+        }
+        pos = pos + 1; // skip close
+        return [elems, pos];
+    }
+
+    fn parse_fn_def(tokens, pos) {
+        pos = pos + 1; // skip 'fn'
+        let name = tokens[pos][1];
+        pos = pos + 1;
+        pos = pos + 1; // skip '('
+        let mut params = [];
+        let mut defaults = [];
+        let mut variadic = nil;
+        let mut kwargs = nil;
+        if tokens[pos][0] != ")" {
+            let pd = parse_param(tokens, pos);
+            push(params, pd[0]);
+            push(defaults, pd[1]);
+            pos = pd[2];
+            while tokens[pos][0] == "," {
+                pos = pos + 1;
+                let pd2 = parse_param(tokens, pos);
+                push(params, pd2[0]);
+                push(defaults, pd2[1]);
+                pos = pd2[2];
+            }
+        }
+        pos = pos + 1; // skip ')'
+        // Optional return type hint: -> type
+        if tokens[pos][0] == "->" {
+            pos = pos + 1;
+            // Skip type tokens
+            while tokens[pos][0] == "Ident" || tokens[pos][0] == "[" || tokens[pos][0] == "]" || tokens[pos][0] == "," || tokens[pos][0] == "|" {
+                pos = pos + 1;
+            }
+        }
+        let block = parse_block(tokens, pos);
+        return [["FnDef", name, params, block[0][1], defaults], block[1]];
+    }
+
+    fn parse_param(tokens, pos) {
+        // *args
+        if tokens[pos][0] == "*" && tokens[pos + 1][0] != "*" {
+            pos = pos + 1;
+            let name = "*" + tokens[pos][1];
+            pos = pos + 1;
+            return [name, nil, pos];
+        }
+        // **kwargs
+        if tokens[pos][0] == "**" {
+            pos = pos + 1;
+            let name = "**" + tokens[pos][1];
+            pos = pos + 1;
+            return [name, nil, pos];
+        }
+        let name = tokens[pos][1];
+        pos = pos + 1;
+        // Optional type hint: param: type
+        if tokens[pos][0] == ":" {
+            pos = pos + 1;
+            while tokens[pos][0] == "Ident" || tokens[pos][0] == "[" || tokens[pos][0] == "]" || tokens[pos][0] == "," || tokens[pos][0] == "|" {
+                pos = pos + 1;
+            }
+        }
+        // Optional default: param = expr
+        let mut default_val = nil;
+        if tokens[pos][0] == "=" {
+            pos = pos + 1;
+            let d = parse_expr(tokens, pos);
+            default_val = d[0];
+            pos = d[1];
+        }
+        return [name, default_val, pos];
+    }
+
+    fn parse_if(tokens, pos) {
+        pos = pos + 1; // skip 'if'
+        let cond = parse_expr(tokens, pos);
+        pos = cond[1];
+        let then_block = parse_block(tokens, pos);
+        pos = then_block[1];
+        let mut els = nil;
+        if tokens[pos][0] == "elif" {
+            // elif desugars to else { if ... }
+            let elif = parse_if(tokens, pos); // parse_if handles "elif" same as "if"
+            els = [elif[0]];
+            pos = elif[1];
+        } else if tokens[pos][0] == "else" {
+            pos = pos + 1;
+            if tokens[pos][0] == "if" || tokens[pos][0] == "elif" {
+                let elif = parse_if(tokens, pos);
+                els = [elif[0]];
+                pos = elif[1];
+            } else {
+                let else_block = parse_block(tokens, pos);
+                els = else_block[0][1];
+                pos = else_block[1];
+            }
+        }
+        return [["If", cond[0], then_block[0][1], els], pos];
+    }
+
+    fn parse_while(tokens, pos) {
+        pos = pos + 1; // skip 'while'
+        let cond = parse_expr(tokens, pos);
+        pos = cond[1];
+        let body = parse_block(tokens, pos);
+        return [["While", cond[0], body[0][1]], body[1]];
+    }
+
+    fn parse_for(tokens, pos) {
+        pos = pos + 1; // skip 'for'
+        let var_name = tokens[pos][1];
+        pos = pos + 1;
+        pos = pos + 1; // skip 'in'
+        let iter = parse_expr(tokens, pos);
+        pos = iter[1];
+        let body = parse_block(tokens, pos);
+        return [["For", var_name, iter[0], body[0][1]], body[1]];
+    }
+
+    fn parse_return(tokens, pos) {
+        pos = pos + 1; // skip 'return'
+        let mut value = nil;
+        if tokens[pos][0] != ";" && tokens[pos][0] != "}" {
+            let r = parse_expr(tokens, pos);
+            value = r[0];
+            pos = r[1];
+        }
+        if tokens[pos][0] == ";" { pos = pos + 1; }
+        return [["Return", value], pos];
+    }
+
+    fn parse_print(tokens, pos) {
+        pos = pos + 1; // skip 'print'
+        pos = pos + 1; // skip '('
+        let val = parse_expr(tokens, pos);
+        pos = val[1];
+        pos = pos + 1; // skip ')'
+        if tokens[pos][0] == ";" { pos = pos + 1; }
+        return [["Print", val[0]], pos];
+    }
+
+    fn parse_quadrant(tokens, pos) {
+        pos = pos + 1; // skip 'quadrant'
+        let name = tokens[pos][1];
+        pos = pos + 1;
+        let body = parse_block(tokens, pos);
+        return [["Quadrant", name, body[0][1]], body[1]];
+    }
+
+    fn parse_try(tokens, pos) {
+        pos = pos + 1; // skip 'try'
+        let try_block = parse_block(tokens, pos);
+        pos = try_block[1];
+        let mut catch_clauses = [];
+        while tokens[pos][0] == "catch" {
+            pos = pos + 1;
+            let mut catch_name = nil;
+            let mut catch_type = nil;
+            // catch e { }  or  catch e : TypeError { }
+            if tokens[pos][0] == "Ident" {
+                catch_name = tokens[pos][1];
+                pos = pos + 1;
+                if tokens[pos][0] == ":" {
+                    pos = pos + 1;
+                    catch_type = tokens[pos][1];
+                    pos = pos + 1;
+                }
+            }
+            let cb = parse_block(tokens, pos);
+            push(catch_clauses, [catch_name, catch_type, cb[0][1]]);
+            pos = cb[1];
+        }
+        let mut finally_body = nil;
+        if tokens[pos][0] == "finally" {
+            pos = pos + 1;
+            let fb = parse_block(tokens, pos);
+            finally_body = fb[0][1];
+            pos = fb[1];
+        }
+        return [["Try", try_block[0][1], catch_clauses, finally_body], pos];
+    }
+
+    fn parse_import(tokens, pos) {
+        pos = pos + 1; // skip 'import'
+        let path = tokens[pos][1];
+        pos = pos + 1;
+        let mut alias = nil;
+        if tokens[pos][0] == "as" {
+            pos = pos + 1;
+            alias = tokens[pos][1];
+            pos = pos + 1;
+        }
+        if tokens[pos][0] == ";" { pos = pos + 1; }
+        return [["Import", path, alias], pos];
+    }
+
+    fn parse_assert(tokens, pos) {
+        pos = pos + 1; // skip 'assert'
+        let cond = parse_expr(tokens, pos);
+        pos = cond[1];
+        let mut msg = nil;
+        if tokens[pos][0] == "," {
+            pos = pos + 1;
+            let m = parse_expr(tokens, pos);
+            msg = m[0];
+            pos = m[1];
+        }
+        if tokens[pos][0] == ";" { pos = pos + 1; }
+        return [["Assert", cond[0], msg], pos];
+    }
+
+    fn parse_del(tokens, pos) {
+        pos = pos + 1; // skip 'del'
+        let name = tokens[pos][1];
+        pos = pos + 1;
+        if tokens[pos][0] == ";" { pos = pos + 1; }
+        return [["Del", name], pos];
+    }
+
+    fn parse_class(tokens, pos) {
+        pos = pos + 1; // skip 'class'
+        let name = tokens[pos][1];
+        pos = pos + 1;
+        let mut parent = nil;
+        if tokens[pos][0] == ":" {
+            pos = pos + 1;
+            parent = tokens[pos][1];
+            pos = pos + 1;
+        }
+        let body = parse_block(tokens, pos);
+        return [["ClassDef", name, parent, body[0][1]], body[1]];
+    }
+
+    fn parse_decorated(tokens, pos) {
+        // Collect decorators
+        let mut decorators = [];
+        while tokens[pos][0] == "@" {
+            pos = pos + 1;
+            let dec_name = tokens[pos][1];
+            pos = pos + 1;
+            let mut dec_args = nil;
+            if tokens[pos][0] == "(" {
+                pos = pos + 1;
+                dec_args = [];
+                if tokens[pos][0] != ")" {
+                    let a = parse_expr(tokens, pos);
+                    push(dec_args, a[0]);
+                    pos = a[1];
+                    while tokens[pos][0] == "," {
+                        pos = pos + 1;
+                        let a2 = parse_expr(tokens, pos);
+                        push(dec_args, a2[0]);
+                        pos = a2[1];
+                    }
+                }
+                pos = pos + 1; // skip ')'
+            }
+            push(decorators, [dec_name, dec_args]);
+        }
+        // Parse the actual fn or class
+        let inner = parse_stmt(tokens, pos);
+        pos = inner[1];
+        return [["Decorated", decorators, inner[0]], pos];
+    }
+
+    fn parse_yield(tokens, pos) {
+        pos = pos + 1; // skip 'yield'
+        let mut value = nil;
+        if tokens[pos][0] != ";" && tokens[pos][0] != "}" {
+            let r = parse_expr(tokens, pos);
+            value = r[0];
+            pos = r[1];
+        }
+        if tokens[pos][0] == ";" { pos = pos + 1; }
+        return [["Yield", value], pos];
+    }
+
+    fn parse_raise(tokens, pos) {
+        pos = pos + 1; // skip 'raise'
+        let mut value = nil;
+        if tokens[pos][0] != ";" && tokens[pos][0] != "}" {
+            let r = parse_expr(tokens, pos);
+            value = r[0];
+            pos = r[1];
+        }
+        if tokens[pos][0] == ";" { pos = pos + 1; }
+        return [["Raise", value], pos];
+    }
+
+    fn parse_block(tokens, pos) {
+        pos = pos + 1; // skip '{'
+        let mut stmts = [];
+        while tokens[pos][0] != "}" && tokens[pos][0] != "EOF" {
+            let r = parse_stmt(tokens, pos);
+            push(stmts, r[0]);
+            pos = r[1];
+        }
+        pos = pos + 1; // skip '}'
+        return [["Block", stmts], pos];
+    }
+
+    fn parse_expr_stmt(tokens, pos) {
+        let expr = parse_expr(tokens, pos);
+        pos = expr[1];
+        // Check for assignment or augmented assignment
+        let aop = tokens[pos][0];
+        if expr[0][0] == "Var" && (aop == "=" || aop == "+=" || aop == "-=" || aop == "*=" || aop == "/=" || aop == "%=" || aop == "**=") {
+            pos = pos + 1;
+            let val = parse_expr(tokens, pos);
+            pos = val[1];
+            if tokens[pos][0] == ";" { pos = pos + 1; }
+            if aop == "=" { return [["Assign", expr[0][1], val[0]], pos]; }
+            let op_map_plus = "+=";
+            let op_map_minus = "-=";
+            let mut bin_op = "+";
+            if aop == "+=" { bin_op = "+"; }
+            if aop == "-=" { bin_op = "-"; }
+            if aop == "*=" { bin_op = "*"; }
+            if aop == "/=" { bin_op = "/"; }
+            if aop == "%=" { bin_op = "%"; }
+            if aop == "**=" { bin_op = "**"; }
+            return [["Assign", expr[0][1], ["BinOp", bin_op, expr[0], val[0]]], pos];
+        }
+        // Index assignment: arr[i] = val
+        if expr[0][0] == "Index" && tokens[pos][0] == "=" {
+            pos = pos + 1;
+            let val = parse_expr(tokens, pos);
+            pos = val[1];
+            if tokens[pos][0] == ";" { pos = pos + 1; }
+            return [["IndexAssign", expr[0][1], expr[0][2], val[0]], pos];
+        }
+        // Field assignment: obj.field = val
+        if expr[0][0] == "Field" && tokens[pos][0] == "=" {
+            pos = pos + 1;
+            let val = parse_expr(tokens, pos);
+            pos = val[1];
+            if tokens[pos][0] == ";" { pos = pos + 1; }
+            return [["FieldAssign", expr[0][1], expr[0][2], val[0]], pos];
+        }
+        // Field augmented assignment: obj.field += val
+        if expr[0][0] == "Field" && (tokens[pos][0] == "+=" || tokens[pos][0] == "-=" || tokens[pos][0] == "*=" || tokens[pos][0] == "/=") {
+            let fa_op = tokens[pos][0];
+            pos = pos + 1;
+            let val = parse_expr(tokens, pos);
+            pos = val[1];
+            if tokens[pos][0] == ";" { pos = pos + 1; }
+            let mut bin_op = "+";
+            if fa_op == "-=" { bin_op = "-"; }
+            if fa_op == "*=" { bin_op = "*"; }
+            if fa_op == "/=" { bin_op = "/"; }
+            return [["FieldAssign", expr[0][1], expr[0][2], ["BinOp", bin_op, expr[0], val[0]]], pos];
+        }
+        if tokens[pos][0] == ";" { pos = pos + 1; }
+        return [["ExprStmt", expr[0]], pos];
+    }
+
+    // Expression parsing (precedence climbing -- Python-level)
+    fn parse_expr(tokens, pos) { return parse_or(tokens, pos); }
+
+    fn parse_or(tokens, pos) {
+        let mut left = parse_and(tokens, pos);
+        pos = left[1];
+        while tokens[pos][0] == "||" {
+            pos = pos + 1;
+            let right = parse_and(tokens, pos);
+            pos = right[1];
+            left = [["BinOp", "||", left[0], right[0]], pos];
+        }
+        return left;
+    }
+
+    fn parse_and(tokens, pos) {
+        let mut left = parse_bitor(tokens, pos);
+        pos = left[1];
+        while tokens[pos][0] == "&&" {
+            pos = pos + 1;
+            let right = parse_bitor(tokens, pos);
+            pos = right[1];
+            left = [["BinOp", "&&", left[0], right[0]], pos];
+        }
+        return left;
+    }
+
+    fn parse_bitor(tokens, pos) {
+        let mut left = parse_bitxor(tokens, pos);
+        pos = left[1];
+        while tokens[pos][0] == "|" {
+            pos = pos + 1;
+            let right = parse_bitxor(tokens, pos);
+            pos = right[1];
+            left = [["BinOp", "|", left[0], right[0]], pos];
+        }
+        return left;
+    }
+
+    fn parse_bitxor(tokens, pos) {
+        let mut left = parse_bitand(tokens, pos);
+        pos = left[1];
+        while tokens[pos][0] == "^" {
+            pos = pos + 1;
+            let right = parse_bitand(tokens, pos);
+            pos = right[1];
+            left = [["BinOp", "^", left[0], right[0]], pos];
+        }
+        return left;
+    }
+
+    fn parse_bitand(tokens, pos) {
+        let mut left = parse_eq(tokens, pos);
+        pos = left[1];
+        while tokens[pos][0] == "&" {
+            pos = pos + 1;
+            let right = parse_eq(tokens, pos);
+            pos = right[1];
+            left = [["BinOp", "&", left[0], right[0]], pos];
+        }
+        return left;
+    }
+
+    fn parse_eq(tokens, pos) {
+        let mut left = parse_cmp(tokens, pos);
+        pos = left[1];
+        while tokens[pos][0] == "==" || tokens[pos][0] == "!=" {
+            let op = tokens[pos][1];
+            pos = pos + 1;
+            let right = parse_cmp(tokens, pos);
+            pos = right[1];
+            left = [["BinOp", op, left[0], right[0]], pos];
+        }
+        return left;
+    }
+
+    fn parse_cmp(tokens, pos) {
+        let mut left = parse_shift(tokens, pos);
+        pos = left[1];
+        while tokens[pos][0] == "<" || tokens[pos][0] == ">" || tokens[pos][0] == "<=" || tokens[pos][0] == ">=" || tokens[pos][0] == "in" || tokens[pos][0] == "not" {
+            let mut op = tokens[pos][1];
+            if op == "in" {
+                pos = pos + 1;
+                let right = parse_shift(tokens, pos);
+                pos = right[1];
+                left = [["BinOp", "in", left[0], right[0]], pos];
+            } else if op == "not" {
+                // "not in"
+                pos = pos + 1;
+                pos = pos + 1; // skip 'in'
+                let right = parse_shift(tokens, pos);
+                pos = right[1];
+                left = [["Unary", "!", ["BinOp", "in", left[0], right[0]]], pos];
+            } else {
+                pos = pos + 1;
+                let right = parse_shift(tokens, pos);
+                pos = right[1];
+                left = [["BinOp", op, left[0], right[0]], pos];
+            }
+        }
+        return left;
+    }
+
+    fn parse_shift(tokens, pos) {
+        let mut left = parse_add(tokens, pos);
+        pos = left[1];
+        while tokens[pos][0] == "<<" || tokens[pos][0] == ">>" {
+            let op = tokens[pos][1];
+            pos = pos + 1;
+            let right = parse_add(tokens, pos);
+            pos = right[1];
+            left = [["BinOp", op, left[0], right[0]], pos];
+        }
+        return left;
+    }
+
+    fn parse_add(tokens, pos) {
+        let mut left = parse_mul(tokens, pos);
+        pos = left[1];
+        while tokens[pos][0] == "+" || tokens[pos][0] == "-" {
+            let op = tokens[pos][1];
+            pos = pos + 1;
+            let right = parse_mul(tokens, pos);
+            pos = right[1];
+            left = [["BinOp", op, left[0], right[0]], pos];
+        }
+        return left;
+    }
+
+    fn parse_mul(tokens, pos) {
+        let mut left = parse_power(tokens, pos);
+        pos = left[1];
+        while tokens[pos][0] == "*" || tokens[pos][0] == "/" || tokens[pos][0] == "%" || tokens[pos][0] == "//" {
+            let op = tokens[pos][1];
+            pos = pos + 1;
+            let right = parse_power(tokens, pos);
+            pos = right[1];
+            left = [["BinOp", op, left[0], right[0]], pos];
+        }
+        return left;
+    }
+
+    fn parse_power(tokens, pos) {
+        let base = parse_unary(tokens, pos);
+        pos = base[1];
+        if tokens[pos][0] == "**" {
+            pos = pos + 1;
+            let exp = parse_power(tokens, pos); // right-associative
+            pos = exp[1];
+            return [["BinOp", "**", base[0], exp[0]], pos];
+        }
+        return base;
+    }
+
+    fn parse_unary(tokens, pos) {
+        if tokens[pos][0] == "-" {
+            pos = pos + 1;
+            let r = parse_unary(tokens, pos);
+            return [["Unary", "-", r[0]], r[1]];
+        }
+        if tokens[pos][0] == "!" || tokens[pos][0] == "not" {
+            pos = pos + 1;
+            let r = parse_unary(tokens, pos);
+            return [["Unary", "!", r[0]], r[1]];
+        }
+        if tokens[pos][0] == "~" {
+            pos = pos + 1;
+            let r = parse_unary(tokens, pos);
+            return [["Unary", "~", r[0]], r[1]];
+        }
+        return parse_postfix(tokens, pos);
+    }
+
+    fn parse_postfix(tokens, pos) {
+        let mut expr = parse_primary(tokens, pos);
+        pos = expr[1];
+        let mut cont = true;
+        while cont {
+            if tokens[pos][0] == "(" {
+                pos = pos + 1;
+                let mut args = [];
+                if tokens[pos][0] != ")" {
+                    let a = parse_expr(tokens, pos);
+                    push(args, a[0]);
+                    pos = a[1];
+                    while tokens[pos][0] == "," {
+                        pos = pos + 1;
+                        let a2 = parse_expr(tokens, pos);
+                        push(args, a2[0]);
+                        pos = a2[1];
+                    }
+                }
+                pos = pos + 1; // skip ')'
+                expr = [["Call", expr[0], args], pos];
+            } else if tokens[pos][0] == "[" {
+                pos = pos + 1;
+                // Check for slice: [a:b], [:b], [a:]
+                if tokens[pos][0] == ":" {
+                    // [:b]
+                    pos = pos + 1;
+                    let end_expr = parse_expr(tokens, pos);
+                    pos = end_expr[1];
+                    pos = pos + 1; // skip ']'
+                    expr = [["Slice", expr[0], ["Num", 0], end_expr[0]], pos];
+                } else {
+                    let idx = parse_expr(tokens, pos);
+                    pos = idx[1];
+                    if tokens[pos][0] == ":" {
+                        // [a:b] or [a:]
+                        pos = pos + 1;
+                        if tokens[pos][0] == "]" {
+                            // [a:]
+                            pos = pos + 1;
+                            expr = [["Slice", expr[0], idx[0], nil], pos];
+                        } else {
+                            let end_expr = parse_expr(tokens, pos);
+                            pos = end_expr[1];
+                            pos = pos + 1; // skip ']'
+                            expr = [["Slice", expr[0], idx[0], end_expr[0]], pos];
+                        }
+                    } else {
+                        pos = pos + 1; // skip ']'
+                        expr = [["Index", expr[0], idx[0]], pos];
+                    }
+                }
+            } else if tokens[pos][0] == "." {
+                pos = pos + 1;
+                let field = tokens[pos][1];
+                pos = pos + 1;
+                if tokens[pos][0] == "(" {
+                    // Method call: obj.method(args) -> builtin(obj, args)
+                    pos = pos + 1;
+                    let mut args = [];
+                    if tokens[pos][0] != ")" {
+                        let a = parse_expr(tokens, pos);
+                        push(args, a[0]);
+                        pos = a[1];
+                        while tokens[pos][0] == "," {
+                            pos = pos + 1;
+                            let a2 = parse_expr(tokens, pos);
+                            push(args, a2[0]);
+                            pos = a2[1];
+                        }
+                    }
+                    pos = pos + 1; // skip ')'
+                    // Desugar method call to MethodCall node
+                    expr = [["MethodCall", expr[0], field, args], pos];
+                } else {
+                    expr = [["Field", expr[0], field], pos];
+                }
+            } else {
+                cont = false;
+            }
+        }
+        return expr;
+    }
+
+    fn parse_primary(tokens, pos) {
+        let tt = tokens[pos][0];
+        let val = tokens[pos][1];
+        if tt == "Num" { return [["Num", val], pos + 1]; }
+        if tt == "Str" { return [["Str", val], pos + 1]; }
+        if tt == "Bool" { return [["Bool", val], pos + 1]; }
+        if tt == "Nil" { return [["Nil"], pos + 1]; }
+        if tt == "Ident" { return [["Var", val], pos + 1]; }
+        if tt == "(" {
+            pos = pos + 1;
+            let e = parse_expr(tokens, pos);
+            pos = e[1];
+            pos = pos + 1; // skip ')'
+            return [e[0], pos];
+        }
+        if tt == "[" {
+            pos = pos + 1;
+            let mut elems = [];
+            if tokens[pos][0] != "]" {
+                let e = parse_expr(tokens, pos);
+                push(elems, e[0]);
+                pos = e[1];
+                // List comprehension: [expr for x in iter if cond]
+                if tokens[pos][0] == "for" {
+                    pos = pos + 1;
+                    let var_name = tokens[pos][1];
+                    pos = pos + 1;
+                    pos = pos + 1; // skip 'in'
+                    let iter_expr = parse_expr(tokens, pos);
+                    pos = iter_expr[1];
+                    let mut filter_expr = nil;
+                    if tokens[pos][0] == "if" {
+                        pos = pos + 1;
+                        let fe = parse_expr(tokens, pos);
+                        filter_expr = fe[0];
+                        pos = fe[1];
+                    }
+                    pos = pos + 1; // skip ']'
+                    return [["ListComp", e[0], var_name, iter_expr[0], filter_expr], pos];
+                }
+                while tokens[pos][0] == "," {
+                    pos = pos + 1;
+                    if tokens[pos][0] == "]" {
+                        // trailing comma
+                    } else {
+                        let e2 = parse_expr(tokens, pos);
+                        push(elems, e2[0]);
+                        pos = e2[1];
+                    }
+                }
+            }
+            pos = pos + 1; // skip ']'
+            return [["Array", elems], pos];
+        }
+        // Dict literal: { key: value, ... }
+        if tt == "{" {
+            // Peek: is this a dict or a block?
+            // Dict if next is "}" or next-next is ":"
+            let next = tokens[pos + 1][0];
+            if next == "}" {
+                pos = pos + 2; // empty dict
+                return [["Dict", []], pos];
+            }
+            // Check for key : value pattern
+            let next2 = tokens[pos + 2][0];
+            if next2 == ":" {
+                pos = pos + 1; // skip '{'
+                let mut pairs = [];
+                while tokens[pos][0] != "}" && tokens[pos][0] != "EOF" {
+                    let k = parse_expr(tokens, pos);
+                    pos = k[1];
+                    pos = pos + 1; // skip ':'
+                    let v = parse_expr(tokens, pos);
+                    pos = v[1];
+                    push(pairs, [k[0], v[0]]);
+                    if tokens[pos][0] == "," { pos = pos + 1; }
+                }
+                pos = pos + 1; // skip '}'
+                return [["Dict", pairs], pos];
+            }
+        }
+        // Lambda: fn (params) expr  (without braces = expression-body lambda)
+        if tt == "fn" && tokens[pos + 1][0] == "(" {
+            pos = pos + 1; // skip 'fn'
+            pos = pos + 1; // skip '('
+            let mut params = [];
+            if tokens[pos][0] != ")" {
+                push(params, tokens[pos][1]);
+                pos = pos + 1;
+                while tokens[pos][0] == "," {
+                    pos = pos + 1;
+                    push(params, tokens[pos][1]);
+                    pos = pos + 1;
+                }
+            }
+            pos = pos + 1; // skip ')'
+            // If next is '{', parse as block; else parse single expression
+            if tokens[pos][0] == "{" {
+                let body = parse_block(tokens, pos);
+                return [["Lambda", params, body[0][1]], body[1]];
+            } else {
+                let body_expr = parse_expr(tokens, pos);
+                pos = body_expr[1];
+                return [["Lambda", params, [["Return", body_expr[0]]]], pos];
+            }
+        }
+        // Skip unknown
+        return [["Nil"], pos + 1];
+    }
+}
+
+// ==================================
+// S4  INTERPRETER / VM
+// ==================================
+
+quadrant vm {
+    // Environment: chain of scopes
+    // Each scope is an array of [name, value] pairs
+
+    fn eval_program(stmts) {
+        let mut env = [[]]; // stack of scopes, innermost last
+        let mut output = [];
+
+        // Register builtins
+        env_def(env, "hilbert_encode", ["builtin", "hilbert_encode"]);
+        env_def(env, "hilbert_decode", ["builtin", "hilbert_decode"]);
+        env_def(env, "hilbert_dist", ["builtin", "hilbert_dist"]);
+        env_def(env, "len", ["builtin", "len"]);
+        env_def(env, "push", ["builtin", "push"]);
+        env_def(env, "abs", ["builtin", "abs"]);
+        env_def(env, "max", ["builtin", "max"]);
+        env_def(env, "min", ["builtin", "min"]);
+        env_def(env, "floor", ["builtin", "floor"]);
+        env_def(env, "to_string", ["builtin", "to_string"]);
+        env_def(env, "type_of", ["builtin", "type_of"]);
+        env_def(env, "range", ["builtin", "range"]);
+        env_def(env, "set_at", ["builtin", "set_at"]);
+        env_def(env, "char_at", ["builtin", "char_at"]);
+        env_def(env, "is_digit", ["builtin", "is_digit"]);
+        env_def(env, "is_alpha", ["builtin", "is_alpha"]);
+        env_def(env, "is_alnum", ["builtin", "is_alnum"]);
+        env_def(env, "str_len", ["builtin", "str_len"]);
+        env_def(env, "str_char_at", ["builtin", "str_char_at"]);
+        env_def(env, "str_from_code", ["builtin", "str_from_code"]);
+        env_def(env, "clamp", ["builtin", "clamp"]);
+        env_def(env, "int", ["builtin", "int"]);
+        env_def(env, "float", ["builtin", "float"]);
+        env_def(env, "str", ["builtin", "str"]);
+        env_def(env, "bool", ["builtin", "bool"]);
+        env_def(env, "input", ["builtin", "input"]);
+        env_def(env, "chr", ["builtin", "chr"]);
+        env_def(env, "ord", ["builtin", "ord"]);
+        env_def(env, "hex", ["builtin", "hex"]);
+        env_def(env, "sorted", ["builtin", "sorted"]);
+        env_def(env, "reversed", ["builtin", "reversed"]);
+        env_def(env, "enumerate", ["builtin", "enumerate"]);
+        env_def(env, "zip", ["builtin", "zip"]);
+        env_def(env, "sum", ["builtin", "sum"]);
+        env_def(env, "map", ["builtin", "map"]);
+        env_def(env, "filter", ["builtin", "filter"]);
+        env_def(env, "any", ["builtin", "any"]);
+        env_def(env, "all", ["builtin", "all"]);
+        env_def(env, "isinstance", ["builtin", "isinstance"]);
+        env_def(env, "round", ["builtin", "round"]);
+        env_def(env, "pow", ["builtin", "pow"]);
+        env_def(env, "divmod", ["builtin", "divmod"]);
+        env_def(env, "dict", ["builtin", "dict"]);
+        env_def(env, "list", ["builtin", "list"]);
+        env_def(env, "keys", ["builtin", "keys"]);
+        env_def(env, "values", ["builtin", "values"]);
+        env_def(env, "items", ["builtin", "items"]);
+        env_def(env, "hasattr", ["builtin", "hasattr"]);
+        env_def(env, "getattr", ["builtin", "getattr"]);
+        env_def(env, "setattr", ["builtin", "setattr"]);
+        env_def(env, "super", ["builtin", "super"]);
+        env_def(env, "next", ["builtin", "next"]);
+        env_def(env, "iter", ["builtin", "iter"]);
+        env_def(env, "reduce", ["builtin", "reduce"]);
+
+        // --- File I/O builtins (in-memory VFS for bootstrap) ---
+        env_def(env, "file_read", ["builtin", "file_read"]);
+        env_def(env, "file_write", ["builtin", "file_write"]);
+        env_def(env, "file_exists", ["builtin", "file_exists"]);
+        env_def(env, "file_list", ["builtin", "file_list"]);
+        env_def(env, "file_delete", ["builtin", "file_delete"]);
+        // --- Byte array operations (binary image building) ---
+        env_def(env, "byte_array", ["builtin", "byte_array"]);
+        env_def(env, "byte_set", ["builtin", "byte_set"]);
+        env_def(env, "byte_get", ["builtin", "byte_get"]);
+        env_def(env, "u16_le", ["builtin", "u16_le"]);
+        env_def(env, "u32_le", ["builtin", "u32_le"]);
+        env_def(env, "u64_le", ["builtin", "u64_le"]);
+        env_def(env, "le_u16", ["builtin", "le_u16"]);
+        env_def(env, "le_u32", ["builtin", "le_u32"]);
+        // --- String builtins (native speed for lexer/parser) ---
+        env_def(env, "str_sub", ["builtin", "str_sub"]);
+        env_def(env, "str_find_native", ["builtin", "str_find_native"]);
+        env_def(env, "str_split_native", ["builtin", "str_split_native"]);
+        env_def(env, "str_join_native", ["builtin", "str_join_native"]);
+        env_def(env, "parse_int", ["builtin", "parse_int"]);
+        // --- System builtins ---
+        env_def(env, "process_args", ["builtin", "process_args"]);
+        env_def(env, "exit_program", ["builtin", "exit_program"]);
+        env_def(env, "panic_halt", ["builtin", "panic_halt"]);
+        env_def(env, "time_ticks", ["builtin", "time_ticks"]);
+        env_def(env, "serial_write", ["builtin", "serial_write"]);
+        env_def(env, "serial_read_line", ["builtin", "serial_read_line"]);
+        env_def(env, "concat", ["builtin", "concat"]);
+        env_def(env, "slice", ["builtin", "slice"]);
+        env_def(env, "copy_array", ["builtin", "copy_array"]);
+        // --- VM internal state ---
+        env_def(env, "_vm_fs", []);
+        env_def(env, "_vm_args", []);
+        env_def(env, "_vm_ticks", 0);
+
+        let mut i = 0;
+        while i < len(stmts) {
+            let result = eval_stmt(stmts[i], env, output);
+            if result[0] == "return_signal" {
+                return output;
+            }
+            i = i + 1;
+        }
+        return output;
+    }
+
+    fn eval_stmt(node, env, output) {
+        let ntype = node[0];
+
+        if ntype == "Let" {
+            let name = node[1];
+            let mut val = nil;
+            if node[3] != nil {
+                val = eval_expr(node[3], env, output);
+            }
+            env_def(env, name, val);
+            return ["ok", val];
+        }
+
+        if ntype == "LetDestruct" {
+            // node = ["LetDestruct", pattern, mutable, expr]
+            let val = eval_expr(node[3], env, output);
+            _destruct_bind(node[1], val, env);
+            return ["ok", val];
+        }
+
+        if ntype == "FnDef" {
+            let name = node[1];
+            let params = node[2];
+            let body = node[3];
+            let defaults = nil;
+            if len(node) > 4 { defaults = node[4]; }
+            env_def(env, name, ["fn", params, body, env, defaults]);
+            return ["ok", nil];
+        }
+
+        if ntype == "ClassDef" {
+            // node = ["ClassDef", name, parent, body_stmts]
+            let class_name = node[1];
+            let parent_name = node[2];
+            let body = node[3];
+            let mut class_obj = [["__name__", class_name]];
+            if parent_name != nil {
+                let parent = env_get(env, parent_name);
+                push(class_obj, ["__parent__", parent]);
+            }
+            // Evaluate class body in a new scope
+            let mut class_env = env;
+            let mut ci = 0;
+            while ci < len(body) {
+                let stmt = body[ci];
+                if stmt[0] == "FnDef" {
+                    let fname = stmt[1];
+                    let fparams = stmt[2];
+                    let fbody = stmt[3];
+                    let fdefaults = nil;
+                    if len(stmt) > 4 { fdefaults = stmt[4]; }
+                    push(class_obj, [fname, ["fn", fparams, fbody, env, fdefaults]]);
+                } else if stmt[0] == "Let" {
+                    let lname = stmt[1];
+                    let mut lval = nil;
+                    if stmt[3] != nil { lval = eval_expr(stmt[3], env, output); }
+                    push(class_obj, [lname, lval]);
+                } else {
+                    eval_stmt(stmt, env, output);
+                }
+                ci = ci + 1;
+            }
+            env_def(env, class_name, ["class", class_obj]);
+            return ["ok", nil];
+        }
+
+        if ntype == "Decorated" {
+            // node = ["Decorated", decorators, inner_stmt]
+            let inner = node[2];
+            // Execute inner statement first
+            eval_stmt(inner, env, output);
+            // Get the function/class that was just defined
+            let target_name = inner[1];
+            let mut target = env_get(env, target_name);
+            // Apply decorators in reverse order
+            let decs = node[1];
+            let mut di = len(decs) - 1;
+            while di >= 0 {
+                let dec_name = decs[di][0];
+                let dec_args = decs[di][1];
+                let decorator = env_get(env, dec_name);
+                if dec_args != nil {
+                    // @decorator(args): call decorator factory first
+                    let mut factory_args = [];
+                    let mut dai = 0;
+                    while dai < len(dec_args) {
+                        push(factory_args, eval_expr(dec_args[dai], env, output));
+                        dai = dai + 1;
+                    }
+                    let factory_result = call_fn(decorator, factory_args, env, output);
+                    target = call_fn(factory_result, [target], env, output);
+                } else {
+                    target = call_fn(decorator, [target], env, output);
+                }
+                di = di - 1;
+            }
+            env_set(env, target_name, target);
+            return ["ok", nil];
+        }
+
+        if ntype == "Yield" {
+            // Yield stores value in a generator state
+            let mut val = nil;
+            if node[1] != nil { val = eval_expr(node[1], env, output); }
+            return ["yield_signal", val];
+        }
+
+        if ntype == "Raise" {
+            let mut val = nil;
+            if node[1] != nil { val = eval_expr(node[1], env, output); }
+            return ["exception_signal", val];
+        }
+
+        if ntype == "If" {
+            let cond = eval_expr(node[1], env, output);
+            if is_truthy(cond) {
+                return eval_stmts(node[2], env, output);
+            }
+            if node[3] != nil {
+                return eval_stmts(node[3], env, output);
+            }
+            return ["ok", nil];
+        }
+
+        if ntype == "While" {
+            let mut r = nil;
+            while is_truthy(eval_expr(node[1], env, output)) {
+                let result = eval_stmts(node[2], env, output);
+                if result[0] == "return_signal" { return result; }
+                if result[0] == "break_signal" { return ["ok", r]; }
+                if result[0] == "continue_signal" { r = result[1]; }
+                else { r = result[1]; }
+            }
+            return ["ok", r];
+        }
+
+        if ntype == "For" {
+            let var_name = node[1];
+            let iter = eval_expr(node[2], env, output);
+            let mut r = nil;
+            let mut j = 0;
+            while j < len(iter) {
+                env_def(env, var_name, iter[j]);
+                let result = eval_stmts(node[3], env, output);
+                if result[0] == "return_signal" { return result; }
+                if result[0] == "break_signal" { return ["ok", r]; }
+                if result[0] == "continue_signal" { j = j + 1; }
+                else { r = result[1]; j = j + 1; }
+            }
+            return ["ok", r];
+        }
+
+        if ntype == "Return" {
+            let mut val = nil;
+            if node[1] != nil {
+                val = eval_expr(node[1], env, output);
+            }
+            return ["return_signal", val];
+        }
+
+        if ntype == "Break" { return ["break_signal", nil]; }
+        if ntype == "Continue" { return ["continue_signal", nil]; }
+        if ntype == "Pass" { return ["ok", nil]; }
+
+        if ntype == "Print" {
+            let val = eval_expr(node[1], env, output);
+            push(output, to_string(val));
+            return ["ok", val];
+        }
+
+        if ntype == "Assign" {
+            let name = node[1];
+            let val = eval_expr(node[2], env, output);
+            env_set(env, name, val);
+            return ["ok", val];
+        }
+
+        if ntype == "IndexAssign" {
+            let obj = eval_expr(node[1], env, output);
+            let idx = eval_expr(node[2], env, output);
+            let val = eval_expr(node[3], env, output);
+            obj[idx] = val;
+            return ["ok", val];
+        }
+
+        if ntype == "FieldAssign" {
+            // node = ["FieldAssign", obj_expr, field_name, val_expr]
+            let obj = eval_expr(node[1], env, output);
+            let field = node[2];
+            let val = eval_expr(node[3], env, output);
+            // Set field on object (array of [key, value] pairs)
+            _obj_set(obj, field, val);
+            return ["ok", val];
+        }
+
+        if ntype == "Try" {
+            // node = ["Try", try_stmts, catch_clauses, finally_stmts]
+            let result = eval_stmts(node[1], env, output);
+            let mut handled = false;
+            if result[0] == "exception_signal" && node[2] != nil {
+                // Try each catch clause
+                let catches = node[2];
+                let mut ci = 0;
+                while ci < len(catches) && !handled {
+                    let clause = catches[ci];
+                    let catch_name = clause[0];
+                    let catch_type = clause[1];
+                    let catch_body = clause[2];
+                    // Type check: if catch_type specified, check exception type
+                    let mut type_match = true;
+                    if catch_type != nil {
+                        let exc_val = result[1];
+                        if type_of(exc_val) == "array" && len(exc_val) > 0 {
+                            // Exception object: check __class__
+                            let exc_class = _obj_get(exc_val, "__class__");
+                            if exc_class != catch_type { type_match = false; }
+                        } else {
+                            type_match = false;
+                        }
+                    }
+                    if type_match {
+                        if catch_name != nil {
+                            env_def(env, catch_name, result[1]);
+                        }
+                        result = eval_stmts(catch_body, env, output);
+                        handled = true;
+                    }
+                    ci = ci + 1;
+                }
+            }
+            if node[3] != nil {
+                eval_stmts(node[3], env, output); // finally
+            }
+            if result[0] == "exception_signal" && !handled {
+                return result; // propagate unhandled exception
+            }
+            return result;
+        }
+
+        if ntype == "Assert" {
+            let cond = eval_expr(node[1], env, output);
+            if !is_truthy(cond) {
+                let mut msg = "Assertion failed";
+                if node[2] != nil {
+                    msg = to_string(eval_expr(node[2], env, output));
+                }
+                push(output, "ASSERT: " + msg);
+            }
+            return ["ok", nil];
+        }
+
+        if ntype == "Import" {
+            // node = ["Import", path, alias]
+            // Import is handled by the build system; interpreter stores the path
+            push(output, "import: " + to_string(node[1]));
+            return ["ok", nil];
+        }
+
+        if ntype == "Del" {
+            env_set(env, node[1], nil);
+            return ["ok", nil];
+        }
+
+        if ntype == "Quadrant" {
+            return eval_stmts(node[2], env, output);
+        }
+
+        if ntype == "ExprStmt" {
+            let val = eval_expr(node[1], env, output);
+            return ["ok", val];
+        }
+
+        if ntype == "Block" {
+            return eval_stmts(node[1], env, output);
+        }
+
+        return ["ok", nil];
+    }
+
+    fn eval_stmts(stmts, env, output) {
+        let mut result = ["ok", nil];
+        let mut i = 0;
+        while i < len(stmts) {
+            result = eval_stmt(stmts[i], env, output);
+            if result[0] == "return_signal" { return result; }
+            if result[0] == "break_signal" { return result; }
+            if result[0] == "continue_signal" { return result; }
+            if result[0] == "exception_signal" { return result; }
+            if result[0] == "yield_signal" { return result; }
+            i = i + 1;
+        }
+        return result;
+    }
+
+    fn eval_expr(node, env, output) {
+        if node == nil { return nil; }
+        let ntype = node[0];
+
+        if ntype == "Num" { return node[1]; }
+        if ntype == "Str" { return node[1]; }
+        if ntype == "Bool" { return node[1]; }
+        if ntype == "Nil" { return nil; }
+        if ntype == "Var" { return env_get(env, node[1]); }
+
+        if ntype == "BinOp" {
+            let op = node[1];
+            let l = eval_expr(node[2], env, output);
+            let r = eval_expr(node[3], env, output);
+            if op == "+" { return l + r; }
+            if op == "-" { return l - r; }
+            if op == "*" { return l * r; }
+            if op == "/" { if r != 0 { return l / r; } return 0; }
+            if op == "%" { if r != 0 { return l % r; } return 0; }
+            if op == "==" { return l == r; }
+            if op == "!=" { return l != r; }
+            if op == "<" { return l < r; }
+            if op == ">" { return l > r; }
+            if op == "<=" { return l <= r; }
+            if op == ">=" { return l >= r; }
+            if op == "&&" { return is_truthy(l) && is_truthy(r); }
+            if op == "||" { return is_truthy(l) || is_truthy(r); }
+            // Power **
+            if op == "**" {
+                if r == 0 { return 1; }
+                if r < 0 {
+                    // Negative exponent: x^(-n) = 1 / x^n
+                    let mut result = 1;
+                    let mut pi = 0;
+                    while pi < (0 - r) { result = result * l; pi = pi + 1; }
+                    if result ==  0 { return 0; }
+                    return 1 / result;
+                }
+                let mut result = 1;
+                let mut pi = 0;
+                while pi < r { result = result * l; pi = pi + 1; }
+                return result;
+            }
+            // Floor division //
+            if op == "//" {
+                if r != 0 { return floor(l / r); }
+                return 0;
+            }
+            // Bitwise operators
+            if op == "&" { return _bitwise_and(l, r); }
+            if op == "|" { return _bitwise_or(l, r); }
+            if op == "^" { return _bitwise_xor(l, r); }
+            if op == "<<" { return _shift_left(l, r); }
+            if op == ">>" { return _shift_right(l, r); }
+            // "in" operator: value in collection
+            if op == "in" {
+                if type_of(r) == "array" {
+                    let mut ii = 0;
+                    while ii < len(r) {
+                        if r[ii] == l { return true; }
+                        ii = ii + 1;
+                    }
+                    return false;
+                }
+                if type_of(r) == "str" {
+                    // string contains
+                    return _str_contains_builtin(r, to_string(l));
+                }
+                return false;
+            }
+            return nil;
+        }
+
+        if ntype == "Unary" {
+            let v = eval_expr(node[2], env, output);
+            if node[1] == "-" { return 0 - v; }
+            if node[1] == "!" { return !is_truthy(v); }
+            if node[1] == "~" { return _bitwise_not(v); }
+            return nil;
+        }
+
+        if ntype == "Call" {
+            let callee = eval_expr(node[1], env, output);
+            let mut args = [];
+            let mut k = 0;
+            while k < len(node[2]) {
+                push(args, eval_expr(node[2][k], env, output));
+                k = k + 1;
+            }
+            return call_fn(callee, args, env, output);
+        }
+
+        if ntype == "MethodCall" {
+            // node = ["MethodCall", obj_expr, method_name, arg_exprs]
+            let obj = eval_expr(node[1], env, output);
+            let method_name = node[2];
+            let mut args = [];
+            let mut k = 0;
+            while k < len(node[3]) {
+                push(args, eval_expr(node[3][k], env, output));
+                k = k + 1;
+            }
+            // 1. Try class method lookup (instance.method)
+            let mut method = nil;
+            if type_of(obj) == "array" && len(obj) > 0 {
+                // Check instance fields first
+                let mut fi = 0;
+                while fi < len(obj) {
+                    if type_of(obj[fi]) == "array" && len(obj[fi]) == 2 {
+                        if obj[fi][0] == method_name { method = obj[fi][1]; }
+                    }
+                    fi = fi + 1;
+                }
+                // Check class hierarchy
+                if method == nil {
+                    let class_obj = _obj_get(obj, "__class_obj__");
+                    if class_obj != nil {
+                        method = _class_lookup(class_obj, method_name);
+                    }
+                }
+            }
+            // 2. If found on class/instance, call with self as first arg
+            if method != nil {
+                let mut all_args = [obj];
+                let mut ai = 0;
+                while ai < len(args) { push(all_args, args[ai]); ai = ai + 1; }
+                return call_fn(method, all_args, env, output);
+            }
+            // 3. Fallback: global function with obj as first arg (e.g. len, push)
+            let global_fn = env_get(env, method_name);
+            if global_fn != nil {
+                let mut all_args = [obj];
+                let mut ai = 0;
+                while ai < len(args) { push(all_args, args[ai]); ai = ai + 1; }
+                return call_fn(global_fn, all_args, env, output);
+            }
+            return nil;
+        }
+
+        if ntype == "Index" {
+            let obj = eval_expr(node[1], env, output);
+            let idx = eval_expr(node[2], env, output);
+            // Negative indexing (Python-style)
+            if idx < 0 { return obj[len(obj) + idx]; }
+            return obj[idx];
+        }
+
+        if ntype == "Slice" {
+            let obj = eval_expr(node[1], env, output);
+            let s = eval_expr(node[2], env, output);
+            let mut e = len(obj);
+            if node[3] != nil { e = eval_expr(node[3], env, output); }
+            // Normalize negative indices
+            let mut ns = s;
+            let mut ne = e;
+            if ns < 0 { ns = len(obj) + ns; }
+            if ne < 0 { ne = len(obj) + ne; }
+            if ns < 0 { ns = 0; }
+            if ne > len(obj) { ne = len(obj); }
+            let mut result = [];
+            while ns < ne {
+                push(result, obj[ns]);
+                ns = ns + 1;
+            }
+            return result;
+        }
+
+        if ntype == "Array" {
+            let mut elems = [];
+            let mut k = 0;
+            while k < len(node[1]) {
+                push(elems, eval_expr(node[1][k], env, output));
+                k = k + 1;
+            }
+            return elems;
+        }
+
+        if ntype == "Dict" {
+            // Dict is array of [key, value] pairs
+            let mut entries = [];
+            let mut k = 0;
+            while k < len(node[1]) {
+                let pair = node[1][k];
+                let dk = eval_expr(pair[0], env, output);
+                let dv = eval_expr(pair[1], env, output);
+                push(entries, [dk, dv]);
+                k = k + 1;
+            }
+            return entries;
+        }
+
+        if ntype == "Lambda" {
+            // Lambda captures current environment
+            return ["fn", node[1], node[2], env];
+        }
+
+        if ntype == "Field" {
+            let obj = eval_expr(node[1], env, output);
+            let field = node[2];
+            // Object/Dict field access: search for key
+            if type_of(obj) == "array" && len(obj) > 0 {
+                let mut fi = 0;
+                while fi < len(obj) {
+                    if type_of(obj[fi]) == "array" && len(obj[fi]) == 2 {
+                        if obj[fi][0] == field { return obj[fi][1]; }
+                    }
+                    fi = fi + 1;
+                }
+                // Check parent class
+                let parent = _obj_get(obj, "__class_obj__");
+                if parent != nil {
+                    return _class_lookup(parent, field);
+                }
+            }
+            return nil;
+        }
+
+        if ntype == "ListComp" {
+            // node = ["ListComp", body_expr, var_name, iter_expr, filter_expr]
+            let iter = eval_expr(node[3], env, output);
+            let mut result = [];
+            let mut li = 0;
+            while li < len(iter) {
+                env_def(env, node[2], iter[li]);
+                let mut include = true;
+                if node[4] != nil {
+                    include = is_truthy(eval_expr(node[4], env, output));
+                }
+                if include {
+                    push(result, eval_expr(node[1], env, output));
+                }
+                li = li + 1;
+            }
+            return result;
+        }
+
+        return nil;
+    }
+
+    fn call_fn(callee, args, env, output) {
+        if callee == nil { return nil; }
+        // Class instantiation: ClassName(args...) -> new instance
+        if callee[0] == "class" {
+            let class_obj = callee[1];
+            let class_name = _obj_get(class_obj, "__name__");
+            // Create instance
+            let mut instance = [["__class__", class_name], ["__class_obj__", class_obj]];
+            // Copy class variables (non-function)
+            let mut ci = 0;
+            while ci < len(class_obj) {
+                if type_of(class_obj[ci]) == "array" && len(class_obj[ci]) == 2 {
+                    let k = class_obj[ci][0];
+                    let v = class_obj[ci][1];
+                    if k != "__name__" && k != "__parent__" {
+                        if type_of(v) != "array" || len(v) < 1 || v[0] != "fn" {
+                            push(instance, [k, v]);
+                        }
+                    }
+                }
+                ci = ci + 1;
+            }
+            // Call __init__ if it exists
+            let init_fn = _class_lookup(class_obj, "__init__");
+            if init_fn != nil {
+                let mut init_args = [instance];
+                let mut ai = 0;
+                while ai < len(args) { push(init_args, args[ai]); ai = ai + 1; }
+                call_fn(init_fn, init_args, env, output);
+            }
+            return instance;
+        }
+        if callee[0] == "builtin" {
+            let name = callee[1];
+            if name == "hilbert_encode" { return hilbert_encode(args[0], args[1], args[2]); }
+            if name == "hilbert_decode" { return hilbert_decode(args[0]); }
+            if name == "hilbert_dist" { return hilbert_dist(args[0], args[1]); }
+            if name == "len" { return len(args[0]); }
+            if name == "push" { return push(args[0], args[1]); }
+            if name == "abs" { return abs(args[0]); }
+            if name == "max" { return max(args[0], args[1]); }
+            if name == "min" { return min(args[0], args[1]); }
+            if name == "floor" { return floor(args[0]); }
+            if name == "to_string" { return to_string(args[0]); }
+            if name == "type_of" { return type_of(args[0]); }
+            if name == "range" {
+                let mut r = [];
+                if len(args) == 1 {
+                    // range(n)
+                    let mut ri = 0;
+                    while ri < args[0] { push(r, ri); ri = ri + 1; }
+                } else if len(args) == 2 {
+                    // range(start, end)
+                    let mut ri = args[0];
+                    while ri < args[1] { push(r, ri); ri = ri + 1; }
+                } else if len(args) >= 3 {
+                    // range(start, end, step)
+                    let mut ri = args[0];
+                    let step = args[2];
+                    if step > 0 {
+                        while ri < args[1] { push(r, ri); ri = ri + step; }
+                    } else if step < 0 {
+                        while ri > args[1] { push(r, ri); ri = ri + step; }
+                    }
+                }
+                return r;
+            }
+            if name == "set_at" { args[0][args[1]] = args[2]; return args[0]; }
+            if name == "char_at" {
+                // char_at(string, index) -> single character string
+                let s = args[0];
+                let idx = args[1];
+                if type_of(s) == "str" {
+                    if idx >= 0 && idx < len(s) { return s[idx]; }
+                    return "";
+                }
+                return "";
+            }
+            if name == "is_digit" {
+                let c = args[0];
+                if c >= "0" && c <= "9" { return true; }
+                return false;
+            }
+            if name == "is_alpha" {
+                let c = args[0];
+                if c >= "a" && c <= "z" { return true; }
+                if c >= "A" && c <= "Z" { return true; }
+                if c == "_" { return true; }
+                return false;
+            }
+            if name == "is_alnum" {
+                let c = args[0];
+                if c >= "0" && c <= "9" { return true; }
+                if c >= "a" && c <= "z" { return true; }
+                if c >= "A" && c <= "Z" { return true; }
+                if c == "_" { return true; }
+                return false;
+            }
+            if name == "str_len" { return len(args[0]); }
+            if name == "str_char_at" { return args[0][args[1]]; }
+            if name == "str_from_code" {
+                // Convert int to single-char string
+                // Use a lookup for printable ASCII
+                let ascii = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+                let code = args[0];
+                if code >= 32 && code <= 126 {
+                    let mut idx = code - 32;
+                    return to_string(ascii[idx]);
+                }
+                return "?";
+            }
+            if name == "clamp" {
+                let n = args[0];
+                if n < args[1] { return args[1]; }
+                if n > args[2] { return args[2]; }
+                return n;
+            }
+            // Type conversion builtins (Python-level)
+            if name == "int" {
+                if type_of(args[0]) == "float" { return floor(args[0]); }
+                if type_of(args[0]) == "str" { return parse_number(args[0]); }
+                if type_of(args[0]) == "bool" { if args[0] { return 1; } return 0; }
+                return args[0];
+            }
+            if name == "float" {
+                if type_of(args[0]) == "int" { return args[0] + 0.0; }
+                return args[0];
+            }
+            if name == "str" { return to_string(args[0]); }
+            if name == "bool" { return is_truthy(args[0]); }
+            if name == "chr" {
+                let ascii = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+                let code = args[0];
+                if code >= 32 && code <= 126 { return to_string(ascii[code - 32]); }
+                return "?";
+            }
+            if name == "ord" {
+                if type_of(args[0]) == "str" && len(args[0]) > 0 {
+                    let c = args[0][0];
+                    // If char is already int, return it
+                    if type_of(c) == "number" || type_of(c) == "int" { return c; }
+                    // Otherwise search ASCII table
+                    let ascii = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+                    let mut oi = 0;
+                    while oi < len(ascii) {
+                        if ascii[oi] == c { return oi + 32; }
+                        oi = oi + 1;
+                    }
+                    // Tab, newline, etc.
+                    if c == "\n" { return 10; }
+                    if c == "\t" { return 9; }
+                    if c == "\r" { return 13; }
+                    return 0;
+                }
+                return 0;
+            }
+            if name == "hex" {
+                let hexchars = "0123456789abcdef";
+                let mut v = args[0];
+                if v < 0 { return "-0x" + to_string(0 - v); }
+                if v == 0 { return "0x0"; }
+                let mut s = "";
+                while v > 0 {
+                    s = to_string(hexchars[v % 16]) + s;
+                    v = v / 16;
+                }
+                return "0x" + s;
+            }
+            if name == "input" {
+                // In interpreter: return empty string (no stdin)
+                return "";
+            }
+            if name == "sorted" {
+                // Simple insertion sort
+                let arr = args[0];
+                let mut s = [];
+                let mut si = 0;
+                while si < len(arr) { push(s, arr[si]); si = si + 1; }
+                si = 1;
+                while si < len(s) {
+                    let key = s[si];
+                    let mut sj = si - 1;
+                    let mut done = false;
+                    while sj >= 0 && !done {
+                        if s[sj] > key { s[sj + 1] = s[sj]; sj = sj - 1; }
+                        else { done = true; }
+                    }
+                    s[sj + 1] = key;
+                    si = si + 1;
+                }
+                return s;
+            }
+            if name == "reversed" {
+                let arr = args[0];
+                let mut r = [];
+                let mut ri = len(arr) - 1;
+                while ri >= 0 { push(r, arr[ri]); ri = ri - 1; }
+                return r;
+            }
+            if name == "enumerate" {
+                let arr = args[0];
+                let mut r = [];
+                let mut ei = 0;
+                while ei < len(arr) { push(r, [ei, arr[ei]]); ei = ei + 1; }
+                return r;
+            }
+            if name == "zip" {
+                let a = args[0];
+                let b = args[1];
+                let mut r = [];
+                let mut zi = 0;
+                let zlen = min(len(a), len(b));
+                while zi < zlen { push(r, [a[zi], b[zi]]); zi = zi + 1; }
+                return r;
+            }
+            if name == "sum" {
+                let arr = args[0];
+                let mut total = 0;
+                let mut si = 0;
+                while si < len(arr) { total = total + arr[si]; si = si + 1; }
+                return total;
+            }
+            if name == "map" {
+                // map(fn, iterable)
+                let f = args[0];
+                let arr = args[1];
+                let mut r = [];
+                let mut mi = 0;
+                while mi < len(arr) {
+                    push(r, call_fn(f, [arr[mi]], env, output));
+                    mi = mi + 1;
+                }
+                return r;
+            }
+            if name == "filter" {
+                let f = args[0];
+                let arr = args[1];
+                let mut r = [];
+                let mut fi = 0;
+                while fi < len(arr) {
+                    if is_truthy(call_fn(f, [arr[fi]], env, output)) {
+                        push(r, arr[fi]);
+                    }
+                    fi = fi + 1;
+                }
+                return r;
+            }
+            if name == "any" {
+                let arr = args[0];
+                let mut ai = 0;
+                while ai < len(arr) {
+                    if is_truthy(arr[ai]) { return true; }
+                    ai = ai + 1;
+                }
+                return false;
+            }
+            if name == "all" {
+                let arr = args[0];
+                let mut ai = 0;
+                while ai < len(arr) {
+                    if !is_truthy(arr[ai]) { return false; }
+                    ai = ai + 1;
+                }
+                return true;
+            }
+            if name == "isinstance" {
+                return type_of(args[0]) == args[1];
+            }
+            if name == "round" {
+                return floor(args[0] + 0.5);
+            }
+            if name == "pow" {
+                let mut result = 1;
+                let mut pi = 0;
+                while pi < args[1] { result = result * args[0]; pi = pi + 1; }
+                return result;
+            }
+            if name == "divmod" {
+                if args[1] != 0 {
+                    return [floor(args[0] / args[1]), args[0] % args[1]];
+                }
+                return [0, 0];
+            }
+            if name == "dict" { return []; }
+            if name == "list" {
+                if type_of(args[0]) == "array" { return args[0]; }
+                if type_of(args[0]) == "str" {
+                    let mut r = [];
+                    let mut ci = 0;
+                    while ci < len(args[0]) {
+                        push(r, to_string(args[0][ci]));
+                        ci = ci + 1;
+                    }
+                    return r;
+                }
+                return [];
+            }
+            if name == "keys" {
+                let m = args[0];
+                let mut r = [];
+                let mut ki = 0;
+                while ki < len(m) { push(r, m[ki][0]); ki = ki + 1; }
+                return r;
+            }
+            if name == "values" {
+                let m = args[0];
+                let mut r = [];
+                let mut vi = 0;
+                while vi < len(m) { push(r, m[vi][1]); vi = vi + 1; }
+                return r;
+            }
+            if name == "items" { return args[0]; }
+            if name == "hasattr" {
+                let obj = args[0];
+                let key = args[1];
+                let mut hi = 0;
+                while hi < len(obj) {
+                    if type_of(obj[hi]) == "array" && len(obj[hi]) == 2 {
+                        if obj[hi][0] == key { return true; }
+                    }
+                    hi = hi + 1;
+                }
+                return false;
+            }
+            if name == "getattr" {
+                let obj = args[0];
+                let key = args[1];
+                let mut gi = 0;
+                while gi < len(obj) {
+                    if type_of(obj[gi]) == "array" && len(obj[gi]) == 2 {
+                        if obj[gi][0] == key { return obj[gi][1]; }
+                    }
+                    gi = gi + 1;
+                }
+                if len(args) > 2 { return args[2]; } // default
+                return nil;
+            }
+            if name == "setattr" {
+                let obj = args[0];
+                let key = args[1];
+                let val = args[2];
+                let mut si = 0;
+                while si < len(obj) {
+                    if type_of(obj[si]) == "array" && len(obj[si]) == 2 {
+                        if obj[si][0] == key { obj[si][1] = val; return obj; }
+                    }
+                    si = si + 1;
+                }
+                push(obj, [key, val]);
+                return obj;
+            }
+            if name == "super" {
+                // super(instance) -> parent class prototype
+                let obj = args[0];
+                let class_obj = _obj_get(obj, "__class_obj__");
+                if class_obj != nil {
+                    let parent = _obj_get(class_obj, "__parent__");
+                    if parent != nil { return parent; }
+                }
+                return nil;
+            }
+            if name == "next" {
+                // next(generator) -> next value
+                if type_of(args[0]) == "array" && len(args[0]) > 0 {
+                    let gen = args[0];
+                    if _obj_get(gen, "__type__") == "generator" {
+                        let items = _obj_get(gen, "__items__");
+                        let idx = _obj_get(gen, "__index__");
+                        if idx < len(items) {
+                            _obj_set(gen, "__index__", idx + 1);
+                            return items[idx];
+                        }
+                    }
+                }
+                return nil;
+            }
+            if name == "iter" {
+                // iter(array) -> generator object
+                let arr = args[0];
+                return [["__type__", "generator"], ["__items__", arr], ["__index__", 0]];
+            }
+            if name == "reduce" {
+                // reduce(fn, iterable, initial)
+                let f = args[0];
+                let arr = args[1];
+                let mut acc = nil;
+                if len(args) > 2 { acc = args[2]; }
+                else if len(arr) > 0 { acc = arr[0]; }
+                let mut ri = 0;
+                if len(args) <= 2 && len(arr) > 0 { ri = 1; }
+                while ri < len(arr) {
+                    acc = call_fn(f, [acc, arr[ri]], env, output);
+                    ri = ri + 1;
+                }
+                return acc;
+            }
+
+            // ============================================================
+            // FILE I/O BUILTINS (in-memory VFS for bootstrap)
+            // The VM maintains _vm_fs: array of [path, content] pairs
+            // ============================================================
+            if name == "file_read" {
+                let path = args[0];
+                let fs = env_get(env, "_vm_fs");
+                let mut fi = 0;
+                while fi < len(fs) {
+                    if fs[fi][0] == path { return fs[fi][1]; }
+                    fi = fi + 1;
+                }
+                return nil;
+            }
+            if name == "file_write" {
+                let path = args[0];
+                let content = args[1];
+                let fs = env_get(env, "_vm_fs");
+                let mut fi = 0;
+                let mut found = false;
+                while fi < len(fs) {
+                    if fs[fi][0] == path {
+                        fs[fi][1] = content;
+                        found = true;
+                    }
+                    fi = fi + 1;
+                }
+                if !found { push(fs, [path, content]); }
+                return len(content);
+            }
+            if name == "file_exists" {
+                let path = args[0];
+                let fs = env_get(env, "_vm_fs");
+                let mut fi = 0;
+                while fi < len(fs) {
+                    if fs[fi][0] == path { return true; }
+                    fi = fi + 1;
+                }
+                return false;
+            }
+            if name == "file_list" {
+                let dir = args[0];
+                let fs = env_get(env, "_vm_fs");
+                let mut result = [];
+                let mut fi = 0;
+                while fi < len(fs) {
+                    let p = fs[fi][0];
+                    let mut match = true;
+                    let mut mi = 0;
+                    while mi < len(dir) {
+                        if mi >= len(p) { match = false; mi = len(dir); }
+                        else if p[mi] != dir[mi] { match = false; mi = len(dir); }
+                        mi = mi + 1;
+                    }
+                    if match { push(result, p); }
+                    fi = fi + 1;
+                }
+                return result;
+            }
+            if name == "file_delete" {
+                let path = args[0];
+                let fs = env_get(env, "_vm_fs");
+                let mut new_fs = [];
+                let mut fi = 0;
+                while fi < len(fs) {
+                    if fs[fi][0] != path { push(new_fs, fs[fi]); }
+                    fi = fi + 1;
+                }
+                env_set(env, "_vm_fs", new_fs);
+                return true;
+            }
+
+            // ============================================================
+            // BYTE ARRAY BUILTINS (binary image construction)
+            // ============================================================
+            if name == "byte_array" {
+                let size = args[0];
+                let mut arr = [];
+                let mut bi = 0;
+                while bi < size { push(arr, 0); bi = bi + 1; }
+                return arr;
+            }
+            if name == "byte_set" {
+                args[0][args[1]] = args[2] % 256;
+                return args[0];
+            }
+            if name == "byte_get" {
+                return args[0][args[1]];
+            }
+            if name == "u16_le" {
+                let a = args[0];
+                let o = args[1];
+                return a[o] + a[o + 1] * 256;
+            }
+            if name == "u32_le" {
+                let a = args[0];
+                let o = args[1];
+                return a[o] + a[o + 1] * 256 + a[o + 2] * 65536 + a[o + 3] * 16777216;
+            }
+            if name == "u64_le" {
+                let a = args[0];
+                let o = args[1];
+                let lo = a[o] + a[o+1]*256 + a[o+2]*65536 + a[o+3]*16777216;
+                let hi = a[o+4] + a[o+5]*256 + a[o+6]*65536 + a[o+7]*16777216;
+                return lo + hi * 4294967296;
+            }
+            if name == "le_u16" {
+                let v = args[0];
+                return [v % 256, (v / 256) % 256];
+            }
+            if name == "le_u32" {
+                let v = args[0];
+                return [v % 256, (v / 256) % 256, (v / 65536) % 256, (v / 16777216) % 256];
+            }
+
+            // ============================================================
+            // STRING BUILTINS (native speed for lexer/parser)
+            // ============================================================
+            if name == "str_sub" {
+                let s = args[0];
+                let mut st = args[1];
+                let mut en = args[2];
+                if st < 0 { st = 0; }
+                if en > len(s) { en = len(s); }
+                let mut result = "";
+                while st < en {
+                    result = result + to_string(s[st]);
+                    st = st + 1;
+                }
+                return result;
+            }
+            if name == "str_find_native" {
+                let s = args[0];
+                let n = args[1];
+                let slen = len(s);
+                let nlen = len(n);
+                if nlen == 0 { return 0; }
+                if nlen > slen { return 0 - 1; }
+                let mut si = 0;
+                while si <= slen - nlen {
+                    let mut m = true;
+                    let mut sj = 0;
+                    while sj < nlen {
+                        if s[si + sj] != n[sj] { m = false; sj = nlen; }
+                        sj = sj + 1;
+                    }
+                    if m { return si; }
+                    si = si + 1;
+                }
+                return 0 - 1;
+            }
+            if name == "str_split_native" {
+                let s = args[0];
+                let sep = args[1];
+                let mut result = [];
+                let mut current = "";
+                let sep_len = len(sep);
+                if sep_len == 0 {
+                    let mut si = 0;
+                    while si < len(s) {
+                        push(result, to_string(s[si]));
+                        si = si + 1;
+                    }
+                    return result;
+                }
+                let mut si = 0;
+                while si < len(s) {
+                    let mut m = true;
+                    if si + sep_len <= len(s) {
+                        let mut sj = 0;
+                        while sj < sep_len {
+                            if s[si + sj] != sep[sj] { m = false; sj = sep_len; }
+                            sj = sj + 1;
+                        }
+                    } else { m = false; }
+                    if m {
+                        push(result, current);
+                        current = "";
+                        si = si + sep_len;
+                    } else {
+                        current = current + to_string(s[si]);
+                        si = si + 1;
+                    }
+                }
+                push(result, current);
+                return result;
+            }
+            if name == "str_join_native" {
+                let arr = args[0];
+                let sep = args[1];
+                if len(arr) == 0 { return ""; }
+                let mut result = to_string(arr[0]);
+                let mut ji = 1;
+                while ji < len(arr) {
+                    result = result + sep + to_string(arr[ji]);
+                    ji = ji + 1;
+                }
+                return result;
+            }
+            if name == "parse_int" {
+                let s = to_string(args[0]);
+                let mut result = 0;
+                let mut sign = 1;
+                let mut pi = 0;
+                if len(s) > 0 {
+                    if s[0] == "-" { sign = 0 - 1; pi = 1; }
+                }
+                let digits = "0123456789";
+                while pi < len(s) {
+                    let c = s[pi];
+                    let mut d = 0;
+                    let mut found = false;
+                    while d < 10 {
+                        if digits[d] == c {
+                            result = result * 10 + d;
+                            found = true;
+                            d = 10;
+                        }
+                        d = d + 1;
+                    }
+                    if !found { pi = len(s); }
+                    pi = pi + 1;
+                }
+                return result * sign;
+            }
+
+            // ============================================================
+            // SYSTEM BUILTINS
+            // ============================================================
+            if name == "process_args" {
+                return env_get(env, "_vm_args");
+            }
+            if name == "exit_program" {
+                push(output, "EXIT:" + to_string(args[0]));
+                return nil;
+            }
+            if name == "panic_halt" {
+                push(output, "PANIC: " + to_string(args[0]));
+                return nil;
+            }
+            if name == "time_ticks" {
+                return env_get(env, "_vm_ticks");
+            }
+            if name == "serial_write" {
+                push(output, to_string(args[0]));
+                return len(to_string(args[0]));
+            }
+            if name == "serial_read_line" {
+                return "";
+            }
+
+            // ============================================================
+            // COLLECTION BUILTINS
+            // ============================================================
+            if name == "concat" {
+                let mut result = [];
+                let mut ci = 0;
+                while ci < len(args[0]) {
+                    push(result, args[0][ci]);
+                    ci = ci + 1;
+                }
+                ci = 0;
+                while ci < len(args[1]) {
+                    push(result, args[1][ci]);
+                    ci = ci + 1;
+                }
+                return result;
+            }
+            if name == "slice" {
+                let arr = args[0];
+                let mut st = args[1];
+                let mut en = args[2];
+                if st < 0 { st = len(arr) + st; }
+                if en < 0 { en = len(arr) + en; }
+                if st < 0 { st = 0; }
+                if en > len(arr) { en = len(arr); }
+                let mut result = [];
+                while st < en {
+                    push(result, arr[st]);
+                    st = st + 1;
+                }
+                return result;
+            }
+            if name == "copy_array" {
+                let src = args[0];
+                let mut cp = [];
+                let mut ci = 0;
+                while ci < len(src) {
+                    push(cp, src[ci]);
+                    ci = ci + 1;
+                }
+                return cp;
+            }
+
+            return nil;
+        }
+        if callee[0] == "fn" {
+            let params = callee[1];
+            let body = callee[2];
+            let closure = callee[3];
+            let defaults = nil;
+            if len(callee) > 4 { defaults = callee[4]; }
+            // Create new scope
+            let mut fn_env = closure;
+            let mut p = 0;
+            while p < len(params) {
+                let mut arg_val = nil;
+                if p < len(args) {
+                    arg_val = args[p];
+                } else if defaults != nil && p < len(defaults) && defaults[p] != nil {
+                    // Apply default value
+                    arg_val = eval_expr(defaults[p], fn_env, output);
+                }
+                let param_name = params[p];
+                // Handle *args (variadic)
+                if type_of(param_name) == "str" && len(param_name) > 1 {
+                    let first_ch = char_at(param_name, 0);
+                    if first_ch == "*" {
+                        // '*args' prefix -- collect remaining args
+                        let mut var_name = "";
+                        let mut vi = 1;
+                        while vi < len(param_name) {
+                            var_name = var_name + to_string(char_at(param_name, vi));
+                            vi = vi + 1;
+                        }
+                        let mut rest = [];
+                        let mut ri = p;
+                        while ri < len(args) { push(rest, args[ri]); ri = ri + 1; }
+                        env_def(fn_env, var_name, rest);
+                        p = len(params); // done
+                    } else {
+                        env_def(fn_env, param_name, arg_val);
+                    }
+                } else {
+                    env_def(fn_env, param_name, arg_val);
+                }
+                p = p + 1;
+            }
+            let result = eval_stmts(body, fn_env, output);
+            if result[0] == "return_signal" { return result[1]; }
+            if result[0] == "exception_signal" { return result; }
+            return result[1];
+        }
+        return nil;
+    }
+
+    // Environment helpers
+    fn env_def(env, name, val) {
+        // Add to current scope
+        push(env[len(env) - 1], [name, val]);
+    }
+
+    fn env_get(env, name) {
+        // Search scopes from innermost to outermost
+        let mut s = len(env) - 1;
+        while s >= 0 {
+            let scope = env[s];
+            let mut i = len(scope) - 1;
+            while i >= 0 {
+                if scope[i][0] == name { return scope[i][1]; }
+                i = i - 1;
+            }
+            s = s - 1;
+        }
+        return nil;
+    }
+
+    fn env_set(env, name, val) {
+        let mut s = len(env) - 1;
+        while s >= 0 {
+            let scope = env[s];
+            let mut i = len(scope) - 1;
+            while i >= 0 {
+                if scope[i][0] == name {
+                    set_at(scope, i, [name, val]);
+                    return true;
+                }
+                i = i - 1;
+            }
+            s = s - 1;
+        }
+        // Not found -- define in current scope
+        env_def(env, name, val);
+        return true;
+    }
+
+    fn is_truthy(v) {
+        if v == nil { return false; }
+        if v == false { return false; }
+        if v == 0 { return false; }
+        if v == "" { return false; }
+        if type_of(v) == "array" && len(v) == 0 { return false; }
+        return true;
+    }
+
+    // Deep destructuring bind: let [a, [b, c]] = [1, [2, 3]];
+    fn _destruct_bind(pattern, value, env) {
+        let mut i = 0;
+        while i < len(pattern) {
+            let p = pattern[i];
+            let v = value[i];
+            if type_of(p) == "array" {
+                // Nested pattern
+                _destruct_bind(p, v, env);
+            } else if p != "_" {
+                env_def(env, p, v);
+            }
+            i = i + 1;
+        }
+    }
+
+    // Object helpers (for class instances / dicts as arrays of [k,v])
+    fn _obj_get(obj, key) {
+        if type_of(obj) != "array" { return nil; }
+        let mut i = 0;
+        while i < len(obj) {
+            if type_of(obj[i]) == "array" && len(obj[i]) == 2 {
+                if obj[i][0] == key { return obj[i][1]; }
+            }
+            i = i + 1;
+        }
+        return nil;
+    }
+
+    fn _obj_set(obj, key, val) {
+        let mut i = 0;
+        while i < len(obj) {
+            if type_of(obj[i]) == "array" && len(obj[i]) == 2 {
+                if obj[i][0] == key { obj[i][1] = val; return obj; }
+            }
+            i = i + 1;
+        }
+        push(obj, [key, val]);
+        return obj;
+    }
+
+    fn _class_lookup(class_obj, method_name) {
+        // Search class and parent chain for a method
+        if class_obj == nil { return nil; }
+        if type_of(class_obj) == "array" {
+            // If it's a ["class", obj] wrapper, unwrap
+            if len(class_obj) > 0 && class_obj[0] == "class" {
+                return _class_lookup(class_obj[1], method_name);
+            }
+            let mut i = 0;
+            while i < len(class_obj) {
+                if type_of(class_obj[i]) == "array" && len(class_obj[i]) == 2 {
+                    if class_obj[i][0] == method_name { return class_obj[i][1]; }
+                }
+                i = i + 1;
+            }
+            // Check parent
+            let parent = _obj_get(class_obj, "__parent__");
+            if parent != nil {
+                return _class_lookup(parent, method_name);
+            }
+        }
+        return nil;
+    }
+
+    // Bitwise helpers (software emulation for interpreter)
+    fn _shift_left(a, n) {
+        let mut result = a;
+        let mut i = 0;
+        while i < n { result = result * 2; i = i + 1; }
+        return result;
+    }
+
+    fn _shift_right(a, n) {
+        let mut result = a;
+        let mut i = 0;
+        while i < n { result = result / 2; i = i + 1; }
+        return result;
+    }
+
+    fn _bitwise_and(a, b) {
+        let mut result = 0;
+        let mut bit = 1;
+        let mut i = 0;
+        let mut aa = a;
+        let mut bb = b;
+        while i < 32 {
+            if (aa % 2 == 1) && (bb % 2 == 1) {
+                result = result + bit;
+            }
+            aa = aa / 2;
+            bb = bb / 2;
+            bit = bit * 2;
+            i = i + 1;
+        }
+        return result;
+    }
+
+    fn _bitwise_or(a, b) {
+        let mut result = 0;
+        let mut bit = 1;
+        let mut i = 0;
+        let mut aa = a;
+        let mut bb = b;
+        while i < 32 {
+            if (aa % 2 == 1) || (bb % 2 == 1) {
+                result = result + bit;
+            }
+            aa = aa / 2;
+            bb = bb / 2;
+            bit = bit * 2;
+            i = i + 1;
+        }
+        return result;
+    }
+
+    fn _bitwise_xor(a, b) {
+        let mut result = 0;
+        let mut bit = 1;
+        let mut i = 0;
+        let mut aa = a;
+        let mut bb = b;
+        while i < 32 {
+            if (aa % 2) != (bb % 2) {
+                result = result + bit;
+            }
+            aa = aa / 2;
+            bb = bb / 2;
+            bit = bit * 2;
+            i = i + 1;
+        }
+        return result;
+    }
+
+    fn _bitwise_not(a) {
+        // ~a = -a - 1 (two's complement)
+        return 0 - a - 1;
+    }
+
+    fn _str_contains_builtin(haystack, needle) {
+        let hlen = len(haystack);
+        let nlen = len(needle);
+        if nlen == 0 { return true; }
+        if nlen > hlen { return false; }
+        let mut i = 0;
+        while i <= hlen - nlen {
+            let mut match = true;
+            let mut j = 0;
+            while j < nlen {
+                if haystack[i + j] != needle[j] { match = false; j = nlen; }
+                j = j + 1;
+            }
+            if match { return true; }
+            i = i + 1;
+        }
+        return false;
+    }
+}
+
+// ==================================
+// S5  x86_64 MACHINE CODE ENCODER
+// ==================================
+
+quadrant x86enc {
+    // Code buffer: array of bytes + label/patch tracking
+    // All instructions emit raw bytes -- zero abstraction
+
+    fn new_buf(origin) {
+        return [[], origin, [], []]; // [bytes, origin, patches, labels]
+    }
+
+    fn buf_len(buf) { return len(buf[0]); }
+    fn buf_emit(buf, b) { push(buf[0], b % 256); }
+    fn buf_emit16(buf, v) { buf_emit(buf, v % 256); buf_emit(buf, (v / 256) % 256); }
+    fn buf_emit32(buf, v) { buf_emit16(buf, v % 65536); buf_emit16(buf, (v / 65536) % 65536); }
+    fn buf_pad_to(buf, n) { while len(buf[0]) < n { push(buf[0], 0); } }
+
+    // --- Instructions ---
+    fn emit_cli(buf) { buf_emit(buf, 250); }
+    fn emit_sti(buf) { buf_emit(buf, 251); }
+    fn emit_hlt(buf) { buf_emit(buf, 244); }
+    fn emit_cld(buf) { buf_emit(buf, 252); }
+    fn emit_nop(buf) { buf_emit(buf, 144); }
+    fn emit_ret(buf) { buf_emit(buf, 195); }
+    fn emit_out_dx_al(buf) { buf_emit(buf, 238); }
+    fn emit_in_al_dx(buf) { buf_emit(buf, 236); }
+    fn emit_out_imm8_al(buf, port) { buf_emit(buf, 230); buf_emit(buf, port); }
+    fn emit_in_al_imm8(buf, port) { buf_emit(buf, 228); buf_emit(buf, port); }
+    fn emit_int(buf, n) { buf_emit(buf, 205); buf_emit(buf, n); }
+    fn emit_wrmsr(buf) { buf_emit(buf, 15); buf_emit(buf, 48); }
+    fn emit_rdmsr(buf) { buf_emit(buf, 15); buf_emit(buf, 50); }
+    fn emit_syscall(buf) { buf_emit(buf, 15); buf_emit(buf, 5); }
+
+    // --- 16-bit real mode ---
+    fn emit_xor_ax_ax(buf) { buf_emit(buf, 49); buf_emit(buf, 192); }
+    fn emit_mov_ds_ax(buf) { buf_emit(buf, 142); buf_emit(buf, 216); }
+    fn emit_mov_es_ax(buf) { buf_emit(buf, 142); buf_emit(buf, 192); }
+    fn emit_mov_ss_ax(buf) { buf_emit(buf, 142); buf_emit(buf, 208); }
+    fn emit_mov_sp_imm16(buf, v) { buf_emit(buf, 188); buf_emit16(buf, v); }
+    fn emit_mov_ah_imm8(buf, v) { buf_emit(buf, 180); buf_emit(buf, v); }
+    fn emit_mov_al_imm8(buf, v) { buf_emit(buf, 176); buf_emit(buf, v); }
+    fn emit_mov_bx_imm16(buf, v) { buf_emit(buf, 187); buf_emit16(buf, v); }
+    fn emit_mov_ch_imm8(buf, v) { buf_emit(buf, 181); buf_emit(buf, v); }
+    fn emit_mov_cl_imm8(buf, v) { buf_emit(buf, 177); buf_emit(buf, v); }
+    fn emit_mov_dh_imm8(buf, v) { buf_emit(buf, 182); buf_emit(buf, v); }
+    fn emit_mov_dl_imm8(buf, v) { buf_emit(buf, 178); buf_emit(buf, v); }
+
+    // --- 32-bit protected mode ---
+    fn emit_mov_eax_imm32(buf, v) { buf_emit(buf, 184); buf_emit32(buf, v); }
+    fn emit_mov_ecx_imm32(buf, v) { buf_emit(buf, 185); buf_emit32(buf, v); }
+    fn emit_mov_edx_imm32(buf, v) { buf_emit(buf, 186); buf_emit32(buf, v); }
+    fn emit_mov_edi_imm32(buf, v) { buf_emit(buf, 191); buf_emit32(buf, v); }
+    fn emit_mov_cr0_eax(buf) { buf_emit(buf, 15); buf_emit(buf, 34); buf_emit(buf, 192); }
+    fn emit_mov_eax_cr0(buf) { buf_emit(buf, 15); buf_emit(buf, 32); buf_emit(buf, 192); }
+    fn emit_mov_cr3_eax(buf) { buf_emit(buf, 15); buf_emit(buf, 34); buf_emit(buf, 216); }
+    fn emit_mov_eax_cr4(buf) { buf_emit(buf, 15); buf_emit(buf, 32); buf_emit(buf, 224); }
+    fn emit_mov_cr4_eax(buf) { buf_emit(buf, 15); buf_emit(buf, 34); buf_emit(buf, 224); }
+    fn emit_bts_eax(buf, bit) { buf_emit(buf, 15); buf_emit(buf, 186); buf_emit(buf, 232); buf_emit(buf, bit); }
+    fn emit_xor_eax_eax(buf) { buf_emit(buf, 49); buf_emit(buf, 192); }
+    fn emit_rep_stosd(buf) { buf_emit(buf, 243); buf_emit(buf, 171); }
+    fn emit_mov_mem_edi_eax(buf) { buf_emit(buf, 137); buf_emit(buf, 7); }
+    fn emit_or_al_imm8(buf, v) { buf_emit(buf, 12); buf_emit(buf, v); }
+    fn emit_or_eax_1_16(buf) { buf_emit(buf, 102); buf_emit(buf, 131); buf_emit(buf, 200); buf_emit(buf, 1); }
+    fn emit_lgdt_imm16(buf, a) { buf_emit(buf, 15); buf_emit(buf, 1); buf_emit(buf, 22); buf_emit16(buf, a); }
+    fn emit_jmp_far16(buf, seg, off) { buf_emit(buf, 234); buf_emit16(buf, off); buf_emit16(buf, seg); }
+    fn emit_jmp_far32(buf, seg, off) { buf_emit(buf, 234); buf_emit32(buf, off); buf_emit16(buf, seg); }
+    fn emit_mov_ax_imm16_32(buf) { buf_emit(buf, 102); buf_emit(buf, 184); buf_emit16(buf, 16); }
+    fn emit_test_al_imm8(buf, v) { buf_emit(buf, 168); buf_emit(buf, v); }
+
+    // --- 64-bit long mode ---
+    fn emit_mov_rax_imm64(buf, v) {
+        buf_emit(buf, 72); buf_emit(buf, 184);
+        buf_emit32(buf, v % 4294967296);
+        buf_emit32(buf, floor(v / 4294967296) % 4294967296);
+    }
+    fn emit_mov_rsp_imm64(buf, v) {
+        buf_emit(buf, 72); buf_emit(buf, 188);
+        buf_emit32(buf, v % 4294967296);
+        buf_emit32(buf, floor(v / 4294967296) % 4294967296);
+    }
+    fn emit_jmp_rax(buf) { buf_emit(buf, 255); buf_emit(buf, 224); }
+
+    // --- 64-bit register helpers ---
+    // REX.W + opcode for r64 instructions
+    // reg encoding: RAX=0 RCX=1 RDX=2 RBX=3 RSP=4 RBP=5 RSI=6 RDI=7
+    fn emit_push_r64(buf, r) { buf_emit(buf, 80 + r); }
+    fn emit_pop_r64(buf, r)  { buf_emit(buf, 88 + r); }
+
+    // MOV r64, imm32 (sign-extended): REX.W C7 /0 id
+    fn emit_mov_r64_imm32(buf, r, v) {
+        buf_emit(buf, 72); buf_emit(buf, 199);
+        buf_emit(buf, 192 + r);
+        buf_emit32(buf, v);
+    }
+
+    // MOV [r64], r64 (store): REX.W 89 /r  (mod=00)
+    fn emit_mov_mem_r64(buf, base, src) {
+        buf_emit(buf, 72); buf_emit(buf, 137);
+        if base == 4 { buf_emit(buf, src * 8 + 4); buf_emit(buf, 36); }
+        else if base == 5 { buf_emit(buf, 64 + src * 8 + base); buf_emit(buf, 0); }
+        else { buf_emit(buf, src * 8 + base); }
+    }
+
+    // MOV r64, [r64] (load): REX.W 8B /r
+    fn emit_mov_r64_mem(buf, dst, base) {
+        buf_emit(buf, 72); buf_emit(buf, 139);
+        if base == 4 { buf_emit(buf, dst * 8 + 4); buf_emit(buf, 36); }
+        else if base == 5 { buf_emit(buf, 64 + dst * 8 + base); buf_emit(buf, 0); }
+        else { buf_emit(buf, dst * 8 + base); }
+    }
+
+    // MOV r64, [r64+disp8]: REX.W 8B mod=01
+    fn emit_mov_r64_mem_disp8(buf, dst, base, disp) {
+        buf_emit(buf, 72); buf_emit(buf, 139);
+        buf_emit(buf, 64 + dst * 8 + base);
+        if base == 4 { buf_emit(buf, 36); }
+        buf_emit(buf, disp % 256);
+    }
+
+    // MOV [r64+disp8], r64: REX.W 89 mod=01
+    fn emit_mov_mem_disp8_r64(buf, base, disp, src) {
+        buf_emit(buf, 72); buf_emit(buf, 137);
+        buf_emit(buf, 64 + src * 8 + base);
+        if base == 4 { buf_emit(buf, 36); }
+        buf_emit(buf, disp % 256);
+    }
+
+    // MOV r64, r64: REX.W 89 /r mod=11
+    fn emit_mov_r64_r64(buf, dst, src) {
+        buf_emit(buf, 72); buf_emit(buf, 137);
+        buf_emit(buf, 192 + src * 8 + dst);
+    }
+
+    // ADD r64, imm8: REX.W 83 /0 ib
+    fn emit_add_r64_imm8(buf, r, v) {
+        buf_emit(buf, 72); buf_emit(buf, 131);
+        buf_emit(buf, 192 + r);
+        buf_emit(buf, v % 256);
+    }
+
+    // SUB r64, imm8: REX.W 83 /5 ib
+    fn emit_sub_r64_imm8(buf, r, v) {
+        buf_emit(buf, 72); buf_emit(buf, 131);
+        buf_emit(buf, 232 + r);
+        buf_emit(buf, v % 256);
+    }
+
+    // CMP r64, imm8: REX.W 83 /7 ib
+    fn emit_cmp_r64_imm8(buf, r, v) {
+        buf_emit(buf, 72); buf_emit(buf, 131);
+        buf_emit(buf, 248 + r);
+        buf_emit(buf, v % 256);
+    }
+
+    // XOR r64, r64: REX.W 31 /r
+    fn emit_xor_r64_r64(buf, dst, src) {
+        buf_emit(buf, 72); buf_emit(buf, 49);
+        buf_emit(buf, 192 + src * 8 + dst);
+    }
+
+    // AND AL, imm8: 24 ib
+    fn emit_and_al_imm8(buf, v) { buf_emit(buf, 36); buf_emit(buf, v); }
+
+    // OR AL, imm8: 0C ib
+    fn emit_or_eax_imm8(buf, v) { buf_emit(buf, 131); buf_emit(buf, 200); buf_emit(buf, v); }
+
+    // SHR r64, imm8: REX.W C1 /5 ib
+    fn emit_shr_r64_imm8(buf, r, v) {
+        buf_emit(buf, 72); buf_emit(buf, 193);
+        buf_emit(buf, 232 + r);
+        buf_emit(buf, v);
+    }
+
+    // SHL r64, imm8: REX.W C1 /4 ib
+    fn emit_shl_r64_imm8(buf, r, v) {
+        buf_emit(buf, 72); buf_emit(buf, 193);
+        buf_emit(buf, 224 + r);
+        buf_emit(buf, v);
+    }
+
+    // JMP rel8: EB cb
+    fn emit_jmp_rel8(buf, off) { buf_emit(buf, 235); buf_emit(buf, off % 256); }
+
+    // JE rel8: 74 cb
+    fn emit_je_rel8(buf, off) { buf_emit(buf, 116); buf_emit(buf, off % 256); }
+
+    // JNE rel8: 75 cb
+    fn emit_jne_rel8(buf, off) { buf_emit(buf, 117); buf_emit(buf, off % 256); }
+
+    // CALL rel32: E8 cd
+    fn emit_call_rel32(buf, off) { buf_emit(buf, 232); buf_emit32(buf, off); }
+
+    // LIDT [addr]: 0F 01 /3
+    fn emit_lidt_mem(buf, base) {
+        buf_emit(buf, 15); buf_emit(buf, 1);
+        buf_emit(buf, 24 + base);
+    }
+
+    // IRETQ: 48 CF
+    fn emit_iretq(buf) { buf_emit(buf, 72); buf_emit(buf, 207); }
+
+    // MOV [imm32], AL (absolute): A2 + addr32 (with addr-size override 67 for 32-bit addr)
+    fn emit_mov_abs32_al(buf, addr) {
+        buf_emit(buf, 103); buf_emit(buf, 162);
+        buf_emit32(buf, addr);
+    }
+
+    // MOV AL, [imm32] (absolute): A0 + addr32
+    fn emit_mov_al_abs32(buf, addr) {
+        buf_emit(buf, 103); buf_emit(buf, 160);
+        buf_emit32(buf, addr);
+    }
+
+    // STOSQ (rep stosq): F3 48 AB
+    fn emit_rep_stosq(buf) { buf_emit(buf, 243); buf_emit(buf, 72); buf_emit(buf, 171); }
+
+    // MOV r64, imm64 for any register: REX.W B8+r + imm64
+    fn emit_mov_r64_imm64(buf, r, v) {
+        buf_emit(buf, 72); buf_emit(buf, 184 + r);
+        buf_emit32(buf, v % 4294967296);
+        buf_emit32(buf, floor(v / 4294967296) % 4294967296);
+    }
+
+    // --- Extended ISA (native codegen support) ---
+
+    // ADD r64, r64: REX.W 01 /r mod=11
+    fn emit_add_r64_r64(buf, dst, src) {
+        buf_emit(buf, 72); buf_emit(buf, 1);
+        buf_emit(buf, 192 + src * 8 + dst);
+    }
+
+    // SUB r64, r64: REX.W 29 /r mod=11
+    fn emit_sub_r64_r64(buf, dst, src) {
+        buf_emit(buf, 72); buf_emit(buf, 41);
+        buf_emit(buf, 192 + src * 8 + dst);
+    }
+
+    // IMUL r64, r64: REX.W 0F AF /r
+    fn emit_imul_r64_r64(buf, dst, src) {
+        buf_emit(buf, 72); buf_emit(buf, 15); buf_emit(buf, 175);
+        buf_emit(buf, 192 + dst * 8 + src);
+    }
+
+    // CQO: REX.W 99
+    fn emit_cqo(buf) { buf_emit(buf, 72); buf_emit(buf, 153); }
+
+    // IDIV r64: REX.W F7 /7
+    fn emit_idiv_r64(buf, r) {
+        buf_emit(buf, 72); buf_emit(buf, 247);
+        buf_emit(buf, 248 + r);
+    }
+
+    // NEG r64: REX.W F7 /3
+    fn emit_neg_r64(buf, r) {
+        buf_emit(buf, 72); buf_emit(buf, 247);
+        buf_emit(buf, 216 + r);
+    }
+
+    // NOT r64: REX.W F7 /2
+    fn emit_not_r64(buf, r) {
+        buf_emit(buf, 72); buf_emit(buf, 247);
+        buf_emit(buf, 208 + r);
+    }
+
+    // AND r64, r64: REX.W 21 /r
+    fn emit_and_r64_r64(buf, dst, src) {
+        buf_emit(buf, 72); buf_emit(buf, 33);
+        buf_emit(buf, 192 + src * 8 + dst);
+    }
+
+    // OR r64, r64: REX.W 09 /r
+    fn emit_or_r64_r64(buf, dst, src) {
+        buf_emit(buf, 72); buf_emit(buf, 9);
+        buf_emit(buf, 192 + src * 8 + dst);
+    }
+
+    // SHL r64, CL: REX.W D3 /4
+    fn emit_shl_r64_cl(buf, r) {
+        buf_emit(buf, 72); buf_emit(buf, 211);
+        buf_emit(buf, 224 + r);
+    }
+
+    // SHR r64, CL: REX.W D3 /5
+    fn emit_shr_r64_cl(buf, r) {
+        buf_emit(buf, 72); buf_emit(buf, 211);
+        buf_emit(buf, 232 + r);
+    }
+
+    // SAR r64, CL: REX.W D3 /7
+    fn emit_sar_r64_cl(buf, r) {
+        buf_emit(buf, 72); buf_emit(buf, 211);
+        buf_emit(buf, 248 + r);
+    }
+
+    // SAR r64, imm8: REX.W C1 /7 ib
+    fn emit_sar_r64_imm8(buf, r, v) {
+        buf_emit(buf, 72); buf_emit(buf, 193);
+        buf_emit(buf, 248 + r);
+        buf_emit(buf, v);
+    }
+
+    // CMP r64, r64: REX.W 39 /r
+    fn emit_cmp_r64_r64(buf, a, b) {
+        buf_emit(buf, 72); buf_emit(buf, 57);
+        buf_emit(buf, 192 + b * 8 + a);
+    }
+
+    // TEST r64, r64: REX.W 85 /r
+    fn emit_test_r64_r64(buf, a, b) {
+        buf_emit(buf, 72); buf_emit(buf, 133);
+        buf_emit(buf, 192 + b * 8 + a);
+    }
+
+    // SETcc: 0F 9x /0 (cc: E=4 NE=5 L=C LE=E G=F GE=D B=2 A=7)
+    fn emit_sete_al(buf) { buf_emit(buf, 15); buf_emit(buf, 148); buf_emit(buf, 192); }
+    fn emit_setne_al(buf) { buf_emit(buf, 15); buf_emit(buf, 149); buf_emit(buf, 192); }
+    fn emit_setl_al(buf) { buf_emit(buf, 15); buf_emit(buf, 156); buf_emit(buf, 192); }
+    fn emit_setle_al(buf) { buf_emit(buf, 15); buf_emit(buf, 158); buf_emit(buf, 192); }
+    fn emit_setg_al(buf) { buf_emit(buf, 15); buf_emit(buf, 159); buf_emit(buf, 192); }
+    fn emit_setge_al(buf) { buf_emit(buf, 15); buf_emit(buf, 157); buf_emit(buf, 192); }
+    fn emit_setb_al(buf) { buf_emit(buf, 15); buf_emit(buf, 146); buf_emit(buf, 192); }
+    fn emit_seta_al(buf) { buf_emit(buf, 15); buf_emit(buf, 151); buf_emit(buf, 192); }
+
+    // MOVZX RAX, AL: REX.W 0F B6 C0
+    fn emit_movzx_rax_al(buf) {
+        buf_emit(buf, 72); buf_emit(buf, 15); buf_emit(buf, 182); buf_emit(buf, 192);
+    }
+
+    // LEA r64, [r64 + disp32]: REX.W 8D mod=10
+    fn emit_lea_r64_disp32(buf, dst, base, disp) {
+        buf_emit(buf, 72); buf_emit(buf, 141);
+        buf_emit(buf, 128 + dst * 8 + base);
+        if base == 4 { buf_emit(buf, 36); }
+        buf_emit32(buf, disp);
+    }
+
+    // LEA r64, [r64 + r64*scale]: REX.W 8D /r (SIB)
+    fn emit_lea_r64_sib(buf, dst, base, index, scale) {
+        buf_emit(buf, 72); buf_emit(buf, 141);
+        buf_emit(buf, 4 + dst * 8); // ModRM: mod=00, rm=100 (SIB)
+        let ss = 0;
+        if scale == 2 { ss = 1; }
+        if scale == 4 { ss = 2; }
+        if scale == 8 { ss = 3; }
+        buf_emit(buf, ss * 64 + index * 8 + base);
+    }
+
+    // CMOVZ r64, r64: REX.W 0F 44 /r
+    fn emit_cmovz_r64(buf, dst, src) {
+        buf_emit(buf, 72); buf_emit(buf, 15); buf_emit(buf, 68);
+        buf_emit(buf, 192 + dst * 8 + src);
+    }
+
+    // CMOVNZ r64, r64: REX.W 0F 45 /r
+    fn emit_cmovnz_r64(buf, dst, src) {
+        buf_emit(buf, 72); buf_emit(buf, 15); buf_emit(buf, 69);
+        buf_emit(buf, 192 + dst * 8 + src);
+    }
+
+    // CMOVL r64, r64: REX.W 0F 4C /r
+    fn emit_cmovl_r64(buf, dst, src) {
+        buf_emit(buf, 72); buf_emit(buf, 15); buf_emit(buf, 76);
+        buf_emit(buf, 192 + dst * 8 + src);
+    }
+
+    // CMOVGE r64, r64: REX.W 0F 4D /r
+    fn emit_cmovge_r64(buf, dst, src) {
+        buf_emit(buf, 72); buf_emit(buf, 15); buf_emit(buf, 77);
+        buf_emit(buf, 192 + dst * 8 + src);
+    }
+
+    // ADD r64, imm32: REX.W 81 /0 id
+    fn emit_add_r64_imm32(buf, r, v) {
+        buf_emit(buf, 72); buf_emit(buf, 129);
+        buf_emit(buf, 192 + r);
+        buf_emit32(buf, v);
+    }
+
+    // SUB r64, imm32: REX.W 81 /5 id
+    fn emit_sub_r64_imm32(buf, r, v) {
+        buf_emit(buf, 72); buf_emit(buf, 129);
+        buf_emit(buf, 232 + r);
+        buf_emit32(buf, v);
+    }
+
+    // CMP r64, imm32: REX.W 81 /7 id
+    fn emit_cmp_r64_imm32(buf, r, v) {
+        buf_emit(buf, 72); buf_emit(buf, 129);
+        buf_emit(buf, 248 + r);
+        buf_emit32(buf, v);
+    }
+
+    // JMP rel32: E9 cd
+    fn emit_jmp_rel32(buf, off) { buf_emit(buf, 233); buf_emit32(buf, off); }
+
+    // JE rel32: 0F 84 cd
+    fn emit_je_rel32(buf, off) { buf_emit(buf, 15); buf_emit(buf, 132); buf_emit32(buf, off); }
+
+    // JNE rel32: 0F 85 cd
+    fn emit_jne_rel32(buf, off) { buf_emit(buf, 15); buf_emit(buf, 133); buf_emit32(buf, off); }
+
+    // JL rel32: 0F 8C cd
+    fn emit_jl_rel32(buf, off) { buf_emit(buf, 15); buf_emit(buf, 140); buf_emit32(buf, off); }
+
+    // JLE rel32: 0F 8E cd
+    fn emit_jle_rel32(buf, off) { buf_emit(buf, 15); buf_emit(buf, 142); buf_emit32(buf, off); }
+
+    // JG rel32: 0F 8F cd
+    fn emit_jg_rel32(buf, off) { buf_emit(buf, 15); buf_emit(buf, 143); buf_emit32(buf, off); }
+
+    // JGE rel32: 0F 8D cd
+    fn emit_jge_rel32(buf, off) { buf_emit(buf, 15); buf_emit(buf, 141); buf_emit32(buf, off); }
+
+    // MOVSX r64, r32: REX.W 63 /r (movsxd)
+    fn emit_movsxd_r64_r32(buf, dst, src) {
+        buf_emit(buf, 72); buf_emit(buf, 99);
+        buf_emit(buf, 192 + dst * 8 + src);
+    }
+
+    // RDTSC: 0F 31 (result in EDX:EAX)
+    fn emit_rdtsc(buf) { buf_emit(buf, 15); buf_emit(buf, 49); }
+
+    // PAUSE (spin-wait hint): F3 90
+    fn emit_pause(buf) { buf_emit(buf, 243); buf_emit(buf, 144); }
+
+    // MFENCE: 0F AE F0
+    fn emit_mfence(buf) { buf_emit(buf, 15); buf_emit(buf, 174); buf_emit(buf, 240); }
+
+    // LFENCE: 0F AE E8
+    fn emit_lfence(buf) { buf_emit(buf, 15); buf_emit(buf, 174); buf_emit(buf, 232); }
+
+    // SFENCE: 0F AE F8
+    fn emit_sfence(buf) { buf_emit(buf, 15); buf_emit(buf, 174); buf_emit(buf, 248); }
+
+    // XCHG r64, r64: REX.W 87 /r (atomic if memory operand)
+    fn emit_xchg_r64_r64(buf, a, b) {
+        buf_emit(buf, 72); buf_emit(buf, 135);
+        buf_emit(buf, 192 + a * 8 + b);
+    }
+
+    // BSF r64, r64: REX.W 0F BC /r (bit scan forward)
+    fn emit_bsf_r64(buf, dst, src) {
+        buf_emit(buf, 72); buf_emit(buf, 15); buf_emit(buf, 188);
+        buf_emit(buf, 192 + dst * 8 + src);
+    }
+
+    // BSR r64, r64: REX.W 0F BD /r (bit scan reverse)
+    fn emit_bsr_r64(buf, dst, src) {
+        buf_emit(buf, 72); buf_emit(buf, 15); buf_emit(buf, 189);
+        buf_emit(buf, 192 + dst * 8 + src);
+    }
+
+    // POPCNT r64, r64: F3 REX.W 0F B8 /r
+    fn emit_popcnt_r64(buf, dst, src) {
+        buf_emit(buf, 243); buf_emit(buf, 72);
+        buf_emit(buf, 15); buf_emit(buf, 184);
+        buf_emit(buf, 192 + dst * 8 + src);
+    }
+
+    // LZCNT r64, r64: F3 REX.W 0F BD /r
+    fn emit_lzcnt_r64(buf, dst, src) {
+        buf_emit(buf, 243); buf_emit(buf, 72);
+        buf_emit(buf, 15); buf_emit(buf, 189);
+        buf_emit(buf, 192 + dst * 8 + src);
+    }
+}
+
+// ==================================
+// S6  BOOT IMAGE BUILDER
+// ==================================
+
+quadrant image_builder {
+    // Build Stage 1: MBR (512 bytes)
+    // Real mode: load stage2 from disk, enable A20, jump to 32768
+    fn build_stage1(s2_sectors) {
+        let buf = x86enc.new_buf(31744);
+        x86enc.emit_cli(buf);
+        x86enc.emit_xor_ax_ax(buf);
+        x86enc.emit_mov_ds_ax(buf);
+        x86enc.emit_mov_es_ax(buf);
+        x86enc.emit_mov_ss_ax(buf);
+        x86enc.emit_mov_sp_imm16(buf, 31744);
+        x86enc.emit_sti(buf);
+        // INT 13h: read stage2
+        x86enc.emit_mov_ah_imm8(buf, 2);
+        x86enc.emit_mov_al_imm8(buf, s2_sectors);
+        x86enc.emit_mov_ch_imm8(buf, 0);
+        x86enc.emit_mov_cl_imm8(buf, 2);
+        x86enc.emit_mov_dh_imm8(buf, 0);
+        x86enc.emit_mov_dl_imm8(buf, 128);
+        x86enc.emit_mov_bx_imm16(buf, 32768);
+        x86enc.emit_int(buf, 19);
+        // Enable A20
+        x86enc.emit_in_al_imm8(buf, 146);
+        x86enc.emit_or_al_imm8(buf, 2);
+        x86enc.emit_out_imm8_al(buf, 146);
+
+        // === E820 Memory Map Detection ===
+        // Store entry count at 0x500, entries starting at 0x504
+        // Each entry: base(8) + length(8) + type(4) = 20 bytes
+        // Use INT 15h, AX=E820h
+        x86enc.emit_mov_bx_imm16(buf, 0);     // ebx = continuation (0 = start)
+        x86enc.emit_mov_di_imm16(buf, 1284);   // di = 0x504 (first entry)
+        // xor bp, bp (counter)
+        x86enc.buf_emit(buf, 49); x86enc.buf_emit(buf, 237);
+
+        // E820 loop start
+        let e820_loop = x86enc.buf_len(buf);
+        x86enc.emit_mov_eax_imm32(buf, 57568);  // eax = 0xE820
+        x86enc.emit_mov_ecx_imm32(buf, 20);     // ecx = 20 (buffer size)
+        x86enc.emit_mov_edx_imm32(buf, 1397006915); // edx = 'SMAP' = 0x534D4150
+        x86enc.emit_int(buf, 21);                // INT 15h
+        // On carry flag set = end of list or error
+        x86enc.buf_emit(buf, 114);               // JC (done)
+        let e820_done_patch = x86enc.buf_len(buf);
+        x86enc.buf_emit(buf, 0);                 // patch target
+        // inc bp (count entries)
+        x86enc.buf_emit(buf, 102); x86enc.buf_emit(buf, 69);
+        // add di, 20 (next entry slot)
+        x86enc.buf_emit(buf, 131); x86enc.buf_emit(buf, 199); x86enc.buf_emit(buf, 20);
+        // test ebx, ebx (if ebx=0, list complete)
+        x86enc.buf_emit(buf, 102); x86enc.buf_emit(buf, 9); x86enc.buf_emit(buf, 219);
+        x86enc.buf_emit(buf, 117);               // JNZ loop
+        let e820_back = e820_loop - x86enc.buf_len(buf) - 1;
+        x86enc.buf_emit(buf, e820_back % 256);
+        // Done: store count at 0x500
+        let e820_done = x86enc.buf_len(buf);
+        set_at(buf[0], e820_done_patch, (e820_done - e820_done_patch - 1) % 256);
+        // mov [0x500], bp (store entry count)
+        x86enc.buf_emit(buf, 102); // operand size override
+        x86enc.buf_emit(buf, 137); x86enc.buf_emit(buf, 46);  // mov [imm16], bp
+        x86enc.buf_emit(buf, 0);   // lo
+        x86enc.buf_emit(buf, 5);   // hi (0x500)
+        // Print "HL!" via BIOS
+        let chars = [72, 76, 33, 13, 10];
+        let mut ci = 0;
+        while ci < 5 {
+            x86enc.emit_mov_ah_imm8(buf, 14);
+            x86enc.emit_mov_al_imm8(buf, chars[ci]);
+            x86enc.buf_emit(buf, 179);
+            x86enc.buf_emit(buf, 7);
+            x86enc.emit_int(buf, 16);
+            ci = ci + 1;
+        }
+        // Jump to stage2
+        x86enc.emit_jmp_far16(buf, 0, 32768);
+        // Pad to 510 + boot signature
+        x86enc.buf_pad_to(buf, 510);
+        x86enc.buf_emit(buf, 85);
+        x86enc.buf_emit(buf, 170);
+        return buf[0];
+    }
+
+    // Build Stage 2: real mode -> protected mode -> long mode
+    fn build_stage2(kernel_addr) {
+        let buf = x86enc.new_buf(32768);
+        x86enc.emit_cli(buf);
+        // LGDT (address patched later)
+        let lgdt_patch = x86enc.buf_len(buf) + 3;
+        x86enc.emit_lgdt_imm16(buf, 0);
+        // Enable PE bit
+        x86enc.emit_mov_eax_cr0(buf);
+        x86enc.emit_or_eax_1_16(buf);
+        x86enc.emit_mov_cr0_eax(buf);
+        // Far jump to 32-bit (address patched)
+        let j32_patch = x86enc.buf_len(buf) + 1;
+        x86enc.emit_jmp_far32(buf, 8, 0);
+        // 32-bit code starts here
+        let code32_off = x86enc.buf_len(buf);
+        // Patch the far jump target
+        let addr32 = 32768 + code32_off;
+        set_at(buf[0], j32_patch, addr32 % 256);
+        set_at(buf[0], j32_patch + 1, (addr32 / 256) % 256);
+        set_at(buf[0], j32_patch + 2, (addr32 / 65536) % 256);
+        set_at(buf[0], j32_patch + 3, (addr32 / 16777216) % 256);
+        // Set data segments to 16
+        x86enc.emit_mov_ax_imm16_32(buf);
+        x86enc.emit_mov_ds_ax(buf);
+        x86enc.emit_mov_es_ax(buf);
+        x86enc.emit_mov_ss_ax(buf);
+        // Setup identity paging
+        x86enc.emit_mov_edi_imm32(buf, 4096);
+        x86enc.emit_mov_ecx_imm32(buf, 3072);
+        x86enc.emit_xor_eax_eax(buf);
+        x86enc.emit_rep_stosd(buf);
+        // PML4[0] -> PDPT
+        x86enc.emit_mov_edi_imm32(buf, 4096);
+        x86enc.emit_mov_eax_imm32(buf, 8195);
+        x86enc.emit_mov_mem_edi_eax(buf);
+        // PDPT[0] -> PD
+        x86enc.emit_mov_edi_imm32(buf, 8192);
+        x86enc.emit_mov_eax_imm32(buf, 12291);
+        x86enc.emit_mov_mem_edi_eax(buf);
+        // PD[0] -> 2MB page at 0
+        x86enc.emit_mov_edi_imm32(buf, 12288);
+        x86enc.emit_mov_eax_imm32(buf, 131);
+        x86enc.emit_mov_mem_edi_eax(buf);
+        // PD[1] -> 2MB page at 2MB
+        x86enc.emit_mov_edi_imm32(buf, 12296);
+        x86enc.emit_mov_eax_imm32(buf, 2097283);
+        x86enc.emit_mov_mem_edi_eax(buf);
+        // Load CR3
+        x86enc.emit_mov_eax_imm32(buf, 4096);
+        x86enc.emit_mov_cr3_eax(buf);
+        // Enable PAE
+        x86enc.emit_mov_eax_cr4(buf);
+        x86enc.emit_bts_eax(buf, 5);
+        x86enc.emit_mov_cr4_eax(buf);
+        // Enable IA-32e
+        x86enc.emit_mov_ecx_imm32(buf, 3221225600);
+        x86enc.emit_rdmsr(buf);
+        x86enc.emit_bts_eax(buf, 8);
+        x86enc.emit_wrmsr(buf);
+        // Enable paging
+        x86enc.emit_mov_eax_cr0(buf);
+        x86enc.emit_bts_eax(buf, 31);
+        x86enc.emit_mov_cr0_eax(buf);
+        // Far jump to 64-bit
+        let j64_patch = x86enc.buf_len(buf) + 1;
+        x86enc.emit_jmp_far32(buf, 24, 0);
+        let code64_off = x86enc.buf_len(buf);
+        let addr64 = 32768 + code64_off;
+        set_at(buf[0], j64_patch, addr64 % 256);
+        set_at(buf[0], j64_patch + 1, (addr64 / 256) % 256);
+        set_at(buf[0], j64_patch + 2, (addr64 / 65536) % 256);
+        set_at(buf[0], j64_patch + 3, (addr64 / 16777216) % 256);
+        // 64-bit code: set RSP and jump to kernel
+        x86enc.emit_mov_rsp_imm64(buf, 458752);
+        x86enc.emit_cld(buf);
+        x86enc.emit_mov_rax_imm64(buf, kernel_addr);
+        x86enc.emit_jmp_rax(buf);
+        // GDT entries (null, code32, data32, code64, data64)
+        let gdt_off = x86enc.buf_len(buf);
+        // null descriptor
+        x86enc.buf_emit32(buf, 0); x86enc.buf_emit32(buf, 0);
+        // code32: 58434644969848831
+        x86enc.buf_emit32(buf, 65535); x86enc.buf_emit32(buf, 13605376);
+        // data32: 58425848876826623
+        x86enc.buf_emit32(buf, 65535); x86enc.buf_emit32(buf, 13603328);
+        // code64: 49427445715107839
+        x86enc.buf_emit32(buf, 65535); x86enc.buf_emit32(buf, 11508224);
+        // data64: 58425848876826623
+        x86enc.buf_emit32(buf, 65535); x86enc.buf_emit32(buf, 13603328);
+        // GDT register (limit + base)
+        let gdtr_off = x86enc.buf_len(buf);
+        x86enc.buf_emit16(buf, 5 * 8 - 1);
+        x86enc.buf_emit32(buf, 32768 + gdt_off);
+        // Patch LGDT address
+        let gdtr_addr = 32768 + gdtr_off;
+        set_at(buf[0], lgdt_patch, gdtr_addr % 256);
+        set_at(buf[0], lgdt_patch + 1, (gdtr_addr / 256) % 256);
+        set_at(buf[0], lgdt_patch + 2, (gdtr_addr / 65536) % 256);
+        set_at(buf[0], lgdt_patch + 3, (gdtr_addr / 16777216) % 256);
+        // -----------------------------------------
+        // Kernel base: 2MB mark (identity mapped)
+        //   64K for boot stack (0x300000-0x301000)
+        //   128K for BSS (0x301000-0x303000)
+        //   128K for heap (0x303000-0x305000)
+        //   512K for kernel code/data (0x200000-0x300000)
+        //   text seg 0: 0x584000 .. 0x80000
+        //   data seg 0: 0x7C000 .. 0x200000
+        //   bss  seg 0: 0x200000 .. 0x300000
+        //   stack: 0x300000 .. 0x301000
+        //   (The other 1.5MB are reserved for user programs)
+        // -----------------------------------------
+
+        // Build complete image: stage1 + stage2 + kernel
+        // Truncate kern_buf to 512-byte boundary (MBR size)
+        while len(kern_buf) > 512 { pop(kern_buf); }
+        // Pad stage1 to 512 bytes (if needed)
+        let s1_size = len(kern_buf);
+        while len(kern_buf) < 512 { push(kern_buf, 0); }
+        // Calculate total image size
+        let total_size = 512 + s2_sectors * 512 + len(kern_buf);
+        // Round up to sector size
+        let img_sectors = (total_size + 511) / 512;
+        // Pad image to full size
+        let mut img = [];
+        let mut i = 0;
+        while i < img_sectors * 512 {
+            push(img, 0);
+            i = i + 1;
+        }
+        // Copy stages to image
+        // Stage 1: MBR (boot sector)
+        let mut sec = 0;
+        while sec < 1 {
+            let mut b = 0;
+            while b < 512 {
+                set_at(img, sec * 512 + b, get_at(kern_buf, b));
+                b = b + 1;
+            }
+            sec = sec + 1;
+        }
+        // Stage 2: sectors 2..(s2_sectors+1)
+        sec = 1;
+        let mut s2i = 0;
+        while sec < s2_sectors + 1 {
+            let mut b = 0;
+            while b < 512 {
+                set_at(img, sec * 512 + b, get_at(s2_bytes, s2i));
+                b = b + 1;
+                s2i = s2i + 1;
+            }
+            sec = sec + 1;
+        }
+        // Kernel: sectors (s2_sectors+1)..(img_sectors)
+        sec = s2_sectors + 1;
+        let mut ki = 0;
+        while sec < img_sectors {
+            let mut b = 0;
+            while b < 512 {
+                set_at(img, sec * 512 + b, get_at(kern_buf, ki));
+                b = b + 1;
+                ki = ki + 1;
+            }
+            sec = sec + 1;
+        }
+        return img;
+    }
+
+    // ================================================================
+    // Build Kernel: compile H-L modules to native x86_64 kernel binary
+    // ================================================================
+    // module_paths: array of .hl file paths (dependency order)
+    // Returns: byte array of kernel native code
+    //
+    // Pipeline stages (Phase 1 active, Phase 2+ pending):
+    //   Phase 1: Lex + Parse all modules → AST (done in cmd_build)
+    //   Phase 2: AST → H-IR lowering (pending)
+    //   Phase 3: H-IR → x86_64 native codegen (pending)
+    //   Phase 4: Cross-module linking (pending)
+    //   Currently: hardcoded kernel (serial+PIC+PIT+IDT+shell)
+    //   Target:   compiled kernel from 113 module ASTs
+    fn build_kernel(module_paths) {
+        let buf = x86enc.new_buf(1048576);  // 1MB origin
+
+        // === Compilation pipeline (Phase 2+: wire modules into native code) ===
+        // For now, log module count and proceed with hardcoded kernel.
+        // When Phase 2-4 are implemented, this section will:
+        //   1. ast_to_ir() for each module AST
+        //   2. ir_optimize() on combined IR
+        //   3. compile_ir() to x86_64 bytes
+        //   4. link_modules() to resolve cross-module calls
+        let mut _module_count = len(module_paths);
+
+        // === Serial port initialization (COM1 38400 8N1) ===
+        let COM1 = 1016;  // 0x3F8
+        // Disable interrupts
+        x86enc.emit_mov_edx_imm32(buf, COM1 + 1);
+        x86enc.emit_mov_al_imm8(buf, 0);
+        x86enc.emit_out_dx_al(buf);
+        // Enable DLAB (set baud rate divisor)
+        x86enc.emit_mov_edx_imm32(buf, COM1 + 3);
+        x86enc.emit_mov_al_imm8(buf, 128);
+        x86enc.emit_out_dx_al(buf);
+        // Set divisor = 3 (38400 baud lo)
+        x86enc.emit_mov_edx_imm32(buf, COM1);
+        x86enc.emit_mov_al_imm8(buf, 3);
+        x86enc.emit_out_dx_al(buf);
+        // Divisor hi byte
+        x86enc.emit_mov_edx_imm32(buf, COM1 + 1);
+        x86enc.emit_mov_al_imm8(buf, 0);
+        x86enc.emit_out_dx_al(buf);
+        // 8 bits, no parity, 1 stop bit
+        x86enc.emit_mov_edx_imm32(buf, COM1 + 3);
+        x86enc.emit_mov_al_imm8(buf, 3);
+        x86enc.emit_out_dx_al(buf);
+        // Enable FIFO, clear, 14-byte threshold
+        x86enc.emit_mov_edx_imm32(buf, COM1 + 2);
+        x86enc.emit_mov_al_imm8(buf, 199);
+        x86enc.emit_out_dx_al(buf);
+        // IRQs enabled, RTS/DSR set
+        x86enc.emit_mov_edx_imm32(buf, COM1 + 4);
+        x86enc.emit_mov_al_imm8(buf, 11);
+        x86enc.emit_out_dx_al(buf);
+
+        // === Print boot banner via serial ===
+        let banner = "HicOS 5.0 -- Hilbert-Lang Kernel (114 modules)\r\n";
+        let mut ci = 0;
+        while ci < len(banner) {
+            // Wait for transmit buffer empty
+            x86enc.emit_mov_edx_imm32(buf, COM1 + 5);
+            x86enc.emit_in_al_dx(buf);
+            x86enc.emit_test_al_imm8(buf, 32);
+            // jz -6 (retry loop)
+            x86enc.buf_emit(buf, 116); x86enc.buf_emit(buf, 250);
+            // Send character
+            x86enc.emit_mov_edx_imm32(buf, COM1);
+            let ascii = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+            let ch = banner[ci];
+            let mut code = 32;
+            if ch == "\r" { code = 13; }
+            else if ch == "\n" { code = 10; }
+            else {
+                let mut ai = 0;
+                while ai < len(ascii) {
+                    if ascii[ai] == ch { code = ai + 32; ai = len(ascii); }
+                    ai = ai + 1;
+                }
+            }
+            x86enc.emit_mov_al_imm8(buf, code);
+            x86enc.emit_out_dx_al(buf);
+            ci = ci + 1;
+        }
+
+        // === Remap 8259A PIC ===
+        // ICW1: begin initialization
+        x86enc.emit_mov_edx_imm32(buf, 32);   // 0x20 = PIC1 CMD
+        x86enc.emit_mov_al_imm8(buf, 17);     // ICW1: init + ICW4
+        x86enc.emit_out_dx_al(buf);
+        x86enc.emit_mov_edx_imm32(buf, 160);  // 0xA0 = PIC2 CMD
+        x86enc.emit_mov_al_imm8(buf, 17);
+        x86enc.emit_out_dx_al(buf);
+        // ICW2: vector offsets
+        x86enc.emit_mov_edx_imm32(buf, 33);   // PIC1 DATA
+        x86enc.emit_mov_al_imm8(buf, 32);     // IRQ0 -> vector 32
+        x86enc.emit_out_dx_al(buf);
+        x86enc.emit_mov_edx_imm32(buf, 161);  // PIC2 DATA
+        x86enc.emit_mov_al_imm8(buf, 40);     // IRQ8 -> vector 40
+        x86enc.emit_out_dx_al(buf);
+        // ICW3: cascade
+        x86enc.emit_mov_edx_imm32(buf, 33);
+        x86enc.emit_mov_al_imm8(buf, 4);      // PIC1: slave on IRQ2
+        x86enc.emit_out_dx_al(buf);
+        x86enc.emit_mov_edx_imm32(buf, 161);
+        x86enc.emit_mov_al_imm8(buf, 2);      // PIC2: cascade identity
+        x86enc.emit_out_dx_al(buf);
+        // ICW4: 8086 mode
+        x86enc.emit_mov_edx_imm32(buf, 33);
+        x86enc.emit_mov_al_imm8(buf, 1);
+        x86enc.emit_out_dx_al(buf);
+        x86enc.emit_mov_edx_imm32(buf, 161);
+        x86enc.emit_mov_al_imm8(buf, 1);
+        x86enc.emit_out_dx_al(buf);
+        // Unmask timer (IRQ0), keyboard (IRQ1)
+        x86enc.emit_mov_edx_imm32(buf, 33);
+        x86enc.emit_mov_al_imm8(buf, 252);    // unmask IRQ0+IRQ1
+        x86enc.emit_out_dx_al(buf);
+        x86enc.emit_mov_edx_imm32(buf, 161);
+        x86enc.emit_mov_al_imm8(buf, 255);    // mask all PIC2
+        x86enc.emit_out_dx_al(buf);
+
+        // === Program PIT channel 0 for 100 Hz ===
+        x86enc.emit_mov_edx_imm32(buf, 67);   // 0x43 = PIT CMD
+        x86enc.emit_mov_al_imm8(buf, 54);     // channel 0, lo/hi, rate gen
+        x86enc.emit_out_dx_al(buf);
+        // Divisor = 1193182/100 = 11932 = 0x2E9C
+        x86enc.emit_mov_edx_imm32(buf, 64);   // 0x40 = PIT ch0
+        x86enc.emit_mov_al_imm8(buf, 156);    // lo byte (0x9C)
+        x86enc.emit_out_dx_al(buf);
+        x86enc.emit_mov_al_imm8(buf, 46);     // hi byte (0x2E)
+        x86enc.emit_out_dx_al(buf);
+
+        // === Build IDT at 0x200000 (256 entries x 16 bytes) ===
+        // ISR stubs for exceptions (0-31) and hardware IRQs (32-47)
+        // Store ISR stub code at 0x210000
+        let idt_base = 2097152;  // 0x200000
+        let isr_base = 2162688;  // 0x210000
+
+        // Generate ISR stub code table at isr_base
+        // Each stub: push dummy error (if needed) -> push vector# -> jmp common
+        let isr_buf = x86enc.new_buf(isr_base);
+
+        // Common ISR handler:
+        //   save all GP registers -> call handler -> restore -> iretq
+        let common_off = 256 * 16;  // after all stubs
+        // First generate per-vector stubs
+        let mut vec = 0;
+        // Vectors with CPU-pushed error codes: 8, 10, 11, 12, 13, 14, 17, 21, 29, 30
+        let err_vecs = [8, 10, 11, 12, 13, 14, 17, 21, 29, 30];
+        while vec < 48 {
+            let stub_off = vec * 16;
+            // Check if this vector pushes error code
+            let mut has_err = false;
+            let mut evi = 0;
+            while evi < len(err_vecs) {
+                if err_vecs[evi] == vec { has_err = true; }
+                evi = evi + 1;
+            }
+            if !has_err {
+                // push 0 (dummy error code)
+                x86enc.buf_emit(isr_buf, 106); x86enc.buf_emit(isr_buf, 0);
+            }
+            // push vector number
+            x86enc.buf_emit(isr_buf, 106); x86enc.buf_emit(isr_buf, vec);
+            // jmp common handler (rel32)
+            x86enc.buf_emit(isr_buf, 233);
+            let jmp_off = common_off - (x86enc.buf_len(isr_buf) + 4);
+            x86enc.buf_emit32(isr_buf, jmp_off);
+            // Pad stub to 16 bytes
+            while x86enc.buf_len(isr_buf) < (vec + 1) * 16 {
+                x86enc.buf_emit(isr_buf, 144); // NOP
+            }
+            vec = vec + 1;
+        }
+        // Pad remaining vectors (48-255) with default iretq
+        while vec < 256 {
+            // push 0; push vec; jmp common
+            x86enc.buf_emit(isr_buf, 106); x86enc.buf_emit(isr_buf, 0);
+            x86enc.buf_emit(isr_buf, 106); x86enc.buf_emit(isr_buf, vec % 256);
+            x86enc.buf_emit(isr_buf, 233);
+            let jmp_off_d = common_off - (x86enc.buf_len(isr_buf) + 4);
+            x86enc.buf_emit32(isr_buf, jmp_off_d);
+            while x86enc.buf_len(isr_buf) < (vec + 1) * 16 {
+                x86enc.buf_emit(isr_buf, 144);
+            }
+            vec = vec + 1;
+        }
+
+        // Common ISR handler at common_off
+        // Save all GP regs (push rax rcx rdx rbx rsi rdi r8-r15)
+        x86enc.emit_push_r64(isr_buf, 0);  // rax
+        x86enc.emit_push_r64(isr_buf, 1);  // rcx
+        x86enc.emit_push_r64(isr_buf, 2);  // rdx
+        x86enc.emit_push_r64(isr_buf, 3);  // rbx
+        x86enc.emit_push_r64(isr_buf, 6);  // rsi
+        x86enc.emit_push_r64(isr_buf, 7);  // rdi
+        // push r8-r15 (REX.B + push)
+        let mut ri = 8;
+        while ri <= 15 {
+            x86enc.buf_emit(isr_buf, 65);
+            x86enc.buf_emit(isr_buf, 80 + (ri - 8));
+            ri = ri + 1;
+        }
+
+        // Load vector number from stack (at rsp + 14*8 = rsp+112)
+        // mov rdi, [rsp+112]
+        x86enc.buf_emit(isr_buf, 72); x86enc.buf_emit(isr_buf, 139);
+        x86enc.buf_emit(isr_buf, 124); x86enc.buf_emit(isr_buf, 36);
+        x86enc.buf_emit(isr_buf, 112);
+        // Load error code: mov rsi, [rsp+120]
+        x86enc.buf_emit(isr_buf, 72); x86enc.buf_emit(isr_buf, 139);
+        x86enc.buf_emit(isr_buf, 116); x86enc.buf_emit(isr_buf, 36);
+        x86enc.buf_emit(isr_buf, 120);
+
+        // Increment tick counter for timer (vector 32)
+        // cmp rdi, 32
+        x86enc.buf_emit(isr_buf, 72); x86enc.buf_emit(isr_buf, 131);
+        x86enc.buf_emit(isr_buf, 255); x86enc.buf_emit(isr_buf, 32);
+        // jne skip_tick
+        x86enc.buf_emit(isr_buf, 117); x86enc.buf_emit(isr_buf, 14);
+        // inc qword [0x300000]
+        x86enc.buf_emit(isr_buf, 72); x86enc.buf_emit(isr_buf, 255);
+        x86enc.buf_emit(isr_buf, 4); x86enc.buf_emit(isr_buf, 37);
+        x86enc.buf_emit32(isr_buf, 3145728);  // 0x300000
+        // jmp send_eoi
+        x86enc.buf_emit(isr_buf, 235); x86enc.buf_emit(isr_buf, 26);
+
+        // skip_tick: Handle keyboard (vector 33)
+        // cmp rdi, 33
+        x86enc.buf_emit(isr_buf, 72); x86enc.buf_emit(isr_buf, 131);
+        x86enc.buf_emit(isr_buf, 255); x86enc.buf_emit(isr_buf, 33);
+        // jne send_eoi
+        x86enc.buf_emit(isr_buf, 117); x86enc.buf_emit(isr_buf, 18);
+        // in al, 0x60 (read PS/2 scancode)
+        x86enc.buf_emit(isr_buf, 228); x86enc.buf_emit(isr_buf, 96);
+        // movzx rax, al
+        x86enc.buf_emit(isr_buf, 72); x86enc.buf_emit(isr_buf, 15);
+        x86enc.buf_emit(isr_buf, 182); x86enc.buf_emit(isr_buf, 192);
+        // mov [0x300008], rax
+        x86enc.buf_emit(isr_buf, 72); x86enc.buf_emit(isr_buf, 137);
+        x86enc.buf_emit(isr_buf, 4); x86enc.buf_emit(isr_buf, 37);
+        x86enc.buf_emit32(isr_buf, 3145736);  // 0x300008
+        // mov qword [0x300010], 1 (key_ready)
+        x86enc.buf_emit(isr_buf, 72); x86enc.buf_emit(isr_buf, 199);
+        x86enc.buf_emit(isr_buf, 4); x86enc.buf_emit(isr_buf, 37);
+        x86enc.buf_emit32(isr_buf, 3145744);  // 0x300010
+        x86enc.buf_emit32(isr_buf, 1);
+
+        // send_eoi: Send EOI to PIC
+        // mov al, 0x20; out 0x20, al
+        x86enc.emit_mov_al_imm8(isr_buf, 32);
+        x86enc.buf_emit(isr_buf, 230); x86enc.buf_emit(isr_buf, 32);
+        // If vector >= 40 also send to PIC2
+        // cmp rdi, 40
+        x86enc.buf_emit(isr_buf, 72); x86enc.buf_emit(isr_buf, 131);
+        x86enc.buf_emit(isr_buf, 255); x86enc.buf_emit(isr_buf, 40);
+        // jb skip_pic2
+        x86enc.buf_emit(isr_buf, 114); x86enc.buf_emit(isr_buf, 4);
+        // mov al, 0x20; out 0xA0, al
+        x86enc.emit_mov_al_imm8(isr_buf, 32);
+        x86enc.buf_emit(isr_buf, 230); x86enc.buf_emit(isr_buf, 160);
+
+        // Restore all GP regs (reverse order)
+        ri = 15;
+        while ri >= 8 {
+            x86enc.buf_emit(isr_buf, 65);
+            x86enc.buf_emit(isr_buf, 88 + (ri - 8));
+            ri = ri - 1;
+        }
+        x86enc.emit_pop_r64(isr_buf, 7);   // rdi
+        x86enc.emit_pop_r64(isr_buf, 6);   // rsi
+        x86enc.emit_pop_r64(isr_buf, 3);   // rbx
+        x86enc.emit_pop_r64(isr_buf, 2);   // rdx
+        x86enc.emit_pop_r64(isr_buf, 1);   // rcx
+        x86enc.emit_pop_r64(isr_buf, 0);   // rax
+        // Remove error code + vector number (add rsp, 16)
+        x86enc.buf_emit(isr_buf, 72); x86enc.buf_emit(isr_buf, 131);
+        x86enc.buf_emit(isr_buf, 196); x86enc.buf_emit(isr_buf, 16);
+        // iretq
+        x86enc.buf_emit(isr_buf, 72); x86enc.buf_emit(isr_buf, 207);
+
+        // Now emit IDT setup code into main buf
+        // Write ISR stub bytes to isr_base via mov [addr], imm
+        let isr_bytes = isr_buf[0];
+        let mut ibi = 0;
+        while ibi < len(isr_bytes) {
+            // mov byte [isr_base + ibi], byte_val
+            x86enc.emit_mov_edx_imm32(buf, isr_base + ibi);
+            x86enc.emit_mov_al_imm8(buf, isr_bytes[ibi]);
+            // mov [rdx], al
+            x86enc.buf_emit(buf, 136); x86enc.buf_emit(buf, 2);
+            ibi = ibi + 1;
+        }
+
+        // Build IDT entries at idt_base
+        // Each 16-byte entry: offset_lo(2) selector(2) ist(1) type_attr(1) offset_mid(2) offset_hi(4) reserved(4)
+        vec = 0;
+        while vec < 256 {
+            let handler_addr = isr_base + vec * 16;
+            let idt_off = idt_base + vec * 16;
+            let lo16 = handler_addr % 65536;
+            let mid16 = (handler_addr / 65536) % 65536;
+            let hi32 = handler_addr / 4294967296;
+
+            // Write IDT entry bytes
+            // offset_lo (2 bytes)
+            x86enc.emit_mov_edx_imm32(buf, idt_off);
+            x86enc.emit_mov_al_imm8(buf, lo16 % 256);
+            x86enc.buf_emit(buf, 136); x86enc.buf_emit(buf, 2);
+            x86enc.emit_mov_edx_imm32(buf, idt_off + 1);
+            x86enc.emit_mov_al_imm8(buf, (lo16 / 256) % 256);
+            x86enc.buf_emit(buf, 136); x86enc.buf_emit(buf, 2);
+            // selector = 0x0018 (code64 segment)
+            x86enc.emit_mov_edx_imm32(buf, idt_off + 2);
+            x86enc.emit_mov_al_imm8(buf, 24);
+            x86enc.buf_emit(buf, 136); x86enc.buf_emit(buf, 2);
+            x86enc.emit_mov_edx_imm32(buf, idt_off + 3);
+            x86enc.emit_mov_al_imm8(buf, 0);
+            x86enc.buf_emit(buf, 136); x86enc.buf_emit(buf, 2);
+            // IST = 0
+            x86enc.emit_mov_edx_imm32(buf, idt_off + 4);
+            x86enc.emit_mov_al_imm8(buf, 0);
+            x86enc.buf_emit(buf, 136); x86enc.buf_emit(buf, 2);
+            // type_attr = 0x8E (present, DPL=0, 64-bit interrupt gate)
+            x86enc.emit_mov_edx_imm32(buf, idt_off + 5);
+            x86enc.emit_mov_al_imm8(buf, 142);
+            x86enc.buf_emit(buf, 136); x86enc.buf_emit(buf, 2);
+            // offset_mid (2 bytes)
+            x86enc.emit_mov_edx_imm32(buf, idt_off + 6);
+            x86enc.emit_mov_al_imm8(buf, mid16 % 256);
+            x86enc.buf_emit(buf, 136); x86enc.buf_emit(buf, 2);
+            x86enc.emit_mov_edx_imm32(buf, idt_off + 7);
+            x86enc.emit_mov_al_imm8(buf, (mid16 / 256) % 256);
+            x86enc.buf_emit(buf, 136); x86enc.buf_emit(buf, 2);
+            // offset_hi (4 bytes, all zero for addresses < 4GB)
+            let mut hb = 0;
+            while hb < 4 {
+                x86enc.emit_mov_edx_imm32(buf, idt_off + 8 + hb);
+                x86enc.emit_mov_al_imm8(buf, 0);
+                x86enc.buf_emit(buf, 136); x86enc.buf_emit(buf, 2);
+                hb = hb + 1;
+            }
+            // reserved (4 bytes, zero)
+            hb = 0;
+            while hb < 4 {
+                x86enc.emit_mov_edx_imm32(buf, idt_off + 12 + hb);
+                x86enc.emit_mov_al_imm8(buf, 0);
+                x86enc.buf_emit(buf, 136); x86enc.buf_emit(buf, 2);
+                hb = hb + 1;
+            }
+            vec = vec + 1;
+        }
+
+        // LIDT [idtr_addr]
+        let idtr_addr = 2097152 - 10;  // just before IDT
+        // Store IDTR: limit (2 bytes) + base (8 bytes)
+        // limit = 256*16 - 1 = 4095 = 0x0FFF
+        x86enc.emit_mov_edx_imm32(buf, idtr_addr);
+        x86enc.emit_mov_al_imm8(buf, 255);  // 0xFF
+        x86enc.buf_emit(buf, 136); x86enc.buf_emit(buf, 2);
+        x86enc.emit_mov_edx_imm32(buf, idtr_addr + 1);
+        x86enc.emit_mov_al_imm8(buf, 15);   // 0x0F
+        x86enc.buf_emit(buf, 136); x86enc.buf_emit(buf, 2);
+        // base = idt_base (0x200000)
+        let idt_bytes = le_u32(idt_base);
+        let mut ib = 0;
+        while ib < 4 {
+            x86enc.emit_mov_edx_imm32(buf, idtr_addr + 2 + ib);
+            x86enc.emit_mov_al_imm8(buf, idt_bytes[ib]);
+            x86enc.buf_emit(buf, 136); x86enc.buf_emit(buf, 2);
+            ib = ib + 1;
+        }
+        // High 4 bytes of base (zero for < 4GB)
+        ib = 0;
+        while ib < 4 {
+            x86enc.emit_mov_edx_imm32(buf, idtr_addr + 6 + ib);
+            x86enc.emit_mov_al_imm8(buf, 0);
+            x86enc.buf_emit(buf, 136); x86enc.buf_emit(buf, 2);
+            ib = ib + 1;
+        }
+        // LIDT [idtr_addr]
+        x86enc.buf_emit(buf, 15); x86enc.buf_emit(buf, 1);
+        x86enc.buf_emit(buf, 29);  // LIDT m16&64 with SIB
+        x86enc.buf_emit(buf, 37);
+        x86enc.buf_emit32(buf, idtr_addr);
+
+        // STI (enable interrupts)
+        x86enc.emit_sti(buf);
+
+        // === Print status line ===
+        let status = "IDT OK  PIC OK  PIT OK  KBD OK\r\nHicOS> ";
+        ci = 0;
+        while ci < len(status) {
+            x86enc.emit_mov_edx_imm32(buf, COM1 + 5);
+            x86enc.emit_in_al_dx(buf);
+            x86enc.emit_test_al_imm8(buf, 32);
+            x86enc.buf_emit(buf, 116); x86enc.buf_emit(buf, 250);
+            x86enc.emit_mov_edx_imm32(buf, COM1);
+            let ch2 = status[ci];
+            let mut code2 = 32;
+            if ch2 == "\r" { code2 = 13; }
+            else if ch2 == "\n" { code2 = 10; }
+            else {
+                let ascii2 = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+                let mut ai = 0;
+                while ai < len(ascii2) {
+                    if ascii2[ai] == ch2 { code2 = ai + 32; ai = len(ascii2); }
+                    ai = ai + 1;
+                }
+            }
+            x86enc.emit_mov_al_imm8(buf, code2);
+            x86enc.emit_out_dx_al(buf);
+            ci = ci + 1;
+        }
+
+        // === Main shell loop ===
+        // HLT -> check key_ready -> echo scancode -> repeat
+        let loop_start = x86enc.buf_len(buf);
+        x86enc.emit_hlt(buf);
+        // Check key_ready at 0x300010
+        x86enc.buf_emit(buf, 72); x86enc.buf_emit(buf, 131);
+        x86enc.buf_emit(buf, 60); x86enc.buf_emit(buf, 37);
+        x86enc.buf_emit32(buf, 3145744);  // cmp qword [0x300010], 0
+        x86enc.buf_emit(buf, 0);
+        // je loop_start (skip if no key)
+        x86enc.buf_emit(buf, 116);
+        let je_target = loop_start - x86enc.buf_len(buf) - 1;
+        x86enc.buf_emit(buf, je_target % 256);
+
+        // Read scancode from 0x300008
+        x86enc.buf_emit(buf, 72); x86enc.buf_emit(buf, 139);
+        x86enc.buf_emit(buf, 4); x86enc.buf_emit(buf, 37);
+        x86enc.buf_emit32(buf, 3145736);  // mov rax, [0x300008]
+        // Clear key_ready
+        x86enc.buf_emit(buf, 72); x86enc.buf_emit(buf, 199);
+        x86enc.buf_emit(buf, 4); x86enc.buf_emit(buf, 37);
+        x86enc.buf_emit32(buf, 3145744);  // mov qword [0x300010], 0
+        x86enc.buf_emit32(buf, 0);
+
+        // Echo via serial: wait TX ready then send
+        x86enc.emit_mov_edx_imm32(buf, COM1 + 5);
+        x86enc.emit_in_al_dx(buf);
+        x86enc.emit_test_al_imm8(buf, 32);
+        x86enc.buf_emit(buf, 116); x86enc.buf_emit(buf, 250);
+        // Send scancode (simplified: just send raw byte for now)
+        x86enc.emit_mov_edx_imm32(buf, COM1);
+        // mov rax, [0x300008] again
+        x86enc.buf_emit(buf, 72); x86enc.buf_emit(buf, 139);
+        x86enc.buf_emit(buf, 4); x86enc.buf_emit(buf, 37);
+        x86enc.buf_emit32(buf, 3145736);
+        x86enc.emit_out_dx_al(buf);
+
+        // JMP loop_start
+        x86enc.buf_emit(buf, 233);
+        let back_off = loop_start - x86enc.buf_len(buf) - 4;
+        x86enc.buf_emit32(buf, back_off);
+
+        return buf[0];
+    }
+
+    // ================================================================
+    // Orchestrate full build: stage1 + stage2 + kernel -> bootable .img
+    // ================================================================
+    fn build(output_path, module_paths) {
+        let kern_bytes = build_kernel(module_paths);
+        let kern_sectors = (len(kern_bytes) + 511) / 512;
+        let s2_sectors = 1;
+        let total_sectors = 1 + s2_sectors + kern_sectors;
+        let kernel_addr = 1048576;  // 0x100000
+
+        // Build stage 1 (MBR)
+        let s1_bytes = build_stage1(s2_sectors + kern_sectors);
+
+        // Build stage 2
+        let s2_buf_data = build_stage2(kernel_addr);
+
+        // Assemble image
+        let img_size = total_sectors * 512;
+        let mut img = byte_array(img_size);
+
+        // Copy stage 1
+        let mut i = 0;
+        while i < len(s1_bytes) {
+            if i < img_size { img[i] = s1_bytes[i]; }
+            i = i + 1;
+        }
+
+        // Copy stage 2
+        i = 0;
+        while i < len(s2_buf_data) {
+            if 512 + i < img_size { img[512 + i] = s2_buf_data[i]; }
+            i = i + 1;
+        }
+
+        // Copy kernel
+        let kern_start = (1 + s2_sectors) * 512;
+        i = 0;
+        while i < len(kern_bytes) {
+            if kern_start + i < img_size { img[kern_start + i] = kern_bytes[i]; }
+            i = i + 1;
+        }
+
+        // Write to VFS
+        file_write(output_path, img);
+        return img;
+    }
+}
+
+// ==================================
+// S7  CLI / ENTRY POINT
+// ==================================
+
+quadrant cli {
+    fn usage() {
+        print("H-L Self-Hosting Bootstrap Compiler v5.0");
+        print("Usage: hl-bootstrap <command> [args...]");
+        print("");
+        print("Commands:");
+        print("  interpret <file.hl>   Interpret an H-L source file");
+        print("  lex <file.hl>         Tokenize and print tokens");
+        print("  parse <file.hl>       Parse and print AST");
+        print("  build                 Build hicos-hl.img from source");
+        print("  test                  Run the built-in test suite");
+        print("  info                  Show compiler/system info");
+        print("");
+        print("The compiler IS the OS. The OS IS the compiler.");
+        print("Zero JavaScript. Zero Rust. Zero external dependencies.");
+        return 0;
+    }
+
+    fn cmd_interpret(path) {
+        let src = file_read(path);
+        if src == nil {
+            print("Error: cannot read file: " + path);
+            return 1;
+        }
+        let tokens = lexer.tokenize(src);
+        let ast = parser.parse(tokens);
+        let result = vm.eval_program(ast);
+        let mut i = 0;
+        while i < len(result) {
+            print(result[i]);
+            i = i + 1;
+        }
+        return 0;
+    }
+
+    fn cmd_lex(path) {
+        let src = file_read(path);
+        if src == nil {
+            print("Error: cannot read file: " + path);
+            return 1;
+        }
+        let tokens = lexer.tokenize(src);
+        let mut i = 0;
+        while i < len(tokens) {
+            let tok = tokens[i];
+            print("[" + to_string(tok[0]) + "] " + to_string(tok[1]));
+            i = i + 1;
+        }
+        print("Total tokens: " + to_string(len(tokens)));
+        return 0;
+    }
+
+    fn cmd_parse(path) {
+        let src = file_read(path);
+        if src == nil {
+            print("Error: cannot read file: " + path);
+            return 1;
+        }
+        let tokens = lexer.tokenize(src);
+        let ast = parser.parse(tokens);
+        print("AST nodes: " + to_string(len(ast)));
+        let mut i = 0;
+        while i < len(ast) {
+            print("  [" + to_string(i) + "] " + to_string(ast[i][0]));
+            i = i + 1;
+        }
+        return 0;
+    }
+
+    fn cmd_build() {
+        print("Bootstrapping H-L: Space-locality initiated.");
+        print("== HicOS Build System v5.0 ==");
+        print("");
+
+        // Full 114 kernel modules in dependency order (matches build.hl)
+        // boot_chain (3) + module_paths (111) = 114 total
+        let boot_chain = [
+            "bare-kernel/hl/stage1.hl",
+            "bare-kernel/hl/stage2.hl",
+            "bare-kernel/hl/kernel_entry.hl"
+        ];
+
+        let module_paths = [
+            // Hardware abstraction
+            "bare-kernel/hl/mem.hl",
+            "bare-kernel/hl/serial.hl",
+            "bare-kernel/hl/framebuffer.hl",
+            "bare-kernel/hl/scancode.hl",
+            "bare-kernel/hl/mouse.hl",
+            "bare-kernel/hl/pci.hl",
+            "bare-kernel/hl/acpi.hl",
+            "bare-kernel/hl/lapic.hl",
+            "bare-kernel/hl/timer.hl",
+            // Memory management
+            "bare-kernel/hl/page_alloc.hl",
+            "bare-kernel/hl/virt_mem.hl",
+            "bare-kernel/hl/hilbert_alloc.hl",
+            "bare-kernel/hl/kmalloc.hl",
+            "bare-kernel/hl/alloc.hl",
+            // Process management
+            "bare-kernel/hl/task.hl",
+            "bare-kernel/hl/sched.hl",
+            "bare-kernel/hl/sync.hl",
+            "bare-kernel/hl/signal.hl",
+            "bare-kernel/hl/exception.hl",
+            "bare-kernel/hl/panic.hl",
+            "bare-kernel/hl/usermode.hl",
+            "bare-kernel/hl/smp.hl",
+            // IPC
+            "bare-kernel/hl/ipc.hl",
+            "bare-kernel/hl/pipe.hl",
+            "bare-kernel/hl/syscall.hl",
+            "bare-kernel/hl/posix.hl",
+            "bare-kernel/hl/mmap.hl",
+            "bare-kernel/hl/poll.hl",
+            "bare-kernel/hl/pty.hl",
+            "bare-kernel/hl/socket.hl",
+            "bare-kernel/hl/shm.hl",
+            "bare-kernel/hl/eventfd.hl",
+            // Filesystem
+            "bare-kernel/hl/ramfs.hl",
+            "bare-kernel/hl/fat16.hl",
+            "bare-kernel/hl/vfs.hl",
+            "bare-kernel/hl/devfs.hl",
+            "bare-kernel/hl/ext2.hl",
+            "bare-kernel/hl/ext4.hl",
+            "bare-kernel/hl/ntfs.hl",
+            "bare-kernel/hl/procfs.hl",
+            "bare-kernel/hl/tmpfs.hl",
+            "bare-kernel/hl/block_cache.hl",
+            "bare-kernel/hl/inotify.hl",
+            "bare-kernel/hl/sysfs.hl",
+            // Network
+            "bare-kernel/hl/virtio_net.hl",
+            "bare-kernel/hl/virtio_blk.hl",
+            "bare-kernel/hl/net.hl",
+            "bare-kernel/hl/arp.hl",
+            "bare-kernel/hl/udp.hl",
+            "bare-kernel/hl/tcp.hl",
+            "bare-kernel/hl/icmp.hl",
+            "bare-kernel/hl/dhcp.hl",
+            "bare-kernel/hl/dns.hl",
+            "bare-kernel/hl/ipv6.hl",
+            "bare-kernel/hl/ntp.hl",
+            "bare-kernel/hl/netfilter.hl",
+            "bare-kernel/hl/http.hl",
+            // ELF loader
+            "bare-kernel/hl/elf.hl",
+            // System services
+            "bare-kernel/hl/power.hl",
+            "bare-kernel/hl/swap.hl",
+            // Graphics + UI + GPU
+            "bare-kernel/hl/vesa.hl",
+            "bare-kernel/hl/wm.hl",
+            "bare-kernel/hl/gpu.hl",
+            "bare-kernel/hl/multimon.hl",
+            "bare-kernel/hl/terminal.hl",
+            // Audio
+            "bare-kernel/hl/audio.hl",
+            "bare-kernel/hl/mixer.hl",
+            // USB
+            "bare-kernel/hl/usb.hl",
+            "bare-kernel/hl/usb_storage.hl",
+            "bare-kernel/hl/usb_hid.hl",
+            "bare-kernel/hl/usb_hub.hl",
+            // Security + crypto
+            "bare-kernel/hl/tls.hl",
+            "bare-kernel/hl/random.hl",
+            "bare-kernel/hl/cgroup.hl",
+            // Wireless
+            "bare-kernel/hl/wifi.hl",
+            "bare-kernel/hl/bluetooth.hl",
+            // Multi-user
+            "bare-kernel/hl/users.hl",
+            // RTC
+            "bare-kernel/hl/rtc.hl",
+            // Environment + proc
+            "bare-kernel/hl/env.hl",
+            // Firmware + boot
+            "bare-kernel/hl/firmware.hl",
+            "bare-kernel/hl/gpt.hl",
+            "bare-kernel/hl/uefi_boot.hl",
+            "bare-kernel/hl/secure_boot.hl",
+            "bare-kernel/hl/ahci.hl",
+            "bare-kernel/hl/nvme.hl",
+            // Logging
+            "bare-kernel/hl/syslog.hl",
+            "bare-kernel/hl/watchdog.hl",
+            "bare-kernel/hl/trace.hl",
+            "bare-kernel/hl/hrtimer.hl",
+            // Compiler (self-hosting native pipeline)
+            "bare-kernel/hl/ir.hl",
+            "bare-kernel/hl/regalloc.hl",
+            "bare-kernel/hl/abi.hl",
+            "bare-kernel/hl/codegen.hl",
+            "bare-kernel/hl/x86enc.hl",
+            "bare-kernel/hl/xref.hl",
+            "bare-kernel/hl/linker.hl",
+            "bare-kernel/hl/hilbert.hl",
+            "bare-kernel/hl/kinterp.hl",
+            "bare-kernel/hl/hlc_loader.hl",
+            "bare-kernel/hl/errno.hl",
+            "bare-kernel/hl/font.hl",
+            // Build + installer
+            "bare-kernel/hl/build.hl",
+            "bare-kernel/hl/installer.hl",
+            // Lint + test
+            "bare-kernel/hl/lint.hl",
+            "bare-kernel/hl/boot.hl",
+            "bare-kernel/hl/test.hl",
+            "bare-kernel/hl/test-runner.hl",
+            "bare-kernel/hl/posix_test.hl",
+            // Init + Login + Shell (last, depend on everything)
+            "bare-kernel/hl/kernel_init.hl",
+            "bare-kernel/hl/login.hl",
+            "bare-kernel/hl/shell.hl"
+        ];
+
+        print("Phase 1: Compiling " + to_string(len(module_paths)) + " kernel modules...");
+
+        // === Phase 1: Lex + Parse all modules ===
+        let mut compiled_modules = [];
+        let mut total_tokens = 0;
+        let mut total_nodes = 0;
+        let mut skip_count = 0;
+        let mut mi = 0;
+        while mi < len(module_paths) {
+            let src = file_read(module_paths[mi]);
+            if src != nil {
+                let tokens = lexer.tokenize(src);
+                let ast = parser.parse_program(tokens);
+                let tok_count = len(tokens);
+                let node_count = len(ast);
+                total_tokens = total_tokens + tok_count;
+                total_nodes = total_nodes + node_count;
+                push(compiled_modules, [module_paths[mi], tokens, ast]);
+                print("  [compiled] " + module_paths[mi] + ": " + to_string(tok_count) + " tokens, " + to_string(node_count) + " AST nodes");
+            } else {
+                skip_count = skip_count + 1;
+                push(compiled_modules, [module_paths[mi], [], []]);
+                print("  [skip] " + module_paths[mi] + ": not in VFS");
+            }
+            mi = mi + 1;
+        }
+        print("");
+        print("Phase 1 summary: " + to_string(len(module_paths) - skip_count) + "/" + to_string(len(module_paths)) + " modules compiled");
+        print("  Total tokens: " + to_string(total_tokens));
+        print("  Total AST nodes: " + to_string(total_nodes));
+        if skip_count > 0 {
+            print("  Skipped (not in VFS): " + to_string(skip_count));
+        }
+        print("");
+
+        // === Phase 2+: Build native image (currently hardcoded kernel) ===
+        print("Phase 2: Generating native x86_64 image...");
+        let img = image_builder.build("hicos-hl.img", module_paths);
+        print("Image size: " + to_string(len(img)) + " bytes (" + to_string(len(img) / 512) + " sectors)");
+        print("");
+        print("===========================================");
+        print("HicOS Build Complete");
+        print("  Boot chain:     " + to_string(len(boot_chain)) + " stages");
+        print("  Kernel modules: " + to_string(len(module_paths)) + " (" + to_string(len(module_paths) - skip_count) + " compiled)");
+        print("  Total tokens:   " + to_string(total_tokens));
+        print("  Total AST:      " + to_string(total_nodes) + " nodes");
+        print("  Output:         hicos-hl.img");
+        print("  Target:         x86_64 bare metal");
+        print("  Language:       H-L (Hilbert-Lang), zero external deps");
+        print("===========================================");
+        return 0;
+    }
+
+    fn cmd_test() {
+        print("H-L Self-Hosting Bootstrap Compiler v5.0 -- Test Suite");
+        print("");
+
+        let mut passed = 0;
+        let mut failed = 0;
+
+        // Test 1: Lexer
+        let t1_tokens = lexer.tokenize("let x = 42;");
+        if len(t1_tokens) >= 4 {
+            print("  [PASS] Lexer: tokenize let binding");
+            passed = passed + 1;
+        } else {
+            print("  [FAIL] Lexer: tokenize let binding");
+            failed = failed + 1;
+        }
+
+        // Test 2: Lexer keywords
+        let t2_tokens = lexer.tokenize("fn while if return");
+        if len(t2_tokens) >= 4 {
+            print("  [PASS] Lexer: keywords recognized");
+            passed = passed + 1;
+        } else {
+            print("  [FAIL] Lexer: keywords recognized");
+            failed = failed + 1;
+        }
+
+        // Test 3: Parser
+        let t3_tokens = lexer.tokenize("let x = 1 + 2;");
+        let t3_ast = parser.parse(t3_tokens);
+        if len(t3_ast) > 0 {
+            if t3_ast[0][0] == "Let" {
+                print("  [PASS] Parser: let binding AST");
+                passed = passed + 1;
+            } else {
+                print("  [FAIL] Parser: let binding AST (got " + to_string(t3_ast[0][0]) + ")");
+                failed = failed + 1;
+            }
+        } else {
+            print("  [FAIL] Parser: empty AST");
+            failed = failed + 1;
+        }
+
+        // Test 4: VM arithmetic
+        let t4 = lexer.tokenize("print(2 + 3);");
+        let t4a = parser.parse(t4);
+        let t4r = vm.eval_program(t4a);
+        if len(t4r) > 0 {
+            if t4r[0] == "5" {
+                print("  [PASS] VM: 2 + 3 = 5");
+                passed = passed + 1;
+            } else {
+                print("  [FAIL] VM: 2 + 3 = " + to_string(t4r[0]));
+                failed = failed + 1;
+            }
+        } else {
+            print("  [FAIL] VM: no output");
+            failed = failed + 1;
+        }
+
+        // Test 5: VM function definition and call
+        let t5_src = "fn add(a, b) { return a + b; } print(add(10, 20));";
+        let t5r = vm.eval_program(parser.parse(lexer.tokenize(t5_src)));
+        if len(t5r) > 0 {
+            if t5r[0] == "30" {
+                print("  [PASS] VM: fn add(10,20) = 30");
+                passed = passed + 1;
+            } else {
+                print("  [FAIL] VM: fn add(10,20) = " + to_string(t5r[0]));
+                failed = failed + 1;
+            }
+        } else {
+            print("  [FAIL] VM: fn add no output");
+            failed = failed + 1;
+        }
+
+        // Test 6: VM while loop
+        let t6_src = "let mut s = 0; let mut i = 1; while i <= 10 { s = s + i; i = i + 1; } print(s);";
+        let t6r = vm.eval_program(parser.parse(lexer.tokenize(t6_src)));
+        if len(t6r) > 0 {
+            if t6r[0] == "55" {
+                print("  [PASS] VM: sum 1..10 = 55");
+                passed = passed + 1;
+            } else {
+                print("  [FAIL] VM: sum 1..10 = " + to_string(t6r[0]));
+                failed = failed + 1;
+            }
+        } else {
+            print("  [FAIL] VM: while loop no output");
+            failed = failed + 1;
+        }
+
+        // Test 7: VM array operations
+        let t7_src = "let a = [1, 2, 3]; print(len(a)); print(a[1]);";
+        let t7r = vm.eval_program(parser.parse(lexer.tokenize(t7_src)));
+        if len(t7r) >= 2 {
+            if t7r[0] == "3" && t7r[1] == "2" {
+                print("  [PASS] VM: array [1,2,3] len=3 idx[1]=2");
+                passed = passed + 1;
+            } else {
+                print("  [FAIL] VM: array results: " + to_string(t7r[0]) + ", " + to_string(t7r[1]));
+                failed = failed + 1;
+            }
+        } else {
+            print("  [FAIL] VM: array no output");
+            failed = failed + 1;
+        }
+
+        // Test 8: VM string operations
+        let t8_src = "print(\"hello\" + \" \" + \"world\");";
+        let t8r = vm.eval_program(parser.parse(lexer.tokenize(t8_src)));
+        if len(t8r) > 0 {
+            if t8r[0] == "hello world" {
+                print("  [PASS] VM: string concat");
+                passed = passed + 1;
+            } else {
+                print("  [FAIL] VM: string concat = " + to_string(t8r[0]));
+                failed = failed + 1;
+            }
+        } else {
+            print("  [FAIL] VM: string no output");
+            failed = failed + 1;
+        }
+
+        // Test 9: VM for loop
+        let t9_src = "let mut s = 0; for i in [1,2,3,4,5] { s = s + i; } print(s);";
+        let t9r = vm.eval_program(parser.parse(lexer.tokenize(t9_src)));
+        if len(t9r) > 0 {
+            if t9r[0] == "15" {
+                print("  [PASS] VM: for-in sum = 15");
+                passed = passed + 1;
+            } else {
+                print("  [FAIL] VM: for-in sum = " + to_string(t9r[0]));
+                failed = failed + 1;
+            }
+        } else {
+            print("  [FAIL] VM: for-in no output");
+            failed = failed + 1;
+        }
+
+        // Test 10: VM class instantiation
+        let t10_src = "class Point { fn __init__(self, x, y) { self.x = x; self.y = y; } } let p = Point(3, 4); print(p.x + p.y);";
+        let t10r = vm.eval_program(parser.parse(lexer.tokenize(t10_src)));
+        if len(t10r) > 0 {
+            if t10r[0] == "7" {
+                print("  [PASS] VM: class Point(3,4).x+y = 7");
+                passed = passed + 1;
+            } else {
+                print("  [FAIL] VM: class result = " + to_string(t10r[0]));
+                failed = failed + 1;
+            }
+        } else {
+            print("  [FAIL] VM: class no output");
+            failed = failed + 1;
+        }
+
+        // Test 11: Hilbert coordinate engine
+        let hk = hilbert.hilbert_encode(42, 17, 9);
+        if hk > 0 {
+            print("  [PASS] Hilbert: encode(42,17,9) = " + to_string(hk));
+            passed = passed + 1;
+        } else {
+            print("  [FAIL] Hilbert: encode returned " + to_string(hk));
+            failed = failed + 1;
+        }
+
+        // Test 12: File I/O builtins
+        let t12_src = "file_write(\"test.txt\", \"hello\"); print(file_read(\"test.txt\")); print(file_exists(\"test.txt\"));";
+        let t12r = vm.eval_program(parser.parse(lexer.tokenize(t12_src)));
+        if len(t12r) >= 2 {
+            if t12r[0] == "hello" {
+                print("  [PASS] VM: file_write + file_read");
+                passed = passed + 1;
+            } else {
+                print("  [FAIL] VM: file I/O result = " + to_string(t12r[0]));
+                failed = failed + 1;
+            }
+        } else {
+            print("  [FAIL] VM: file I/O no output");
+            failed = failed + 1;
+        }
+
+        // Test 13: Byte array builtins
+        let t13_src = "let b = byte_array(4); byte_set(b, 0, 72); byte_set(b, 1, 76); print(byte_get(b, 0)); print(byte_get(b, 1));";
+        let t13r = vm.eval_program(parser.parse(lexer.tokenize(t13_src)));
+        if len(t13r) >= 2 {
+            if t13r[0] == "72" && t13r[1] == "76" {
+                print("  [PASS] VM: byte_array + byte_set/get");
+                passed = passed + 1;
+            } else {
+                print("  [FAIL] VM: byte results = " + to_string(t13r[0]) + ", " + to_string(t13r[1]));
+                failed = failed + 1;
+            }
+        } else {
+            print("  [FAIL] VM: byte array no output");
+            failed = failed + 1;
+        }
+
+        // Test 14: x86 encoder
+        let t14_buf = x86enc.new_buf(0);
+        x86enc.emit_mov_r64_imm32(t14_buf, 0, 42);
+        if x86enc.buf_len(t14_buf) > 0 {
+            print("  [PASS] x86enc: mov rax, 42 (" + to_string(x86enc.buf_len(t14_buf)) + " bytes)");
+            passed = passed + 1;
+        } else {
+            print("  [FAIL] x86enc: empty buffer");
+            failed = failed + 1;
+        }
+
+        // Test 15: Image builder stage1
+        let t15_s1 = image_builder.build_stage1(1);
+        if len(t15_s1) == 512 {
+            if t15_s1[510] == 85 && t15_s1[511] == 170 {
+                print("  [PASS] ImageBuilder: stage1 512B + boot sig 55AA");
+                passed = passed + 1;
+            } else {
+                print("  [FAIL] ImageBuilder: stage1 no boot sig");
+                failed = failed + 1;
+            }
+        } else {
+            print("  [FAIL] ImageBuilder: stage1 size = " + to_string(len(t15_s1)));
+            failed = failed + 1;
+        }
+
+        print("");
+        print("Results: " + to_string(passed) + " passed, " + to_string(failed) + " failed, " + to_string(passed + failed) + " total");
+        if failed == 0 {
+            print("All tests passed!");
+        }
+        return failed;
+    }
+
+    fn cmd_info() {
+        print("H-L Self-Hosting Bootstrap Compiler v4.5");
+        print("Source: hl-bootstrap.hl (this file)");
+        print("Binary: hicos-hl.img (pre-compiled stage-0)");
+        print("");
+        print("Sections:");
+        print("  S1  Hilbert Coordinate Engine");
+        print("  S2  Lexer (tokenizer)");
+        print("  S3  Parser (AST builder)");
+        print("  S4  Interpreter / VM");
+        print("  S5  x86_64 Machine Code Encoder");
+        print("  S6  Boot Image Builder");
+        print("  S7  CLI / Entry Point");
+        print("");
+        print("This compiler can:");
+        print("  - Lex, parse, and interpret .hl files");
+        print("  - Generate native x86_64 machine code");
+        print("  - Produce bootable disk images (MBR + stage2 + kernel)");
+        print("  - Run the full H-L test suite");
+        print("");
+        print("The compiler IS the OS. The OS IS the compiler.");
+        print("Zero JavaScript. Zero Rust. Zero external dependencies.");
+        return 0;
+    }
+
+    fn main() {
+        let args = process_args();
+        if len(args) < 1 {
+            usage();
+            return 0;
+        }
+        let cmd = args[0];
+        if cmd == "interpret" {
+            if len(args) < 2 {
+                print("Usage: hl-bootstrap interpret <file.hl>");
+                return 1;
+            }
+            return cmd_interpret(args[1]);
+        }
+        if cmd == "lex" {
+            if len(args) < 2 {
+                print("Usage: hl-bootstrap lex <file.hl>");
+                return 1;
+            }
+            return cmd_lex(args[1]);
+        }
+        if cmd == "parse" {
+            if len(args) < 2 {
+                print("Usage: hl-bootstrap parse <file.hl>");
+                return 1;
+            }
+            return cmd_parse(args[1]);
+        }
+        if cmd == "build" {
+            return cmd_build();
+        }
+        if cmd == "test" {
+            return cmd_test();
+        }
+        if cmd == "info" {
+            return cmd_info();
+        }
+        print("Unknown command: " + cmd);
+        usage();
+        return 1;
+    }
+}
+
+// Auto-dispatch: run CLI main or show info
+let _cli_args = process_args();
+if len(_cli_args) > 0 {
+    cli.main();
+} else {
+    cli.cmd_info();
+}

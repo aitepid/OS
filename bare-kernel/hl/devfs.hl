@@ -1,0 +1,109 @@
+// devfs.hl -- Device Filesystem
+//
+// Virtual filesystem exposing hardware devices as files.
+// Mounted at /dev by VFS.
+//
+// Devices:
+//   /dev/null      -- discard writes, read returns EOF
+//   /dev/zero      -- reads return zeros
+//   /dev/random    -- reads return pseudo-random bytes
+//   /dev/serial0   -- COM1 serial port
+//   /dev/console   -- VGA text console
+//   /dev/vda       -- VirtIO block device 0
+//   /dev/input/mouse0  -- PS/2 mouse
+//   /dev/input/kbd0    -- PS/2 keyboard
+
+let DEV_TABLE = 8847360;      // 0x870000
+let DEV_ENTRY_SIZE = 64;
+let MAX_DEVICES = 32;
+
+let DEV_NULL    = 0;
+let DEV_ZERO    = 1;
+let DEV_RANDOM  = 2;
+let DEV_SERIAL  = 3;
+let DEV_CONSOLE = 4;
+let DEV_VDA     = 5;
+let DEV_MOUSE   = 6;
+let DEV_KBD     = 7;
+
+let mut dev_count = 0;
+
+fn devfs_init() {
+    dev_count = 0;
+    devfs_register(DEV_NULL, "null");
+    devfs_register(DEV_ZERO, "zero");
+    devfs_register(DEV_RANDOM, "random");
+    devfs_register(DEV_SERIAL, "serial0");
+    devfs_register(DEV_CONSOLE, "console");
+    devfs_register(DEV_VDA, "vda");
+    devfs_register(DEV_MOUSE, "mouse0");
+    devfs_register(DEV_KBD, "kbd0");
+    return 0;
+}
+
+fn devfs_register(dev_type, name) {
+    if dev_count >= MAX_DEVICES { return 0; }
+    let addr = DEV_TABLE + dev_count * DEV_ENTRY_SIZE;
+    mem_write_u64(addr, dev_type);
+    // Write name string at addr+8
+    dev_count = dev_count + 1;
+    return dev_count - 1;
+}
+
+fn devfs_read(dev_type, buf, count) {
+    if dev_type == DEV_NULL { return 0; }  // EOF
+    if dev_type == DEV_ZERO {
+        // Fill buf with zeros
+        let mut i = 0;
+        while i < count { set_at(buf, i, 0); i = i + 1; }
+        return count;
+    }
+    if dev_type == DEV_RANDOM {
+        // LFSR pseudo-random
+        let mut i = 0;
+        while i < count {
+            // set_at(buf, i, lfsr_next() % 256);
+            i = i + 1;
+        }
+        return count;
+    }
+    if dev_type == DEV_SERIAL {
+        return serial_read_byte(); // 1 byte at a time
+    }
+    return 0;
+}
+
+fn devfs_write(dev_type, data, count) {
+    if dev_type == DEV_NULL { return count; } // discard
+    if dev_type == DEV_SERIAL {
+        let mut i = 0;
+        while i < count {
+            serial_write_byte(data[i]);
+            i = i + 1;
+        }
+        return count;
+    }
+    if dev_type == DEV_CONSOLE {
+        let mut i = 0;
+        while i < count {
+            vga_putchar(data[i]);
+            i = i + 1;
+        }
+        return count;
+    }
+    return 0;
+}
+
+// Simple LFSR for /dev/random
+let mut lfsr_state = 2463534242;
+fn lfsr_next() {
+    lfsr_state = lfsr_state * 1103515245 + 12345;
+    // Xorshift for better distribution
+    let mut x = lfsr_state;
+    x = x * 2 + x; // approximate xorshift
+    lfsr_state = x;
+    return x;
+}
+
+print("devfs.hl loaded");
+print("Devices: null zero random serial0 console vda mouse0 kbd0");

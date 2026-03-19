@@ -1,0 +1,134 @@
+// usermode.hl -- Ring 0 -> Ring 3 Transition + TSS
+//
+// Implements the mechanism to switch from kernel mode (ring 0)
+// to user mode (ring 3) and back via SYSCALL/SYSRET.
+//
+// Requirements:
+//   1. TSS (Task State Segment) with kernel RSP0
+//   2. GDT entries for user code/data segments
+//   3. SYSCALL/SYSRET MSR configuration
+//   4. Stack switching on syscall entry
+//
+// GDT layout (set by stage2):
+//   0x00: null
+//   0x08: kernel code 64-bit (DPL=0)
+//   0x10: kernel data (DPL=0)
+//   0x18: user code 64-bit (DPL=3)
+//   0x20: user data (DPL=3)
+//   0x28: TSS descriptor (16 bytes)
+//
+// TSS at 0x320000 (104 bytes minimum):
+//   +4:  RSP0 (8 bytes) -- kernel stack for ring 3 -> ring 0
+//   +12: RSP1 (8 bytes)
+//   +20: RSP2 (8 bytes)
+//   +36: IST1-IST7 (7 * 8 bytes) -- interrupt stacks
+//   +100: IOPB offset (2 bytes)
+
+let TSS_ADDR = 3276800;       // 0x320000
+let TSS_SIZE = 104;
+let KERNEL_STACK_TOP = 458752; // 0x70000
+
+// MSR addresses
+let MSR_STAR  = 3221225601;    // 0xC0000081
+let MSR_LSTAR = 3221225602;    // 0xC0000082
+let MSR_FMASK = 3221225604;    // 0xC0000084
+
+// Initialize TSS
+fn tss_init() {
+    // Zero TSS region
+    mem_zero(TSS_ADDR, TSS_SIZE);
+
+    // Set RSP0 = kernel stack top (ring3 -> ring0 switch stack)
+    mem_write_u64(TSS_ADDR + 4, KERNEL_STACK_TOP);
+
+    // Set IOPB offset to TSS_SIZE (no I/O bitmap)
+    mem_write_u16(TSS_ADDR + 100, TSS_SIZE);
+
+    // Native: LTR 0x28 (load TSS selector from GDT)
+    // [emitted by image_builder: mov ax, 0x28; ltr ax]
+    return 0;
+}
+
+// Setup SYSCALL/SYSRET MSRs
+// GDT layout required: null(0x00), kcode(0x08), kdata(0x10), udata(0x18), ucode64(0x20)
+// STAR MSR encoding:
+//   bits[47:32] = kernel CS base = 0x0008 -> SYSCALL: CS=0x08, SS=0x10
+//   bits[63:48] = user   CS base = 0x0010 -> SYSRET:  CS=0x10+16=0x20|3, SS=0x10+8=0x18|3
+fn syscall_msr_setup(handler_addr) {
+    // STAR = (user_base << 48) | (kernel_base << 32) | 0
+    // user_base=0x0010, kernel_base=0x0008
+    // STAR = 0x0010_0008_0000_0000
+    let star_hi = 1048584;  // (0x0010 << 16) | 0x0008 = 0x00100008
+    // Native: wrmsr(0xC0000081, star_lo=0, star_hi)
+    // In interpreter, record the values for image_builder
+    mem_write_u32(TSS_ADDR - 32, star_hi);       // stash for codegen
+    mem_write_u32(TSS_ADDR - 28, 0);
+
+    // LSTAR = handler address (SYSCALL entry point)
+    mem_write_u64(TSS_ADDR - 24, handler_addr);
+
+    // FMASK = 0x200 (clear IF on SYSCALL entry for safety)
+    mem_write_u32(TSS_ADDR - 16, 512);
+
+    // Native emission:
+    // mov ecx, 0xC0000081; mov eax, 0; mov edx, star_hi; wrmsr
+    // mov ecx, 0xC0000082; mov eax, handler_lo; mov edx, handler_hi; wrmsr
+    // mov ecx, 0xC0000084; mov eax, 0x200; xor edx,edx; wrmsr
+    return 0;
+}
+
+// Switch to user mode using IRETQ
+// Builds the 5-qword frame on kernel stack then executes IRETQ
+fn enter_usermode(user_rip, user_rsp) {
+    // Build IRETQ frame in memory (kernel stack simulation)
+    // Frame layout (top to bottom on stack):
+    //   RSP-40: RIP    = user_rip
+    //   RSP-32: CS     = 0x20 | 3 = 0x23 (user code, DPL3)
+    //   RSP-24: RFLAGS = 0x202 (IF=1, reserved bit 1)
+    //   RSP-16: RSP    = user_rsp
+    //   RSP-8:  SS     = 0x18 | 3 = 0x1B (user data, DPL3)
+    let frame_base = KERNEL_STACK_TOP - 40;
+    mem_write_u64(frame_base,      user_rip);   // RIP
+    mem_write_u64(frame_base + 8,  35);         // CS = 0x23
+    mem_write_u64(frame_base + 16, 514);        // RFLAGS = 0x202
+    mem_write_u64(frame_base + 24, user_rsp);   // RSP
+    mem_write_u64(frame_base + 32, 27);         // SS = 0x1B
+
+    // Native: mov rsp, frame_base; iretq
+    return 0;
+}
+
+// Syscall entry handler (called by hardware on SYSCALL instruction)
+// RCX = user RIP, R11 = user RFLAGS (saved by CPU)
+fn syscall_entry() {
+    // Save user context to per-CPU save area
+    let save_area = TSS_ADDR + 112; // after TSS, use reserved space
+    // swapgs
+    // mov [save_area], rsp       -- save user RSP
+    mem_write_u64(save_area, KERNEL_STACK_TOP);  // fallback saved RSP value
+    // mov rsp, KERNEL_STACK_TOP  -- switch to kernel stack
+    // push rcx                   -- user RIP
+    // push r11                   -- user RFLAGS
+    // push rdi, rsi, rdx, r10, r8, r9 -- syscall args
+    // mov rdi, rax               -- syscall number -> arg0
+    // call syscall_dispatch
+    // pop r9, r8, r10, rdx, rsi, rdi
+    // pop r11; pop rcx
+    // mov rsp, [save_area]       -- restore user RSP
+    // sysretq                    -- return to ring 3
+    return 0;
+}
+
+// Enable SMEP + SMAP in CR4 (prevents ring0 from executing/accessing ring3 pages)
+fn security_enable_smep_smap() {
+    // CR4.SMEP = bit 20, CR4.SMAP = bit 21
+    // Native: mov rax, cr4; or rax, (1<<20)|(1<<21); mov cr4, rax
+    // In interpreter: record intent for codegen
+    // SMEP: 1048576 (0x100000), SMAP: 2097152 (0x200000)
+    // Combined: 3145728 (0x300000)
+    return 3145728;
+}
+
+print("usermode.hl loaded");
+print("TSS at: 0x" + to_string(TSS_ADDR));
+print("Kernel stack: 0x" + to_string(KERNEL_STACK_TOP));

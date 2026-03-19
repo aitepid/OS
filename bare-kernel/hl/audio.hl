@@ -1,0 +1,123 @@
+// audio.hl -- AC97 Audio Driver
+//
+// Basic sound output via Intel AC97 codec (QEMU default audio device).
+// PCI: vendor=0x8086 device=0x2415 (ICH AC97 audio)
+//
+// AC97 uses NABM (Native Audio Bus Mastering) with 3 DMA channels:
+//   PCM-OUT (channel 0): main audio playback
+//   PCM-IN  (channel 1): recording
+//   MIC-IN  (channel 2): microphone
+//
+// Buffer Descriptor List (BDL): 32 entries, each 8 bytes:
+//   +0: buffer_addr (4) -- physical address of PCM data
+//   +4: length (2) -- number of samples (not bytes)
+//   +6: flags (2) -- bit 14 = last entry, bit 15 = fire IRQ
+
+let AC97_VENDOR = 32902;      // 0x8086
+let AC97_DEVICE = 9237;       // 0x2415
+
+let mut ac97_nabm_bar = 0;    // BAR1: NABM I/O base
+let mut ac97_mixer_bar = 0;   // BAR0: Mixer I/O base
+
+// NABM registers (relative to nabm_bar)
+let NABM_PCMOUT_BDBAR = 16;   // 0x10 -- BDL base address
+let NABM_PCMOUT_CIV   = 20;   // 0x14 -- current index value
+let NABM_PCMOUT_LVI   = 21;   // 0x15 -- last valid index
+let NABM_PCMOUT_SR    = 22;   // 0x16 -- status register
+let NABM_PCMOUT_CR    = 27;   // 0x1B -- control register
+let NABM_GLOB_CNT     = 44;   // 0x2C -- global control
+let NABM_GLOB_STA     = 48;   // 0x30 -- global status
+
+// Mixer registers (relative to mixer_bar)
+let MIXER_RESET        = 0;
+let MIXER_MASTER_VOL   = 2;
+let MIXER_PCM_VOL      = 24;  // 0x18
+let MIXER_SAMPLE_RATE  = 44;  // 0x2C
+
+let BDL_ADDR = 8978432;       // 0x890000 -- BDL (32 * 8 = 256 bytes)
+let PCM_BUF_ADDR = 8978688;   // 0x890100 -- PCM data buffer (64 KB)
+let PCM_BUF_SIZE = 65536;
+
+fn ac97_init(pci_bus, pci_dev, pci_func) {
+    // ac97_mixer_bar = pci_bar(pci_bus, pci_dev, pci_func, 0) & 0xFFFC;
+    // ac97_nabm_bar = pci_bar(pci_bus, pci_dev, pci_func, 1) & 0xFFFC;
+
+    // Enable PCI bus mastering
+    // let cmd = pci_config_read16(bus, dev, func, 0x04);
+    // pci_config_write16(bus, dev, func, 0x04, cmd | 0x05);
+
+    // Reset codec
+    // out16(ac97_mixer_bar + MIXER_RESET, 0x0001);
+
+    // Set sample rate to 44100 Hz
+    // out16(ac97_mixer_bar + MIXER_SAMPLE_RATE, 44100);
+
+    // Set master volume (0 = max, 0x8000 = mute)
+    // out16(ac97_mixer_bar + MIXER_MASTER_VOL, 0x0000);
+    // out16(ac97_mixer_bar + MIXER_PCM_VOL, 0x0808);
+
+    // Enable cold reset in global control
+    // out32(ac97_nabm_bar + NABM_GLOB_CNT, 0x02);
+
+    return 0;
+}
+
+// Play a buffer of PCM samples (16-bit signed, stereo, 44100 Hz)
+fn ac97_play(samples_addr, sample_count) {
+    // Setup BDL entry 0
+    mem_write_u32(BDL_ADDR + 0, samples_addr);
+    mem_write_u16(BDL_ADDR + 4, sample_count);
+    mem_write_u16(BDL_ADDR + 6, 0xC000); // last + IOC
+
+    // Set BDL base address
+    // out32(ac97_nabm_bar + NABM_PCMOUT_BDBAR, BDL_ADDR);
+
+    // Set last valid index to 0
+    // out8(ac97_nabm_bar + NABM_PCMOUT_LVI, 0);
+
+    // Start playback: set RPBM bit in control register
+    // out8(ac97_nabm_bar + NABM_PCMOUT_CR, 0x01);
+
+    return 0;
+}
+
+// Stop playback
+fn ac97_stop() {
+    // out8(ac97_nabm_bar + NABM_PCMOUT_CR, 0x00);
+    return 0;
+}
+
+// Generate a simple sine wave tone (for testing)
+fn ac97_beep(freq_hz, duration_ms) {
+    let sample_rate = 44100;
+    let total_samples = sample_rate * duration_ms / 1000;
+    // Generate samples: sin(2*pi*freq*t/sample_rate) * 32767
+    // For simplicity: square wave (easier without floating point)
+    let half_period = sample_rate / (2 * freq_hz);
+    let mut i = 0;
+    let mut high = 1;
+    let mut count = 0;
+    while i < total_samples {
+        if count >= half_period { high = 1 - high; count = 0; }
+        let sample = 0;
+        if high == 1 { sample = 16384; } else { sample = 0 - 16384; }
+        // Write stereo sample (L+R = 4 bytes)
+        mem_write_i16(PCM_BUF_ADDR + i * 4, sample);
+        mem_write_i16(PCM_BUF_ADDR + i * 4 + 2, sample);
+        count = count + 1;
+        i = i + 1;
+    }
+    ac97_play(PCM_BUF_ADDR, total_samples);
+    return 0;
+}
+
+// Set master volume (0-100)
+fn ac97_set_volume(percent) {
+    // AC97 volume: 0=max, 63=min, bit 15=mute
+    let vol = 63 - percent * 63 / 100;
+    // out16(ac97_mixer_bar + MIXER_MASTER_VOL, vol * 256 + vol);
+    return 0;
+}
+
+print("audio.hl loaded");
+print("AC97: PCM playback, 44100 Hz 16-bit stereo");

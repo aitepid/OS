@@ -1,0 +1,159 @@
+// usb.hl -- USB XHCI Host Controller Driver (Basic)
+//
+// Detects XHCI controller via PCI, resets it, and enumerates ports.
+// XHCI PCI class: 0x0C / 0x03 / 0x30
+//
+// XHCI memory-mapped registers (from BAR0):
+//   +00: CAPLENGTH (1) + HCIVERSION (2)
+//   +04: HCSPARAMS1 -- MaxSlots(bits 0-7), MaxIntrs(8-18), MaxPorts(24-31)
+//   +08: HCSPARAMS2
+//   +0C: HCSPARAMS3
+//   +10: HCCPARAMS1 -- 64-bit capable (bit 0), context size (bit 2)
+//   +14: DBOFF (doorbell array offset)
+//   +18: RTSOFF (runtime registers offset)
+//
+// Operational registers (at BAR0 + CAPLENGTH):
+//   +00: USBCMD -- Run/Stop (bit 0), Reset (bit 1)
+//   +04: USBSTS -- HCHalted (bit 0)
+//   +08: PAGESIZE
+//   +14: DNCTRL
+//   +18: CRCR -- Command Ring Control
+//   +30: DCBAAP -- Device Context Base Address Array Pointer
+//   +38: CONFIG -- MaxSlotsEn
+
+let USB_CLASS = 12;            // 0x0C
+let USB_SUBCLASS_XHCI = 3;
+let USB_PROGIF_XHCI = 48;     // 0x30
+
+let mut xhci_bar = 0;
+let mut xhci_cap_len = 0;
+let mut xhci_max_ports = 0;
+let mut xhci_max_slots = 0;
+
+// DCBA array at 0x8A0000 (256 * 8 = 2048 bytes)
+let DCBA_ADDR = 9043968;      // 0x8A0000
+// Command ring at 0x8A1000 (256 TRBs * 16 = 4096 bytes)
+let CMD_RING_ADDR = 9048064;   // 0x8A1000
+// Event ring at 0x8A2000
+let EVT_RING_ADDR = 9052160;   // 0x8A2000
+
+fn xhci_init(pci_bus, pci_dev, pci_func) {
+    // Read BAR0 (MMIO, mask low 4 bits)
+    let bar0_raw = pci_bar(pci_bus, pci_dev, pci_func, 0);
+    xhci_bar = (bar0_raw / 16) * 16;
+
+    // Enable bus mastering + memory space
+    // pci_config_write16(bus, dev, func, 0x04, cmd | 0x06);
+
+    // Read capability registers
+    xhci_cap_len = mem_read_u8(xhci_bar);
+    let hcsparams1 = mem_read_u32(xhci_bar + 4);
+    xhci_max_slots = hcsparams1 % 256;
+    xhci_max_ports = (hcsparams1 / 16777216) % 256;
+
+    let op = xhci_bar + xhci_cap_len;
+
+    // Stop controller: clear Run/Stop (bit 0)
+    let usbcmd = mem_read_u32(op);
+    mem_write_u32(op, (usbcmd / 2) * 2);  // clear bit 0
+    // Wait for HCHalted: poll USBSTS bit 0
+    let mut timeout = 10000;
+    while timeout > 0 {
+        let sts = mem_read_u32(op + 4);
+        if sts % 2 == 1 { timeout = 0; }  // HCHalted = 1, done
+        timeout = timeout - 1;
+    }
+
+    // Reset: set HCRST (bit 1)
+    mem_write_u32(op, 2);
+    timeout = 10000;
+    while timeout > 0 {
+        let cmd = mem_read_u32(op);
+        if (cmd / 2) % 2 == 0 { timeout = 0; }  // HCRST cleared
+        timeout = timeout - 1;
+    }
+
+    // Set MaxSlotsEn
+    mem_write_u32(op + 56, xhci_max_slots);  // CONFIG register at +0x38
+
+    // Setup DCBA array (zeroed)
+    mem_zero(DCBA_ADDR, 2048);
+    mem_write_u64(op + 48, DCBA_ADDR);  // DCBAAP at +0x30
+
+    // Setup command ring (zeroed, cycle bit = 1)
+    mem_zero(CMD_RING_ADDR, 4096);
+    mem_write_u64(op + 24, CMD_RING_ADDR + 1);  // CRCR at +0x18, cycle bit
+
+    // Start controller: set Run/Stop (bit 0)
+    let start_cmd = mem_read_u32(op);
+    mem_write_u32(op, start_cmd + 1);
+
+    print("xHCI init: " + to_string(xhci_max_ports) + " ports, " + to_string(xhci_max_slots) + " slots");
+    return 0;
+}
+
+// Check port status
+fn xhci_port_status(port) {
+    let op = xhci_bar + xhci_cap_len;
+    let portsc = mem_read_u32(op + 1024 + port * 16);  // +0x400 + port*0x10
+    // bit 0 = CCS (connected), bit 1 = PED (enabled)
+    // bits 10-13 = port speed (1=FS, 2=LS, 3=HS, 4=SS)
+    return portsc;
+}
+
+// Speed name helper
+fn xhci_speed_name(speed) {
+    if speed == 1 { return "Full-Speed (12 Mbps)"; }
+    if speed == 2 { return "Low-Speed (1.5 Mbps)"; }
+    if speed == 3 { return "High-Speed (480 Mbps)"; }
+    if speed == 4 { return "SuperSpeed (5 Gbps)"; }
+    return "Unknown";
+}
+
+// Enumerate connected devices
+fn xhci_enumerate() {
+    let mut found = 0;
+    let mut port = 0;
+    while port < xhci_max_ports {
+        let status = xhci_port_status(port);
+        let connected = status % 2;  // CCS bit 0
+        if connected == 1 {
+            let speed = (status / 1024) % 16;  // bits 10-13
+            print("  USB port " + to_string(port) + ": connected (" + xhci_speed_name(speed) + ")");
+            found = found + 1;
+        }
+        port = port + 1;
+    }
+    return found;
+}
+
+// Detect xHCI on PCI bus
+fn usb_detect() {
+    let devices = pci_scan();
+    let mut i = 0;
+    while i < len(devices) {
+        let cls = devices[i][5];
+        let sub = devices[i][6];
+        if cls == USB_CLASS && sub == USB_SUBCLASS_XHCI {
+            return [devices[i][0], devices[i][1], devices[i][2]];
+        }
+        i = i + 1;
+    }
+    return [];
+}
+
+// Full USB initialization
+fn usb_init() {
+    let pci_info = usb_detect();
+    if len(pci_info) == 0 {
+        print("No xHCI USB controller found.");
+        return 0;
+    }
+    print("xHCI USB controller found: bus=" + to_string(pci_info[0]) + " dev=" + to_string(pci_info[1]));
+    xhci_init(pci_info[0], pci_info[1], pci_info[2]);
+    let count = xhci_enumerate();
+    print("USB: " + to_string(count) + " device(s) connected");
+    return count;
+}
+
+print("usb.hl loaded -- xHCI USB controller (detect/init/enumerate)");

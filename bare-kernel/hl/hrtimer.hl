@@ -1,0 +1,139 @@
+// hrtimer.hl -- High-Resolution Timers
+//
+// Sub-millisecond precision timers using LAPIC timer or HPET.
+// Linux equivalent: hrtimer, clock_gettime(CLOCK_MONOTONIC)
+//
+// Timer modes:
+//   HRTIMER_ONESHOT  = 1 (fire once)
+//   HRTIMER_PERIODIC = 2 (repeat at interval)
+//
+// Clock sources (in order of precision):
+//   TSC        -- CPU timestamp counter (~ns precision)
+//   LAPIC      -- Local APIC timer (~us precision)
+//   PIT/HPET   -- fallback (~ms precision)
+//
+// Each timer: callback_id, expiry, interval, mode, active
+
+let HRTIMER_ONESHOT = 1;
+let HRTIMER_PERIODIC = 2;
+
+let HRTIMER_MAX = 32;
+let mut hrtimer_count = 0;
+let mut hrtimer_now_us = 0;  // microseconds since boot
+
+// TSC calibration
+let mut tsc_freq_mhz = 0;   // TSC ticks per microsecond
+let mut tsc_calibrated = 0;
+
+let hrt_active = [];
+let hrt_mode = [];
+let hrt_expiry_us = [];  // expiry in microseconds
+let hrt_interval_us = [];
+let hrt_callback = [];   // callback identifier
+let hrt_task = [];
+
+fn hrtimer_init() {
+    let mut i = 0;
+    while i < HRTIMER_MAX {
+        push(hrt_active, 0);
+        push(hrt_mode, 0);
+        push(hrt_expiry_us, 0);
+        push(hrt_interval_us, 0);
+        push(hrt_callback, 0);
+        push(hrt_task, 0 - 1);
+        i = i + 1;
+    }
+    // Calibrate TSC using PIT
+    // tsc_calibrate();
+    tsc_freq_mhz = 2000; // assume 2GHz if uncalibrated
+    tsc_calibrated = 1;
+    return 0;
+}
+
+fn hrtimer_create(mode, delay_us, interval_us, callback_id) {
+    let mut i = 0;
+    while i < HRTIMER_MAX {
+        if hrt_active[i] == 0 {
+            hrt_active[i] = 1;
+            hrt_mode[i] = mode;
+            hrt_expiry_us[i] = hrtimer_now_us + delay_us;
+            hrt_interval_us[i] = interval_us;
+            hrt_callback[i] = callback_id;
+            hrt_task[i] = 0; // current_task
+            hrtimer_count = hrtimer_count + 1;
+            return i;
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn hrtimer_cancel(id) {
+    if id < 0 { return 0 - 1; }
+    if id >= HRTIMER_MAX { return 0 - 1; }
+    hrt_active[id] = 0;
+    hrtimer_count = hrtimer_count - 1;
+    return 0;
+}
+
+fn hrtimer_tick(elapsed_us) {
+    hrtimer_now_us = hrtimer_now_us + elapsed_us;
+
+    let mut i = 0;
+    while i < HRTIMER_MAX {
+        if hrt_active[i] == 1 {
+            if hrtimer_now_us >= hrt_expiry_us[i] {
+                // Timer expired -- fire callback
+                let cb = hrt_callback[i];
+                // dispatch_callback(cb);
+
+                if hrt_mode[i] == HRTIMER_PERIODIC {
+                    // Re-arm
+                    hrt_expiry_us[i] = hrt_expiry_us[i] + hrt_interval_us[i];
+                } else {
+                    // One-shot: deactivate
+                    hrt_active[i] = 0;
+                    hrtimer_count = hrtimer_count - 1;
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Clock access
+fn clock_gettime_us() {
+    // if tsc_calibrated {
+    //     let tsc = rdtsc();
+    //     return tsc / tsc_freq_mhz;
+    // }
+    return hrtimer_now_us;
+}
+
+fn clock_gettime_ms() {
+    return hrtimer_now_us / 1000;
+}
+
+fn nanosleep_us(us) {
+    let target = hrtimer_now_us + us;
+    // while hrtimer_now_us < target { pause; }
+    return 0;
+}
+
+fn usleep(us) {
+    return nanosleep_us(us);
+}
+
+fn msleep(ms) {
+    return nanosleep_us(ms * 1000);
+}
+
+fn hrtimer_status() {
+    return to_string(hrtimer_count) + "/" + to_string(HRTIMER_MAX) +
+           " timers, uptime=" + to_string(hrtimer_now_us / 1000000) + "s" +
+           ", TSC=" + to_string(tsc_freq_mhz) + "MHz";
+}
+
+print("hrtimer.hl loaded");
+print("High-res timers: " + to_string(HRTIMER_MAX) + " timers, us precision, TSC/LAPIC");

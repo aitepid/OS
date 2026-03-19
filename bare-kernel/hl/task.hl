@@ -1,0 +1,478 @@
+// task.hl -- Task (Process) Structure and Context Switch
+//
+// Each task has a saved register context and metadata.
+// Context switch saves/restores all general-purpose registers + RIP + RSP.
+//
+// Task states: READY=0, RUNNING=1, BLOCKED=2, DEAD=3
+//
+// Memory layout for task table:
+//   0x310000 -- Task table (max 64 tasks, 256 bytes each = 16 KB)
+//   Each task entry (256 bytes):
+//     +0   : state (u64)
+//     +8   : pid (u64)
+//     +16  : rsp (u64) -- saved stack pointer
+//     +24  : rip (u64) -- saved instruction pointer
+//     +32  : rax (u64)
+//     +40  : rbx (u64)
+//     +48  : rcx (u64)
+//     +56  : rdx (u64)
+//     +64  : rsi (u64)
+//     +72  : rdi (u64)
+//     +80  : rbp (u64)
+//     +88  : r8-r15 (8 * u64 = 64 bytes)
+//     +152 : rflags (u64)
+//     +160 : cr3 (u64) -- page table root
+//     +168 : vruntime (u64) -- CFS virtual runtime
+//     +176 : nice (u64) -- priority (-20..19)
+//     +184 : name_ptr (u64) -- pointer to name string
+//     +192 : ticks (u64) -- total ticks run
+//     +200 : pending_mask (u64) -- signal pending (used by signal.hl)
+//     +208 : blocked_mask (u64) -- signal blocked (used by signal.hl)
+//     +216 : handler_table_ptr (u64) -- signal handler table (signal.hl)
+//     +224 : wake_tick (u64) -- wakeup deadline for sleep (timer.hl)
+//     +232 : exit_code (u64) -- exit status (posix.hl)
+//     +240 : reserved (16 bytes)
+
+let TASK_TABLE = 3211264;  // 0x310000
+let TASK_SIZE = 256;
+let MAX_TASKS = 64;
+
+let STATE_FREE    = 0;
+let STATE_READY   = 1;
+let STATE_RUNNING = 2;
+let STATE_BLOCKED = 3;
+let STATE_DEAD    = 4;
+
+let mut next_pid = 1;
+let mut current_task = 0;   // index into task table
+let mut _tc = 0;
+
+// Get base address of task entry
+fn task_addr(idx) {
+    return TASK_TABLE + idx * TASK_SIZE;
+}
+
+// Initialize the task table and run queue
+fn task_init() {
+    mem_zero(TASK_TABLE, MAX_TASKS * TASK_SIZE);
+    _tc = 0;
+    next_pid = 1;
+    current_task = 0;
+    _rq_heap = [];
+    _rq_size = 0;
+
+    // Create task 0: the kernel idle task (currently running)
+    // Idle task is RUNNING, NOT in the heap — it's the fallback
+    let addr = task_addr(0);
+    mem_write_u64(addr + 0, STATE_RUNNING);
+    mem_write_u64(addr + 8, 0);  // pid = 0
+    _tc = 1;
+    return 0;
+}
+
+// Create a new task
+// entry_point: address of first instruction
+// stack_top: top of allocated stack
+// Returns pid, or 0 on failure
+fn task_create(entry_point, stack_top) {
+    // Find a free slot
+    let mut i = 0;
+    while i < MAX_TASKS {
+        let addr = task_addr(i);
+        let state = mem_read_u64(addr + 0);
+        if state == STATE_FREE {
+            let pid = next_pid;
+            next_pid = next_pid + 1;
+
+            // Initialize task context
+            mem_write_u64(addr + 0, STATE_READY);
+            mem_write_u64(addr + 8, pid);
+            mem_write_u64(addr + 16, stack_top);
+            mem_write_u64(addr + 24, entry_point);
+            mem_write_u64(addr + 152, 514);   // rflags: IF=1 (0x202)
+            mem_write_u64(addr + 160, 4096);  // cr3 (kernel page table)
+            mem_write_u64(addr + 168, 0);     // vruntime
+            mem_write_u64(addr + 176, 0);     // nice (default)
+
+            _tc = _tc + 1;
+            // Insert into run-queue heap
+            rq_insert(i, 0);
+            return pid;
+        }
+        i = i + 1;
+    }
+    return 0; // no free slots
+}
+
+// Kill a task by pid
+fn task_kill(pid) {
+    let mut i = 0;
+    while i < MAX_TASKS {
+        let addr = task_addr(i);
+        let task_pid = mem_read_u64(addr + 8);
+        if task_pid == pid {
+            mem_write_u64(addr + 0, STATE_DEAD);
+            rq_remove(i);  // remove from run queue
+            _tc = _tc - 1;
+            return 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Get current task count
+fn task_count() {
+    return _tc;
+}
+
+// ============================================================
+// Min-Heap for O(log n) CFS scheduling
+// ============================================================
+// Each entry: [task_idx, vruntime]
+// Invariant: parent.vruntime <= child.vruntime
+// heap[0] is always the task with lowest vruntime (next to run)
+
+let mut _rq_heap = [];    // run-queue min-heap
+let mut _rq_size = 0;
+
+fn _rq_swap(a, b) {
+    let tmp = _rq_heap[a];
+    set_at(_rq_heap, a, _rq_heap[b]);
+    set_at(_rq_heap, b, tmp);
+    return 0;
+}
+
+fn _rq_sift_up(idx) {
+    let mut i = idx;
+    while i > 0 {
+        let parent = (i - 1) / 2;
+        if _rq_heap[i][1] < _rq_heap[parent][1] {
+            _rq_swap(i, parent);
+            i = parent;
+        } else {
+            return 0;
+        }
+    }
+    return 0;
+}
+
+fn _rq_sift_down(idx) {
+    let mut i = idx;
+    while i * 2 + 1 < _rq_size {
+        let left = i * 2 + 1;
+        let right = i * 2 + 2;
+        let mut smallest = i;
+        if left < _rq_size {
+            if _rq_heap[left][1] < _rq_heap[smallest][1] {
+                smallest = left;
+            }
+        }
+        if right < _rq_size {
+            if _rq_heap[right][1] < _rq_heap[smallest][1] {
+                smallest = right;
+            }
+        }
+        if smallest != i {
+            _rq_swap(i, smallest);
+            i = smallest;
+        } else {
+            return 0;
+        }
+    }
+    return 0;
+}
+
+// Insert a task into the run queue
+fn rq_insert(task_idx, vruntime) {
+    if _rq_size < len(_rq_heap) {
+        set_at(_rq_heap, _rq_size, [task_idx, vruntime]);
+    } else {
+        push(_rq_heap, [task_idx, vruntime]);
+    }
+    _rq_size = _rq_size + 1;
+    _rq_sift_up(_rq_size - 1);
+    return 0;
+}
+
+// Remove and return the task index with lowest vruntime
+fn rq_pop_min() {
+    if _rq_size == 0 { return 0 - 1; }
+    let min_entry = _rq_heap[0];
+    _rq_size = _rq_size - 1;
+    if _rq_size > 0 {
+        set_at(_rq_heap, 0, _rq_heap[_rq_size]);
+        _rq_sift_down(0);
+    }
+    return min_entry[0]; // task_idx
+}
+
+// Peek at the minimum vruntime without removing
+fn rq_peek_vruntime() {
+    if _rq_size == 0 { return 999999999; }
+    return _rq_heap[0][1];
+}
+
+// Remove a specific task from the heap (for blocking/killing)
+fn rq_remove(task_idx) {
+    let mut i = 0;
+    while i < _rq_size {
+        if _rq_heap[i][0] == task_idx {
+            // Replace with last element, then fix heap
+            _rq_size = _rq_size - 1;
+            if i < _rq_size {
+                set_at(_rq_heap, i, _rq_heap[_rq_size]);
+                _rq_sift_down(i);
+                _rq_sift_up(i);
+            }
+            return 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Current heap size
+fn rq_count() {
+    return _rq_size;
+}
+
+// ============================================================
+// Task Management (uses min-heap run queue)
+// ============================================================
+
+// Pick next task to run: O(log n) via min-heap pop + re-insert
+fn task_pick_next() {
+    if _rq_size == 0 { return current_task; }
+
+    // Peek: if min vruntime >= current task's vruntime, no preempt needed
+    let cur_addr = task_addr(current_task);
+    let cur_vrt = mem_read_u64(cur_addr + 168);
+    let min_vrt = rq_peek_vruntime();
+
+    if min_vrt >= cur_vrt {
+        return current_task;
+    }
+
+    // Pop the winner
+    return rq_pop_min();
+}
+
+// Context switch: save current task registers, load next task registers
+// Native: ~30 instructions of MOV to/from task struct + MOV CR3
+// Called from timer ISR when preemption is needed
+fn context_switch(next_idx) {
+    if next_idx == current_task { return 0; }
+
+    let cur_addr = task_addr(current_task);
+    let nxt_addr = task_addr(next_idx);
+
+    // --- Save current task ---
+    // Mark as READY (was RUNNING) and re-insert into run queue
+    let cur_state = mem_read_u64(cur_addr + 0);
+    if cur_state == STATE_RUNNING {
+        mem_write_u64(cur_addr + 0, STATE_READY);
+        let cur_vrt = mem_read_u64(cur_addr + 168);
+        rq_insert(current_task, cur_vrt);
+    }
+    // In native kernel, the ISR entry stub saves all GPRs to the task struct:
+    //   mov [cur_addr+32], rax
+    //   mov [cur_addr+40], rbx
+    //   ...
+    //   mov [cur_addr+152], rflags
+    //   mov [cur_addr+16], rsp
+    //   mov [cur_addr+24], [return address on stack]
+
+    // --- Load next task ---
+    mem_write_u64(nxt_addr + 0, STATE_RUNNING);
+
+    // CR3 switch (address space isolation)
+    let cur_cr3 = mem_read_u64(cur_addr + 160);
+    let nxt_cr3 = mem_read_u64(nxt_addr + 160);
+    if cur_cr3 != nxt_cr3 {
+        // Native: mov rax, [nxt_addr+160]; mov cr3, rax
+        // This flushes the TLB for the old address space
+        tlb_flush_all();
+    }
+
+    // Load next task's saved RSP and RIP:
+    //   Native: mov rsp, [nxt_addr+16]
+    //           push [nxt_addr+24]; ret   (jump to saved RIP)
+    // Restore GPRs from next task struct:
+    //   Native: mov rax, [nxt_addr+32] ... mov r15, [nxt_addr+144]
+    //           push [nxt_addr+152]; popfq (restore RFLAGS)
+
+    current_task = next_idx;
+    return 1;
+}
+
+// === Scheduler Entry Point ===
+// Called from timer ISR or when a task voluntarily yields/blocks.
+fn schedule() {
+    let next = task_pick_next();
+    if next != current_task {
+        context_switch(next);
+    }
+    return 0;
+}
+
+// Yield: current task voluntarily gives up CPU
+fn task_yield() {
+    let addr = task_addr(current_task);
+    let vrt = mem_read_u64(addr + 168);
+    // Bump vruntime slightly so other tasks get a chance
+    mem_write_u64(addr + 168, vrt + 1);
+    schedule();
+    return 0;
+}
+
+// Block: put current task to sleep (e.g., waiting for I/O, pipe, sleep)
+fn task_block(reason) {
+    let addr = task_addr(current_task);
+    mem_write_u64(addr + 0, STATE_BLOCKED);
+    // reason is stored for debugging (not strictly needed)
+    // Schedule another task immediately
+    schedule();
+    return 0;
+}
+
+// Unblock: wake up a specific task by index
+fn task_unblock(task_idx) {
+    let addr = task_addr(task_idx);
+    let state = mem_read_u64(addr + 0);
+    if state == STATE_BLOCKED {
+        mem_write_u64(addr + 0, STATE_READY);
+        let vrt = mem_read_u64(addr + 168);
+        // Give it a slight vruntime bonus so it runs soon
+        let min_vrt = rq_peek_vruntime();
+        if vrt > min_vrt { vrt = min_vrt; }
+        rq_insert(task_idx, vrt);
+    }
+    return 0;
+}
+
+// Exit: terminate current task
+fn task_exit(exit_code) {
+    let addr = task_addr(current_task);
+    mem_write_u64(addr + 0, STATE_DEAD);
+    // Store exit code at +232 (avoiding signal fields at +200/+208/+216, wake_tick at +224)
+    mem_write_u64(addr + 232, exit_code);
+    _tc = _tc - 1;
+    // Wake parent if waiting (send SIGCHLD)
+    let pid = mem_read_u64(addr + 8);
+    signal_send(0, SIGCHLD);  // pid 0 = notify parent (simplified)
+    // Must schedule away — this task is dead
+    schedule();
+    return 0;  // never reached in native kernel
+}
+
+// Get task info for debugging
+fn task_info(task_idx) {
+    let addr = task_addr(task_idx);
+    let state = mem_read_u64(addr + 0);
+    let pid = mem_read_u64(addr + 8);
+    let vrt = mem_read_u64(addr + 168);
+    let ticks = mem_read_u64(addr + 192);
+    let state_names = ["FREE", "READY", "RUNNING", "BLOCKED", "DEAD"];
+    let mut sname = "UNKNOWN";
+    if state >= 0 && state <= 4 { sname = state_names[state]; }
+    return "[" + to_string(task_idx) + "] pid=" + to_string(pid) + " " + sname + " vrt=" + to_string(vrt) + " ticks=" + to_string(ticks);
+}
+
+// List all active tasks
+fn task_list() {
+    print("=== Task List ===");
+    let mut i = 0;
+    let mut active = 0;
+    while i < MAX_TASKS {
+        let addr = task_addr(i);
+        let state = mem_read_u64(addr + 0);
+        if state != STATE_FREE {
+            print("  " + task_info(i));
+            active = active + 1;
+        }
+        i = i + 1;
+    }
+    print("Active tasks: " + to_string(active) + "/" + to_string(MAX_TASKS));
+    print("Run queue size: " + to_string(rq_count()));
+    return active;
+}
+
+// Timer tick handler (called from timer ISR)
+// Increments vruntime of current task, checks if preemption needed
+fn task_timer_tick() {
+    let addr = task_addr(current_task);
+    let vrt = mem_read_u64(addr + 168);
+    let nice = mem_read_u64(addr + 176);
+    let weight = nice_to_weight(nice);
+    let delta = 1024 / weight;
+    mem_write_u64(addr + 168, vrt + delta);
+    mem_write_u64(addr + 192, mem_read_u64(addr + 192) + 1);  // ticks++
+
+    // Check if we should preempt
+    let next = task_pick_next();
+    if next != current_task {
+        context_switch(next);
+    }
+    return 0;
+}
+
+// Self-test
+print("task.hl loaded");
+print("Task table at: 0x" + to_string(TASK_TABLE));
+print("Max tasks: " + to_string(MAX_TASKS));
+print("Task size: " + to_string(TASK_SIZE) + " bytes");
+print("Scheduler: CFS min-heap O(log n)");
+
+// --- Min-heap verification ---
+_rq_heap = [];
+_rq_size = 0;
+// Insert tasks with out-of-order vruntimes
+rq_insert(3, 500);
+rq_insert(1, 100);
+rq_insert(5, 900);
+rq_insert(2, 50);
+rq_insert(4, 300);
+
+// Peek should return 50 (task 2)
+if rq_peek_vruntime() == 50 {
+    print("heap: peek OK");
+} else {
+    print("heap: peek FAIL (got " + to_string(rq_peek_vruntime()) + ")");
+}
+
+// Pop should return tasks in ascending vruntime order: 2,1,4,3,5
+let p1 = rq_pop_min();
+let p2 = rq_pop_min();
+let p3 = rq_pop_min();
+let p4 = rq_pop_min();
+let p5 = rq_pop_min();
+if p1 == 2 && p2 == 1 && p3 == 4 && p4 == 3 && p5 == 5 {
+    print("heap: pop order OK");
+} else {
+    print("heap: pop order FAIL (" + to_string(p1) + "," + to_string(p2) + "," + to_string(p3) + "," + to_string(p4) + "," + to_string(p5) + ")");
+}
+
+// Test rq_remove
+rq_insert(10, 200);
+rq_insert(20, 100);
+rq_insert(30, 300);
+rq_remove(20);  // remove the min
+if rq_peek_vruntime() == 200 {
+    print("heap: remove OK");
+} else {
+    print("heap: remove FAIL (got " + to_string(rq_peek_vruntime()) + ")");
+}
+
+// Empty after 2 more pops
+rq_pop_min();
+rq_pop_min();
+if rq_count() == 0 {
+    print("heap: empty OK");
+} else {
+    print("heap: empty FAIL (count=" + to_string(rq_count()) + ")");
+}
+
+// Clean up: reset for kernel use
+_rq_heap = [];
+_rq_size = 0;

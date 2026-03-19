@@ -1,0 +1,90 @@
+// HicOS_SettingsManager.hl -- System Settings (Native H-L)
+//
+// Key-value configuration store backed by VFS.
+// Settings file: /etc/hicos.conf (one KEY=VALUE per line)
+
+let SETTINGS_PATH = "/etc/hicos.conf";
+let settings_keys = [];
+let settings_vals = [];
+
+fn settings_init() {
+    // Try to load existing config
+    let fd = vfs_open(SETTINGS_PATH, 0);
+    if fd >= 0 {
+        let stat = vfs_stat(SETTINGS_PATH);
+        let content = vfs_read(fd, 0, stat[0]);
+        vfs_close(fd);
+        let lines = str_split(content, "\n");
+        let mut i = 0;
+        while i < len(lines) {
+            let line = lines[i];
+            let eq = str_find(line, "=");
+            if eq > 0 {
+                let key = str_sub(line, 0, eq);
+                let val = str_sub(line, eq + 1, len(line));
+                push(settings_keys, key);
+                push(settings_vals, val);
+            }
+            i = i + 1;
+        }
+        print("settings: loaded " + to_string(len(settings_keys)) + " entries");
+    } else {
+        print("settings: no config file, using defaults");
+    }
+    return 0;
+}
+
+fn settings_get(key) {
+    let mut i = 0;
+    while i < len(settings_keys) {
+        if settings_keys[i] == key {
+            return settings_vals[i];
+        }
+        i = i + 1;
+    }
+    return nil;
+}
+
+fn settings_set(key, value) {
+    let mut i = 0;
+    while i < len(settings_keys) {
+        if settings_keys[i] == key {
+            settings_vals[i] = value;
+            return 0;
+        }
+        i = i + 1;
+    }
+    push(settings_keys, key);
+    push(settings_vals, value);
+    return 0;
+}
+
+fn settings_save() {
+    let mut content = "";
+    let mut i = 0;
+    while i < len(settings_keys) {
+        content = content + settings_keys[i] + "=" + settings_vals[i] + "\n";
+        i = i + 1;
+    }
+    let fd = vfs_open(SETTINGS_PATH, 1);
+    if fd >= 0 {
+        vfs_write(fd, content, len(content));
+        vfs_close(fd);
+        print("settings: saved " + to_string(len(settings_keys)) + " entries");
+        return 0;
+    }
+    print("settings: failed to save");
+    return 0 - 1;
+}
+
+fn settings_list() {
+    print("=== System Settings ===");
+    let mut i = 0;
+    while i < len(settings_keys) {
+        print("  " + settings_keys[i] + " = " + settings_vals[i]);
+        i = i + 1;
+    }
+    return len(settings_keys);
+}
+
+print("HicOS_SettingsManager.hl loaded (native H-L)");

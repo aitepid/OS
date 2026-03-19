@@ -1,0 +1,76 @@
+// HicOS_FileSystem.hl -- Filesystem User Interface (Native H-L)
+//
+// User-space file operations. Delegates to bare-kernel/hl/vfs.hl.
+
+fn hicos_fs_init() {
+    fs_init();
+    vfs_init();
+    print("HicOS filesystem initialized");
+    return 0;
+}
+
+fn hicos_fs_open(path, mode) {
+    // mode: 0=read, 1=write, 2=append
+    return vfs_open(path, mode);
+}
+
+fn hicos_fs_read(fd, size) {
+    return vfs_read(fd, 0, size);
+}
+
+fn hicos_fs_write(fd, data, size) {
+    return vfs_write(fd, data, size);
+}
+
+fn hicos_fs_close(fd) {
+    return vfs_close(fd);
+}
+
+fn hicos_fs_stat(path) {
+    return vfs_stat(path);
+}
+
+fn hicos_fs_ls(path) {
+    let entries = vfs_readdir(path);
+    let mut i = 0;
+    while i < len(entries) {
+        print("  " + entries[i]);
+        i = i + 1;
+    }
+    return len(entries);
+}
+
+fn hicos_fs_mkdir(path) {
+    return vfs_mkdir(path);
+}
+
+fn hicos_fs_rm(path) {
+    return vfs_unlink(path);
+}
+
+fn hicos_fs_cat(path) {
+    let fd = vfs_open(path, 0);
+    if fd < 0 {
+        print("Error: cannot open " + path);
+        return "";
+    }
+    let stat = vfs_stat(path);
+    let content = vfs_read(fd, 0, stat[0]);
+    vfs_close(fd);
+    return content;
+}
+
+fn hicos_fs_write_file(path, content) {
+    let fd = vfs_open(path, 1);
+    if fd < 0 {
+        print("Error: cannot create " + path);
+        return 0 - 1;
+    }
+    vfs_write(fd, content, len(content));
+    vfs_close(fd);
+    return 0;
+}
+
+print("HicOS_FileSystem.hl loaded (native H-L)");
+
+

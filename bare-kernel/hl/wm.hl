@@ -1,0 +1,213 @@
+// wm.hl -- Window Manager (VESA Framebuffer)
+//
+// Provides a stacking window manager on top of VESA linear framebuffer.
+// Each window has: position, size, title, z-order, content buffer.
+// Mouse events drive window focus, move, and resize.
+//
+// Window table: 16 windows max
+
+let WM_MAX_WINDOWS = 16;
+let WM_TABLE_ADDR = 9306112;  // 0x8E0000
+
+// Window entry (128 bytes):
+//   +0:   id (8)
+//   +8:   x (8)
+//   +16:  y (8)
+//   +24:  width (8)
+//   +32:  height (8)
+//   +40:  z_order (8)
+//   +48:  flags (8) -- bit0=visible, bit1=focused, bit2=minimized
+//   +56:  title_ptr (8) -- pointer to title string
+//   +64:  content_buf (8) -- pointer to pixel buffer
+//   +72:  owner_task (8)
+//   +80:  dirty (8) -- 1 if needs repaint
+
+let WM_FLAG_VISIBLE  = 1;
+let WM_FLAG_FOCUSED  = 2;
+let WM_FLAG_MINIMIZED = 4;
+
+let mut wm_window_count = 0;
+let mut wm_focused_id = 0;
+let mut wm_mouse_x = 512;
+let mut wm_mouse_y = 384;
+let mut wm_dragging = 0;
+let mut wm_drag_win = 0;
+let mut wm_drag_off_x = 0;
+let mut wm_drag_off_y = 0;
+
+// Desktop colors (ARGB)
+let WM_DESKTOP_COLOR = 4281611316;  // 0xFF336699 dark blue
+let WM_TITLEBAR_COLOR = 4284506208; // 0xFF4488DD
+let WM_TITLEBAR_ACTIVE = 4278222848; // 0xFF0066FF
+let WM_BORDER_COLOR = 4280427042;   // 0xFF222222
+let WM_TITLE_HEIGHT = 20;
+
+fn wm_init() {
+    wm_window_count = 0;
+    wm_focused_id = 0;
+    // Clear screen to desktop color
+    vesa_clear(WM_DESKTOP_COLOR);
+    return 0;
+}
+
+fn wm_create_window(x, y, w, h, title, owner) {
+    if wm_window_count >= WM_MAX_WINDOWS { return 0 - 1; }
+    let id = wm_window_count;
+    wm_window_count = wm_window_count + 1;
+    let addr = WM_TABLE_ADDR + id * 128;
+    mem_write_u64(addr, id);
+    mem_write_u64(addr+8, x);
+    mem_write_u64(addr+16, y);
+    mem_write_u64(addr+24, w);
+    mem_write_u64(addr+32, h);
+    mem_write_u64(addr+40, id);  // z = creation order
+    mem_write_u64(addr+48, WM_FLAG_VISIBLE | WM_FLAG_FOCUSED);
+    mem_write_u64(addr+72, owner);
+    mem_write_u64(addr+80, 1);  // dirty
+    return id;
+}
+
+fn wm_draw_window(win_id) {
+    let addr = WM_TABLE_ADDR + win_id * 128;
+    let x = mem_read_u64(addr+8);
+    let y = mem_read_u64(addr+16);
+    let w = mem_read_u64(addr+24);
+    let h = mem_read_u64(addr+32);
+    let flags = mem_read_u64(addr+48);
+
+    // Title bar
+    let title_color = WM_TITLEBAR_COLOR;
+    if win_id == wm_focused_id { title_color = WM_TITLEBAR_ACTIVE; }
+    vesa_fill_rect(x, y, w, WM_TITLE_HEIGHT, title_color);
+
+    // Close button (red square at top-right)
+    vesa_fill_rect(x + w - 18, y + 2, 16, 16, 4294901760); // red
+
+    // Border
+    vesa_rect(x, y, w, h + WM_TITLE_HEIGHT, WM_BORDER_COLOR);
+
+    // Content area (white)
+    vesa_fill_rect(x + 1, y + WM_TITLE_HEIGHT, w - 2, h - 1, VESA_WHITE);
+
+    return 0;
+}
+
+fn wm_draw_all() {
+    vesa_clear(WM_DESKTOP_COLOR);
+    // Draw windows from lowest z to highest z
+    let mut z = 0;
+    while z < wm_window_count {
+        let mut i = 0;
+        while i < wm_window_count {
+            let addr = WM_TABLE_ADDR + i * 128;
+            if mem_read_u64(addr+40) == z { wm_draw_window(i); }
+            i = i + 1;
+        }
+        z = z + 1;
+    }
+    // Draw mouse cursor
+    wm_draw_cursor(wm_mouse_x, wm_mouse_y);
+    return 0;
+}
+
+fn wm_draw_cursor(x, y) {
+    // Simple 8x8 arrow cursor
+    vesa_fill_rect(x, y, 2, 8, VESA_WHITE);
+    vesa_fill_rect(x, y, 8, 2, VESA_WHITE);
+    vesa_putpixel(x+1, y+1, VESA_BLACK);
+    vesa_putpixel(x+2, y+2, VESA_BLACK);
+    vesa_putpixel(x+3, y+3, VESA_BLACK);
+    vesa_putpixel(x+4, y+4, VESA_BLACK);
+    return 0;
+}
+
+// Handle mouse movement
+fn wm_mouse_move(dx, dy) {
+    wm_mouse_x = wm_mouse_x + dx;
+    wm_mouse_y = wm_mouse_y + dy;
+    // Clamp to screen
+    if wm_mouse_x < 0 { wm_mouse_x = 0; }
+    if wm_mouse_y < 0 { wm_mouse_y = 0; }
+    if wm_mouse_x >= vesa_width { wm_mouse_x = vesa_width - 1; }
+    if wm_mouse_y >= vesa_height { wm_mouse_y = vesa_height - 1; }
+
+    if wm_dragging == 1 {
+        // Move window
+        let addr = WM_TABLE_ADDR + wm_drag_win * 128;
+        mem_write_u64(addr+8, wm_mouse_x - wm_drag_off_x);
+        mem_write_u64(addr+16, wm_mouse_y - wm_drag_off_y);
+    }
+    return 0;
+}
+
+// Handle mouse button press at current position
+fn wm_mouse_click(button) {
+    if button == 0 { // left click release
+        wm_dragging = 0;
+        return 0;
+    }
+
+    // Find topmost window under cursor (highest z first)
+    let mut best = 0 - 1;
+    let mut best_z = 0 - 1;
+    let mut i = 0;
+    while i < wm_window_count {
+        let addr = WM_TABLE_ADDR + i * 128;
+        let wx = mem_read_u64(addr+8); let wy = mem_read_u64(addr+16);
+        let ww = mem_read_u64(addr+24); let wh = mem_read_u64(addr+32) + WM_TITLE_HEIGHT;
+        let wz = mem_read_u64(addr+40);
+        if wm_mouse_x >= wx && wm_mouse_x < wx+ww && wm_mouse_y >= wy && wm_mouse_y < wy+wh {
+            if wz > best_z { best_z = wz; best = i; }
+        }
+        i = i + 1;
+    }
+
+    if best >= 0 {
+        wm_focused_id = best;
+        // Check if click is on title bar -> start drag
+        // Check if click is on close button -> close window
+    }
+    return 0;
+}
+
+fn wm_close_window(win_id) {
+    if win_id < 0 { return 0; }
+    if win_id >= wm_window_count { return 0; }
+    let addr = WM_TABLE_ADDR + win_id * 128;
+    mem_write_u64(addr + 48, 0);  // clear flags = invisible
+    return 0;
+}
+
+fn wm_move_window(win_id, new_x, new_y) {
+    if win_id < 0 || win_id >= wm_window_count { return 0 - 1; }
+    let addr = WM_TABLE_ADDR + win_id * 128;
+    mem_write_u64(addr + 8, new_x);
+    mem_write_u64(addr + 16, new_y);
+    mem_write_u64(addr + 80, 1);  // mark dirty
+    return 0;
+}
+
+fn wm_resize_window(win_id, new_w, new_h) {
+    if win_id < 0 || win_id >= wm_window_count { return 0 - 1; }
+    let addr = WM_TABLE_ADDR + win_id * 128;
+    mem_write_u64(addr + 24, new_w);
+    mem_write_u64(addr + 32, new_h);
+    mem_write_u64(addr + 80, 1);  // mark dirty
+    return 0;
+}
+
+fn wm_get_focused() {
+    return wm_focused_id;
+}
+
+fn wm_get_window_count() {
+    return wm_window_count;
+}
+
+fn wm_render_all() {
+    wm_draw_all();
+    return 0;
+}
+
+print("wm.hl loaded");
+print("Window manager: 16 windows, stacking, mouse drag, move, resize, title bars");

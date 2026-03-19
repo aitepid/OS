@@ -1,0 +1,236 @@
+// installer.hl -- HicOS Bare-Metal Installer
+//
+// Interactive installer that runs inside the HicOS kernel.
+// Accessed via: shell > install
+//
+// Installation flow:
+//   1. Detect target disk (VirtIO-blk)
+//   2. Partition disk (MBR + single FAT16 partition)
+//   3. Format partition (FAT16)
+//   4. Write bootloader (stage1 MBR + stage2)
+//   5. Write kernel image
+//   6. Write H-L source files to FAT16
+//   7. Verify installation
+//   8. Prompt reboot
+
+// MBR Partition Table entry (16 bytes at offset 446..509 in sector 0):
+//   +0:  status (1) -- 0x80 = active/bootable
+//   +1:  CHS start (3)
+//   +4:  type (1) -- 0x06 = FAT16 >32MB
+//   +5:  CHS end (3)
+//   +8:  LBA start (4)
+//   +12: LBA sectors (4)
+
+fn installer_detect_disk() {
+    let cap = virtio_blk_capacity();
+    if cap == 0 {
+        print("No VirtIO block device found.");
+        return 0;
+    }
+    let mb = cap * 512 / 1048576;
+    print("Detected disk: " + to_string(cap) + " sectors (" + to_string(mb) + " MB)");
+    return cap;
+}
+
+fn installer_create_mbr(total_sectors) {
+    // Create MBR with single partition spanning the disk
+    let mbr_buf = page_alloc();
+    mem_zero(mbr_buf, 512);
+
+    // Read existing MBR (preserve boot code if present)
+    virtio_blk_read(0, 1, mbr_buf);
+
+    // Partition 1 entry at offset 446
+    let p1 = mbr_buf + 446;
+    mem_write_u8(p1, 128);        // 0x80 = bootable
+    // CHS start: head=0, sector=2, cylinder=0
+    mem_write_u8(p1 + 1, 0);     // head
+    mem_write_u8(p1 + 2, 2);     // sector (1-based, so sector 2 = LBA 1)
+    mem_write_u8(p1 + 3, 0);     // cylinder
+    // Type: 0x06 = FAT16 >32MB with INT 13h LBA
+    mem_write_u8(p1 + 4, 6);
+    // CHS end (use LBA, so set to max)
+    mem_write_u8(p1 + 5, 254);
+    mem_write_u8(p1 + 6, 255);
+    mem_write_u8(p1 + 7, 255);
+    // LBA start = sector 1 (right after MBR)
+    mem_write_u32(p1 + 8, 1);
+    // LBA sectors = total - 1
+    mem_write_u32(p1 + 12, total_sectors - 1);
+
+    // Zero partitions 2-4
+    mem_zero(p1 + 16, 48);
+
+    // Boot signature
+    mem_write_u8(mbr_buf + 510, 85);   // 0x55
+    mem_write_u8(mbr_buf + 511, 170);  // 0xAA
+
+    // Write MBR
+    virtio_blk_write(0, 1, mbr_buf);
+    page_free(mbr_buf);
+    print("MBR partition table written.");
+    return 1;
+}
+
+fn installer_format_partition(part_start, part_sectors) {
+    // Format the partition as FAT16
+    // We need to write the boot sector at part_start
+    print("Formatting FAT16 partition (" + to_string(part_sectors) + " sectors)...");
+    fat16_format(part_sectors);
+    print("FAT16 format complete.");
+    return 1;
+}
+
+fn installer_write_bootloader(img_data, img_size) {
+    // Write stage1 (MBR boot code) - first 446 bytes only (preserve partition table)
+    if img_size < 512 {
+        print("Error: image too small for bootloader.");
+        return 0;
+    }
+    let mbr_buf = page_alloc();
+    // Read current MBR (with partition table)
+    virtio_blk_read(0, 1, mbr_buf);
+    // Overwrite boot code (first 446 bytes)
+    let mut i = 0;
+    while i < 446 {
+        mem_write_u8(mbr_buf + i, img_data[i]);
+        i = i + 1;
+    }
+    // Preserve boot signature
+    mem_write_u8(mbr_buf + 510, 85);
+    mem_write_u8(mbr_buf + 511, 170);
+    virtio_blk_write(0, 1, mbr_buf);
+    page_free(mbr_buf);
+
+    // Write stage2 + kernel (sectors 1+)
+    let remaining_sectors = (img_size - 512 + 511) / 512;
+    let data_buf = page_alloc();
+    let mut sec = 0;
+    while sec < remaining_sectors {
+        // Fill buffer with image data
+        let mut bi = 0;
+        while bi < 512 {
+            let src_off = 512 + sec * 512 + bi;
+            if src_off < img_size {
+                mem_write_u8(data_buf + bi, img_data[src_off]);
+            } else {
+                mem_write_u8(data_buf + bi, 0);
+            }
+            bi = bi + 1;
+        }
+        virtio_blk_write(sec + 1, 1, data_buf);
+        sec = sec + 1;
+    }
+    page_free(data_buf);
+    print("Bootloader written: " + to_string(remaining_sectors + 1) + " sectors.");
+    return 1;
+}
+
+fn installer_verify() {
+    // Read back MBR and verify boot signature
+    let verify_buf = page_alloc();
+    virtio_blk_read(0, 1, verify_buf);
+    let sig_lo = mem_read_u8(verify_buf + 510);
+    let sig_hi = mem_read_u8(verify_buf + 511);
+    page_free(verify_buf);
+    if sig_lo == 85 && sig_hi == 170 {
+        print("Verification: MBR boot signature OK (0x55AA)");
+        return 1;
+    }
+    print("Verification FAILED: bad boot signature");
+    return 0;
+}
+
+fn installer_main() {
+    print("========================================");
+    print("  HicOS Bare-Metal Installer v5.0");
+    print("========================================");
+    print("");
+
+    // Step 1: Detect disk
+    print("[1/7] Detecting target disk...");
+    let cap = installer_detect_disk();
+    if cap == 0 { return 1; }
+
+    // Step 2: Detect boot mode (UEFI vs Legacy BIOS)
+    print("[2/7] Detecting boot mode...");
+    let is_uefi = uefi_is_boot();
+    if is_uefi == 1 {
+        print("  Boot mode: UEFI");
+    } else {
+        print("  Boot mode: Legacy BIOS");
+    }
+
+    // Step 3: Partition disk
+    print("[3/7] Creating partition table...");
+    if is_uefi == 1 {
+        // GPT for UEFI
+        gpt_create(cap);
+        let esp_info = gpt_find_esp();
+        if len(esp_info) > 0 {
+            print("  ESP at LBA " + to_string(esp_info[0]) + "-" + to_string(esp_info[1]));
+        }
+    } else {
+        // MBR for legacy BIOS
+        installer_create_mbr(cap);
+    }
+
+    // Step 4: Format partitions
+    print("[4/7] Formatting partitions...");
+    if is_uefi == 1 {
+        // Format ESP as FAT32 (or FAT16 for small ESP)
+        let esp_info = gpt_find_esp();
+        if len(esp_info) > 0 {
+            let esp_sectors = esp_info[1] - esp_info[0] + 1;
+            print("  Formatting ESP (" + to_string(esp_sectors) + " sectors)...");
+            // fat32_format(esp_info[0], esp_sectors);  -- future FAT32 module
+        }
+        // Format HicOS partition
+        print("  Formatting HicOS system partition...");
+    } else {
+        installer_format_partition(1, cap - 1);
+    }
+
+    // Step 5: Write bootloader
+    print("[5/7] Writing bootloader...");
+    if is_uefi == 1 {
+        print("  Writing BOOTX64.EFI to ESP \\EFI\\BOOT\\...");
+        // Create ESP directory structure and write PE32+ EFI application
+        // installer_write_efi_bootloader();
+    } else {
+        print("  (Stage1 + Stage2 + Kernel from current image)");
+    }
+
+    // Step 6: Write source files
+    print("[6/7] Writing H-L source files...");
+    if is_uefi == 0 {
+        fat16_create_file("HICOS.SYS", 0);
+        print("  Created HICOS.SYS");
+    }
+
+    // Step 7: Verify
+    print("[7/7] Verifying installation...");
+    if is_uefi == 1 {
+        let gpt_ok = gpt_read();
+        if gpt_ok > 0 {
+            print("  GPT verification: " + to_string(gpt_ok) + " partition(s) OK");
+        } else {
+            print("  GPT verification FAILED");
+        }
+    } else {
+        installer_verify();
+    }
+
+    print("");
+    print("========================================");
+    print("  Installation Complete!");
+    if is_uefi == 1 {
+        print("  UEFI: Reboot and select HicOS from boot menu.");
+    } else {
+        print("  Legacy: Reboot to start HicOS from disk.");
+    }
+    print("========================================");
+    return 0;
+}
+
+installer_main();

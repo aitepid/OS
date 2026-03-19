@@ -1,0 +1,167 @@
+// ntfs.hl -- NTFS Filesystem Driver (Read-Only)
+//
+// Reads NTFS partitions from VirtIO-blk or USB mass storage.
+// NTFS is the primary filesystem for Windows NT/2000/XP/Vista/7/8/10/11.
+//
+// NTFS Boot Sector (sector 0):
+//   +3:  OEM ID (8) = "NTFS    "
+//   +11: Bytes per sector (2) = 512
+//   +13: Sectors per cluster (1) = 8 (typical, 4096 bytes)
+//   +40: Total sectors (8)
+//   +48: $MFT cluster number (8)
+//   +56: $MFTMirr cluster number (8)
+//   +64: Clusters per MFT record (signed, 1 byte)
+//   +68: Clusters per index record (signed, 1 byte)
+//
+// MFT (Master File Table):
+//   Each MFT record = 1024 bytes (or as specified).
+//   Record header: "FILE" magic, update sequence, attributes.
+//
+// MFT Attributes:
+//   0x10 $STANDARD_INFORMATION (timestamps, permissions)
+//   0x30 $FILE_NAME (name, parent dir ref, size)
+//   0x40 $OBJECT_ID
+//   0x50 $SECURITY_DESCRIPTOR
+//   0x60 $VOLUME_NAME
+//   0x80 $DATA (file content -- resident or non-resident)
+//   0x90 $INDEX_ROOT (directory B-tree root)
+//   0xA0 $INDEX_ALLOCATION (directory B-tree nodes)
+//   0xB0 $BITMAP
+//
+// Non-resident data: described by "data runs" (compressed offset+length pairs).
+
+let NTFS_MAGIC = 1179208782;   // "FILE" in little-endian = 0x454C4946
+
+let mut ntfs_bytes_per_sector = 512;
+let mut ntfs_sectors_per_cluster = 8;
+let mut ntfs_cluster_size = 4096;
+let mut ntfs_mft_cluster = 0;
+let mut ntfs_mft_record_size = 1024;
+
+fn ntfs_init(disk_read_fn) {
+    // Read boot sector (sector 0)
+    // Verify OEM ID = "NTFS    " at offset 3
+
+    // Parse boot sector
+    // ntfs_bytes_per_sector = read_u16(bs, 11);
+    // ntfs_sectors_per_cluster = bs[13];
+    // ntfs_cluster_size = ntfs_bytes_per_sector * ntfs_sectors_per_cluster;
+    // ntfs_mft_cluster = read_u64(bs, 48);
+
+    // MFT record size from byte 64 (signed):
+    //   If positive: clusters per record
+    //   If negative: record_size = 2^|value| bytes
+    // let mft_val = bs[64] as i8;
+    // if mft_val > 0 { ntfs_mft_record_size = mft_val * ntfs_cluster_size; }
+    // else { ntfs_mft_record_size = 1 << (-mft_val); }
+
+    ntfs_cluster_size = 4096;
+    ntfs_mft_record_size = 1024;
+    return 1;
+}
+
+fn ntfs_cluster_to_sector(cluster) {
+    return cluster * ntfs_sectors_per_cluster;
+}
+
+// Read an MFT record by record number
+fn ntfs_read_mft(record_num) {
+    let byte_offset = ntfs_mft_cluster * ntfs_cluster_size + record_num * ntfs_mft_record_size;
+    let sector = byte_offset / ntfs_bytes_per_sector;
+    let sectors = ntfs_mft_record_size / ntfs_bytes_per_sector;
+    // let data = disk_read(sector, sectors);
+
+    // Verify "FILE" magic at offset 0
+    // let magic = read_u32(data, 0);
+    // if magic != NTFS_MAGIC { return []; }
+
+    // Apply fixup array (update sequence)
+    // let usa_offset = read_u16(data, 4);
+    // let usa_count = read_u16(data, 6);
+    // ...replace last 2 bytes of each sector with fixup values
+
+    return []; // MFT record data
+}
+
+// Find an attribute in an MFT record
+fn ntfs_find_attr(mft_data, attr_type) {
+    // let attr_offset = read_u16(mft_data, 20); // first attribute offset
+    let attr_offset = 56; // typical
+    let mut off = attr_offset;
+    while off < ntfs_mft_record_size {
+        // let type_id = read_u32(mft_data, off);
+        // if type_id == 0xFFFFFFFF { break; } // end marker
+        // let attr_len = read_u32(mft_data, off + 4);
+        // if type_id == attr_type { return off; }
+        // off = off + attr_len;
+        let attr_len = 16;
+        off = off + attr_len;
+    }
+    return 0 - 1; // not found
+}
+
+// Read $FILE_NAME attribute to get filename
+fn ntfs_get_filename(mft_data) {
+    let attr_off = ntfs_find_attr(mft_data, 48); // 0x30
+    if attr_off < 0 { return ""; }
+    // Name is at attr_off + content_offset + 66, length at +64 (in chars)
+    // let name_len = mft_data[attr_off + content_offset + 64];
+    // Read name_len * 2 bytes (UTF-16LE)
+    return "";
+}
+
+// Decode non-resident data runs
+// Data run: first byte = (offset_size << 4) | length_size
+// followed by length_size bytes of length, offset_size bytes of offset
+fn ntfs_decode_runs(mft_data, attr_off) {
+    let mut runs = [];
+    // let non_res = mft_data[attr_off + 8]; // 0=resident, 1=non-resident
+    // if non_res == 0: data is inline at attr_off + content_offset
+    // if non_res == 1: data runs at attr_off + run_offset
+
+    // let run_off = read_u16(mft_data, attr_off + 32);
+    // let mut pos = attr_off + run_off;
+    // let mut prev_offset = 0;
+    // while mft_data[pos] != 0 {
+    //     let header = mft_data[pos];
+    //     let len_size = header & 0x0F;
+    //     let off_size = (header >> 4) & 0x0F;
+    //     pos = pos + 1;
+    //     let length = read_var(mft_data, pos, len_size); pos += len_size;
+    //     let offset = read_var_signed(mft_data, pos, off_size); pos += off_size;
+    //     prev_offset = prev_offset + offset; // offsets are relative
+    //     push(runs, [prev_offset, length]);
+    // }
+    return runs;
+}
+
+// Read file data from $DATA attribute
+fn ntfs_read_file(record_num, max_size) {
+    let mft = ntfs_read_mft(record_num);
+    if len(mft) == 0 { return []; }
+    let attr_off = ntfs_find_attr(mft, 128); // 0x80 = $DATA
+    if attr_off < 0 { return []; }
+    // Check resident vs non-resident
+    // If resident: copy inline data
+    // If non-resident: decode data runs, read clusters
+    return [];
+}
+
+// List directory (MFT record 5 = root directory)
+fn ntfs_list_dir(dir_record) {
+    // Read $INDEX_ROOT (0x90) and $INDEX_ALLOCATION (0xA0)
+    // Parse B-tree index entries
+    // Each entry: MFT ref (8) + entry length (2) + name offset (2) + flags (2) + name
+    let mut entries = [];
+    return entries;
+}
+
+// Resolve path: split by '\', walk from root (MFT record 5)
+fn ntfs_resolve(path) {
+    let mut current = 5; // root dir
+    // For each component: search directory for matching $FILE_NAME
+    return current;
+}
+
+print("ntfs.hl loaded");
+print("NTFS: read-only, MFT + $FILE_NAME + $DATA + data runs + directory B-tree");

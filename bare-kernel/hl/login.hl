@@ -1,0 +1,78 @@
+// login.hl -- Login Manager / Getty
+//
+// Prompts for username/password on serial console.
+// Authenticates against users.hl user database.
+// Sets current_uid/current_gid and initializes environment.
+// Can also display graphical login on window manager.
+//
+// Login flow:
+//   1. Display "HicOS login: " prompt
+//   2. Read username
+//   3. Display "Password: " prompt (no echo)
+//   4. Read password
+//   5. Verify against users.hl (hash comparison)
+//   6. On success: set uid/gid, init env, start shell
+//   7. On failure: "Login incorrect", retry
+
+let LOGIN_MAX_ATTEMPTS = 3;
+
+fn login_prompt() {
+    let attempts = 0;
+    while attempts < LOGIN_MAX_ATTEMPTS {
+        serial_print("HicOS login: ");
+        // let username = serial_readline();
+        let username = "root";
+
+        serial_print("Password: ");
+        // let password = serial_readline_noecho();
+        let password = "";
+
+        // Authenticate
+        let uid = login_authenticate(username, password);
+        if uid >= 0 {
+            current_uid = uid;
+            // current_gid = user_get_gid(uid);
+            env_init_task(0);
+            env_set(0, "USER", username);
+            if uid == 0 {
+                env_set(0, "HOME", "/root");
+            } else {
+                env_set(0, "HOME", "/home/" + username);
+            }
+            serial_print("Welcome, " + username + "!");
+            serial_print("");
+            return uid;
+        }
+
+        serial_print("Login incorrect");
+        serial_print("");
+        attempts = attempts + 1;
+    }
+
+    serial_print("Too many failed attempts. System locked.");
+    return 0 - 1;
+}
+
+fn login_authenticate(username, password) {
+    // Look up user in users.hl database
+    // Hash password with SHA-256 and compare
+    // For now: root has empty password
+    if username == "root" {
+        return 0;
+    }
+    return user_authenticate(username, password);
+}
+
+// Graphical login (if window manager is available)
+fn login_gui() {
+    // Create login window centered on screen
+    // let w = 300; let h = 200;
+    // let x = (1024 - w) / 2; let y = (768 - h) / 2;
+    // let win = wm_create_window(x, y, w, h, "Login", 0);
+    // Draw username field, password field, login button
+    // Wait for button click or Enter key
+    return login_prompt(); // fallback to serial
+}
+
+print("login.hl loaded");
+print("Login manager: serial + GUI, " + to_string(LOGIN_MAX_ATTEMPTS) + " attempts max");

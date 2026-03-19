@@ -1,0 +1,64 @@
+// sched.hl -- H-L Scheduler Configuration Module
+// Replaces hardcoded scheduler params with spatial H-L logic.
+
+// CFS scheduling parameters (matching Linux kernel)
+let CFS_LATENCY_MS = 20;
+let CFS_MIN_GRANULARITY_MS = 2;
+let CFS_WAKEUP_GRAN_MS = 4;
+let DEFAULT_NICE = 0;
+let DEFAULT_WEIGHT = 1024;
+
+// Nice -> weight lookup via computation (not table)
+fn nice_to_weight(nice) {
+    // Approximate: weight = 1024 * 1.25^(-nice)
+    let w = 1024;
+    let mut n = nice;
+    if n > 0 {
+        while n > 0 {
+            w = w * 4 / 5;
+            n = n - 1;
+        }
+    } else {
+        while n < 0 {
+            w = w * 5 / 4;
+            n = n + 1;
+        }
+    }
+    return w;
+}
+
+// Compute time slice for a process
+fn calc_slice(proc_weight, total_weight) {
+    let slice = CFS_LATENCY_MS * proc_weight / total_weight;
+    if slice < CFS_MIN_GRANULARITY_MS {
+        return CFS_MIN_GRANULARITY_MS;
+    }
+    return slice;
+}
+
+// Check if preemption should occur
+fn should_preempt(cur_vruntime, new_vruntime, new_weight) {
+    let threshold = CFS_WAKEUP_GRAN_MS * 1024 / new_weight;
+    if cur_vruntime - new_vruntime > threshold {
+        return 1;
+    }
+    return 0;
+}
+
+// Update vruntime after running delta_ms
+fn update_vruntime(vruntime, delta_ms, weight) {
+    return vruntime + delta_ms * 1024 / weight;
+}
+
+// Self-test
+let w_0 = nice_to_weight(0);
+let w_5 = nice_to_weight(5);
+let w_neg5 = nice_to_weight(-5);
+print(w_0);
+print(w_5);
+print(w_neg5);
+
+let slice = calc_slice(1024, 3072);
+print(slice);
+
+print("sched.hl loaded");

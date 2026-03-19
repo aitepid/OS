@@ -1,0 +1,287 @@
+// smp.hl -- Symmetric Multi-Processing Bootstrap
+//
+// Boots additional CPU cores using the INIT-SIPI-SIPI sequence.
+// Requires ACPI MADT to discover LAPIC IDs of other CPUs.
+//
+// SMP boot protocol (x86):
+//   1. Parse MADT to get list of LAPIC IDs
+//   2. Allocate AP (Application Processor) boot trampoline at < 1MB
+//   3. Copy trampoline code to that address
+//   4. For each AP:
+//      a. Send INIT IPI
+//      b. Wait 10ms
+//      c. Send SIPI with trampoline page number
+//      d. Wait 200us
+//      e. Send second SIPI
+//      f. Wait for AP to signal ready
+//
+// AP trampoline:
+//   Starts in real mode -> enters protected mode -> enters long mode
+//   -> jumps to ap_main() in kernel
+//
+// Memory:
+//   0x8000: AP trampoline code (< 4KB)
+//   0x310000+: Per-CPU task structures
+
+let TRAMPOLINE_ADDR = 32768;   // 0x8000
+let MAX_CPUS = 16;
+
+let mut num_cpus = 1;          // BSP is always CPU 0
+let mut cpu_apic_ids = [0];    // BSP APIC ID
+let mut cpus_online = 1;
+
+// Discover CPUs from ACPI MADT
+fn smp_discover() {
+    let rsdp = acpi_find_rsdp();
+    if rsdp == 0 { return 1; }
+    let rsdp_info = acpi_parse_rsdp(rsdp);
+    let rsdt = rsdp_info[1];  // rsdt_addr
+    if rsdt == 0 { return 1; }
+    // Search MADT (signature "APIC" = [65,80,73,67])
+    let madt = acpi_find_table(rsdt, [65, 80, 73, 67]);
+    if madt == 0 { return 1; }
+    // MADT header: +36 = local APIC addr, +40 = flags, +44 = entries start
+    let entry_base = madt + 44;
+    let madt_len = mem_read_u32(madt + 4);
+    let mut offset = 44;
+    num_cpus = 0;
+    while offset < madt_len {
+        let entry_type = mem_read_u8(madt + offset);
+        let entry_len = mem_read_u8(madt + offset + 1);
+        if entry_len == 0 { offset = madt_len; } // prevent infinite loop
+        else {
+            if entry_type == 0 {
+                // Type 0 = Processor Local APIC
+                let apic_id = mem_read_u8(madt + offset + 3);
+                let flags = mem_read_u32(madt + offset + 4);
+                if (flags % 2) == 1 {
+                    // CPU is enabled
+                    if num_cpus < MAX_CPUS {
+                        if num_cpus < len(cpu_apic_ids) {
+                            cpu_apic_ids[num_cpus] = apic_id;
+                        } else {
+                            push(cpu_apic_ids, apic_id);
+                        }
+                        num_cpus = num_cpus + 1;
+                    }
+                }
+            }
+            offset = offset + entry_len;
+        }
+    }
+    if num_cpus == 0 { num_cpus = 1; }
+    return num_cpus;
+}
+
+// Build AP trampoline (real mode -> protected -> long mode)
+fn smp_build_trampoline() {
+    // Write real-mode bootstrap code at TRAMPOLINE_ADDR
+    // Phase 1: CLI, load GDT
+    mem_write_u8(TRAMPOLINE_ADDR, 250);       // CLI
+    mem_write_u8(TRAMPOLINE_ADDR + 1, 49);    // XOR AX,AX
+    mem_write_u8(TRAMPOLINE_ADDR + 2, 192);
+    mem_write_u8(TRAMPOLINE_ADDR + 3, 142);   // MOV DS,AX
+    mem_write_u8(TRAMPOLINE_ADDR + 4, 216);
+    // LGDT [TRAMPOLINE_ADDR + 0x80] (GDT pointer placed at offset 0x80)
+    mem_write_u8(TRAMPOLINE_ADDR + 5, 15);
+    mem_write_u8(TRAMPOLINE_ADDR + 6, 1);
+    mem_write_u8(TRAMPOLINE_ADDR + 7, 22);
+    mem_write_u16(TRAMPOLINE_ADDR + 8, TRAMPOLINE_ADDR + 128);
+    // Enable PE
+    mem_write_u8(TRAMPOLINE_ADDR + 10, 15);   // MOV EAX,CR0
+    mem_write_u8(TRAMPOLINE_ADDR + 11, 32);
+    mem_write_u8(TRAMPOLINE_ADDR + 12, 192);
+    mem_write_u8(TRAMPOLINE_ADDR + 13, 12);   // OR AL,1
+    mem_write_u8(TRAMPOLINE_ADDR + 14, 1);
+    mem_write_u8(TRAMPOLINE_ADDR + 15, 15);   // MOV CR0,EAX
+    mem_write_u8(TRAMPOLINE_ADDR + 16, 34);
+    mem_write_u8(TRAMPOLINE_ADDR + 17, 192);
+    // AP signals ready by incrementing cpus_online counter
+    return 0;
+}
+
+// Boot all APs
+fn smp_boot_aps() {
+    if num_cpus <= 1 { return 0; }
+
+    smp_build_trampoline();
+
+    let mut i = 1; // skip BSP (index 0)
+    while i < num_cpus {
+        if i < len(cpu_apic_ids) {
+            let apic_id = cpu_apic_ids[i];
+
+            // Send INIT IPI via LAPIC ICR
+            lapic_send_init(apic_id);
+            // Busy-wait ~10ms (10000 iterations at ~1us each)
+            let mut delay = 0;
+            while delay < 10000 { delay = delay + 1; }
+
+            // Send SIPI with trampoline page number
+            let vector_page = TRAMPOLINE_ADDR / 4096;
+            lapic_send_sipi(apic_id, vector_page);
+            // Wait ~200us
+            delay = 0;
+            while delay < 200 { delay = delay + 1; }
+
+            // Send second SIPI (required by Intel spec)
+            lapic_send_sipi(apic_id, vector_page);
+            // Wait for AP to signal ready (timeout ~100ms)
+            let expected = cpus_online + 1;
+            let mut timeout = 100000;
+            while cpus_online < expected && timeout > 0 {
+                timeout = timeout - 1;
+            }
+        }
+        i = i + 1;
+    }
+
+    return cpus_online;
+}
+
+// AP entry point (called by each AP after entering long mode)
+fn ap_main() {
+    // Initialize this CPU's LAPIC
+    lapic_init();
+
+    // Get our APIC ID
+    let cpu_id = lapic_id();
+
+    // Set up per-CPU stack (4KB per core, at 0x350000 + cpu_id * 4096)
+    let stack_top = PER_CPU_BASE + cpu_id * PER_CPU_SIZE + 4096;
+    // Native: mov rsp, stack_top
+
+    // Initialize per-CPU data
+    percpu_init(cpu_id);
+
+    // Signal BSP that we're online
+    cpus_online = cpus_online + 1;
+
+    // Enter idle loop (wait for scheduler to assign work)
+    // Native: loop { hlt; check IPI mailbox; }
+    return 0;
+}
+
+// === Per-CPU Data Structure ===
+// Per-CPU region at 0x350000 (MAX_CPUS * 4096 bytes)
+//   +0:    apic_id (u64)
+//   +8:    current_task (u64) -- task index running on this CPU
+//   +16:   idle_ticks (u64)
+//   +24:   flags (u64) -- bit 0: online
+//   +32:   ipi_mailbox (u64) -- inter-processor interrupt target
+//   +40:   stack_base (u64)
+//   +48:   reserved (4048 bytes)
+let PER_CPU_BASE = 3473408;    // 0x350000
+let PER_CPU_SIZE = 4096;
+
+fn percpu_addr(cpu_id) {
+    return PER_CPU_BASE + cpu_id * PER_CPU_SIZE;
+}
+
+fn percpu_init(cpu_id) {
+    let addr = percpu_addr(cpu_id);
+    mem_zero(addr, PER_CPU_SIZE);
+    mem_write_u64(addr, cpu_id);
+    mem_write_u64(addr + 8, 0);  // no task yet
+    mem_write_u64(addr + 24, 1); // online flag
+    mem_write_u64(addr + 40, addr + PER_CPU_SIZE);  // stack top
+    return 0;
+}
+
+fn percpu_get_task(cpu_id) {
+    return mem_read_u64(percpu_addr(cpu_id) + 8);
+}
+
+fn percpu_set_task(cpu_id, task_idx) {
+    mem_write_u64(percpu_addr(cpu_id) + 8, task_idx);
+    return 0;
+}
+
+// === Spinlock ===
+// Simple test-and-set spinlock for SMP synchronization
+// Lock variable: a memory address holding 0 (unlocked) or 1 (locked)
+
+fn spin_lock(lock_addr) {
+    // Native: loop { xchg [lock_addr], 1; if old == 0 break; pause; }
+    // Interpreter simulation:
+    let mut attempts = 0;
+    while mem_read_u64(lock_addr) != 0 && attempts < 1000000 {
+        attempts = attempts + 1;
+    }
+    mem_write_u64(lock_addr, 1);
+    return 0;
+}
+
+fn spin_unlock(lock_addr) {
+    mem_write_u64(lock_addr, 0);
+    return 0;
+}
+
+fn spin_trylock(lock_addr) {
+    if mem_read_u64(lock_addr) == 0 {
+        mem_write_u64(lock_addr, 1);
+        return 1;  // acquired
+    }
+    return 0;  // contended
+}
+
+// Kernel-wide locks
+let LOCK_SCHED = 3538944;       // 0x360000
+let LOCK_ALLOC = 3538952;       // 0x360008
+let LOCK_PRINT = 3538960;       // 0x360010
+
+fn smp_locks_init() {
+    mem_write_u64(LOCK_SCHED, 0);
+    mem_write_u64(LOCK_ALLOC, 0);
+    mem_write_u64(LOCK_PRINT, 0);
+    return 0;
+}
+
+// === IPI (Inter-Processor Interrupt) ===
+// Send a reschedule IPI to a specific CPU
+fn smp_send_reschedule(target_cpu) {
+    if target_cpu < num_cpus {
+        let apic_id = cpu_apic_ids[target_cpu];
+        lapic_send_ipi(apic_id, 48);  // vector 48 = reschedule IPI
+    }
+    return 0;
+}
+
+// Send IPI to all other CPUs
+fn smp_broadcast_ipi(vector) {
+    let my_id = lapic_id();
+    let mut i = 0;
+    while i < num_cpus {
+        if cpu_apic_ids[i] != my_id {
+            lapic_send_ipi(cpu_apic_ids[i], vector);
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Full SMP initialization
+fn smp_init() {
+    smp_locks_init();
+    percpu_init(0);  // BSP = CPU 0
+    let detected = smp_discover();
+    print("SMP: " + to_string(detected) + " CPU(s) detected");
+    if detected > 1 {
+        let booted = smp_boot_aps();
+        print("SMP: " + to_string(booted) + " CPU(s) online");
+    }
+    return cpus_online;
+}
+
+// Get number of online CPUs
+fn smp_cpu_count() {
+    return cpus_online;
+}
+
+// Self-test
+print("smp.hl loaded");
+print("Max CPUs: " + to_string(MAX_CPUS));
+print("Trampoline at: 0x8000");
+print("Per-CPU data at: 0x350000");
+print("Spinlocks at: 0x360000");
+print("Boot sequence: INIT -> SIPI -> SIPI");

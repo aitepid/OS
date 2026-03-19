@@ -1,0 +1,67 @@
+// HicOS_FileEncryption.hl -- File Encryption (Native H-L)
+//
+// Symmetric file encryption/decryption using XOR stream cipher.
+// For production use: ChaCha20-Poly1305 (tls.hl).
+// Requires: vfs.hl, page_alloc.hl
+
+let FENC_KEY_MAX = 256;
+
+fn fenc_xor_block(data_addr, data_len, key, key_len) {
+    let mut i = 0;
+    while i < data_len {
+        let b = mem_read_u8(data_addr + i);
+        let k = mem_read_u8(key + (i % key_len));
+        mem_write_u8(data_addr + i, b ^ k);
+        i = i + 1;
+    }
+    return data_len;
+}
+
+fn fenc_encrypt_file(src_path, dst_path, key, key_len) {
+    let fd = vfs_open(src_path, 0);
+    if fd < 0 {
+        print("fenc: cannot open " + src_path);
+        return 0 - 1;
+    }
+    let stat = vfs_stat(src_path);
+    let size = stat[0];
+    let buf = page_alloc();
+    let data = vfs_read(fd, 0, size);
+    vfs_close(fd);
+    // Copy data to page buffer
+    let mut i = 0;
+    while i < size {
+        mem_write_u8(buf + i, data[i]);
+        i = i + 1;
+    }
+    // Encrypt in place
+    fenc_xor_block(buf, size, key, key_len);
+    // Write encrypted data
+    let ofd = vfs_open(dst_path, 1);
+    vfs_write(ofd, buf, size);
+    vfs_close(ofd);
+    page_free(buf);
+    print("fenc: encrypted " + src_path + " -> " + dst_path + " (" + to_string(size) + " bytes)");
+    return size;
+}
+
+fn fenc_decrypt_file(src_path, dst_path, key, key_len) {
+    // XOR is symmetric: encrypt == decrypt
+    return fenc_encrypt_file(src_path, dst_path, key, key_len);
+}
+
+fn fenc_hash_key(password) {
+    // Simple hash: DJB2
+    let mut hash = 5381;
+    let mut i = 0;
+    while i < len(password) {
+        hash = hash * 33 + ord(password, i);
+        hash = hash % 4294967296;
+        i = i + 1;
+    }
+    return hash;
+}
+
+print("HicOS_FileEncryption.hl loaded (native H-L)");
+
+

@@ -1,0 +1,152 @@
+// ipv6.hl -- IPv6 Protocol Stack
+//
+// Basic IPv6 support: address handling, NDP, ICMPv6.
+// IPv6 header (40 bytes, fixed):
+//   +0:  Version(4b)=6 + Traffic Class(8b) + Flow Label(20b) = first 4 bytes
+//   +4:  Payload Length (2)
+//   +6:  Next Header (1) -- same as IPv4 protocol field
+//   +7:  Hop Limit (1)
+//   +8:  Source Address (16)
+//   +24: Destination Address (16)
+//
+// Next Header values:
+//   6  = TCP
+//   17 = UDP
+//   58 = ICMPv6
+//   59 = No Next Header
+//   0  = Hop-by-Hop Options
+//
+// NDP (Neighbor Discovery Protocol) replaces ARP:
+//   Router Solicitation/Advertisement
+//   Neighbor Solicitation/Advertisement
+//   Uses ICMPv6 types 133-137
+//
+// Link-local: fe80::/10 + interface ID (from MAC EUI-64)
+// Loopback: ::1
+// All-nodes multicast: ff02::1
+// All-routers multicast: ff02::2
+
+let IPV6_HEADER_LEN = 40;
+let IPV6_NEXT_TCP = 6;
+let IPV6_NEXT_UDP = 17;
+let IPV6_NEXT_ICMPV6 = 58;
+
+// IPv6 address = 16 bytes (stored as array of 16 u8)
+let ipv6_addr_zero = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+let ipv6_addr_loopback = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1];
+
+let mut ipv6_our_addr = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+let mut ipv6_gateway = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+let mut ipv6_prefix_len = 64;
+
+fn ipv6_init(mac) {
+    // Generate link-local address: fe80:: + EUI-64 from MAC
+    ipv6_our_addr[0] = 254;  // 0xFE
+    ipv6_our_addr[1] = 128;  // 0x80
+    // bytes 2-7 = 0
+    ipv6_our_addr[8] = mac[0] ^ 2;  // flip U/L bit
+    ipv6_our_addr[9] = mac[1];
+    ipv6_our_addr[10] = mac[2];
+    ipv6_our_addr[11] = 255;  // 0xFF
+    ipv6_our_addr[12] = 254;  // 0xFE
+    ipv6_our_addr[13] = mac[3];
+    ipv6_our_addr[14] = mac[4];
+    ipv6_our_addr[15] = mac[5];
+    return 0;
+}
+
+fn ipv6_build_header(payload_len, next_header, hop_limit, dst) {
+    let mut hdr = [];
+    // Version=6, TC=0, Flow=0 => 0x60000000
+    push(hdr, 96); push(hdr, 0); push(hdr, 0); push(hdr, 0);
+    // Payload length
+    push(hdr, (payload_len / 256) % 256);
+    push(hdr, payload_len % 256);
+    // Next header
+    push(hdr, next_header);
+    // Hop limit
+    push(hdr, hop_limit);
+    // Source (16 bytes)
+    let mut i = 0;
+    while i < 16 { push(hdr, ipv6_our_addr[i]); i = i + 1; }
+    // Destination (16 bytes)
+    i = 0;
+    while i < 16 { push(hdr, dst[i]); i = i + 1; }
+    return hdr;
+}
+
+fn ipv6_handle(data) {
+    if len(data) < IPV6_HEADER_LEN { return 0; }
+    let version = data[0] / 16;
+    if version != 6 { return 0; }
+    let payload_len = data[4] * 256 + data[5];
+    let next_hdr = data[6];
+    // Extract src/dst addresses
+    if next_hdr == IPV6_NEXT_ICMPV6 {
+        return icmpv6_handle(data, IPV6_HEADER_LEN, payload_len);
+    }
+    if next_hdr == IPV6_NEXT_TCP {
+        // Pass to TCP with IPv6 pseudo-header
+    }
+    if next_hdr == IPV6_NEXT_UDP {
+        // Pass to UDP handler
+    }
+    return 0;
+}
+
+// ICMPv6 types for NDP
+let ICMPV6_ECHO_REQUEST = 128;
+let ICMPV6_ECHO_REPLY = 129;
+let ICMPV6_ROUTER_SOLICIT = 133;
+let ICMPV6_ROUTER_ADVERT = 134;
+let ICMPV6_NEIGHBOR_SOLICIT = 135;
+let ICMPV6_NEIGHBOR_ADVERT = 136;
+
+fn icmpv6_handle(pkt, offset, length) {
+    if length < 4 { return 0; }
+    let icmp_type = pkt[offset];
+    if icmp_type == ICMPV6_ECHO_REQUEST {
+        // Build echo reply
+        return 0;
+    }
+    if icmp_type == ICMPV6_NEIGHBOR_SOLICIT {
+        // Respond with Neighbor Advertisement if target is us
+        return 0;
+    }
+    if icmp_type == ICMPV6_ROUTER_ADVERT {
+        // Parse prefix information, update our address
+        return 0;
+    }
+    return 0;
+}
+
+// NDP: send Router Solicitation to discover routers
+fn ndp_router_solicit() {
+    // ICMPv6 type 133, dst = ff02::2 (all-routers)
+    let dst = [255,2,0,0,0,0,0,0,0,0,0,0,0,0,0,2];
+    let mut icmp = [];
+    push(icmp, ICMPV6_ROUTER_SOLICIT);
+    push(icmp, 0);  // code
+    push(icmp, 0); push(icmp, 0);  // checksum field
+    push(icmp, 0); push(icmp, 0); push(icmp, 0); push(icmp, 0);  // reserved
+    let hdr = ipv6_build_header(len(icmp), IPV6_NEXT_ICMPV6, 255, dst);
+    // send hdr + icmp
+    return 0;
+}
+
+// NDP: send Neighbor Solicitation (equivalent of ARP request)
+fn ndp_neighbor_solicit(target_ip) {
+    // ICMPv6 type 135, dst = solicited-node multicast of target
+    let mut icmp = [];
+    push(icmp, ICMPV6_NEIGHBOR_SOLICIT);
+    push(icmp, 0);
+    push(icmp, 0); push(icmp, 0);  // checksum
+    push(icmp, 0); push(icmp, 0); push(icmp, 0); push(icmp, 0);  // reserved
+    // Target address (16 bytes)
+    let mut i = 0;
+    while i < 16 { push(icmp, target_ip[i]); i = i + 1; }
+    return icmp;
+}
+
+print("ipv6.hl loaded");
+print("IPv6: 128-bit addresses, NDP, ICMPv6, link-local auto-config");

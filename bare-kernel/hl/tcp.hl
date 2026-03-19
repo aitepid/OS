@@ -1,0 +1,285 @@
+// tcp.hl -- TCP/IP State Machine
+//
+// Implements TCP over IPv4 with basic connection management.
+// States follow RFC 793: CLOSED->SYN_SENT->ESTABLISHED->FIN_WAIT->CLOSED
+//
+// Each TCP connection (TCB) is a 256-byte structure.
+// Max 64 simultaneous connections.
+// Connection table at 0x800000 (8MB).
+
+let TCP_TABLE = 8388608;       // 0x800000
+let TCB_SIZE = 256;
+let MAX_TCP = 64;
+
+// TCP states
+let TCP_CLOSED      = 0;
+let TCP_LISTEN      = 1;
+let TCP_SYN_SENT    = 2;
+let TCP_SYN_RCVD    = 3;
+let TCP_ESTABLISHED = 4;
+let TCP_FIN_WAIT1   = 5;
+let TCP_FIN_WAIT2   = 6;
+let TCP_CLOSE_WAIT  = 7;
+let TCP_CLOSING     = 8;
+let TCP_LAST_ACK    = 9;
+let TCP_TIME_WAIT   = 10;
+
+// TCP flags
+let TCP_FIN = 1;
+let TCP_SYN = 2;
+let TCP_RST = 4;
+let TCP_PSH = 8;
+let TCP_ACK = 16;
+
+// TCB layout (256 bytes):
+//   +0   state(8)
+//   +8   local_ip(4) local_port(4)
+//   +16  remote_ip(4) remote_port(4)
+//   +24  seq_num(8)
+//   +32  ack_num(8)
+//   +40  window(8)
+//   +48  rx_buf_addr(8)
+//   +56  rx_buf_len(8)
+//   +64  rx_buf_head(8)
+//   +72  rx_buf_tail(8)
+//   +80  tx_buf_addr(8)
+//   +88  tx_buf_len(8)
+//   +96  tx_buf_head(8)
+//   +104 tx_buf_tail(8)
+//   +112 retransmit_tick(8)
+//   +120 rtt_estimate(8)
+//   +128 reserved(128)
+
+let mut next_ephemeral_port = 49152;
+
+fn tcp_alloc_port() {
+    let p = next_ephemeral_port;
+    next_ephemeral_port = next_ephemeral_port + 1;
+    if next_ephemeral_port > 65535 { next_ephemeral_port = 49152; }
+    return p;
+}
+
+// Find free TCB slot
+fn tcp_alloc_tcb() {
+    let mut i = 0;
+    while i < MAX_TCP {
+        let state = mem_read_u64(TCP_TABLE + i * TCB_SIZE);
+        if state == TCP_CLOSED { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+// Build TCP segment header (20 bytes, no options)
+fn tcp_build_header(src_port, dst_port, seq, ack, flags, window) {
+    let mut hdr = [];
+    push(hdr, (src_port / 256) % 256); push(hdr, src_port % 256);
+    push(hdr, (dst_port / 256) % 256); push(hdr, dst_port % 256);
+    // seq (4 bytes big-endian)
+    push(hdr, (seq / 16777216) % 256); push(hdr, (seq / 65536) % 256);
+    push(hdr, (seq / 256) % 256); push(hdr, seq % 256);
+    // ack (4 bytes)
+    push(hdr, (ack / 16777216) % 256); push(hdr, (ack / 65536) % 256);
+    push(hdr, (ack / 256) % 256); push(hdr, ack % 256);
+    // data offset (5 << 4) + reserved
+    push(hdr, 80); // 0x50 = 5 dwords
+    // flags
+    push(hdr, flags);
+    // window (2 bytes)
+    push(hdr, (window / 256) % 256); push(hdr, window % 256);
+    // checksum field
+    push(hdr, 0); push(hdr, 0);
+    // urgent pointer
+    push(hdr, 0); push(hdr, 0);
+    return hdr;
+}
+
+// Connect to remote host (active open)
+fn tcp_connect(remote_ip, remote_port) {
+    let idx = tcp_alloc_tcb();
+    if idx < 0 { return 0 - 1; }
+    let local_port = tcp_alloc_port();
+    // Initialize TCB
+    mem_write_u64(TCP_TABLE + idx*TCB_SIZE + 0, TCP_SYN_SENT);
+    mem_write_u32(TCP_TABLE + idx*TCB_SIZE + 8, ip_pack(my_ip[0],my_ip[1],my_ip[2],my_ip[3]));
+    mem_write_u32(TCP_TABLE + idx*TCB_SIZE + 12, local_port);
+    mem_write_u32(TCP_TABLE + idx*TCB_SIZE + 16, remote_ip);
+    mem_write_u32(TCP_TABLE + idx*TCB_SIZE + 20, remote_port);
+    // Send SYN
+    let seq = 1000; // initial seq (should be random)
+    let hdr = tcp_build_header(local_port, remote_port, seq, 0, TCP_SYN, 65535);
+    // wrap in IP packet, send via virtio_net_send
+    return idx;
+}
+
+// Listen on a port (passive open)
+fn tcp_listen(local_port) {
+    let idx = tcp_alloc_tcb();
+    if idx < 0 { return 0 - 1; }
+    mem_write_u64(TCP_TABLE + idx*TCB_SIZE, TCP_LISTEN);
+    mem_write_u32(TCP_TABLE + idx*TCB_SIZE + 12, local_port);
+    return idx;
+}
+
+// Process incoming TCP segment
+fn tcp_input(src_ip, seg_data) {
+    if len(seg_data) < 20 { return 0; }
+    let src_port = seg_data[0] * 256 + seg_data[1];
+    let dst_port = seg_data[2] * 256 + seg_data[3];
+    let seq = seg_data[4]*16777216 + seg_data[5]*65536 + seg_data[6]*256 + seg_data[7];
+    let ack = seg_data[8]*16777216 + seg_data[9]*65536 + seg_data[10]*256 + seg_data[11];
+    let flags = seg_data[13];
+    let data_off = (seg_data[12] / 16) * 4;
+
+    // Find matching TCB
+    let mut i = 0;
+    while i < MAX_TCP {
+        let state = mem_read_u64(TCP_TABLE + i * TCB_SIZE);
+        let lport = mem_read_u32(TCP_TABLE + i * TCB_SIZE + 12);
+        if lport == dst_port && state != TCP_CLOSED {
+            tcp_process_segment(i, src_ip, src_port, seq, ack, flags, seg_data, data_off);
+            return 1;
+        }
+        i = i + 1;
+    }
+    return 0; // no matching connection
+}
+
+// State machine transition
+fn tcp_process_segment(tcb_idx, src_ip, src_port, seq, ack, flags, data, data_off) {
+    let addr = TCP_TABLE + tcb_idx * TCB_SIZE;
+    let state = mem_read_u64(addr);
+
+    // SYN = 0x02, ACK = 0x10, FIN = 0x01
+    let is_syn = (flags / 2) % 2;
+    let is_ack = (flags / 16) % 2;
+    let is_fin = flags % 2;
+
+    if state == TCP_LISTEN && is_syn == 1 {
+        // SYN received: transition to SYN_RCVD, send SYN+ACK
+        mem_write_u64(addr, TCP_SYN_RCVD);
+        mem_write_u32(addr + 16, src_ip);   // remote IP
+        mem_write_u32(addr + 20, src_port); // remote port
+        mem_write_u64(addr + 24, seq + 1);  // expected next seq
+        return 0;
+    }
+    if state == TCP_SYN_RCVD && is_ack == 1 {
+        mem_write_u64(addr, TCP_ESTABLISHED);
+        return 0;
+    }
+    if state == TCP_ESTABLISHED && is_fin == 1 {
+        mem_write_u64(addr, TCP_CLOSE_WAIT);
+        return 0;
+    }
+    // ESTABLISHED + data: buffer payload (simplified)
+    if state == TCP_ESTABLISHED && len(data) > data_off {
+        // Data available at data[data_off..]
+        return len(data) - data_off;
+    }
+    return 0;
+}
+
+// Send data on established connection
+fn tcp_send(tcb_idx, payload) {
+    let addr = TCP_TABLE + tcb_idx * TCB_SIZE;
+    let state = mem_read_u64(addr);
+    if state != TCP_ESTABLISHED { return 0; }
+
+    let local_port = mem_read_u32(addr + 12);
+    let remote_ip = mem_read_u32(addr + 16);
+    let remote_port = mem_read_u32(addr + 20);
+    let seq = mem_read_u64(addr + 24);
+    let ack_num = mem_read_u64(addr + 32);
+    let window = mem_read_u64(addr + 40);
+
+    // Build TCP header with PSH+ACK
+    let hdr = tcp_build_header(local_port, remote_port, seq, ack_num, TCP_PSH + TCP_ACK, window);
+
+    // Combine TCP header + payload
+    let mut tcp_pkt = [];
+    let mut i = 0;
+    while i < len(hdr) { push(tcp_pkt, hdr[i]); i = i + 1; }
+    i = 0;
+    while i < len(payload) { push(tcp_pkt, payload[i]); i = i + 1; }
+
+    // Wrap in IPv4 packet
+    let dst_ip = ip_unpack(remote_ip);
+    let ip_pkt = build_ip_tcp_packet(dst_ip, tcp_pkt);
+    virtio_net_send_pkt(ip_pkt);
+
+    // Update seq number
+    mem_write_u64(addr + 24, seq + len(payload));
+    return len(payload);
+}
+
+// Close connection (active close)
+fn tcp_close(tcb_idx) {
+    let addr = TCP_TABLE + tcb_idx * TCB_SIZE;
+    let state = mem_read_u64(addr);
+    if state != TCP_ESTABLISHED && state != TCP_CLOSE_WAIT { return 0; }
+
+    let local_port = mem_read_u32(addr + 12);
+    let remote_port = mem_read_u32(addr + 20);
+    let seq = mem_read_u64(addr + 24);
+    let ack_num = mem_read_u64(addr + 32);
+
+    // Send FIN+ACK
+    let hdr = tcp_build_header(local_port, remote_port, seq, ack_num, TCP_FIN + TCP_ACK, 0);
+    let remote_ip = mem_read_u32(addr + 16);
+    let dst_ip = ip_unpack(remote_ip);
+    let ip_pkt = build_ip_tcp_packet(dst_ip, hdr);
+    virtio_net_send_pkt(ip_pkt);
+
+    // Transition state
+    if state == TCP_ESTABLISHED {
+        mem_write_u64(addr, TCP_FIN_WAIT1);
+    }
+    if state == TCP_CLOSE_WAIT {
+        mem_write_u64(addr, TCP_LAST_ACK);
+    }
+    return 1;
+}
+
+// Build Ethernet + IPv4 packet containing TCP segment
+fn build_ip_tcp_packet(dst_ip, tcp_data) {
+    let mut pkt = [];
+    // Ethernet header (14 bytes) -- use gateway MAC
+    let mut i = 0;
+    while i < 6 { push(pkt, gw_mac[i]); i = i + 1; }
+    i = 0;
+    while i < 6 { push(pkt, my_mac[i]); i = i + 1; }
+    push(pkt, 8); push(pkt, 0); // IPv4
+
+    // IPv4 header (20 bytes)
+    let ip_total = 20 + len(tcp_data);
+    push(pkt, 69);  // ver=4, ihl=5
+    push(pkt, 0);   // TOS
+    push(pkt, (ip_total / 256) % 256);
+    push(pkt, ip_total % 256);
+    push(pkt, 0); push(pkt, 0); // ID
+    push(pkt, 64); push(pkt, 0); // DF
+    push(pkt, 64);  // TTL
+    push(pkt, 6);   // TCP
+    push(pkt, 0); push(pkt, 0); // checksum placeholder
+    i = 0;
+    while i < 4 { push(pkt, my_ip[i]); i = i + 1; }
+    i = 0;
+    while i < 4 { push(pkt, dst_ip[i]); i = i + 1; }
+
+    // IP checksum
+    let mut ip_hdr = [];
+    i = 14;
+    while i < 34 { push(ip_hdr, pkt[i]); i = i + 1; }
+    let cksum = ip_checksum(ip_hdr);
+    set_at(pkt, 24, (cksum / 256) % 256);
+    set_at(pkt, 25, cksum % 256);
+
+    // TCP data
+    i = 0;
+    while i < len(tcp_data) { push(pkt, tcp_data[i]); i = i + 1; }
+    return pkt;
+}
+
+print("tcp.hl loaded");
+print("Max connections: " + to_string(MAX_TCP));
+print("Ephemeral ports: 49152-65535");

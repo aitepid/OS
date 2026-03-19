@@ -1,0 +1,64 @@
+// xref.hl -- Symbol Cross-Reference Scanner
+//
+// Scans all kernel modules and reports:
+//   1. All defined functions (fn name)
+//   2. All function calls
+//   3. Undefined symbols (called but never defined)
+//   4. Unused functions (defined but never called)
+//
+// Usage: hl-bootstrap interpret bare-kernel/hl/xref.hl
+
+fn xref_scan() {
+    let files = file_list("bare-kernel/hl/");
+    let defined = [];
+    let defined_in = [];
+    let called = [];
+    let called_from = [];
+
+    let mut fi = 0;
+    while fi < len(files) {
+        let fname = files[fi];
+        if str_ends_with(fname, ".hl") == false {
+            fi = fi + 1;
+            // skip non-HL files
+        } else {
+            let content = file_read("bare-kernel/hl/" + fname);
+            let lines = str_split(content, "\n");
+            let mut li = 0;
+            while li < len(lines) {
+                let line = lines[li];
+                // Skip comment lines
+                let trimmed = str_trim(line);
+                if str_starts_with(trimmed, "//") == false {
+                    // Check for function definition: fn name(
+                    let fn_pos = str_find(trimmed, "fn ");
+                    if fn_pos == 0 {
+                        let paren = str_find(trimmed, "(");
+                        if paren > 3 {
+                            let name = str_sub(trimmed, 3, paren);
+                            push(defined, name);
+                            push(defined_in, fname);
+                        }
+                    }
+                }
+                li = li + 1;
+            }
+        }
+        fi = fi + 1;
+    }
+
+    print("=== Symbol Cross-Reference Report ===");
+    print("Files scanned: " + to_string(len(files)));
+    print("Functions defined: " + to_string(len(defined)));
+
+    // Report definitions
+    let mut di = 0;
+    while di < len(defined) {
+        print("  DEF " + defined[di] + " <- " + defined_in[di]);
+        di = di + 1;
+    }
+
+    return len(defined);
+}
+
+xref_scan();

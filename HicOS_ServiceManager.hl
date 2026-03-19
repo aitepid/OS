@@ -1,0 +1,134 @@
+// HicOS_ServiceManager.hl -- System Service Manager (Native H-L)
+//
+// Manages system services (daemons):
+//   - Service registration, start, stop, restart, status
+//   - Boot-time auto-start
+//   - Dependency ordering
+//
+// Built-in services:
+//   syslogd  - System log aggregator
+//   crond    - Periodic task scheduler
+//   networkd - Network daemon (DHCP + link management)
+//   shelld   - Interactive shell service
+
+let SVC_MAX = 32;
+let SVC_STATE_STOPPED = 0;
+let SVC_STATE_RUNNING = 1;
+let SVC_STATE_FAILED  = 2;
+
+// Service registry: parallel arrays
+let svc_names  = [];
+let svc_states = [];
+let svc_pids   = [];
+let svc_auto   = []; // 1 = auto-start at boot
+let mut svc_count = 0;
+
+fn svc_register(name, autostart) {
+    if svc_count >= SVC_MAX {
+        print("svc: max services reached");
+        return 0 - 1;
+    }
+    push(svc_names, name);
+    push(svc_states, SVC_STATE_STOPPED);
+    push(svc_pids, 0);
+    push(svc_auto, autostart);
+    svc_count = svc_count + 1;
+    return svc_count - 1;
+}
+
+fn svc_find(name) {
+    let mut i = 0;
+    while i < svc_count {
+        if svc_names[i] == name { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn svc_start(name) {
+    let idx = svc_find(name);
+    if idx < 0 {
+        print("svc: unknown service '" + name + "'");
+        return 0 - 1;
+    }
+    if svc_states[idx] == SVC_STATE_RUNNING {
+        print("svc: " + name + " already running (PID " + to_string(svc_pids[idx]) + ")");
+        return 0;
+    }
+    // Attempt to start
+    svc_states[idx] = SVC_STATE_RUNNING;
+    svc_pids[idx] = task_count() + 1; // placeholder PID
+    print("svc: started " + name + " (PID " + to_string(svc_pids[idx]) + ")");
+    return svc_pids[idx];
+}
+
+fn svc_stop(name) {
+    let idx = svc_find(name);
+    if idx < 0 {
+        print("svc: unknown service '" + name + "'");
+        return 0 - 1;
+    }
+    if svc_states[idx] != SVC_STATE_RUNNING {
+        print("svc: " + name + " not running");
+        return 0;
+    }
+    svc_states[idx] = SVC_STATE_STOPPED;
+    print("svc: stopped " + name + " (was PID " + to_string(svc_pids[idx]) + ")");
+    svc_pids[idx] = 0;
+    return 0;
+}
+
+fn svc_restart(name) {
+    svc_stop(name);
+    return svc_start(name);
+}
+
+fn svc_status(name) {
+    let idx = svc_find(name);
+    if idx < 0 {
+        print("svc: unknown service '" + name + "'");
+        return 0 - 1;
+    }
+    let state_str = "stopped";
+    if svc_states[idx] == SVC_STATE_RUNNING { state_str = "running"; }
+    if svc_states[idx] == SVC_STATE_FAILED { state_str = "failed"; }
+    print(name + ": " + state_str + " (PID " + to_string(svc_pids[idx]) + ")");
+    return svc_states[idx];
+}
+
+fn svc_list() {
+    print("SERVICE        STATE     PID   AUTO");
+    let mut i = 0;
+    while i < svc_count {
+        let state_str = "stopped";
+        if svc_states[i] == SVC_STATE_RUNNING { state_str = "running"; }
+        if svc_states[i] == SVC_STATE_FAILED { state_str = "failed "; }
+        let auto_str = "no ";
+        if svc_auto[i] == 1 { auto_str = "yes"; }
+        print("  " + svc_names[i] + "  " + state_str + "  " + to_string(svc_pids[i]) + "  " + auto_str);
+        i = i + 1;
+    }
+    return svc_count;
+}
+
+fn svc_boot_init() {
+    // Register built-in services
+    svc_register("syslogd", 1);
+    svc_register("crond", 1);
+    svc_register("networkd", 1);
+    svc_register("shelld", 1);
+
+    // Auto-start services
+    let mut i = 0;
+    while i < svc_count {
+        if svc_auto[i] == 1 {
+            svc_start(svc_names[i]);
+        }
+        i = i + 1;
+    }
+
+    print("svc: boot init complete (" + to_string(svc_count) + " services)");
+    return 0;
+}
+
+print("HicOS_ServiceManager.hl loaded (native H-L)");

@@ -1,0 +1,262 @@
+// virt_mem.hl -- Virtual Memory Manager
+//
+// Manages x86-64 4-level paging: PML4 -> PDPT -> PD -> PT
+// Provides map/unmap/translate operations on 4KB pages.
+//
+// Page table layout (identity-mapped by stage2):
+//   PML4  @ 0x1000 (4096)
+//   PDPT  @ 0x2000 (8192)
+//   PD    @ 0x3000 (12288)
+//   PT pool starts @ 0x500000 (5MB) -- allocated by page_alloc
+//
+// Page table entry flags:
+//   bit 0: Present
+//   bit 1: Read/Write
+//   bit 2: User/Supervisor
+//   bit 7: Page Size (1 = 2MB huge page in PD)
+//   bits 12-51: Physical address (4KB aligned)
+
+let PTE_PRESENT  = 1;
+let PTE_WRITABLE = 2;
+let PTE_USER     = 4;
+let PTE_PS       = 128;    // Page Size (2MB)
+
+let PML4_ADDR = 4096;       // 0x1000
+let PAGE_SIZE = 4096;
+let ENTRIES_PER_TABLE = 512;
+let PT_POOL_START = 5242880; // 0x500000
+
+// Extract page table indices from a 48-bit virtual address
+fn pml4_index(vaddr) {
+    return (vaddr / 549755813888) % 512;  // bits 47:39 (vaddr >> 39) & 0x1FF
+}
+fn pdpt_index(vaddr) {
+    return (vaddr / 1073741824) % 512;    // bits 38:30
+}
+fn pd_index(vaddr) {
+    return (vaddr / 2097152) % 512;       // bits 29:21
+}
+fn pt_index(vaddr) {
+    return (vaddr / 4096) % 512;          // bits 20:12
+}
+fn page_offset(vaddr) {
+    return vaddr % 4096;                  // bits 11:0
+}
+
+// Read a 64-bit page table entry at a physical address
+// (In native kernel: mov rax, [addr])
+fn pte_read(phys_addr) {
+    return mem_read_u64(phys_addr);
+}
+
+// Write a 64-bit page table entry
+fn pte_write(phys_addr, value) {
+    mem_write_u64(phys_addr, value);
+    return 0;
+}
+
+// Allocate a new page table (zeroed 4KB page)
+// Returns physical address of new table
+fn alloc_page_table() {
+    let addr = page_alloc();
+    // Zero the page (512 entries * 8 bytes)
+    let mut i = 0;
+    while i < 512 {
+        mem_write_u64(addr + i * 8, 0);
+        i = i + 1;
+    }
+    return addr;
+}
+
+// Map a 4KB virtual page to a physical frame
+// vaddr: virtual address (4KB aligned)
+// paddr: physical address (4KB aligned)
+// flags: PTE_PRESENT | PTE_WRITABLE | PTE_USER
+fn map_page(vaddr, paddr, flags) {
+    let pml4i = pml4_index(vaddr);
+    let pdpti = pdpt_index(vaddr);
+    let pdi   = pd_index(vaddr);
+    let pti   = pt_index(vaddr);
+
+    // Walk PML4 -> PDPT
+    let pml4e = pte_read(PML4_ADDR + pml4i * 8);
+    let mut pdpt_addr = 0;
+    if pml4e % 2 == 1 {
+        // Present -- extract address (bits 12-51)
+        pdpt_addr = (pml4e / 4096) * 4096;
+    } else {
+        // Allocate new PDPT
+        pdpt_addr = alloc_page_table();
+        pte_write(PML4_ADDR + pml4i * 8, pdpt_addr + PTE_PRESENT + PTE_WRITABLE);
+    }
+
+    // Walk PDPT -> PD
+    let pdpte = pte_read(pdpt_addr + pdpti * 8);
+    let mut pd_addr = 0;
+    if pdpte % 2 == 1 {
+        pd_addr = (pdpte / 4096) * 4096;
+    } else {
+        pd_addr = alloc_page_table();
+        pte_write(pdpt_addr + pdpti * 8, pd_addr + PTE_PRESENT + PTE_WRITABLE);
+    }
+
+    // Walk PD -> PT (skip if 2MB page)
+    let pde = pte_read(pd_addr + pdi * 8);
+    let mut pt_addr = 0;
+    if pde % 2 == 1 {
+        if (pde / 128) % 2 == 1 {
+            // 2MB huge page -- can't subdivide in this simple impl
+            return 0; // error: already mapped as huge page
+        }
+        pt_addr = (pde / 4096) * 4096;
+    } else {
+        pt_addr = alloc_page_table();
+        pte_write(pd_addr + pdi * 8, pt_addr + PTE_PRESENT + PTE_WRITABLE);
+    }
+
+    // Write PT entry
+    pte_write(pt_addr + pti * 8, paddr + flags);
+
+    // Invalidate TLB for this virtual address
+    // In native: invlpg [vaddr]
+    return 1; // success
+}
+
+// Unmap a 4KB virtual page
+fn unmap_page(vaddr) {
+    let pml4i = pml4_index(vaddr);
+    let pdpti = pdpt_index(vaddr);
+    let pdi   = pd_index(vaddr);
+    let pti   = pt_index(vaddr);
+
+    let pml4e = pte_read(PML4_ADDR + pml4i * 8);
+    if pml4e % 2 == 0 { return 0; }
+    let pdpt_addr = (pml4e / 4096) * 4096;
+
+    let pdpte = pte_read(pdpt_addr + pdpti * 8);
+    if pdpte % 2 == 0 { return 0; }
+    let pd_addr = (pdpte / 4096) * 4096;
+
+    let pde = pte_read(pd_addr + pdi * 8);
+    if pde % 2 == 0 { return 0; }
+    let pt_addr = (pde / 4096) * 4096;
+
+    // Clear PT entry
+    pte_write(pt_addr + pti * 8, 0);
+    // invlpg [vaddr]
+    return 1;
+}
+
+// Translate virtual -> physical address
+fn translate(vaddr) {
+    let pml4i = pml4_index(vaddr);
+    let pdpti = pdpt_index(vaddr);
+    let pdi   = pd_index(vaddr);
+    let pti   = pt_index(vaddr);
+    let off   = page_offset(vaddr);
+
+    let pml4e = pte_read(PML4_ADDR + pml4i * 8);
+    if pml4e % 2 == 0 { return 0; }
+    let pdpt_addr = (pml4e / 4096) * 4096;
+
+    let pdpte = pte_read(pdpt_addr + pdpti * 8);
+    if pdpte % 2 == 0 { return 0; }
+    let pd_addr = (pdpte / 4096) * 4096;
+
+    let pde = pte_read(pd_addr + pdi * 8);
+    if pde % 2 == 0 { return 0; }
+
+    // Check for 2MB huge page
+    if (pde / 128) % 2 == 1 {
+        let base = (pde / 2097152) * 2097152;
+        return base + (vaddr % 2097152);
+    }
+
+    let pt_addr = (pde / 4096) * 4096;
+    let pte = pte_read(pt_addr + pti * 8);
+    if pte % 2 == 0 { return 0; }
+    let frame = (pte / 4096) * 4096;
+    return frame + off;
+}
+
+// Aliases for module compatibility (mmap.hl, posix.hl)
+fn virt_mem_map(vaddr, paddr, flags) { return map_page(vaddr, paddr, flags); }
+fn virt_mem_unmap(vaddr) { return unmap_page(vaddr); }
+
+// Map a 2MB huge page (identity mapped)
+fn map_huge_page(vaddr, paddr, flags) {
+    let pml4i = pml4_index(vaddr);
+    let pdpti = pdpt_index(vaddr);
+    let pdi   = pd_index(vaddr);
+
+    // Walk PML4 -> PDPT
+    let pml4e = pte_read(PML4_ADDR + pml4i * 8);
+    let mut pdpt_addr = 0;
+    if pml4e % 2 == 1 {
+        pdpt_addr = (pml4e / 4096) * 4096;
+    } else {
+        pdpt_addr = alloc_page_table();
+        pte_write(PML4_ADDR + pml4i * 8, pdpt_addr + PTE_PRESENT + PTE_WRITABLE);
+    }
+
+    // Walk PDPT -> PD
+    let pdpte = pte_read(pdpt_addr + pdpti * 8);
+    let mut pd_addr = 0;
+    if pdpte % 2 == 1 {
+        pd_addr = (pdpte / 4096) * 4096;
+    } else {
+        pd_addr = alloc_page_table();
+        pte_write(pdpt_addr + pdpti * 8, pd_addr + PTE_PRESENT + PTE_WRITABLE);
+    }
+
+    // Write PD entry as 2MB huge page (PS bit set)
+    pte_write(pd_addr + pdi * 8, paddr + flags + PTE_PS);
+    return 1;
+}
+
+// Identity map all usable RAM from E820 using 2MB huge pages
+fn map_all_ram() {
+    let count = e820_count();
+    let mut mapped = 0;
+    let mut i = 0;
+    while i < count {
+        if e820_entry_type(i) == E820_TYPE_USABLE {
+            let base = e820_entry_base(i);
+            let length = e820_entry_length(i);
+            // Align base down to 2MB and end up to 2MB
+            let start = (base / 2097152) * 2097152;
+            let end = ((base + length + 2097151) / 2097152) * 2097152;
+            let mut addr = start;
+            while addr < end {
+                map_huge_page(addr, addr, PTE_PRESENT + PTE_WRITABLE);
+                mapped = mapped + 1;
+                addr = addr + 2097152;
+            }
+        }
+        i = i + 1;
+    }
+    print("Mapped " + to_string(mapped) + " x 2MB pages (" + to_string(mapped * 2) + " MB)");
+    return mapped;
+}
+
+// Flush TLB (reload CR3)
+fn tlb_flush_all() {
+    // Native: mov rax, cr3; mov cr3, rax
+    return 0;
+}
+
+// Invalidate single TLB entry
+fn tlb_invalidate(vaddr) {
+    // Native: invlpg [vaddr]
+    return 0;
+}
+
+// Self-test: index extraction
+let test_addr = 4194304; // 0x400000 = 4MB
+print("virt_mem.hl loaded");
+print("addr 0x400000 indices:");
+print("  PML4: " + to_string(pml4_index(test_addr)));
+print("  PDPT: " + to_string(pdpt_index(test_addr)));
+print("  PD:   " + to_string(pd_index(test_addr)));
+print("  PT:   " + to_string(pt_index(test_addr)));
+print("  off:  " + to_string(page_offset(test_addr)));

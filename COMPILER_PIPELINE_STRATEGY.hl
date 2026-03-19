@@ -1,0 +1,559 @@
+// COMPILER_PIPELINE_STRATEGY.hl -- 编译管线打通：从宿主增强到自动编译的全路径策划案
+//
+// 战略目标: 增强宿主解释器，让 hl-bootstrap.hl 能够直接将
+//           bare-kernel/hl/ 中 114 个纯 H-L 模块自动编译为原生 x86_64 机器码，
+//           彻底消灭层级 A（手写 PS1 机器码）和层级 C（设计级 .hl 源码）之间的鸿沟。
+//
+// 创建日期: 2025
+// 基于: PIPELINE_PLAN.hl (六阶段规划) + 全量代码审计
+
+// ============================================================================
+// 一、断裂点诊断（基于代码实测）
+// ============================================================================
+//
+// 目前编译管线有一条致命的循环依赖链:
+//
+//   hl-bootstrap.hl (4,630行)
+//     包含: S2 Lexer + S3 Parser + S4 VM + S5 x86enc + S6 ImageBuilder + S7 CLI
+//     其中 build_kernel() 使用 x86enc.* 生成机器码
+//     ↓ 需要被执行
+//   hl-bootstrap-shim.ps1 (474行, 极简 PS 解释器)
+//     只支持: let/fn/if/while/return + 基础表达式 + print/to_string/len
+//     不支持: quadrant 作用域、嵌套数组、数组索引、push、字符串索引
+//     ↓ 无法执行 hl-bootstrap.hl
+//   scripts/rebuild-image.ps1 (3,676行)
+//     绕过编译器，直接手写 x86_64 机器码
+//     ↓ 产出
+//   hicos-hl.img (41,472字节, 18条命令, 42/42 QEMU 测试通过)
+//
+// 核心矛盾: hl-bootstrap.hl 是编译器但无法被执行
+//            rebuild-image.ps1 能生成镜像但不是编译器
+//
+// ============================================================================
+// 二、宿主解释器缺失特性清单（精确到代码行）
+// ============================================================================
+//
+// 以下是 hl-bootstrap-shim.ps1 执行 build_kernel() 所需但缺失的特性:
+//
+// ┌────┬──────────────────────┬───────────────────────────────────────────┐
+// │ #  │ 缺失特性             │ hl-bootstrap.hl 中的使用位置             │
+// ├────┼──────────────────────┼───────────────────────────────────────────┤
+// │ 1  │ quadrant 作用域解析  │ L2822: quadrant x86enc { ... }           │
+// │    │                      │ L3290: quadrant image_builder { ... }     │
+// │    │                      │ 编译器定义了 7 个 quadrant，所有函数      │
+// │    │                      │ 在 quadrant 内定义                       │
+// ├────┼──────────────────────┼───────────────────────────────────────────┤
+// │ 2  │ 限定名调用           │ L3554: x86enc.new_buf(1048576)           │
+// │    │ (x86enc.func())      │ L3568: x86enc.emit_mov_edx_imm32(...)   │
+// │    │                      │ 共 56 个不同的 x86enc.* 调用             │
+// ├────┼──────────────────────┼───────────────────────────────────────────┤
+// │ 3  │ 嵌套数组字面量       │ L2827: return [[], origin, [], []]       │
+// │    │                      │ x86enc.new_buf() 返回 4 元素数组         │
+// │    │                      │ 其中第 0 个是字节数组 []                 │
+// ├────┼──────────────────────┼───────────────────────────────────────────┤
+// │ 4  │ 数组索引访问         │ L2830: return len(buf[0])                │
+// │    │ (arr[i])             │ L2831: push(buf[0], b % 256)             │
+// │    │                      │ build_kernel 中数十次 buf[0] 引用        │
+// ├────┼──────────────────────┼───────────────────────────────────────────┤
+// │ 5  │ push() 内置函数      │ L2831: push(buf[0], b % 256)            │
+// │    │                      │ x86enc 的核心: 往字节数组追加字节        │
+// ├────┼──────────────────────┼───────────────────────────────────────────┤
+// │ 6  │ 字符串索引           │ L3609: let ch = banner[ci]               │
+// │    │ (str[i])             │ 串口输出逐字符遍历 banner                │
+// ├────┼──────────────────────┼───────────────────────────────────────────┤
+// │ 7  │ 嵌套函数调用         │ L2830: len(buf[0])                       │
+// │    │ (fn(expr[idx]))      │ L2833: buf_emit16(buf, v % 65536)        │
+// │    │                      │ 参数中包含数组索引和算术表达式           │
+// ├────┼──────────────────────┼───────────────────────────────────────────┤
+// │ 8  │ 大整数运算           │ L2833: v / 65536, v % 65536              │
+// │    │                      │ x86enc 中大量 16/32 位掩码运算           │
+// └────┴──────────────────────┴───────────────────────────────────────────┘
+//
+// ============================================================================
+// 三、战略路径选择
+// ============================================================================
+//
+// 可选路径:
+//
+//   路径 A: 增强 shim → 运行整个 hl-bootstrap.hl → 调用 build_kernel()
+//     - 需要 shim 支持 hl-bootstrap.hl 的所有特性
+//     - 工作量: 极大 (4630行 H-L 用到类/装饰器/生成器/try-catch/...)
+//     - 风险: shim 需要成为一个完整的 H-L 解释器
+//
+//   路径 B: 增强 shim → 仅运行 x86enc + image_builder 两个 quadrant
+//     ★ 推荐路径 ★
+//     - 只需支持 build_kernel() 调用链中实际用到的特性
+//     - 实测 build_kernel() 仅使用: let/while/if/fn + 限定名调用 +
+//       嵌套数组 + 数组索引 + push/len + 字符串索引 + 算术
+//     - 不需要: 类/装饰器/生成器/try-catch/list-comp/import
+//     - 工作量: 中等 (~500 行 PS1 增强)
+//
+//   路径 C: 在 PowerShell 中重建编译管线 (不用 hl-bootstrap.hl)
+//     - 类似 rebuild-image.ps1 的做法，但自动化
+//     - 违背项目 100% H-L 哲学
+//     - 不推荐
+//
+// 选择: 路径 B — 最小增强宿主，专注 build 能力
+//
+// ============================================================================
+// 四、三阶段实施计划
+// ============================================================================
+//
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║  阶段 0: 宿主增强 — 让 shim 能执行 x86enc + image_builder            ║
+// ╚══════════════════════════════════════════════════════════════════════════╝
+//
+// 目标: hl-bootstrap-shim.ps1 能解释执行 hl-bootstrap.hl 中的
+//       image_builder.build() → build_stage1() + build_stage2() + build_kernel()
+//       → 产出与 rebuild-image.ps1 等价的 hicos-hl.img
+//
+// 分 4 个子步骤:
+//
+// ── 步骤 0.1: quadrant 扁平化 ──
+//
+//   当前: shim 不识别 `quadrant x86enc { fn foo() { ... } }`
+//   目标: 将 quadrant 内的函数注册为 `x86enc.foo` 全局函数
+//
+//   实现:
+//   在 shim 的 pre-parse 阶段（第 388-425 行）:
+//   1. 识别 `quadrant NAME {` 行 → 记录当前 quadrant 名
+//   2. quadrant 内的 `fn foo(...)` → 注册为 `$funcs["NAME.foo"]`
+//   3. quadrant 结束 `}` → 清除 quadrant 名
+//
+//   修改文件: scripts/hl-bootstrap-shim.ps1 (pre-parse 部分)
+//   新增代码: ~30 行
+//   验证: `hl-bootstrap interpret test_x86enc.hl` 能调用 x86enc.new_buf
+//
+// ── 步骤 0.2: 嵌套数组 + 数组索引 + push/len ──
+//
+//   当前: Eval-Expr 不支持 `[[], 0, [], []]` 或 `buf[0]`
+//   目标: 支持任意嵌套的数组字面量创建和索引访问
+//
+//   实现:
+//   在 Eval-Expr 中:
+//   1. 解析数组字面量 `[expr, expr, ...]`:
+//      - 找到最外层 `[...]`，按逗号分割（跳过嵌套括号）
+//      - 递归 Eval-Expr 每个元素
+//      - 返回 PowerShell 数组 @(elem1, elem2, ...)
+//   2. 解析数组索引 `expr[idx]`:
+//      - 匹配 `name[expr]` 模式
+//      - Eval 索引表达式
+//      - 返回 `$arr[$idx]`
+//   3. 添加 push 内置函数:
+//      - `push(arr, val)` → `$arr.Add($val)` (ArrayList)
+//      - 注意: 嵌套数组的子数组也需要是可变的
+//   4. 增强 len 内置函数:
+//      - 已部分支持，确保对数组和字符串都有效
+//
+//   修改文件: scripts/hl-bootstrap-shim.ps1 (Eval-Expr 函数)
+//   新增代码: ~100 行
+//   验证: `let buf = [[], 42, [], []]; push(buf[0], 7); print(len(buf[0]))`
+//         期望输出: `1`
+//
+// ── 步骤 0.3: 字符串索引 + 大整数运算 ──
+//
+//   当前: `banner[ci]` 无法解析
+//   目标: 字符串 str[i] 返回第 i 个字符（单字符字符串）
+//
+//   实现:
+//   1. 在 Eval-Expr 的数组索引分支中:
+//      - 如果被索引对象是字符串，返回 $str[$idx] 单字符
+//   2. 大整数: PowerShell [long] 已支持 64 位，无需额外处理
+//      验证 `65536 * 65536` → 4294967296 不溢出
+//
+//   修改文件: scripts/hl-bootstrap-shim.ps1
+//   新增代码: ~20 行
+//   验证: `let s = "hello"; print(s[1])` → 输出 `e`
+//
+// ── 步骤 0.4: 端到端验证 ──
+//
+//   创建 test_build_kernel.hl 测试文件:
+//   ```
+//   // 最小化测试: x86enc + image_builder 子集
+//   quadrant x86enc {
+//       fn new_buf(origin) { return [[], origin, [], []]; }
+//       fn buf_len(buf) { return len(buf[0]); }
+//       fn buf_emit(buf, b) { push(buf[0], b % 256); }
+//       fn emit_cli(buf) { buf_emit(buf, 250); }
+//       fn emit_sti(buf) { buf_emit(buf, 251); }
+//   }
+//   let buf = x86enc.new_buf(0);
+//   x86enc.emit_cli(buf);
+//   x86enc.emit_sti(buf);
+//   print("buf len: " + to_string(x86enc.buf_len(buf)));
+//   print("byte 0: " + to_string(buf[0][0]));
+//   print("byte 1: " + to_string(buf[0][1]));
+//   ```
+//   期望输出:
+//     buf len: 2
+//     byte 0: 250
+//     byte 1: 251
+//
+//   然后运行完整的 hl-bootstrap.hl build 命令:
+//   `hl-bootstrap interpret hl-bootstrap.hl` → 执行 CLI 入口
+//
+//   验收标准:
+//   - x86enc 所有 132 个函数可调用
+//   - build_kernel() 产出的字节数组与 rebuild-image.ps1 一致
+//   - build() 产出的 .img 文件能通过 QEMU boot test
+//
+// 工作量汇总:
+//   步骤 0.1: ~30 行   (quadrant 解析)
+//   步骤 0.2: ~100 行  (数组操作)
+//   步骤 0.3: ~20 行   (字符串索引)
+//   步骤 0.4: ~50 行   (测试+修复)
+//   总计:     ~200 行 PowerShell 新增
+//
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║  阶段 1: 编译管线激活 — build_kernel() 从硬编码变为编译 .hl 模块      ║
+// ╚══════════════════════════════════════════════════════════════════════════╝
+//
+// 前提: 阶段 0 完成后，shim 能执行 build_kernel()
+// 目标: build_kernel() 内部替换硬编码内核为编译产物
+//
+// 分 3 个子步骤:
+//
+// ── 步骤 1.1: 模块加载 + Lex + Parse (对应 PIPELINE_PLAN Phase 1-2) ──
+//
+//   当前: build_kernel(module_paths) 中 module_paths 被忽略
+//         L3563: `let mut _module_count = len(module_paths);`
+//
+//   目标: 为每个模块产出 AST
+//
+//   实现:
+//   1. 在 shim 的 build 命令中:
+//      - 读取 bare-kernel/hl/*.hl 所有文件
+//      - 通过 _vm_fs 机制注入到解释器内存
+//   2. 在 build_kernel() 中:
+//      - 遍历 module_paths
+//      - 调用 lexer.tokenize(file_read(path))
+//      - 调用 parser.parse_program(tokens)
+//      - 存储 AST 到编译上下文
+//
+//   修改文件:
+//     hl-bootstrap.hl L3553-3563 (build_kernel 开头)
+//     scripts/hl-bootstrap-shim.ps1 (build 命令注入文件)
+//   新增代码: ~50 行 H-L + ~30 行 PS1
+//
+//   验证: `hl-bootstrap build` 输出:
+//     [lex+parse] mem.hl: 847 tokens, 156 AST nodes
+//     [lex+parse] serial.hl: 312 tokens, 48 AST nodes
+//     ...
+//     Total: 114 modules parsed
+//
+//   BUT: 这一步需要 shim 能执行 lexer.tokenize() 和 parser.parse_program()
+//         这两个函数在 hl-bootstrap.hl 的 quadrant lexer / quadrant parser 中
+//         代码量很大 (lexer ~290 行, parser ~840 行)
+//         需要 shim 的 Eval-Expr/Exec-Block 相当完善
+//
+//   风险: lexer/parser 代码可能用到 shim 未支持的特性
+//   缓解: 逐步测试，先用简单的 .hl 源码验证
+//
+// ── 步骤 1.2: AST → IR 降低 (对应 PIPELINE_PLAN Phase 2) ──
+//
+//   目标: 每个模块的 AST 产出 H-IR 指令流
+//
+//   实现:
+//   1. 在 bare-kernel/hl/ir.hl 中已有:
+//      - ir_lower_expr(): 处理 Num/Bool/Nil/Str/Var/BinOp/Unary/Call
+//      - ir_lower_stmt(): 处理 Let/Assign/FnDef/Return/If/While/Print/Quadrant
+//      - ir_lower_module(): 遍历模块顶层语句
+//      - ir_optimize(): 常量折叠 + DCE + 强度削减
+//   2. 在 build_kernel() 中对每个模块 AST 调用:
+//      ir_init()
+//      ir_lower_module(ast)
+//      ir_optimize()
+//
+//   修改文件:
+//     hl-bootstrap.hl build_kernel() (添加 IR 降低调用)
+//     bare-kernel/hl/ir.hl (可能需要补全边缘 case)
+//
+//   BUT: ir.hl 中的函数需要被 shim 能执行
+//         ir.hl 本身使用了数组操作 (IR 指令列表)
+//         → 依赖阶段 0 的数组增强
+//
+// ── 步骤 1.3: IR → x86_64 原生码 (对应 PIPELINE_PLAN Phase 3) ──
+//
+//   目标: 每个模块的 IR 产出 x86_64 字节数组
+//
+//   实现:
+//   1. 在 bare-kernel/hl/codegen.hl 中已有:
+//      - compile_expr(): 处理 Num/Var/BinOp/Unary/Bool/Nil/Str/Array
+//      - compile_stmt(): 不完整 — 缺 FnDef/FnCall/If/While/Return
+//      - compile_function(): 函数前奏/尾声
+//   2. 需要新增:
+//      - compile_ir(): 从 IR 指令生成 x86_64 (替代直接从 AST)
+//        IR_CONST → mov reg, imm
+//        IR_LOAD  → mov reg, [rbp+disp]
+//        IR_STORE → mov [rbp+disp], reg
+//        IR_ADD   → add reg, reg
+//        IR_SUB   → sub reg, reg
+//        IR_MUL   → imul reg, reg
+//        IR_DIV   → cqo + idiv
+//        IR_CMP_* → cmp + setcc
+//        IR_JMP   → jmp rel32
+//        IR_JZ    → test + je rel32
+//        IR_CALL  → ABI arg setup + call rel32
+//        IR_RET   → epilogue + ret
+//        IR_PRINT → call serial_puts
+//   3. 使用 regalloc.hl 的 regalloc_run() 分配物理寄存器
+//   4. 使用 abi.hl 的 abi_emit_args() 处理调用约定
+//
+//   修改文件:
+//     bare-kernel/hl/codegen.hl (大量新增)
+//     bare-kernel/hl/regalloc.hl (可能微调)
+//     bare-kernel/hl/abi.hl (可能微调)
+//
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║  阶段 2: 链接 + 镜像生成 — 114 模块合并为可引导 .img                  ║
+// ╚══════════════════════════════════════════════════════════════════════════╝
+//
+// 前提: 阶段 1 完成后，每个模块都有 x86_64 字节数组
+// 目标: 合并为完整内核，生成可引导 .img 文件
+//
+// ── 步骤 2.1: 跨模块链接 (对应 PIPELINE_PLAN Phase 4) ──
+//
+//   使用 bare-kernel/hl/linker.hl 已有的:
+//   - linker_add_symbol(): 注册模块导出函数
+//   - linker_add_reloc(): 记录跨模块 call 的重定位点
+//   - linker_pass1(): 收集符号 + 计算偏移
+//   - linker_pass2(): 解析重定位 (patch call rel32)
+//   - linker_add_string(): 字符串常量池
+//
+//   内存布局:
+//     0x100000  .text 起始 (所有模块的 native code 拼接)
+//     按 build.hl 依赖顺序排列
+//     每个模块的函数偏移在 Pass 1 确定
+//     跨模块 call 在 Pass 2 修补
+//
+// ── 步骤 2.2: 镜像组装 ──
+//
+//   复用 image_builder.build():
+//   1. build_stage1(kernel_sectors) → MBR 512 字节
+//   2. build_stage2(kernel_addr) → 实模式→长模式 切换
+//   3. 链接后的内核二进制 → 内核扇区
+//   4. 拼接 → 写入 hicos-hl.img
+//
+// ── 步骤 2.3: QEMU 验证 ──
+//
+//   编译产出的 .img 必须通过:
+//   1. `qemu-boot-test.ps1` 的核心检查 (banner + shell prompt)
+//   2. 至少 help/ver 命令可执行
+//   3. `hl-bootstrap gate` 全通过
+//
+// ============================================================================
+// 五、依赖关系图（精确到步骤）
+// ============================================================================
+//
+//   步骤 0.1 (quadrant 扁平化)
+//     │
+//     ├── 步骤 0.2 (嵌套数组+索引+push)
+//     │     │
+//     │     ├── 步骤 0.3 (字符串索引)
+//     │     │     │
+//     │     │     └── 步骤 0.4 (端到端验证)
+//     │     │           │
+//     │     │           ├── 步骤 1.1 (模块加载+Lex+Parse)
+//     │     │           │     │
+//     │     │           │     ├── 步骤 1.2 (AST→IR)
+//     │     │           │     │     │
+//     │     │           │     │     └── 步骤 1.3 (IR→x86_64)
+//     │     │           │     │           │
+//     │     │           │     │           └── 步骤 2.1 (链接)
+//     │     │           │     │                 │
+//     │     │           │     │                 └── 步骤 2.2 (镜像组装)
+//     │     │           │     │                       │
+//     │     │           │     │                       └── 步骤 2.3 (QEMU 验证)
+
+// ============================================================================
+// 六、风险评估与最大阻塞点
+// ============================================================================
+//
+// ┌────┬──────────────────────────────────────────┬────────┬────────────────┐
+// │ #  │ 风险                                     │ 概率   │ 缓解措施       │
+// ├────┼──────────────────────────────────────────┼────────┼────────────────┤
+// │ R1 │ shim 增强后仍无法执行 lexer/parser       │ 高     │ 分步验证:      │
+// │    │ (hl-bootstrap.hl 的 lexer/parser 用了    │        │ 先只执行       │
+// │    │ 复杂的递归下降+字符串操作)               │        │ x86enc 部分    │
+// │    │                                          │        │ lexer/parser   │
+// │    │                                          │        │ 作为 Phase 2   │
+// ├────┼──────────────────────────────────────────┼────────┼────────────────┤
+// │ R2 │ codegen.hl 补全工作量超预期              │ 中     │ 先只编译核心   │
+// │    │ (当前只处理表达式子集，缺全部语句)       │        │ 20个模块的     │
+// │    │                                          │        │ 简单函数       │
+// ├────┼──────────────────────────────────────────┼────────┼────────────────┤
+// │ R3 │ 编译产出的 native code 不如手写高效      │ 低     │ 保留硬编码     │
+// │    │                                          │        │ 初始化序列     │
+// │    │                                          │        │ 只编译业务逻辑 │
+// ├────┼──────────────────────────────────────────┼────────┼────────────────┤
+// │ R4 │ IR 优化 pass 产出错误代码                │ 中     │ 默认关闭优化   │
+// │    │                                          │        │ 先确保正确性   │
+// ├────┼──────────────────────────────────────────┼────────┼────────────────┤
+// │ R5 │ 跨模块调用的重定位错误                   │ 中     │ 先编译单模块   │
+// │    │                                          │        │ 验证后才链接   │
+// └────┴──────────────────────────────────────────┴────────┴────────────────┘
+//
+// ★ 最大阻塞点: R1 — shim 能否执行 hl-bootstrap.hl 的 lexer/parser
+//
+//   lexer.tokenize() 使用:
+//     - 字符串 charAt (str[i]) — 需要步骤 0.3
+//     - while 循环 — shim 已支持
+//     - 复杂的 if/else 链 — shim 已支持
+//     - push() 往 token 数组追加 — 需要步骤 0.2
+//     - 字符串比较 == — shim 已支持
+//     - 嵌套数组 [TT_xxx, value] — 需要步骤 0.2
+//
+//   parser.parse_program() 使用:
+//     - 递归函数调用 (parse_expr → parse_primary → parse_call)
+//     - 数组作为 AST 节点 ["BinOp", "+", left, right]
+//     - 多返回值 [node, new_pos]
+//     - 所有 quadrant 内函数互相调用
+//
+//   如果 shim 增强后仍无法执行 lexer/parser:
+//   降级方案: 在 shim 中内嵌 PowerShell 版 lexer/parser
+//            (类似 hl-compile-pipeline.ps1 已有 tokenizer)
+//            只让 shim 执行 build_kernel 中的 x86enc 调用
+//            AST 由 PowerShell 侧生成并注入
+//
+// ============================================================================
+// 七、立即可执行的第一步
+// ============================================================================
+//
+// 当前优先级: 阶段 0 步骤 0.1 — quadrant 扁平化
+//
+// 具体变更:
+//
+// 1) scripts/hl-bootstrap-shim.ps1 第 388-425 行 (pre-parse 部分):
+//
+//    当前代码:
+//    ```powershell
+//    while ($i -lt $lines.Count) {
+//        $line = $lines[$i].Trim()
+//        if ($line -match '^fn\s+(\w+)\s*\(([^)]*)\)\s*\{') {
+//            // ... register function
+//        } else {
+//            [void]$topLines.Add($line)
+//            $i++
+//        }
+//    }
+//    ```
+//
+//    改为:
+//    ```powershell
+//    $currentQuadrant = $null
+//    while ($i -lt $lines.Count) {
+//        $line = $lines[$i].Trim()
+//        # Detect quadrant start
+//        if ($line -match '^quadrant\s+(\w+)\s*\{\s*$') {
+//            $currentQuadrant = $Matches[1]
+//            $i++; continue
+//        }
+//        # Detect quadrant end (lone closing brace at depth 0)
+//        if ($currentQuadrant -and $line -eq '}') {
+//            $currentQuadrant = $null
+//            $i++; continue
+//        }
+//        # Register function (with quadrant prefix if inside one)
+//        if ($line -match '^fn\s+(\w+)\s*\(([^)]*)\)\s*\{') {
+//            $fname = $Matches[1]
+//            if ($currentQuadrant) { $fname = "$currentQuadrant.$fname" }
+//            // ... register as before
+//        } else {
+//            if (-not $currentQuadrant) {
+//                [void]$topLines.Add($line)
+//            }
+//            $i++
+//        }
+//    }
+//    ```
+//
+// 2) 同时在 Eval-Expr 的函数调用分支中:
+//    支持 `x86enc.emit_cli(buf)` 格式 — 函数名中包含点号
+//    → 已经通过上述步骤自动支持（注册为 "x86enc.emit_cli"）
+//
+// 验收: 创建 test_quadrant.hl:
+//   ```
+//   quadrant math {
+//       fn add(a, b) { return a + b; }
+//       fn mul(a, b) { return a * b; }
+//   }
+//   print(math.add(3, 4));
+//   print(math.mul(5, 6));
+//   ```
+//   运行: `hl-bootstrap interpret test_quadrant.hl`
+//   期望输出:
+//     > 7
+//     > 30
+
+// ============================================================================
+// 八、涉及文件修改总览
+// ============================================================================
+//
+// 阶段 0 (宿主增强):
+//   scripts/hl-bootstrap-shim.ps1     +~200 行 (核心增强)
+//   test_quadrant.hl                  新建 (验证用)
+//   test_x86enc_shim.hl              新建 (验证用)
+//
+// 阶段 1 (编译管线):
+//   hl-bootstrap.hl                   修改 build_kernel() (~100 行)
+//   bare-kernel/hl/codegen.hl         大量新增 compile_ir() (~400 行)
+//   bare-kernel/hl/ir.hl              可能微调 ir_lower_*
+//   scripts/hl-bootstrap-shim.ps1     build 命令注入文件 (~30 行)
+//
+// 阶段 2 (链接+镜像):
+//   bare-kernel/hl/linker.hl          可能微调
+//   hl-bootstrap.hl                   build() 使用链接器 (~50 行)
+//   scripts/qemu-boot-test.ps1        新增编译镜像测试
+//
+// ============================================================================
+// 九、度量指标
+// ============================================================================
+//
+// 阶段 0 完成标志:
+//   □ hl-bootstrap interpret test_quadrant.hl → 输出正确
+//   □ hl-bootstrap interpret test_x86enc_shim.hl → 输出 CLI=250, STI=251
+//   □ x86enc.new_buf() 返回可操作的嵌套数组
+//   □ build_kernel() 前 50 行（串口初始化）产出正确字节
+//
+// 阶段 1 完成标志:
+//   □ 114 个模块全部 lex + parse 成功
+//   □ 核心 20 个模块产出 IR
+//   □ serial.hl 编译为 native code 并在 QEMU 中输出 "HL!"
+//   □ shell.hl 编译后 help 命令可执行
+//
+// 阶段 2 完成标志:
+//   □ hl-bootstrap build → 产出 .img 文件
+//   □ .img 在 QEMU 中启动到 "HicOS 5.0" banner
+//   □ .img 在 QEMU 中响应 help/ver 命令
+//   □ hl-bootstrap gate 全通过
+//
+// 最终目标:
+//   □ rebuild-image.ps1 不再是必需的
+//   □ 所有镜像内容均由 hl-bootstrap.hl 编译产出
+//   □ 修改 bare-kernel/hl/*.hl → hl-bootstrap build → 新 .img → QEMU 测试
+//   □ 层级 A 和层级 C 合为一体
+
+fn strategy_status() {
+    print("=== 编译管线打通策略 v1.0 ===");
+    print("");
+    print("阶段 0: 宿主增强     — 待实施 (优先级: ★★★★★)");
+    print("  0.1 quadrant 扁平化          — 待实施 (~30 行)");
+    print("  0.2 嵌套数组+索引+push       — 待实施 (~100 行)");
+    print("  0.3 字符串索引               — 待实施 (~20 行)");
+    print("  0.4 端到端验证               — 待实施 (~50 行)");
+    print("");
+    print("阶段 1: 编译管线     — 阻塞于阶段 0");
+    print("  1.1 模块加载+Lex+Parse       — 阻塞");
+    print("  1.2 AST→IR 降低             — 阻塞");
+    print("  1.3 IR→x86_64 原生码        — 阻塞 (codegen.hl 需大量新增)");
+    print("");
+    print("阶段 2: 链接+镜像    — 阻塞于阶段 1");
+    print("  2.1 跨模块链接               — 阻塞");
+    print("  2.2 镜像组装                 — 阻塞");
+    print("  2.3 QEMU 验证               — 阻塞");
+    print("");
+    print("立即下一步: 步骤 0.1 — 在 shim 中增加 quadrant 解析");
+    return 0;
+}
+
+strategy_status();

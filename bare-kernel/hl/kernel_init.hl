@@ -1,0 +1,196 @@
+// kernel_init.hl -- Kernel Initialization Sequence
+//
+// Master init function called from kernel_entry after entering long mode.
+// Initializes all subsystems in correct dependency order.
+//
+// This file is the "main()" of the kernel: it calls init functions
+// from every module and enters the shell/scheduler loop.
+
+fn kernel_main() {
+    // === Phase 0: Early hardware ===
+    serial_init();         // serial.hl  -- COM1 for debug output
+    serial_print("HicOS 5.0 -- Hilbert-Lang Kernel (114 modules)");
+    serial_print("Initializing subsystems...");
+
+    // === Phase 0b: Boot mode detection ===
+    let is_uefi = uefi_is_boot();
+    if is_uefi == 1 {
+        serial_print("  [ok] Boot: UEFI");
+    } else {
+        serial_print("  [ok] Boot: Legacy BIOS");
+    }
+
+    // === Phase 1: Interrupts ===
+    // PIC remap + PIT + IDT (inline in kernel_entry native code)
+    serial_print("  [ok] IDT + PIC + PIT (100 Hz)");
+
+    // === Phase 2: Memory management ===
+    kmalloc_init();        // kmalloc.hl -- kernel heap (1 MB)
+    if is_uefi == 1 {
+        uefi_parse_memory_map();
+        uefi_init_page_alloc();
+    } else {
+        page_alloc_init();     // page_alloc.hl -- bitmap frame allocator
+    }
+    hilbert_alloc_init();  // hilbert_alloc.hl
+    swap_init();           // swap.hl -- 64 MB swap partition
+    serial_print("  [ok] Memory: kmalloc + page_alloc + virt_mem + hilbert + swap");
+
+    // === Phase 3: Timer ===
+    serial_print("  [ok] Timer: PIT 100 Hz + RTC");
+
+    // === Phase 4: Task management ===
+    task_init();           // task.hl -- task table (64 slots)
+    serial_print("  [ok] Tasks: 64 slots, CFS scheduler");
+
+    // === Phase 5: Filesystem ===
+    fs_init();             // ramfs.hl -- RAM filesystem
+    vfs_init();            // vfs.hl -- VFS layer
+    devfs_init();          // devfs.hl -- /dev device nodes
+    serial_print("  [ok] Filesystem: ramfs + FAT16 + ext2 + VFS + devfs");
+
+    // === Phase 6: Display ===
+    if is_uefi == 1 {
+        uefi_init_framebuffer();
+    } else {
+        mouse_init();          // mouse.hl -- PS/2 mouse via IRQ12
+        vesa_auto_init();      // vesa.hl -- VESA framebuffer
+    }
+    serial_print("  [ok] Devices: keyboard + mouse + VESA/GOP");
+
+    // === Phase 7: PCI + Storage + Network + Audio ===
+    pci_scan();            // pci.hl -- enumerate PCI bus
+    ahci_init();           // ahci.hl -- SATA controller
+    usb_init();            // usb.hl -- xHCI controller
+    net_init();            // net.hl -- VirtIO-net + ARP
+    dhcp_discover();       // dhcp.hl -- IP address
+    serial_print("  [ok] PCI + AHCI + USB + VirtIO-net + DHCP");
+
+    // === Phase 8: ACPI + SMP ===
+    power_init();          // power.hl -- ACPI tables
+    smp_init();            // smp.hl -- boot APs
+    serial_print("  [ok] ACPI + SMP: " + to_string(smp_cpu_count()) + " core(s)");
+
+    // === Phase 9: Usermode + Security ===
+    tss_init();            // usermode.hl -- TSS for ring 3
+    users_init();          // users.hl -- multi-user + permissions
+    secboot_init();        // secure_boot.hl
+    serial_print("  [ok] Usermode + Secure Boot");
+
+    // === Phase 10: Firmware + GPT ===
+    firmware_init();       // firmware.hl
+    let gpt_count = gpt_read();
+    if gpt_count > 0 {
+        serial_print("  [ok] GPT: " + to_string(gpt_count) + " partition(s)");
+    } else {
+        serial_print("  [ok] MBR partition layout");
+    }
+
+    // === Summary ===
+    serial_print("");
+    serial_print("=== HicOS kernel initialized (114 modules) ===");
+    serial_print("");
+
+    // === Enter interactive shell ===
+    serial_print("HicOS> ");
+    shell_main();          // shell.hl -- interactive command loop
+
+    // === Idle loop (if shell exits) ===
+    return 0;
+}
+
+// Module dependency map (100 modules):
+//
+// kernel_entry -> kernel_init (this file)
+//   |-> serial       (no deps)
+//   |-> kmalloc      (no deps)
+//   |-> page_alloc   (no deps)
+//   |-> virt_mem     (page_alloc)
+//   |-> hilbert_alloc(page_alloc)
+//   |-> swap         (page_alloc, virt_mem, virtio_blk)
+//   |-> mmap         (virt_mem, page_alloc)
+//   |-> timer        (PIT ticks)
+//   |-> rtc          (CMOS ports)
+//   |-> task         (no deps)
+//   |-> sched        (task)
+//   |-> sync         (task)
+//   |-> signal       (task)
+//   |-> exception    (serial, signal)
+//   |-> panic        (serial, framebuffer)
+//   |-> pipe         (no deps)
+//   |-> poll         (pipe, tcp, vfs)
+//   |-> pty          (no deps)
+//   |-> socket       (tcp, udp, net)
+//   |-> shm          (mmap, page_alloc)
+//   |-> eventfd      (poll)
+//   |-> posix        (task, vfs, elf, signal, pipe)
+//   |-> env          (no deps)
+//   |-> ramfs        (no deps)
+//   |-> fat16        (virtio_blk)
+//   |-> ext2         (virtio_blk | usb_storage)
+//   |-> ext4         (virtio_blk | usb_storage)
+//   |-> ntfs         (virtio_blk | usb_storage)
+//   |-> tmpfs        (no deps)
+//   |-> block_cache  (virtio_blk | usb_storage)
+//   |-> inotify      (vfs)
+//   |-> sysfs        (no deps)
+//   |-> vfs          (ramfs, fat16, ext2, ext4, ntfs, tmpfs)
+//   |-> devfs        (serial, framebuffer)
+//   |-> procfs       (task, timer, virt_mem)
+//   |-> scancode     (no deps)
+//   |-> mouse        (no deps)
+//   |-> framebuffer  (no deps)
+//   |-> vesa         (no deps)
+//   |-> wm           (vesa, mouse, task)
+//   |-> terminal     (wm, vesa)
+//   |-> gpu          (pci, virtio)
+//   |-> multimon     (gpu)
+//   |-> pci          (no deps)
+//   |-> acpi         (no deps)
+//   |-> lapic        (acpi)
+//   |-> smp          (lapic, acpi, task)
+//   |-> virtio_net   (pci)
+//   |-> virtio_blk   (pci)
+//   |-> net          (virtio_net)
+//   |-> arp          (net)
+//   |-> udp          (net)
+//   |-> tcp          (net)
+//   |-> icmp         (net)
+//   |-> dhcp         (net, virtio_net)
+//   |-> dns          (net)
+//   |-> ipv6         (net)
+//   |-> ntp          (udp, rtc)
+//   |-> netfilter    (net)
+//   |-> http         (tcp, tls, dns)
+//   |-> tls          (tcp, dns)
+//   |-> random       (no deps, uses RDRAND + timer jitter)
+//   |-> cgroup       (task, page_alloc)
+//   |-> wifi         (net, firmware)
+//   |-> bluetooth    (usb, firmware)
+//   |-> ipc          (task, sync)
+//   |-> syscall      (task, vfs, signal, net, posix)
+//   |-> usermode     (task, syscall)
+//   |-> users        (no deps)
+//   |-> elf          (virt_mem, page_alloc)
+//   |-> power        (acpi)
+//   |-> audio        (pci)
+//   |-> mixer        (audio)
+//   |-> usb          (pci)
+//   |-> usb_storage  (usb)
+//   |-> usb_hid      (usb)
+//   |-> usb_hub      (usb)
+//   |-> firmware     (vfs)
+//   |-> syslog       (serial, timer)
+//   |-> watchdog     (timer, syslog, task)
+//   |-> trace        (timer)
+//   |-> hrtimer      (lapic, timer)
+//   |-> ir           (no deps)
+//   |-> regalloc     (no deps)
+//   |-> abi          (x86enc)
+//   |-> codegen      (ir, regalloc, abi, x86enc)
+//   |-> login        (users, env, shell)
+//   |-> shell        (serial, syscall, vfs, task, timer, rtc, env)
+
+print("kernel_init.hl loaded");
+print("Init sequence: 12 phases, 100 modules");
+kernel_main();

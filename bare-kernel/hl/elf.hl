@@ -1,0 +1,143 @@
+// elf.hl -- Minimal ELF64 Loader
+//
+// Loads statically-linked ELF64 executables into virtual memory.
+// Only supports ET_EXEC with PT_LOAD segments.
+//
+// ELF64 header (64 bytes):
+//   e_ident[16]  -- magic, class, endian
+//   e_type(2)    -- 2=ET_EXEC, 3=ET_DYN
+//   e_machine(2) -- 0x3E=x86_64
+//   e_version(4)
+//   e_entry(8)   -- entry point virtual address
+//   e_phoff(8)   -- program header table offset
+//   e_shoff(8)
+//   e_flags(4)
+//   e_ehsize(2)
+//   e_phentsize(2)
+//   e_phnum(2)
+//
+// Program header (56 bytes each):
+//   p_type(4)   -- 1=PT_LOAD
+//   p_flags(4)  -- 1=X, 2=W, 4=R
+//   p_offset(8) -- offset in file
+//   p_vaddr(8)  -- virtual address
+//   p_paddr(8)
+//   p_filesz(8) -- size in file
+//   p_memsz(8)  -- size in memory (may be larger, zero-fill)
+//   p_align(8)
+
+let ELF_MAGIC = [127, 69, 76, 70]; // 0x7F 'E' 'L' 'F'
+let ET_EXEC = 2;
+let EM_X86_64 = 62;  // 0x3E
+let PT_LOAD = 1;
+
+// Verify ELF magic bytes
+fn elf_check_magic(data) {
+    if len(data) < 64 { return 0; }
+    if data[0] != 127 { return 0; }
+    if data[1] != 69 { return 0; }  // 'E'
+    if data[2] != 76 { return 0; }  // 'L'
+    if data[3] != 70 { return 0; }  // 'F'
+    if data[4] != 2 { return 0; }   // ELFCLASS64
+    if data[5] != 1 { return 0; }   // ELFDATA2LSB
+    return 1;
+}
+
+// Read little-endian u16 from data at offset
+fn elf_read16(data, off) {
+    return data[off] + data[off + 1] * 256;
+}
+
+// Read little-endian u32
+fn elf_read32(data, off) {
+    return data[off] + data[off+1]*256 + data[off+2]*65536 + data[off+3]*16777216;
+}
+
+// Read little-endian u64 (as H-L integer, may lose precision above 2^53)
+fn elf_read64(data, off) {
+    let lo = elf_read32(data, off);
+    let hi = elf_read32(data, off + 4);
+    return lo + hi * 4294967296;
+}
+
+// Parse ELF header, return [entry_point, phoff, phnum, phentsize]
+fn elf_parse_header(data) {
+    if elf_check_magic(data) == 0 { return nil; }
+
+    let e_type = elf_read16(data, 16);
+    let e_machine = elf_read16(data, 18);
+    if e_type != ET_EXEC { return nil; }
+    if e_machine != EM_X86_64 { return nil; }
+
+    let e_entry = elf_read64(data, 24);
+    let e_phoff = elf_read64(data, 32);
+    let e_phentsize = elf_read16(data, 54);
+    let e_phnum = elf_read16(data, 56);
+
+    return [e_entry, e_phoff, e_phnum, e_phentsize];
+}
+
+// Load ELF into memory: map PT_LOAD segments, return entry point
+fn elf_load(data) {
+    let hdr = elf_parse_header(data);
+    if hdr == nil { return 0; }
+
+    let entry = hdr[0];
+    let phoff = hdr[1];
+    let phnum = hdr[2];
+    let phentsz = hdr[3];
+
+    let mut i = 0;
+    while i < phnum {
+        let off = phoff + i * phentsz;
+        let p_type = elf_read32(data, off);
+
+        if p_type == PT_LOAD {
+            let p_offset = elf_read64(data, off + 8);
+            let p_vaddr  = elf_read64(data, off + 16);
+            let p_filesz = elf_read64(data, off + 32);
+            let p_memsz  = elf_read64(data, off + 40);
+
+            // Allocate and map pages for this segment
+            let pages_needed = (p_memsz + 4095) / 4096;
+            let mut pg = 0;
+            while pg < pages_needed {
+                let vaddr = p_vaddr + pg * 4096;
+                let paddr = page_alloc();
+                map_page(vaddr, paddr, 7); // PRESENT | WRITABLE | USER
+                pg = pg + 1;
+            }
+
+            // Copy file data to virtual address
+            let mut j = 0;
+            while j < p_filesz {
+                mem_write_u8(p_vaddr + j, data[p_offset + j]);
+                j = j + 1;
+            }
+
+            // Zero-fill remainder (BSS)
+            while j < p_memsz {
+                mem_write_u8(p_vaddr + j, 0);
+                j = j + 1;
+            }
+        }
+        i = i + 1;
+    }
+
+    return entry;
+}
+
+// Aliases for posix.hl compatibility
+fn elf_entry(data) {
+    let hdr = elf_parse_header(data);
+    if hdr == nil { return 0; }
+    return hdr[0];
+}
+
+fn elf_load_segments(data, task_id) {
+    return elf_load(data);
+}
+
+// Self-test
+print("elf.hl loaded");
+print("Supports: ELF64, ET_EXEC, x86_64, PT_LOAD");

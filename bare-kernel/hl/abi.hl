@@ -1,0 +1,175 @@
+// abi.hl -- System V AMD64 ABI Implementation
+//
+// Enforces calling convention for native H-L functions:
+//   - Integer args: RDI, RSI, RDX, RCX, R8, R9 (then stack)
+//   - Return value: RAX (64-bit integer)
+//   - Caller-saved: RAX, RCX, RDX, RSI, RDI, R8-R11
+//   - Callee-saved: RBX, R12-R15, RBP
+//   - Stack: 16-byte aligned before CALL
+//   - Red zone: 128 bytes below RSP (leaf functions may use)
+//
+// Also handles ELF64 symbol table for linking compiled H-L modules.
+
+// Argument registers in order
+let ABI_ARG_REGS = [7, 6, 2, 1, 8, 9]; // RDI RSI RDX RCX R8 R9
+let ABI_MAX_REG_ARGS = 6;
+
+// Function table for linking
+let ABI_MAX_FUNCS = 128;
+let mut abi_func_count = 0;
+
+let abi_func_name = [];
+let abi_func_addr = [];    // code offset
+let abi_func_argc = [];    // argument count
+let abi_func_size = [];    // code size in bytes
+
+fn abi_init() {
+    let mut i = 0;
+    while i < ABI_MAX_FUNCS {
+        push(abi_func_name, "");
+        push(abi_func_addr, 0);
+        push(abi_func_argc, 0);
+        push(abi_func_size, 0);
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn abi_register_func(name, addr, argc, size) {
+    if abi_func_count >= ABI_MAX_FUNCS { return 0 - 1; }
+    let idx = abi_func_count;
+    abi_func_name[idx] = name;
+    abi_func_addr[idx] = addr;
+    abi_func_argc[idx] = argc;
+    abi_func_size[idx] = size;
+    abi_func_count = abi_func_count + 1;
+    return idx;
+}
+
+fn abi_lookup_func(name) {
+    let mut i = 0;
+    while i < abi_func_count {
+        if abi_func_name[i] == name { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn abi_get_addr(func_idx) {
+    if func_idx < 0 { return 0; }
+    return abi_func_addr[func_idx];
+}
+
+// Emit argument setup for a function call
+// args = array of virtual register IDs holding each argument
+fn abi_emit_args(buf, args) {
+    let argc = len(args);
+    let mut i = 0;
+    // First 6 args go in registers
+    while i < argc {
+        if i < ABI_MAX_REG_ARGS {
+            let target_reg = ABI_ARG_REGS[i];
+            // codegen will emit: mov target_reg, source
+            // Caller must handle this based on regalloc results
+        }
+        i = i + 1;
+    }
+    // Stack args (7th+) pushed right-to-left
+    if argc > ABI_MAX_REG_ARGS {
+        i = argc - 1;
+        while i >= ABI_MAX_REG_ARGS {
+            // push arg[i] (caller handles source)
+            i = i - 1;
+        }
+    }
+    return 0;
+}
+
+// Calculate stack frame size for a function
+// Must be 16-byte aligned before CALL instruction
+fn abi_frame_size(local_bytes, spill_bytes, stack_arg_bytes) {
+    let total = local_bytes + spill_bytes + stack_arg_bytes;
+    // Round up to 16-byte alignment (accounting for pushed RBP = 8 bytes)
+    let remainder = (total + 8) % 16;
+    if remainder != 0 {
+        total = total + 16 - remainder;
+    }
+    return total;
+}
+
+// Emit caller-save: push all caller-saved registers that are live across a call
+fn abi_emit_caller_save(buf, live_regs) {
+    let mut i = 0;
+    while i < len(live_regs) {
+        let r = live_regs[i];
+        // Only save caller-saved registers
+        let mut is_caller = 0;
+        let mut j = 0;
+        while j < len(CALLER_SAVED) {
+            if CALLER_SAVED[j] == r { is_caller = 1; }
+            j = j + 1;
+        }
+        if is_caller == 1 {
+            // emit push r
+            if r >= 8 {
+                // REX.B prefix for R8-R15
+                x86enc.buf_emit(buf, 65); // 0x41
+            }
+            x86enc.buf_emit(buf, 80 + (r % 8)); // PUSH
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn abi_emit_caller_restore(buf, live_regs) {
+    // Restore in reverse order
+    let mut i = len(live_regs) - 1;
+    while i >= 0 {
+        let r = live_regs[i];
+        let mut is_caller = 0;
+        let mut j = 0;
+        while j < len(CALLER_SAVED) {
+            if CALLER_SAVED[j] == r { is_caller = 1; }
+            j = j + 1;
+        }
+        if is_caller == 1 {
+            if r >= 8 { x86enc.buf_emit(buf, 65); }
+            x86enc.buf_emit(buf, 88 + (r % 8)); // POP
+        }
+        i = i - 1;
+    }
+    return 0;
+}
+
+// Emit callee-save prologue (push callee-saved regs used by function)
+fn abi_emit_callee_save(buf, used_callee_regs) {
+    let mut i = 0;
+    while i < len(used_callee_regs) {
+        let r = used_callee_regs[i];
+        if r >= 8 { x86enc.buf_emit(buf, 65); }
+        x86enc.buf_emit(buf, 80 + (r % 8));
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn abi_emit_callee_restore(buf, used_callee_regs) {
+    let mut i = len(used_callee_regs) - 1;
+    while i >= 0 {
+        let r = used_callee_regs[i];
+        if r >= 8 { x86enc.buf_emit(buf, 65); }
+        x86enc.buf_emit(buf, 88 + (r % 8));
+        i = i - 1;
+    }
+    return 0;
+}
+
+fn abi_status() {
+    return to_string(abi_func_count) + "/" + to_string(ABI_MAX_FUNCS) +
+           " functions registered, System V AMD64 ABI";
+}
+
+print("abi.hl loaded");
+print("ABI: System V AMD64 (6 reg args, 16B stack align, 128B red zone)");
+print("Symbol table: " + to_string(ABI_MAX_FUNCS) + " function slots");

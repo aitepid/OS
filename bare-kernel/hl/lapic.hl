@@ -1,0 +1,125 @@
+// lapic.hl -- Local APIC + APIC Timer
+//
+// Modern replacement for 8259A PIC + PIT.
+// Each CPU core has a Local APIC at 0xFEE00000 (default).
+//
+// Key registers (MMIO, 32-bit aligned):
+//   0x020: LAPIC ID
+//   0x030: LAPIC Version
+//   0x080: Task Priority (TPR)
+//   0x0B0: End of Interrupt (EOI)
+//   0x0F0: Spurious Interrupt Vector
+//   0x320: LVT Timer
+//   0x380: Timer Initial Count
+//   0x390: Timer Current Count
+//   0x3E0: Timer Divide Config
+
+let LAPIC_BASE = 4276092928;  // 0xFEE00000
+
+let LAPIC_ID          = 32;    // 0x020
+let LAPIC_VER         = 48;    // 0x030
+let LAPIC_TPR         = 128;   // 0x080
+let LAPIC_EOI         = 176;   // 0x0B0
+let LAPIC_SVR         = 240;   // 0x0F0
+let LAPIC_LVT_TIMER   = 800;   // 0x320
+let LAPIC_TIMER_INIT   = 896;   // 0x380
+let LAPIC_TIMER_CUR    = 912;   // 0x390
+let LAPIC_TIMER_DIV    = 992;   // 0x3E0
+let LAPIC_ICR_LO      = 768;   // 0x300
+let LAPIC_ICR_HI      = 784;   // 0x310
+
+// Timer modes
+let TIMER_ONESHOT  = 0;
+let TIMER_PERIODIC = 131072;  // bit 17 (0x20000)
+
+// Read LAPIC register (MMIO at LAPIC_BASE + offset)
+fn lapic_read(offset) {
+    return mem_read_u32(LAPIC_BASE + offset);
+}
+
+// Write LAPIC register (MMIO at LAPIC_BASE + offset)
+fn lapic_write(offset, value) {
+    mem_write_u32(LAPIC_BASE + offset, value);
+    return 0;
+}
+
+// Initialize Local APIC
+fn lapic_init() {
+    // Enable APIC: set SVR bit 8 (APIC Enable) + spurious vector 0xFF
+    lapic_write(LAPIC_SVR, 511);    // 0x1FF
+    // Set timer divide to 16
+    lapic_write(LAPIC_TIMER_DIV, 3);
+    // LVT Timer: periodic mode, vector 32
+    lapic_write(LAPIC_LVT_TIMER, TIMER_PERIODIC + 32);
+    // Initial count (default 1M — calibrate later via lapic_calibrate)
+    lapic_write(LAPIC_TIMER_INIT, 1000000);
+    return 0;
+}
+
+// Send End of Interrupt
+fn lapic_eoi() {
+    lapic_write(LAPIC_EOI, 0);
+    return 0;
+}
+
+// Get LAPIC ID of current CPU
+fn lapic_id() {
+    let id_reg = lapic_read(LAPIC_ID);
+    return (id_reg / 16777216) % 256; // bits 31:24
+}
+
+// Send IPI (Inter-Processor Interrupt) to another CPU
+fn lapic_send_ipi(target_apic_id, vector) {
+    lapic_write(LAPIC_ICR_HI, target_apic_id * 16777216);
+    lapic_write(LAPIC_ICR_LO, vector);
+    return 0;
+}
+
+// Send INIT IPI (for SMP boot)
+fn lapic_send_init(target_apic_id) {
+    lapic_write(LAPIC_ICR_HI, target_apic_id * 16777216);
+    lapic_write(LAPIC_ICR_LO, 17664); // 0x4500: INIT, level, assert
+    return 0;
+}
+
+// Send SIPI (Startup IPI) for SMP
+fn lapic_send_sipi(target_apic_id, vector_page) {
+    lapic_write(LAPIC_ICR_HI, target_apic_id * 16777216);
+    lapic_write(LAPIC_ICR_LO, 17920 + vector_page); // 0x4600 | page
+    return 0;
+}
+
+// Calibrate APIC timer using PIT (one-shot 10ms measurement)
+fn lapic_calibrate() {
+    // 1. Set APIC timer to one-shot, masked, max count
+    lapic_write(LAPIC_LVT_TIMER, 65568); // 0x10020: masked, vector 32
+    lapic_write(LAPIC_TIMER_INIT, 4294967295); // 0xFFFFFFFF
+
+    // 2. Wait 10ms using PIT channel 2
+    // PIT freq = 1193182 Hz, 10ms = 11932 ticks
+    port_out_u8(97, (port_in_u8(97) % 252) + 1); // gate high
+    port_out_u8(66, 180);     // channel 2, mode 0, lo/hi
+    port_out_u8(66, 0);
+    port_out_u8(66, 156);     // 11932 low
+    port_out_u8(66, 46);      // 11932 high
+    // Poll until PIT output goes high (bit 5 of port 0x61)
+    let mut pit_done = 0;
+    while pit_done == 0 {
+        let status = port_in_u8(97);
+        if (status / 32) % 2 == 1 { pit_done = 1; }
+    }
+
+    // 3. Read remaining APIC timer count
+    let remaining = lapic_read(LAPIC_TIMER_CUR);
+    let elapsed = 4294967295 - remaining;
+
+    // 4. Set periodic with calibrated count for ~100 Hz
+    let ticks_per_hz = elapsed / 10; // elapsed was 10ms worth
+    lapic_write(LAPIC_LVT_TIMER, TIMER_PERIODIC + 32);
+    lapic_write(LAPIC_TIMER_INIT, ticks_per_hz);
+    return ticks_per_hz;
+}
+
+print("lapic.hl loaded");
+print("LAPIC base: 0xFEE00000");
+print("Timer vector: 32 (periodic, ~100 Hz)");

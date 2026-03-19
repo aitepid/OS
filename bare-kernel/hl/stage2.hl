@@ -1,0 +1,50 @@
+// stage2.hl -- Protected -> Long Mode Transition
+//
+// Loaded at 32768 by stage1.
+// This code transitions the CPU from 16-bit real mode to 64-bit long mode.
+//
+// SEQUENCE:
+//   1. Load GDT with null/code32/data32/code64/data64 descriptors
+//   2. Enable protected mode (CR0.PE)
+//   3. Far jump to 32-bit code segment
+//   4. Set up identity-mapped page tables (PML4 -> PDPT -> PD, 2MB pages)
+//   5. Load CR3 with PML4 base
+//   6. Enable PAE (CR4.PAE)
+//   7. Enable long mode (EFER.LME via MSR 3221225600)
+//   8. Enable paging (CR0.PG)
+//   9. Far jump to 64-bit code segment
+//  10. Set up 64-bit stack and jump to kernel at 1048576
+//
+// == H-L Spatial Representation ==
+// Stage2 occupies quadrant (1,0,0) in the Hilbert address space
+
+quadrant mode_transition {
+    // --- 16-bit Real Mode ---
+    // cli
+    // lgdt [gdtr]
+
+    // --- Enable Protected Mode ---
+    // mov eax, cr0; or eax, 1; mov cr0, eax
+    // jmp 8:code32    (far jump to 32-bit CS)
+
+    // --- 32-bit Protected Mode ---
+    // mov ax, 16; mov ds/es/ss, ax
+
+    // --- Page Tables (identity map first 4 MB) ---
+    // PML4 @ 4096: entry[0] -> PDPT @ 8192
+    // PDPT @ 8192: entry[0] -> PD @ 12288
+    // PD   @ 12288: entry[0] -> 2MB page @ 0 (PS=1)
+    //                 entry[1] -> 2MB page @ 2097152 (PS=1)
+
+    // --- Enable Long Mode ---
+    // mov cr3, 4096
+    // mov eax, cr4; bts eax, 5; mov cr4, eax      (PAE)
+    // mov ecx, 3221225600; rdmsr; bts eax, 8; wrmsr  (LME)
+    // mov eax, cr0; bts eax, 31; mov cr0, eax      (PG)
+    // jmp 24:code64    (far jump to 64-bit CS)
+
+    // --- 64-bit Long Mode ---
+    // mov rsp, 458752
+    // cld
+    // mov rax, 1048576; jmp rax   (kernel entry)
+}

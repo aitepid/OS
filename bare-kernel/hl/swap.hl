@@ -1,0 +1,139 @@
+// swap.hl -- Swap / Demand Paging
+//
+// Provides virtual memory overcommit by paging out least-recently-used
+// frames to a swap partition on VirtIO-blk.
+//
+// Page replacement: approximate LRU using accessed-bit scanning (clock algo).
+//
+// Swap partition layout:
+//   Sector 0: swap header (magic, version, page_count)
+//   Sector 1-N: swap slots, each = 8 sectors (4096 bytes = 1 page)
+//
+// Swap map: bitmap tracking which swap slots are in use.
+// Max swap: 64 MB = 16384 pages
+
+let SWAP_START_SECTOR = 1;
+let SWAP_SLOT_SECTORS = 8;        // 8 sectors * 512 = 4096 bytes/page
+let MAX_SWAP_PAGES = 16384;       // 64 MB
+let SWAP_MAP_ADDR = 8912896;      // 0x880000 -- bitmap (16384 bits = 2048 bytes)
+let SWAP_MAP_SIZE = 2048;
+
+let mut swap_enabled = 0;
+let mut swap_used = 0;
+
+fn swap_init() {
+    mem_zero(SWAP_MAP_ADDR, SWAP_MAP_SIZE);
+    swap_enabled = 1;
+    swap_used = 0;
+    return 0;
+}
+
+// Find a free swap slot
+fn swap_alloc_slot() {
+    let mut i = 0;
+    while i < MAX_SWAP_PAGES {
+        let byte_off = i / 8;
+        let bit_off = i % 8;
+        let byte_val = mem_read_u8(SWAP_MAP_ADDR + byte_off);
+        let mut mask = 1;
+        let mut s = 0;
+        while s < bit_off { mask = mask * 2; s = s + 1; }
+        if (byte_val / mask) % 2 == 0 {
+            mem_write_u8(SWAP_MAP_ADDR + byte_off, byte_val + mask);
+            swap_used = swap_used + 1;
+            return i;
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn swap_free_slot(slot) {
+    let byte_off = slot / 8;
+    let bit_off = slot % 8;
+    let byte_val = mem_read_u8(SWAP_MAP_ADDR + byte_off);
+    let mut mask = 1;
+    let mut s = 0;
+    while s < bit_off { mask = mask * 2; s = s + 1; }
+    if (byte_val / mask) % 2 == 1 {
+        mem_write_u8(SWAP_MAP_ADDR + byte_off, byte_val - mask);
+    }
+    swap_used = swap_used - 1;
+    return 0;
+}
+
+// Write a page frame to swap
+fn swap_out(frame_addr, swap_slot) {
+    let sector = SWAP_START_SECTOR + swap_slot * SWAP_SLOT_SECTORS;
+    virtio_blk_write(sector, SWAP_SLOT_SECTORS, frame_addr);
+    return 0;
+}
+
+fn swap_in(swap_slot, frame_addr) {
+    let sector = SWAP_START_SECTOR + swap_slot * SWAP_SLOT_SECTORS;
+    virtio_blk_read(sector, SWAP_SLOT_SECTORS, frame_addr);
+    return 0;
+}
+
+// === Clock Algorithm (approximate LRU) ===
+// Scan page table entries looking for pages with accessed bit = 0.
+// If accessed = 1, clear it and move on. If accessed = 0, evict.
+
+let mut clock_hand = 0;  // current scan position in page frame list
+
+fn swap_find_victim() {
+    let total_frames = TOTAL_PAGES;
+    let mut scanned = 0;
+    while scanned < total_frames * 2 {  // max 2 full rotations
+        clock_hand = (clock_hand + 1) % total_frames;
+        if clock_hand >= FIRST_FREE_PAGE {
+            // Check PTE accessed bit for this frame
+            let frame_addr = clock_hand * PAGE_SIZE;
+            let pte = pte_read(frame_addr);
+            if pte % 2 == 1 {   // PTE_PRESENT
+                let accessed = (pte / 32) % 2;  // bit 5 = accessed
+                if accessed == 1 {
+                    // Clear accessed bit, move on
+                    pte_write(frame_addr, pte - 32);
+                } else {
+                    return clock_hand;  // victim found
+                }
+            }
+        }
+        scanned = scanned + 1;
+    }
+    return FIRST_FREE_PAGE; // fallback: evict first available
+}
+
+// Page fault handler: demand paging path
+fn demand_page(fault_addr) {
+    // Align to page boundary
+    let page_addr = (fault_addr / PAGE_SIZE) * PAGE_SIZE;
+    // 1. Try to allocate a free frame
+    let mut frame = page_alloc();
+    if frame == 0 {
+        // No free frames: swap out a victim
+        let victim = swap_find_victim();
+        let slot = swap_alloc_slot();
+        if slot < 0 {
+            print("PANIC: swap full, cannot demand page");
+            return 0;
+        }
+        let victim_addr = victim * PAGE_SIZE;
+        swap_out(victim_addr, slot);
+        // Mark victim PTE as swapped (present=0, store swap slot in high bits)
+        // The frame is now free
+        page_free(victim_addr);
+        frame = page_alloc();
+    }
+    if frame == 0 { return 0; } // still no memory
+    // 2. Zero the frame
+    mem_zero(frame, PAGE_SIZE);
+    // 3. Map at fault address
+    map_page(page_addr, frame, PTE_PRESENT + PTE_WRITABLE + PTE_USER);
+    return frame;
+}
+
+print("swap.hl loaded");
+print("Max swap: " + to_string(MAX_SWAP_PAGES * 4) + " KB (" + to_string(MAX_SWAP_PAGES * 4 / 1024) + " MB)");
+print("Page replacement: clock algorithm (approx LRU)");

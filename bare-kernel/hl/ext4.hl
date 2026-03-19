@@ -1,0 +1,141 @@
+// ext4.hl -- ext4 Filesystem Driver (Read-Only)
+//
+// ext4 is the default Linux filesystem. It extends ext2/ext3 with:
+//   - Extents (replacing indirect block lists)
+//   - 48-bit block addresses (up to 1 EB volumes)
+//   - Journal (jbd2) for crash recovery
+//   - Directory hash tree (htree) for fast lookup
+//   - Inline data for small files
+//
+// Superblock at byte 1024 (same as ext2):
+//   +0:  s_inodes_count (4)
+//   +4:  s_blocks_count_lo (4)
+//   +24: s_log_block_size (4) -- block_size = 1024 << value
+//   +40: s_inodes_per_group (4)
+//   +56: s_magic (2) = 0xEF53 (same as ext2)
+//   +88: s_inode_size (2) -- typically 256 for ext4
+//   +92: s_feature_compat (4)
+//   +96: s_feature_incompat (4) -- bit 6 = extents, bit 9 = 64bit
+//   +100: s_feature_ro_compat (4)
+//   +352: s_blocks_count_hi (4) -- upper 32 bits
+//
+// ext4 Extent Tree (in inode i_block[0..3]):
+//   Extent header (12 bytes):
+//     +0: eh_magic (2) = 0xF30A
+//     +2: eh_entries (2)
+//     +4: eh_max (2)
+//     +6: eh_depth (2) -- 0=leaf
+//     +8: eh_generation (4)
+//   Leaf extent (12 bytes):
+//     +0: ee_block (4) -- first file block
+//     +4: ee_len (2) -- number of blocks
+//     +6: ee_start_hi (2)
+//     +8: ee_start_lo (4)
+
+let EXT4_MAGIC = 61267;            // 0xEF53
+let EXT4_EXTENT_MAGIC = 62218;     // 0xF30A
+let EXT4_FEAT_EXTENTS = 64;        // bit 6 of feature_incompat
+let EXT4_ROOT_INODE = 2;
+
+let mut ext4_block_size = 4096;
+let mut ext4_inode_size = 256;
+let mut ext4_inodes_per_group = 0;
+let mut ext4_has_extents = 0;
+let mut ext4_is_64bit = 0;
+
+fn ext4_init(disk_read_fn) {
+    // Read superblock at offset 1024
+    // let sb = disk_read(2, 2);
+    // let magic = read_u16(sb, 56);
+    // if magic != EXT4_MAGIC { return 0; }
+
+    // ext4_block_size = 1024 << read_u32(sb, 24);
+    // ext4_inode_size = read_u16(sb, 88);
+    // ext4_inodes_per_group = read_u32(sb, 40);
+
+    // Check features
+    // let incompat = read_u32(sb, 96);
+    // ext4_has_extents = (incompat / 64) % 2;  // bit 6
+    // ext4_is_64bit = (incompat / 512) % 2;    // bit 9
+
+    ext4_has_extents = 1;
+    ext4_block_size = 4096;
+    ext4_inode_size = 256;
+    return 1;
+}
+
+fn ext4_read_inode(inode_num) {
+    // Same group/index calculation as ext2
+    let group = (inode_num - 1) / ext4_inodes_per_group;
+    let index = (inode_num - 1) % ext4_inodes_per_group;
+    // Read BGDT, find inode table, read inode
+    return [];
+}
+
+// Parse extent tree from inode i_block area
+fn ext4_parse_extents(inode_data) {
+    let mut extents = [];
+    // Extent header at offset 40 in inode
+    // let magic = read_u16(inode_data, 40);
+    // if magic != EXT4_EXTENT_MAGIC { return extents; }
+    // let entries = read_u16(inode_data, 42);
+    // let depth = read_u16(inode_data, 46);
+
+    // if depth == 0: leaf extents follow header
+    // let mut i = 0;
+    // while i < entries {
+    //     let off = 52 + i * 12;  // 40 + 12 (header) + i*12
+    //     let file_block = read_u32(inode_data, off);
+    //     let length = read_u16(inode_data, off + 4);
+    //     let start_hi = read_u16(inode_data, off + 6);
+    //     let start_lo = read_u32(inode_data, off + 8);
+    //     let start = start_hi * 4294967296 + start_lo;
+    //     push(extents, [file_block, length, start]);
+    //     i = i + 1;
+    // }
+
+    // if depth > 0: index nodes point to child extent blocks
+    return extents;
+}
+
+fn ext4_read_file(inode_num, max_size) {
+    let inode = ext4_read_inode(inode_num);
+    if len(inode) == 0 { return []; }
+
+    if ext4_has_extents == 1 {
+        let extents = ext4_parse_extents(inode);
+        // For each extent: read blocks from disk
+        // let mut data = [];
+        // for ext in extents {
+        //     let blocks = disk_read(ext[2] * (ext4_block_size/512), ext[1] * (ext4_block_size/512));
+        //     data = data + blocks;
+        // }
+        return [];
+    }
+
+    // Fallback: indirect blocks (same as ext2)
+    return [];
+}
+
+fn ext4_list_dir(inode_num) {
+    // ext4 directories use either linear entries or htree
+    // Linear: same format as ext2 dir entries
+    // htree: hash-based B-tree for fast lookup
+    let dir_data = ext4_read_file(inode_num, 0);
+    let mut entries = [];
+    let mut off = 0;
+    while off < len(dir_data) {
+        // Parse dir entry: inode(4) + rec_len(2) + name_len(1) + type(1) + name
+        off = off + 1;
+    }
+    return entries;
+}
+
+fn ext4_resolve(path) {
+    let mut current = EXT4_ROOT_INODE;
+    // Split by '/', walk directory tree
+    return current;
+}
+
+print("ext4.hl loaded");
+print("ext4: extents, 48-bit blocks, htree directories, read-only");

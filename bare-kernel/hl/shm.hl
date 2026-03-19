@@ -1,0 +1,133 @@
+// shm.hl -- POSIX Shared Memory
+//
+// Implements shm_open / shm_unlink / ftruncate for shared memory segments.
+// Allows multiple tasks to map the same physical pages into their address spaces.
+//
+// Linux equivalent: /dev/shm, shm_open(3), mmap(MAP_SHARED)
+// Windows equivalent: CreateFileMapping + MapViewOfFile
+//
+// Used for: database caches, IPC zero-copy buffers, GPU shared surfaces.
+//
+// Each segment: name, physical pages, reference count, permissions.
+
+let SHM_MAX = 32;
+let SHM_MAX_SIZE = 1048576;  // 1MB per segment
+let SHM_PHYS_BASE = 14680064;  // 0xE00000
+
+let mut shm_count = 0;
+
+let shm_active = [];
+let shm_name = [];
+let shm_size = [];
+let shm_phys = [];
+let shm_refcount = [];
+let shm_mode = [];  // permissions
+
+fn shm_init() {
+    let mut i = 0;
+    while i < SHM_MAX {
+        push(shm_active, 0);
+        push(shm_name, "");
+        push(shm_size, 0);
+        push(shm_phys, 0);
+        push(shm_refcount, 0);
+        push(shm_mode, 0);
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn shm_open(name, flags, mode) {
+    // Check if already exists
+    let mut i = 0;
+    while i < SHM_MAX {
+        if shm_active[i] == 1 {
+            if shm_name[i] == name {
+                shm_refcount[i] = shm_refcount[i] + 1;
+                return i;
+            }
+        }
+        i = i + 1;
+    }
+    // Create new
+    i = 0;
+    while i < SHM_MAX {
+        if shm_active[i] == 0 {
+            shm_active[i] = 1;
+            shm_name[i] = name;
+            shm_size[i] = 0;
+            shm_phys[i] = SHM_PHYS_BASE + i * SHM_MAX_SIZE;
+            shm_refcount[i] = 1;
+            shm_mode[i] = mode;
+            shm_count = shm_count + 1;
+            return i;
+        }
+        i = i + 1;
+    }
+    return 0 - 1; // EMFILE
+}
+
+fn shm_ftruncate(id, size) {
+    if id < 0 { return 0 - 1; }
+    if id >= SHM_MAX { return 0 - 1; }
+    if shm_active[id] == 0 { return 0 - 1; }
+    if size > SHM_MAX_SIZE { return 0 - 1; }
+    shm_size[id] = size;
+    // Zero memory
+    // memset(shm_phys[id], 0, size);
+    return 0;
+}
+
+fn shm_map(id, task_id) {
+    if id < 0 { return 0; }
+    if id >= SHM_MAX { return 0; }
+    if shm_active[id] == 0 { return 0; }
+    // Map physical pages into task's address space using mmap
+    // let vaddr = sys_mmap(0, shm_size[id], PROT_READ | PROT_WRITE, MAP_SHARED, -1, 0);
+    // Map to same physical pages: shm_phys[id]
+    // let pages = (shm_size[id] + 4095) / 4096;
+    // let p = 0;
+    // while p < pages {
+    //     virt_mem_map_for_task(task_id, vaddr + p * 4096, shm_phys[id] + p * 4096);
+    //     p = p + 1;
+    // }
+    return shm_phys[id]; // return virtual address
+}
+
+fn shm_unlink(name) {
+    let mut i = 0;
+    while i < SHM_MAX {
+        if shm_active[i] == 1 {
+            if shm_name[i] == name {
+                shm_refcount[i] = shm_refcount[i] - 1;
+                if shm_refcount[i] <= 0 {
+                    shm_active[i] = 0;
+                    shm_name[i] = "";
+                    shm_size[i] = 0;
+                    shm_count = shm_count - 1;
+                }
+                return 0;
+            }
+        }
+        i = i + 1;
+    }
+    return 0 - 1; // ENOENT
+}
+
+fn shm_close(id) {
+    if id < 0 { return 0; }
+    if id >= SHM_MAX { return 0; }
+    shm_refcount[id] = shm_refcount[id] - 1;
+    if shm_refcount[id] <= 0 {
+        shm_active[id] = 0;
+        shm_count = shm_count - 1;
+    }
+    return 0;
+}
+
+fn shm_status() {
+    return to_string(shm_count) + "/" + to_string(SHM_MAX) + " segments active";
+}
+
+print("shm.hl loaded");
+print("Shared memory: " + to_string(SHM_MAX) + " segments, " + to_string(SHM_MAX_SIZE / 1024) + "KB max each");

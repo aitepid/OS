@@ -1,0 +1,165 @@
+// cgroup.hl -- Control Groups (Resource Limits)
+//
+// Provides per-task-group resource accounting and limits.
+// Linux equivalent: cgroups v2
+//
+// Controlled resources:
+//   1. CPU: max percentage of CPU time
+//   2. Memory: max resident memory (pages)
+//   3. I/O: max bandwidth (bytes/sec)
+//   4. PIDs: max number of tasks in group
+//
+// Hierarchy: flat (no nesting in this implementation)
+// Each task belongs to exactly one cgroup.
+// Default cgroup (id=0) has no limits.
+
+let CGROUP_MAX = 16;
+let mut cgroup_count = 0;
+
+let cg_active = [];
+let cg_name = [];
+let cg_cpu_max = [];     // max CPU percentage (0-100, 0=unlimited)
+let cg_mem_max = [];     // max pages (0=unlimited)
+let cg_mem_used = [];    // current pages used
+let cg_io_max = [];      // max bytes/sec (0=unlimited)
+let cg_pid_max = [];     // max tasks (0=unlimited)
+let cg_pid_count = [];   // current task count
+let cg_cpu_used = [];    // CPU ticks used this period
+
+// Task-to-cgroup mapping (for 64 tasks)
+let task_cgroup = [];
+
+fn cgroup_init() {
+    let mut i = 0;
+    while i < CGROUP_MAX {
+        push(cg_active, 0);
+        push(cg_name, "");
+        push(cg_cpu_max, 0);
+        push(cg_mem_max, 0);
+        push(cg_mem_used, 0);
+        push(cg_io_max, 0);
+        push(cg_pid_max, 0);
+        push(cg_pid_count, 0);
+        push(cg_cpu_used, 0);
+        i = i + 1;
+    }
+    // Default cgroup (id=0): no limits
+    cg_active[0] = 1;
+    cg_name[0] = "root";
+    cgroup_count = 1;
+
+    // All 64 tasks start in default cgroup
+    i = 0;
+    while i < 64 {
+        push(task_cgroup, 0);
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn cgroup_create(name) {
+    let mut i = 1;
+    while i < CGROUP_MAX {
+        if cg_active[i] == 0 {
+            cg_active[i] = 1;
+            cg_name[i] = name;
+            cg_cpu_max[i] = 0;
+            cg_mem_max[i] = 0;
+            cg_mem_used[i] = 0;
+            cg_io_max[i] = 0;
+            cg_pid_max[i] = 0;
+            cg_pid_count[i] = 0;
+            cg_cpu_used[i] = 0;
+            cgroup_count = cgroup_count + 1;
+            return i;
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn cgroup_destroy(id) {
+    if id <= 0 { return 0 - 1; } // can't destroy root
+    if id >= CGROUP_MAX { return 0 - 1; }
+    if cg_pid_count[id] > 0 { return 0 - 1; } // still has tasks
+    cg_active[id] = 0;
+    cgroup_count = cgroup_count - 1;
+    return 0;
+}
+
+fn cgroup_set_cpu(id, max_pct) {
+    if id < 0 { return 0 - 1; }
+    if id >= CGROUP_MAX { return 0 - 1; }
+    cg_cpu_max[id] = max_pct;
+    return 0;
+}
+
+fn cgroup_set_mem(id, max_pages) {
+    if id < 0 { return 0 - 1; }
+    if id >= CGROUP_MAX { return 0 - 1; }
+    cg_mem_max[id] = max_pages;
+    return 0;
+}
+
+fn cgroup_set_pids(id, max_pids) {
+    if id < 0 { return 0 - 1; }
+    if id >= CGROUP_MAX { return 0 - 1; }
+    cg_pid_max[id] = max_pids;
+    return 0;
+}
+
+fn cgroup_attach(task_id, cg_id) {
+    if task_id < 0 { return 0 - 1; }
+    if task_id >= 64 { return 0 - 1; }
+    if cg_id < 0 { return 0 - 1; }
+    if cg_id >= CGROUP_MAX { return 0 - 1; }
+    if cg_active[cg_id] == 0 { return 0 - 1; }
+    // Check PID limit
+    if cg_pid_max[cg_id] > 0 {
+        if cg_pid_count[cg_id] >= cg_pid_max[cg_id] {
+            return 0 - 1; // limit reached
+        }
+    }
+    let old_cg = task_cgroup[task_id];
+    cg_pid_count[old_cg] = cg_pid_count[old_cg] - 1;
+    task_cgroup[task_id] = cg_id;
+    cg_pid_count[cg_id] = cg_pid_count[cg_id] + 1;
+    return 0;
+}
+
+fn cgroup_check_mem(task_id, pages_needed) {
+    let cg = task_cgroup[task_id];
+    if cg_mem_max[cg] == 0 { return 1; } // unlimited
+    if cg_mem_used[cg] + pages_needed > cg_mem_max[cg] {
+        return 0; // would exceed limit
+    }
+    return 1;
+}
+
+fn cgroup_account_mem(task_id, pages) {
+    let cg = task_cgroup[task_id];
+    cg_mem_used[cg] = cg_mem_used[cg] + pages;
+    return 0;
+}
+
+fn cgroup_check_cpu(task_id) {
+    let cg = task_cgroup[task_id];
+    if cg_cpu_max[cg] == 0 { return 1; } // unlimited
+    // Check if group has exceeded its CPU quota for this period
+    // if cg_cpu_used[cg] * 100 / timer_period > cg_cpu_max[cg] { return 0; }
+    return 1;
+}
+
+fn cgroup_status(id) {
+    if id < 0 { return "invalid"; }
+    if id >= CGROUP_MAX { return "invalid"; }
+    if cg_active[id] == 0 { return "inactive"; }
+    return cg_name[id] + ": pids=" + to_string(cg_pid_count[id]) +
+           "/" + to_string(cg_pid_max[id]) +
+           " mem=" + to_string(cg_mem_used[id]) +
+           "/" + to_string(cg_mem_max[id]) + "pg" +
+           " cpu=" + to_string(cg_cpu_max[id]) + "%";
+}
+
+print("cgroup.hl loaded");
+print("cgroups: " + to_string(CGROUP_MAX) + " groups, CPU/mem/PID limits");

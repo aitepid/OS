@@ -1,0 +1,88 @@
+// HicOS_Sandbox.hl -- Process Sandbox (Native H-L)
+//
+// Syscall-filter sandbox for untrusted code execution.
+// Restricts which syscalls a task can invoke.
+// Requires: task.hl, syscall.hl, page_alloc.hl
+
+let SBX_MAX = 32;
+let SBX_POLICY_ALLOW_ALL = 0;
+let SBX_POLICY_READONLY  = 1;
+let SBX_POLICY_NETWORK   = 2;
+let SBX_POLICY_MINIMAL   = 3;
+
+let sbx_pids     = [];
+let sbx_policies = [];
+let mut sbx_count = 0;
+
+fn sbx_init() {
+    print("sandbox: initialized (max " + to_string(SBX_MAX) + ")");
+    return 0;
+}
+
+fn sbx_create(pid, policy) {
+    if sbx_count >= SBX_MAX { return 0 - 1; }
+    push(sbx_pids, pid);
+    push(sbx_policies, policy);
+    sbx_count = sbx_count + 1;
+    print("sandbox: PID " + to_string(pid) + " policy=" + to_string(policy));
+    return sbx_count - 1;
+}
+
+fn sbx_check_syscall(pid, syscall_nr) {
+    // Find sandbox for this PID
+    let mut i = 0;
+    while i < sbx_count {
+        if sbx_pids[i] == pid {
+            let policy = sbx_policies[i];
+            if policy == SBX_POLICY_ALLOW_ALL { return 1; }
+            if policy == SBX_POLICY_READONLY {
+                // Allow: read, stat, mmap, exit
+                if syscall_nr == 0 { return 1; } // SYS_READ
+                if syscall_nr == 4 { return 1; } // SYS_STAT
+                if syscall_nr == 60 { return 1; } // SYS_EXIT
+                return 0; // deny
+            }
+            if policy == SBX_POLICY_MINIMAL {
+                if syscall_nr == 60 { return 1; } // only exit
+                return 0;
+            }
+            return 1;
+        }
+        i = i + 1;
+    }
+    // No sandbox = allow all
+    return 1;
+}
+
+fn sbx_destroy(pid) {
+    let mut i = 0;
+    while i < sbx_count {
+        if sbx_pids[i] == pid {
+            sbx_pids[i] = 0 - 1;
+            print("sandbox: removed for PID " + to_string(pid));
+            return 0;
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn sbx_list() {
+    print("SANDBOX  PID   POLICY");
+    let mut i = 0;
+    while i < sbx_count {
+        if sbx_pids[i] >= 0 {
+            let pol = "allow-all";
+            if sbx_policies[i] == SBX_POLICY_READONLY { pol = "readonly"; }
+            if sbx_policies[i] == SBX_POLICY_NETWORK { pol = "network"; }
+            if sbx_policies[i] == SBX_POLICY_MINIMAL { pol = "minimal"; }
+            print("  [" + to_string(i) + "] PID " + to_string(sbx_pids[i]) + "  " + pol);
+        }
+        i = i + 1;
+    }
+    return sbx_count;
+}
+
+print("HicOS_Sandbox.hl loaded (native H-L)");
+
+

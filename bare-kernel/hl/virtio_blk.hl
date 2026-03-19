@@ -1,0 +1,293 @@
+// virtio_blk.hl -- VirtIO Block Device Driver
+//
+// Provides read/write access to virtual disks in QEMU.
+// VirtIO-blk PCI: vendor=0x1AF4, device=0x1001
+// Single virtqueue for requests.
+//
+// Request format:
+//   Header (16 bytes): type(4) reserved(4) sector(8)
+//   Data buffer: 512 bytes per sector
+//   Status (1 byte): 0=OK, 1=IOERR, 2=UNSUPPORTED
+//
+// VirtIO legacy I/O port layout (BAR0):
+//   +0x00 (4) Device Features
+//   +0x04 (4) Guest Features
+//   +0x08 (4) Queue Address (PFN)
+//   +0x0C (2) Queue Size
+//   +0x0E (2) Queue Select
+//   +0x10 (2) Queue Notify
+//   +0x12 (1) Device Status
+//   +0x13 (1) ISR Status
+//   +0x14 (8) Device-specific config (capacity in sectors for blk)
+
+let VIRTIO_BLK_DEV = 4097;    // 0x1001
+let VIRTIO_BLK_T_IN  = 0;     // read
+let VIRTIO_BLK_T_OUT = 1;     // write
+let VIRTIO_BLK_S_OK  = 0;
+
+let mut blk_bar = 0;
+let SECTOR_SIZE = 512;
+
+// Virtqueue state
+let VIRTQ_SIZE = 128;
+let mut vq_desc_base = 0;     // descriptor table base address
+let mut vq_avail_base = 0;    // available ring base address
+let mut vq_used_base = 0;     // used ring base address
+let mut vq_free_head = 0;     // head of free descriptor chain
+let mut vq_last_used = 0;     // last used ring index we've seen
+let mut vq_avail_idx = 0;     // next available ring index
+
+// Descriptor flags
+let VIRTQ_DESC_F_NEXT = 1;
+let VIRTQ_DESC_F_WRITE = 2;   // device writes (host reads)
+
+// Request header buffer (16 bytes, page-aligned)
+let mut req_header_addr = 0;
+// Status byte buffer
+let mut req_status_addr = 0;
+// Data buffer (SECTOR_SIZE * max_sectors)
+let mut req_data_addr = 0;
+
+fn virtio_blk_init(pci_bus, pci_dev, pci_func) {
+    // Read BAR0 from PCI config space
+    blk_bar = pci_read_bar(pci_bus, pci_dev, pci_func, 0);
+    // Mask I/O space indicator bit
+    blk_bar = blk_bar - (blk_bar % 4);
+
+    // === Device initialization (VirtIO 1.0 legacy) ===
+    // Step 1: Reset device
+    port_out_u8(blk_bar + 18, 0);
+
+    // Step 2: Set ACKNOWLEDGE status bit
+    port_out_u8(blk_bar + 18, 1);
+
+    // Step 3: Set DRIVER status bit
+    port_out_u8(blk_bar + 18, 3);
+
+    // Step 4: Read and negotiate features
+    let dev_features = port_in_u32(blk_bar + 0);
+    // We don't need any special features for basic read/write
+    port_out_u32(blk_bar + 4, 0);
+
+    // Step 5: Set FEATURES_OK status bit
+    port_out_u8(blk_bar + 18, 11);
+
+    // Step 6: Setup virtqueue 0
+    port_out_u16(blk_bar + 14, 0);  // select queue 0
+    let queue_size = port_in_u16(blk_bar + 12);
+    // Use VIRTQ_SIZE or device max, whichever is smaller
+    let mut actual_qsize = VIRTQ_SIZE;
+    if queue_size < actual_qsize { actual_qsize = queue_size; }
+
+    // Allocate virtqueue memory (page-aligned at 0x400000)
+    // Descriptor table: 16 bytes per entry
+    vq_desc_base = 4194304;  // 0x400000
+    let desc_size = actual_qsize * 16;
+    // Available ring: 2 + 2 + 2*qsize + 2 bytes
+    vq_avail_base = vq_desc_base + desc_size;
+    let avail_size = 6 + actual_qsize * 2;
+    // Used ring: 2 + 2 + 8*qsize + 2 bytes (align to 4096)
+    vq_used_base = ((vq_avail_base + avail_size + 4095) / 4096) * 4096;
+
+    // Zero out virtqueue memory
+    let mut addr = vq_desc_base;
+    while addr < vq_used_base + 6 + actual_qsize * 8 {
+        mem_write_u8(addr, 0);
+        addr = addr + 1;
+    }
+
+    // Initialize free descriptor chain
+    let mut di = 0;
+    while di < actual_qsize - 1 {
+        // desc[di].next = di + 1
+        mem_write_u16(vq_desc_base + di * 16 + 14, di + 1);
+        // desc[di].flags = NEXT
+        mem_write_u16(vq_desc_base + di * 16 + 12, VIRTQ_DESC_F_NEXT);
+        di = di + 1;
+    }
+    vq_free_head = 0;
+    vq_last_used = 0;
+    vq_avail_idx = 0;
+
+    // Tell device the queue address (PFN = phys_addr / 4096)
+    let pfn = vq_desc_base / 4096;
+    port_out_u32(blk_bar + 8, pfn);
+
+    // Step 7: Set DRIVER_OK status bit
+    port_out_u8(blk_bar + 18, 15);
+
+    // Allocate request buffers (at 0x500000)
+    req_header_addr = 5242880;    // 0x500000
+    req_status_addr = 5242896;    // 0x500010
+    req_data_addr   = 5242912;    // 0x500020
+
+    return 1;
+}
+
+// Internal: allocate a descriptor from free chain
+fn _vq_alloc_desc() {
+    let idx = vq_free_head;
+    let next = mem_read_u16(vq_desc_base + idx * 16 + 14);
+    vq_free_head = next;
+    return idx;
+}
+
+// Internal: free a descriptor back to chain
+fn _vq_free_desc(idx) {
+    mem_write_u16(vq_desc_base + idx * 16 + 14, vq_free_head);
+    mem_write_u16(vq_desc_base + idx * 16 + 12, VIRTQ_DESC_F_NEXT);
+    vq_free_head = idx;
+    return 0;
+}
+
+// Internal: write a descriptor
+fn _vq_write_desc(idx, addr, length, flags, next) {
+    let base = vq_desc_base + idx * 16;
+    // addr (8 bytes, little-endian)
+    mem_write_u32(base + 0, addr % 4294967296);
+    mem_write_u32(base + 4, addr / 4294967296);
+    // len (4 bytes)
+    mem_write_u32(base + 8, length);
+    // flags (2 bytes)
+    mem_write_u16(base + 12, flags);
+    // next (2 bytes)
+    mem_write_u16(base + 14, next);
+    return 0;
+}
+
+// Internal: submit descriptor chain and wait for completion
+fn _vq_submit_and_wait(head_idx) {
+    // Add to available ring
+    let avail_idx_off = vq_avail_base + 2;  // avail->idx offset
+    let ring_off = vq_avail_base + 4 + (vq_avail_idx % VIRTQ_SIZE) * 2;
+    mem_write_u16(ring_off, head_idx);
+    vq_avail_idx = vq_avail_idx + 1;
+    mem_write_u16(avail_idx_off, vq_avail_idx);
+
+    // Notify device (write queue index 0 to Queue Notify port)
+    port_out_u16(blk_bar + 16, 0);
+
+    // Poll used ring until our request completes
+    let used_idx_off = vq_used_base + 2;
+    let mut timeout = 10000000;
+    while timeout > 0 {
+        let used_idx = mem_read_u16(used_idx_off);
+        if used_idx != vq_last_used {
+            vq_last_used = used_idx;
+            return 0;  // completed
+        }
+        timeout = timeout - 1;
+    }
+    return 0 - 1;  // timeout
+}
+
+// Read sectors from disk
+// sector: starting sector number
+// count: number of sectors
+// buf_addr: destination buffer physical address
+fn virtio_blk_read(sector, count, buf_addr) {
+    // Build request header at req_header_addr
+    // type = VIRTIO_BLK_T_IN (0)
+    mem_write_u32(req_header_addr + 0, VIRTIO_BLK_T_IN);
+    // reserved = 0
+    mem_write_u32(req_header_addr + 4, 0);
+    // sector (8 bytes)
+    mem_write_u32(req_header_addr + 8, sector % 4294967296);
+    mem_write_u32(req_header_addr + 12, sector / 4294967296);
+
+    // Clear status byte
+    mem_write_u8(req_status_addr, 255);
+
+    // Allocate 3 descriptors for the chain: header -> data -> status
+    let d0 = _vq_alloc_desc();
+    let d1 = _vq_alloc_desc();
+    let d2 = _vq_alloc_desc();
+
+    // Descriptor 0: request header (16 bytes, device-readable)
+    _vq_write_desc(d0, req_header_addr, 16, VIRTQ_DESC_F_NEXT, d1);
+
+    // Descriptor 1: data buffer (count * 512 bytes, device-writable)
+    let data_len = count * SECTOR_SIZE;
+    _vq_write_desc(d1, buf_addr, data_len, VIRTQ_DESC_F_WRITE + VIRTQ_DESC_F_NEXT, d2);
+
+    // Descriptor 2: status byte (1 byte, device-writable)
+    _vq_write_desc(d2, req_status_addr, 1, VIRTQ_DESC_F_WRITE, 0);
+
+    // Submit and wait
+    let result = _vq_submit_and_wait(d0);
+
+    // Free descriptors
+    _vq_free_desc(d2);
+    _vq_free_desc(d1);
+    _vq_free_desc(d0);
+
+    // Check status
+    let status = mem_read_u8(req_status_addr);
+    if status == VIRTIO_BLK_S_OK {
+        return data_len;
+    }
+    return 0 - 1;
+}
+
+// Write sectors to disk
+fn virtio_blk_write(sector, count, buf_addr) {
+    // Build request header
+    mem_write_u32(req_header_addr + 0, VIRTIO_BLK_T_OUT);
+    mem_write_u32(req_header_addr + 4, 0);
+    mem_write_u32(req_header_addr + 8, sector % 4294967296);
+    mem_write_u32(req_header_addr + 12, sector / 4294967296);
+
+    // Clear status
+    mem_write_u8(req_status_addr, 255);
+
+    // Allocate 3 descriptors
+    let d0 = _vq_alloc_desc();
+    let d1 = _vq_alloc_desc();
+    let d2 = _vq_alloc_desc();
+
+    // Descriptor 0: request header (device-readable)
+    _vq_write_desc(d0, req_header_addr, 16, VIRTQ_DESC_F_NEXT, d1);
+
+    // Descriptor 1: data buffer (device-readable, NOT writable)
+    let data_len = count * SECTOR_SIZE;
+    _vq_write_desc(d1, buf_addr, data_len, VIRTQ_DESC_F_NEXT, d2);
+
+    // Descriptor 2: status byte (device-writable)
+    _vq_write_desc(d2, req_status_addr, 1, VIRTQ_DESC_F_WRITE, 0);
+
+    // Submit and wait
+    let result = _vq_submit_and_wait(d0);
+
+    // Free descriptors
+    _vq_free_desc(d2);
+    _vq_free_desc(d1);
+    _vq_free_desc(d0);
+
+    let status = mem_read_u8(req_status_addr);
+    if status == VIRTIO_BLK_S_OK {
+        return data_len;
+    }
+    return 0 - 1;
+}
+
+// Get disk capacity in sectors
+fn virtio_blk_capacity() {
+    // Device config at BAR0+0x14 (8 bytes, little-endian sector count)
+    let lo = port_in_u32(blk_bar + 20);
+    let hi = port_in_u32(blk_bar + 24);
+    return lo + hi * 4294967296;
+}
+
+// Convenience: read a single sector into kernel buffer
+fn virtio_blk_read_sector(sector) {
+    return virtio_blk_read(sector, 1, req_data_addr);
+}
+
+// Convenience: get pointer to last-read data buffer
+fn virtio_blk_data_addr() {
+    return req_data_addr;
+}
+
+print("virtio_blk.hl loaded -- VirtIO legacy I/O block driver");
+print("Sector size: " + to_string(SECTOR_SIZE));
+print("Virtqueue size: " + to_string(VIRTQ_SIZE));

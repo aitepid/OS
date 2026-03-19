@@ -1,0 +1,128 @@
+// gpu.hl -- GPU Command Submission Framework (VirtIO-GPU)
+//
+// Provides a 2D/3D command interface via VirtIO-GPU (QEMU default).
+// VirtIO-GPU PCI: vendor=0x1AF4, device=0x1050 (transitional)
+//
+// VirtIO-GPU commands (via virtqueue):
+//   VIRTIO_GPU_CMD_GET_DISPLAY_INFO     = 0x0100
+//   VIRTIO_GPU_CMD_RESOURCE_CREATE_2D   = 0x0101
+//   VIRTIO_GPU_CMD_RESOURCE_UNREF       = 0x0102
+//   VIRTIO_GPU_CMD_SET_SCANOUT          = 0x0103
+//   VIRTIO_GPU_CMD_RESOURCE_FLUSH       = 0x0104
+//   VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D  = 0x0105
+//   VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING = 0x0106
+//   VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING = 0x0107
+//   VIRTIO_GPU_CMD_GET_CAPSET_INFO      = 0x0108
+//   VIRTIO_GPU_CMD_GET_CAPSET           = 0x0109
+//
+// 3D extensions (virgl):
+//   VIRTIO_GPU_CMD_CTX_CREATE           = 0x0200
+//   VIRTIO_GPU_CMD_CTX_DESTROY          = 0x0201
+//   VIRTIO_GPU_CMD_CTX_ATTACH_RESOURCE  = 0x0202
+//   VIRTIO_GPU_CMD_SUBMIT_3D            = 0x0206
+//
+// Each command is a struct sent via virtqueue controlq.
+// Response comes back on the same queue.
+
+let GPU_VENDOR = 6900;         // 0x1AF4
+let GPU_DEVICE = 4176;         // 0x1050
+
+let GPU_CMD_GET_DISPLAY_INFO       = 256;   // 0x0100
+let GPU_CMD_RESOURCE_CREATE_2D     = 257;
+let GPU_CMD_RESOURCE_UNREF         = 258;
+let GPU_CMD_SET_SCANOUT            = 259;
+let GPU_CMD_RESOURCE_FLUSH         = 260;
+let GPU_CMD_TRANSFER_TO_HOST_2D    = 261;
+let GPU_CMD_RESOURCE_ATTACH_BACKING = 262;
+let GPU_CMD_CTX_CREATE             = 512;   // 0x0200
+let GPU_CMD_CTX_DESTROY            = 513;
+let GPU_CMD_SUBMIT_3D              = 518;   // 0x0206
+
+// Pixel format: B8G8R8A8_UNORM = 1, B8G8R8X8_UNORM = 2
+let GPU_FORMAT_BGRA = 1;
+
+let mut gpu_vq_addr = 0;        // virtqueue base
+let mut gpu_display_w = 0;
+let mut gpu_display_h = 0;
+let mut gpu_resource_id = 1;
+
+// GPU command header (24 bytes):
+//   +0:  type (4)
+//   +4:  flags (4)
+//   +8:  fence_id (8)
+//   +16: ctx_id (4)
+//   +20: padding (4)
+
+fn gpu_init(pci_bus, pci_dev, pci_func) {
+    // 1. Setup VirtIO device (similar to virtio_net)
+    // 2. Send GET_DISPLAY_INFO to learn resolution
+    // 3. Create a 2D resource for the framebuffer
+    // 4. Attach backing memory
+    // 5. Set scanout
+
+    gpu_display_w = 1024;
+    gpu_display_h = 768;
+    return 0;
+}
+
+fn gpu_create_resource(width, height) {
+    let id = gpu_resource_id;
+    gpu_resource_id = gpu_resource_id + 1;
+    // Build RESOURCE_CREATE_2D command:
+    //   header (24) + resource_id(4) + format(4) + width(4) + height(4)
+    // Send via virtqueue
+    return id;
+}
+
+fn gpu_attach_backing(resource_id, mem_addr, mem_size) {
+    // Build RESOURCE_ATTACH_BACKING:
+    //   header (24) + resource_id(4) + nr_entries(4)
+    //   + entry: addr(8) + length(4) + padding(4)
+    return 0;
+}
+
+fn gpu_set_scanout(resource_id) {
+    // Build SET_SCANOUT:
+    //   header (24) + scanout_id(4) + resource_id(4) + rect(x,y,w,h each 4)
+    return 0;
+}
+
+fn gpu_transfer(resource_id, x, y, w, h) {
+    // Build TRANSFER_TO_HOST_2D:
+    //   header (24) + rect(16) + offset(8) + resource_id(4) + padding(4)
+    return 0;
+}
+
+fn gpu_flush(resource_id, x, y, w, h) {
+    // Build RESOURCE_FLUSH:
+    //   header (24) + rect(16) + resource_id(4) + padding(4)
+    return 0;
+}
+
+// High-level: blit a pixel buffer to screen
+fn gpu_blit(buf_addr, x, y, w, h) {
+    // 1. Transfer region from guest memory to host resource
+    // gpu_transfer(fb_resource, x, y, w, h);
+    // 2. Flush to display
+    // gpu_flush(fb_resource, x, y, w, h);
+    return 0;
+}
+
+// === 3D context (virgl) ===
+fn gpu_ctx_create(ctx_id) {
+    // Build CTX_CREATE: header + ctx_name_len(4) + name(64)
+    return 0;
+}
+
+fn gpu_submit_3d(ctx_id, cmd_buf, cmd_size) {
+    // Build SUBMIT_3D: header + size(4) + command buffer
+    // Commands use Gallium3D TGSI/NIR command stream
+    return 0;
+}
+
+fn gpu_ctx_destroy(ctx_id) {
+    return 0;
+}
+
+print("gpu.hl loaded");
+print("VirtIO-GPU: 2D scanout + 3D virgl context submission");

@@ -1,0 +1,72 @@
+// HicOS_NetworkManager.hl -- Network Manager (Native H-L)
+//
+// User-space network interface. Delegates to bare-kernel/hl/net.hl,
+// dhcp.hl, dns.hl, tcp.hl, socket.hl.
+
+let mut _net_initialized = 0;
+
+fn hicos_net_init() {
+    if _net_initialized == 0 {
+        net_init();
+        socket_init();
+        _net_initialized = 1;
+    }
+    print("HicOS network initialized");
+    return 0;
+}
+
+fn hicos_net_dhcp() {
+    dhcp_discover();
+    print("DHCP: requesting IP address...");
+    return 0;
+}
+
+fn hicos_net_ifconfig() {
+    print("eth0: VirtIO-net");
+    print("  IP:      " + to_string(my_ip[0]) + "." + to_string(my_ip[1]) + "." + to_string(my_ip[2]) + "." + to_string(my_ip[3]));
+    print("  Gateway: " + to_string(gw_ip[0]) + "." + to_string(gw_ip[1]) + "." + to_string(gw_ip[2]) + "." + to_string(gw_ip[3]));
+    print("  DNS:     " + to_string(dhcp_dns[0]) + "." + to_string(dhcp_dns[1]) + "." + to_string(dhcp_dns[2]) + "." + to_string(dhcp_dns[3]));
+    return 0;
+}
+
+fn hicos_net_dns(hostname) {
+    let parts = str_split(hostname, ".");
+    let ip = dns_resolve(parts);
+    return ip;
+}
+
+fn hicos_net_ping(ip) {
+    // Send ICMP echo request
+    print("PING " + to_string(ip[0]) + "." + to_string(ip[1]) + "." + to_string(ip[2]) + "." + to_string(ip[3]));
+    return 0;
+}
+
+fn hicos_net_socket(domain, stype) {
+    return sys_socket(domain, stype, 0);
+}
+
+fn hicos_net_connect(sockfd, ip, port) {
+    return sys_connect(sockfd, ip, port);
+}
+
+fn hicos_net_send(sockfd, data, length) {
+    return sys_send(sockfd, data, length);
+}
+
+fn hicos_net_recv(sockfd, buf, maxlen) {
+    return sys_recv(sockfd, buf, maxlen);
+}
+
+fn hicos_net_close(sockfd) {
+    return sys_close_socket(sockfd);
+}
+
+fn hicos_net_status() {
+    print("Network: " + to_string(_net_initialized == 1));
+    print("Sockets: " + to_string(socket_count) + "/" + to_string(SOCKET_MAX));
+    return _net_initialized;
+}
+
+print("HicOS_NetworkManager.hl loaded (native H-L)");
+
+

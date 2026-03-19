@@ -1,0 +1,156 @@
+// timer.hl -- Timer Framework + RTC (Real-Time Clock)
+//
+// Unified timer interface over PIT, LAPIC timer, and HPET.
+// Also reads CMOS RTC for wall-clock time.
+//
+// System tick at 0x300000 (incremented by timer ISR at 100 Hz)
+// Uptime = ticks / 100 seconds
+
+let TICK_ADDR = 3145728;       // 0x300000
+let TICK_HZ = 100;
+
+// RTC ports
+let RTC_ADDR_PORT = 112;      // 0x70
+let RTC_DATA_PORT = 113;      // 0x71
+
+// Get system uptime in seconds
+fn uptime_secs() {
+    let ticks = mem_read_u64(TICK_ADDR);
+    return ticks / TICK_HZ;
+}
+
+// Get system uptime in milliseconds
+fn uptime_ms() {
+    let ticks = mem_read_u64(TICK_ADDR);
+    return ticks * 1000 / TICK_HZ;
+}
+
+// Get raw tick count
+fn get_ticks() {
+    return mem_read_u64(TICK_ADDR);
+}
+
+// Sleep for approximately `ms` milliseconds
+// Blocks current task until wakeup tick
+fn sleep_ms(ms) {
+    let wake_tick = get_ticks() + ms * TICK_HZ / 1000;
+    // Store wakeup tick in task's reserved area (+224)
+    // (avoiding +200 pending_mask, +208 blocked_mask, +216 handler_ptr from signal.hl)
+    let addr = task_addr(current_task);
+    mem_write_u64(addr + 224, wake_tick);
+    // Block the current task
+    task_block(1);  // reason=1 (sleep)
+    return 0;
+}
+
+// Check sleeping tasks and wake them if their time has come
+// Called from timer ISR after incrementing tick counter
+fn timer_check_sleepers() {
+    let now = get_ticks();
+    let mut i = 0;
+    while i < MAX_TASKS {
+        let addr = task_addr(i);
+        let state = mem_read_u64(addr + 0);
+        if state == STATE_BLOCKED {
+            let wake_tick = mem_read_u64(addr + 224);
+            if wake_tick > 0 && now >= wake_tick {
+                // Clear wakeup tick
+                mem_write_u64(addr + 224, 0);
+                // Unblock the task
+                task_unblock(i);
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// === Timer callback registration ===
+// Max 32 software timers
+let TIMER_TABLE = 3248128;    // 0x318000
+let TIMER_ENTRY_SIZE = 32;    // fire_tick(8) + callback_addr(8) + arg(8) + flags(8)
+let MAX_TIMERS = 32;
+
+fn timer_register(delay_ms, callback_addr, arg, repeat) {
+    let fire_tick = get_ticks() + delay_ms * TICK_HZ / 1000;
+    let mut i = 0;
+    while i < MAX_TIMERS {
+        let addr = TIMER_TABLE + i * TIMER_ENTRY_SIZE;
+        let flags = mem_read_u64(addr + 24);
+        if flags == 0 {
+            mem_write_u64(addr, fire_tick);
+            mem_write_u64(addr + 8, callback_addr);
+            mem_write_u64(addr + 16, arg);
+            mem_write_u64(addr + 24, 1 + repeat * 2);
+            return i;
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn timer_cancel(timer_id) {
+    let addr = TIMER_TABLE + timer_id * TIMER_ENTRY_SIZE;
+    mem_write_u64(addr + 24, 0);
+    return 0;
+}
+
+// Called from timer ISR: check and fire expired timers, then schedule
+fn timer_check() {
+    let now = get_ticks();
+    let mut i = 0;
+    while i < MAX_TIMERS {
+        let addr = TIMER_TABLE + i * TIMER_ENTRY_SIZE;
+        let flags = mem_read_u64(addr + 24);
+        if flags % 2 == 1 {
+            let fire = mem_read_u64(addr);
+            if now >= fire {
+                let cb = mem_read_u64(addr + 8);
+                let arg = mem_read_u64(addr + 16);
+                // call cb(arg) -- dispatch via function table
+                if (flags / 2) % 2 == 1 {
+                    // Repeat: reschedule at same interval
+                    mem_write_u64(addr, now + (fire - mem_read_u64(addr)));
+                } else {
+                    mem_write_u64(addr + 24, 0);  // one-shot: deactivate
+                }
+            }
+        }
+        i = i + 1;
+    }
+    // Wake sleeping tasks whose deadline has passed
+    timer_check_sleepers();
+    // Drive the CFS scheduler: update vruntime + preempt if needed
+    task_timer_tick();
+    return 0;
+}
+
+// === CMOS RTC ===
+// Read a CMOS register (BCD format by default)
+fn rtc_read_reg(reg) {
+    port_out_u8(RTC_ADDR_PORT, reg);
+    return port_in_u8(RTC_DATA_PORT);
+}
+
+fn bcd_to_bin(bcd) {
+    return (bcd / 16) * 10 + bcd % 16;
+}
+
+// Read current time: returns [year, month, day, hour, min, sec]
+fn rtc_read_time() {
+    // Wait for update-in-progress to clear
+    // while (rtc_read_reg(0x0A) & 0x80) != 0 {}
+
+    let sec   = bcd_to_bin(rtc_read_reg(0));
+    let min   = bcd_to_bin(rtc_read_reg(2));
+    let hour  = bcd_to_bin(rtc_read_reg(4));
+    let day   = bcd_to_bin(rtc_read_reg(7));
+    let month = bcd_to_bin(rtc_read_reg(8));
+    let year  = bcd_to_bin(rtc_read_reg(9)) + 2000;
+
+    return [year, month, day, hour, min, sec];
+}
+
+print("timer.hl loaded");
+print("Tick rate: " + to_string(TICK_HZ) + " Hz");
+print("Software timers: " + to_string(MAX_TIMERS));

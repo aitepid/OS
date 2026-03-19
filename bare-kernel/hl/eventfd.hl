@@ -1,0 +1,110 @@
+// eventfd.hl -- Event File Descriptors
+//
+// Lightweight inter-task signaling primitive.
+// Linux equivalent: eventfd(2)
+//
+// An eventfd is a counter:
+//   - write(n) adds n to counter
+//   - read() returns counter value and resets to 0
+//   - poll/epoll compatible (POLLIN when counter > 0)
+//
+// Flags:
+//   EFD_SEMAPHORE = 1  (read decrements by 1 instead of draining)
+//   EFD_NONBLOCK  = 2  (read returns -EAGAIN if counter==0)
+//
+// Used for: thread synchronization, event loops, async I/O completion
+
+let EFD_SEMAPHORE = 1;
+let EFD_NONBLOCK = 2;
+
+let EVENTFD_MAX = 32;
+let mut eventfd_count = 0;
+
+let efd_active = [];
+let efd_counter = [];
+let efd_flags = [];
+let efd_task = [];  // owning task
+
+fn eventfd_init() {
+    let mut i = 0;
+    while i < EVENTFD_MAX {
+        push(efd_active, 0);
+        push(efd_counter, 0);
+        push(efd_flags, 0);
+        push(efd_task, 0 - 1);
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn sys_eventfd(initval, flags) {
+    let mut i = 0;
+    while i < EVENTFD_MAX {
+        if efd_active[i] == 0 {
+            efd_active[i] = 1;
+            efd_counter[i] = initval;
+            efd_flags[i] = flags;
+            efd_task[i] = 0; // current_task
+            eventfd_count = eventfd_count + 1;
+            return i;
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn eventfd_write(fd, value) {
+    if fd < 0 { return 0 - 1; }
+    if fd >= EVENTFD_MAX { return 0 - 1; }
+    if efd_active[fd] == 0 { return 0 - 1; }
+    efd_counter[fd] = efd_counter[fd] + value;
+    // Wake any tasks blocked on eventfd_read
+    // poll_wake(fd, POLLIN);
+    return 0;
+}
+
+fn eventfd_read(fd) {
+    if fd < 0 { return 0 - 1; }
+    if fd >= EVENTFD_MAX { return 0 - 1; }
+    if efd_active[fd] == 0 { return 0 - 1; }
+
+    if efd_counter[fd] == 0 {
+        if (efd_flags[fd] & EFD_NONBLOCK) != 0 {
+            return 0 - 1; // EAGAIN
+        }
+        // Block until counter > 0
+        // task_block_on(fd);
+        return 0;
+    }
+
+    if (efd_flags[fd] & EFD_SEMAPHORE) != 0 {
+        // Semaphore mode: decrement by 1, return 1
+        efd_counter[fd] = efd_counter[fd] - 1;
+        return 1;
+    }
+
+    // Normal mode: drain counter
+    let val = efd_counter[fd];
+    efd_counter[fd] = 0;
+    return val;
+}
+
+fn eventfd_poll(fd) {
+    // Returns POLLIN if counter > 0
+    if fd < 0 { return 0; }
+    if efd_active[fd] == 0 { return 0; }
+    if efd_counter[fd] > 0 { return 1; } // POLLIN
+    return 0;
+}
+
+fn eventfd_close(fd) {
+    if fd < 0 { return 0; }
+    if fd >= EVENTFD_MAX { return 0; }
+    efd_active[fd] = 0;
+    efd_counter[fd] = 0;
+    eventfd_count = eventfd_count - 1;
+    return 0;
+}
+
+print("eventfd.hl loaded");
+print("eventfd: " + to_string(EVENTFD_MAX) + " descriptors, semaphore + nonblock modes");

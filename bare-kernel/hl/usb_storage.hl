@@ -1,0 +1,105 @@
+// usb_storage.hl -- USB Mass Storage Class Driver (Bulk-Only Transport)
+//
+// Implements USB Mass Storage Bulk-Only Transport (BBB) protocol
+// for reading/writing USB flash drives and external disks.
+//
+// Protocol: host sends Command Block Wrapper (CBW) via bulk-OUT,
+//           device responds with data + Command Status Wrapper (CSW).
+//
+// SCSI commands used:
+//   0x00 TEST UNIT READY
+//   0x12 INQUIRY
+//   0x25 READ CAPACITY(10)
+//   0x28 READ(10)
+//   0x2A WRITE(10)
+//
+// CBW (31 bytes):
+//   +0:  dCBWSignature (4) = 0x43425355 ("USBC")
+//   +4:  dCBWTag (4)
+//   +8:  dCBWDataTransferLength (4)
+//   +12: bmCBWFlags (1) -- bit 7: 0=OUT, 1=IN
+//   +13: bCBWLUN (1)
+//   +14: bCBWCBLength (1)
+//   +15: CBWCB (16) -- SCSI command block
+//
+// CSW (13 bytes):
+//   +0:  dCSWSignature (4) = 0x53425355 ("USBS")
+//   +4:  dCSWTag (4) -- must match CBW tag
+//   +8:  dCSWDataResidue (4)
+//   +12: bCSWStatus (1) -- 0=passed, 1=failed, 2=phase error
+
+let CBW_SIGNATURE = 1128420181;  // 0x43425355
+let CSW_SIGNATURE = 1396855893;  // 0x53425355
+
+let mut usb_stor_bulk_in  = 0;   // endpoint addresses (from config descriptor)
+let mut usb_stor_bulk_out = 0;
+let mut usb_stor_tag = 1;
+let mut usb_stor_block_size = 512;
+let mut usb_stor_block_count = 0;
+
+fn usb_stor_init(slot_id) {
+    // 1. Get configuration descriptor, find bulk IN and bulk OUT endpoints
+    // 2. Set configuration
+    // 3. Send INQUIRY to verify it's a mass storage device
+    // 4. Send READ CAPACITY to get block_size and block_count
+    return 0;
+}
+
+fn usb_stor_build_cbw(scsi_cmd, lba, blocks, data_len, direction) {
+    let mut cbw = [];
+    // Signature
+    push(cbw, CBW_SIGNATURE % 256);
+    push(cbw, (CBW_SIGNATURE / 256) % 256);
+    push(cbw, (CBW_SIGNATURE / 65536) % 256);
+    push(cbw, (CBW_SIGNATURE / 16777216) % 256);
+    // Tag
+    let tag = usb_stor_tag;
+    usb_stor_tag = usb_stor_tag + 1;
+    push(cbw, tag % 256); push(cbw, (tag / 256) % 256);
+    push(cbw, (tag / 65536) % 256); push(cbw, (tag / 16777216) % 256);
+    // Data transfer length
+    push(cbw, data_len % 256); push(cbw, (data_len / 256) % 256);
+    push(cbw, (data_len / 65536) % 256); push(cbw, (data_len / 16777216) % 256);
+    // Flags (direction)
+    if direction == 1 { push(cbw, 128); } else { push(cbw, 0); }
+    push(cbw, 0);  // LUN=0
+    push(cbw, 10); // CB length = 10 for READ/WRITE(10)
+    // SCSI CDB
+    push(cbw, scsi_cmd);
+    push(cbw, 0); // reserved
+    // LBA (big-endian)
+    push(cbw, (lba / 16777216) % 256);
+    push(cbw, (lba / 65536) % 256);
+    push(cbw, (lba / 256) % 256);
+    push(cbw, lba % 256);
+    push(cbw, 0); // reserved
+    // Transfer length in blocks (big-endian 16-bit)
+    push(cbw, (blocks / 256) % 256);
+    push(cbw, blocks % 256);
+    push(cbw, 0); // control
+    // Pad to 16 bytes CBWCB
+    let mut p = 0;
+    while len(cbw) < 31 { push(cbw, 0); p = p + 1; }
+    return cbw;
+}
+
+fn usb_stor_read(lba, count, buf_addr) {
+    let data_len = count * usb_stor_block_size;
+    let cbw = usb_stor_build_cbw(40, lba, count, data_len, 1); // 0x28 = READ(10)
+    // Send CBW via bulk OUT endpoint
+    // Receive data via bulk IN endpoint
+    // Receive CSW via bulk IN endpoint, verify tag + status
+    return 0;
+}
+
+fn usb_stor_write(lba, count, buf_addr) {
+    let data_len = count * usb_stor_block_size;
+    let cbw = usb_stor_build_cbw(42, lba, count, data_len, 0); // 0x2A = WRITE(10)
+    // Send CBW via bulk OUT endpoint
+    // Send data via bulk OUT endpoint
+    // Receive CSW via bulk IN endpoint
+    return 0;
+}
+
+print("usb_storage.hl loaded");
+print("USB Mass Storage: SCSI over Bulk-Only Transport");

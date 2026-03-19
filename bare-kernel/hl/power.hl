@@ -1,0 +1,155 @@
+// power.hl -- ACPI Power Management
+//
+// Implements shutdown, reboot, and sleep via ACPI.
+// Also supports the keyboard-controller reboot fallback.
+//
+// ACPI shutdown: write to PM1a_CNT register with SLP_TYP | SLP_EN
+// ACPI reboot: write to RESET_REG if FADT provides one
+// Fallback reboot: pulse 8042 reset line (out 0x64, 0xFE)
+// Triple-fault reboot: LIDT 0; INT 0
+
+let mut acpi_pm1a_cnt = 0;    // from FADT
+let mut acpi_pm1b_cnt = 0;    // from FADT (optional)
+let mut acpi_slp_typa = 0;    // from \_S5 (shutdown) DSDT parse
+let mut acpi_slp_typb = 0;
+let mut acpi_reset_reg = 0;   // FADT reset register address
+let mut acpi_reset_val = 0;   // FADT reset register value
+let mut acpi_fadt_addr = 0;
+
+fn power_shutdown() {
+    print("[POWER] Shutdown initiated...");
+
+    // Method 1: ACPI PM1a_CNT
+    if acpi_pm1a_cnt != 0 {
+        // SLP_EN (bit 13) + SLP_TYPa (bits 10-12)
+        let val = acpi_slp_typa * 1024 + 8192;  // SLP_TYP << 10 | SLP_EN
+        port_out_u16(acpi_pm1a_cnt, val);
+        if acpi_pm1b_cnt != 0 {
+            let val2 = acpi_slp_typb * 1024 + 8192;
+            port_out_u16(acpi_pm1b_cnt, val2);
+        }
+        // If ACPI shutdown worked, we never reach here
+    }
+
+    // Method 2: QEMU debug exit (port 0x604)
+    port_out_u16(1540, 8192);  // 0x604, 0x2000
+
+    // Method 3: Bochs/older QEMU (port 0xB004)
+    port_out_u16(45060, 8192); // 0xB004, 0x2000
+
+    // Method 4: halt all CPUs
+    print("[POWER] ACPI shutdown failed, halting CPU.");
+    // Native: cli; hlt
+    return 0;
+}
+
+fn power_reboot() {
+    print("[POWER] Reboot initiated...");
+
+    // Method 1: ACPI reset register
+    if acpi_reset_reg != 0 {
+        port_out_u8(acpi_reset_reg, acpi_reset_val);
+        // Wait for reboot
+        let mut wait = 0;
+        while wait < 100000 { wait = wait + 1; }
+    }
+
+    // Method 2: 8042 keyboard controller reset
+    // Wait for input buffer empty: poll port 0x64 bit 1
+    let mut timeout = 100000;
+    while timeout > 0 {
+        let status = port_in_u8(100);  // 0x64
+        if (status / 2) % 2 == 0 { timeout = 0; }
+        timeout = timeout - 1;
+    }
+    port_out_u8(100, 254);  // 0x64, 0xFE -- pulse reset line
+
+    // Method 3: Triple fault (load null IDT, trigger interrupt)
+    // LIDT with limit=0 at address 0, then INT 0
+    mem_write_u16(0, 0);     // IDT limit = 0
+    mem_write_u64(2, 0);     // IDT base = 0
+    // Native: lidt [0]; int 0 → triple fault → hardware reset
+
+    print("[POWER] All reboot methods failed.");
+    return 0;
+}
+
+fn power_sleep() {
+    print("[POWER] Entering S1 sleep...");
+    // S1 sleep: CPU keeps running in reduced power
+    if acpi_pm1a_cnt != 0 {
+        // S1 SLP_TYP is usually 1 (from DSDT)
+        let val = 1 * 1024 + 8192;  // SLP_TYP=1, SLP_EN=1
+        port_out_u16(acpi_pm1a_cnt, val);
+    }
+    // On wake: SLP_EN auto-clears, devices may need re-init
+    return 0;
+}
+
+// Parse FADT for power management registers
+fn power_init_fadt(fadt_addr) {
+    if fadt_addr == 0 { return 0; }
+    acpi_fadt_addr = fadt_addr;
+
+    // PM1a_CNT_BLK at FADT offset +64 (4 bytes, I/O port)
+    acpi_pm1a_cnt = mem_read_u32(fadt_addr + 64);
+    // PM1b_CNT_BLK at FADT offset +68
+    acpi_pm1b_cnt = mem_read_u32(fadt_addr + 68);
+
+    // FADT revision >= 2: reset register at +116
+    let fadt_rev = mem_read_u8(fadt_addr + 8);
+    if fadt_rev >= 2 {
+        // Generic Address Structure at +116 (12 bytes):
+        //   +0: address_space (1), +1: bit_width (1), +4: address (8)
+        let addr_space = mem_read_u8(fadt_addr + 116);
+        if addr_space == 1 {  // I/O space
+            acpi_reset_reg = mem_read_u32(fadt_addr + 120);
+            acpi_reset_val = mem_read_u8(fadt_addr + 128);
+        }
+    }
+
+    // SCI_INT for power button events at +46
+    // let sci_irq = mem_read_u16(fadt_addr + 46);
+
+    print("  PM1a_CNT: 0x" + format_hex(acpi_pm1a_cnt, 4));
+    if acpi_pm1b_cnt != 0 {
+        print("  PM1b_CNT: 0x" + format_hex(acpi_pm1b_cnt, 4));
+    }
+    if acpi_reset_reg != 0 {
+        print("  Reset reg: 0x" + format_hex(acpi_reset_reg, 4) + " val: 0x" + format_hex(acpi_reset_val, 2));
+    }
+    return 1;
+}
+
+// Full ACPI power init: find FADT, parse it, get S5 sleep type
+fn power_init() {
+    let rsdp = acpi_find_rsdp();
+    if rsdp == 0 {
+        print("ACPI not found, power management limited.");
+        return 0;
+    }
+    let rsdp_info = acpi_parse_rsdp(rsdp);
+    let rsdt = rsdp_info[1];
+    if rsdt == 0 { return 0; }
+
+    // Find FADT (signature "FACP" = [70, 65, 67, 80])
+    let fadt = acpi_find_table(rsdt, [70, 65, 67, 80]);
+    if fadt != 0 {
+        power_init_fadt(fadt);
+
+        // Read DSDT address from FADT (+40)
+        let dsdt = mem_read_u32(fadt + 40);
+        if dsdt != 0 {
+            // Search DSDT for \_S5_ object to get SLP_TYP values
+            // The \_S5_ package typically looks like: 08 5F 53 35 5F 12 ...
+            // For QEMU/Bochs/Hyper-V the S5 SLP_TYP is usually 5
+            acpi_slp_typa = 5;  // default for QEMU
+            acpi_slp_typb = 0;
+        }
+    }
+    print("ACPI power management initialized.");
+    return 1;
+}
+
+print("power.hl loaded");
+print("Methods: ACPI shutdown/sleep, 8042/triple-fault reboot, QEMU fallback");

@@ -1,0 +1,238 @@
+// x86enc.hl -- x86_64 Machine Code Encoder (Kernel Module)
+//
+// Standalone encoder for generating x86_64 machine code at runtime.
+// Extracted from hl-bootstrap.hl S6 "x86enc" quadrant for use by
+// codegen.hl and kinterp.hl inside the kernel.
+//
+// Register encoding: RAX=0 RCX=1 RDX=2 RBX=3 RSP=4 RBP=5 RSI=6 RDI=7
+
+// === Single-byte instructions ===
+fn emit_cli(buf) { buf_emit(buf, 250); }
+fn emit_sti(buf) { buf_emit(buf, 251); }
+fn emit_hlt(buf) { buf_emit(buf, 244); }
+fn emit_cld(buf) { buf_emit(buf, 252); }
+fn emit_nop(buf) { buf_emit(buf, 144); }
+fn emit_ret(buf) { buf_emit(buf, 195); }
+fn emit_out_dx_al(buf) { buf_emit(buf, 238); }
+fn emit_in_al_dx(buf) { buf_emit(buf, 236); }
+
+// === I/O with immediate port ===
+fn emit_out_imm8_al(buf, port) { buf_emit(buf, 230); buf_emit(buf, port); }
+fn emit_in_al_imm8(buf, port) { buf_emit(buf, 228); buf_emit(buf, port); }
+
+// === Interrupts / privileged ===
+fn emit_int(buf, n) { buf_emit(buf, 205); buf_emit(buf, n); }
+fn emit_wrmsr_op(buf) { buf_emit(buf, 15); buf_emit(buf, 48); }
+fn emit_rdmsr_op(buf) { buf_emit(buf, 15); buf_emit(buf, 50); }
+fn emit_syscall_op(buf) { buf_emit(buf, 15); buf_emit(buf, 5); }
+fn emit_iretq(buf) { buf_emit(buf, 72); buf_emit(buf, 207); }
+
+// === 64-bit push/pop ===
+fn emit_push_r64(buf, r) { buf_emit(buf, 80 + r); }
+fn emit_pop_r64(buf, r)  { buf_emit(buf, 88 + r); }
+
+// === MOV r64, imm32 (sign-extended): REX.W C7 /0 id ===
+fn emit_mov_r64_imm32(buf, r, v) {
+    buf_emit(buf, 72); buf_emit(buf, 199);
+    buf_emit(buf, 192 + r);
+    buf_emit32(buf, v);
+}
+
+// === MOV r64, imm64: REX.W B8+r + imm64 ===
+fn emit_mov_r64_imm64(buf, r, v) {
+    buf_emit(buf, 72); buf_emit(buf, 184 + r);
+    buf_emit32(buf, v % 4294967296);
+    let hi = v / 4294967296;
+    if hi < 0 { hi = hi + 4294967296; }
+    buf_emit32(buf, hi % 4294967296);
+}
+
+// === MOV r64, r64: REX.W 89 /r mod=11 ===
+fn emit_mov_r64_r64(buf, dst, src) {
+    buf_emit(buf, 72); buf_emit(buf, 137);
+    buf_emit(buf, 192 + src * 8 + dst);
+}
+
+// === MOV r64, [r64] (load): REX.W 8B /r ===
+fn emit_mov_r64_mem(buf, dst, base) {
+    buf_emit(buf, 72); buf_emit(buf, 139);
+    if base == 4 { buf_emit(buf, dst * 8 + 4); buf_emit(buf, 36); }
+    else if base == 5 { buf_emit(buf, 64 + dst * 8 + base); buf_emit(buf, 0); }
+    else { buf_emit(buf, dst * 8 + base); }
+}
+
+// === MOV r64, [r64+disp8]: REX.W 8B mod=01 ===
+fn emit_mov_r64_mem_disp8(buf, dst, base, disp) {
+    buf_emit(buf, 72); buf_emit(buf, 139);
+    buf_emit(buf, 64 + dst * 8 + base);
+    if base == 4 { buf_emit(buf, 36); }
+    buf_emit(buf, disp % 256);
+}
+
+// === MOV [r64], r64 (store): REX.W 89 /r ===
+fn emit_mov_mem_r64(buf, base, src) {
+    buf_emit(buf, 72); buf_emit(buf, 137);
+    if base == 4 { buf_emit(buf, src * 8 + 4); buf_emit(buf, 36); }
+    else if base == 5 { buf_emit(buf, 64 + src * 8 + base); buf_emit(buf, 0); }
+    else { buf_emit(buf, src * 8 + base); }
+}
+
+// === MOV [r64+disp8], r64: REX.W 89 mod=01 ===
+fn emit_mov_mem_disp8_r64(buf, base, disp, src) {
+    buf_emit(buf, 72); buf_emit(buf, 137);
+    buf_emit(buf, 64 + src * 8 + base);
+    if base == 4 { buf_emit(buf, 36); }
+    buf_emit(buf, disp % 256);
+}
+
+// === ADD r64, imm8: REX.W 83 /0 ib ===
+fn emit_add_r64_imm8(buf, r, v) {
+    buf_emit(buf, 72); buf_emit(buf, 131);
+    buf_emit(buf, 192 + r);
+    buf_emit(buf, v % 256);
+}
+
+// === SUB r64, imm8: REX.W 83 /5 ib ===
+fn emit_sub_r64_imm8(buf, r, v) {
+    buf_emit(buf, 72); buf_emit(buf, 131);
+    buf_emit(buf, 232 + r);
+    buf_emit(buf, v % 256);
+}
+
+// === CMP r64, imm8: REX.W 83 /7 ib ===
+fn emit_cmp_r64_imm8(buf, r, v) {
+    buf_emit(buf, 72); buf_emit(buf, 131);
+    buf_emit(buf, 248 + r);
+    buf_emit(buf, v % 256);
+}
+
+// === ADD r64, r64: REX.W 01 /r ===
+fn emit_add_r64_r64(buf, dst, src) {
+    buf_emit(buf, 72); buf_emit(buf, 1);
+    buf_emit(buf, 192 + src * 8 + dst);
+}
+
+// === SUB r64, r64: REX.W 29 /r ===
+fn emit_sub_r64_r64(buf, dst, src) {
+    buf_emit(buf, 72); buf_emit(buf, 41);
+    buf_emit(buf, 192 + src * 8 + dst);
+}
+
+// === IMUL r64, r64: REX.W 0F AF /r ===
+fn emit_imul_r64_r64(buf, dst, src) {
+    buf_emit(buf, 72); buf_emit(buf, 15); buf_emit(buf, 175);
+    buf_emit(buf, 192 + dst * 8 + src);
+}
+
+// === XOR r64, r64: REX.W 31 /r ===
+fn emit_xor_r64_r64(buf, dst, src) {
+    buf_emit(buf, 72); buf_emit(buf, 49);
+    buf_emit(buf, 192 + src * 8 + dst);
+}
+
+// === CQO: REX.W 99 ===
+fn emit_cqo(buf) { buf_emit(buf, 72); buf_emit(buf, 153); }
+
+// === IDIV r64: REX.W F7 /7 ===
+fn emit_idiv_r64(buf, r) {
+    buf_emit(buf, 72); buf_emit(buf, 247);
+    buf_emit(buf, 248 + r);
+}
+
+// === SHR r64, imm8: REX.W C1 /5 ib ===
+fn emit_shr_r64_imm8(buf, r, v) {
+    buf_emit(buf, 72); buf_emit(buf, 193);
+    buf_emit(buf, 232 + r);
+    buf_emit(buf, v);
+}
+
+// === SHL r64, imm8: REX.W C1 /4 ib ===
+fn emit_shl_r64_imm8(buf, r, v) {
+    buf_emit(buf, 72); buf_emit(buf, 193);
+    buf_emit(buf, 224 + r);
+    buf_emit(buf, v);
+}
+
+// === Short jumps ===
+fn emit_jmp_rel8(buf, off)  { buf_emit(buf, 235); buf_emit(buf, off % 256); }
+fn emit_je_rel8(buf, off)   { buf_emit(buf, 116); buf_emit(buf, off % 256); }
+fn emit_jne_rel8(buf, off)  { buf_emit(buf, 117); buf_emit(buf, off % 256); }
+
+// === CALL rel32: E8 cd ===
+fn emit_call_rel32(buf, off) { buf_emit(buf, 232); buf_emit32(buf, off); }
+
+// === JMP rax: FF E0 ===
+fn emit_jmp_rax(buf) { buf_emit(buf, 255); buf_emit(buf, 224); }
+
+// === TEST r64, r64: REX.W 85 /r ===
+fn emit_test_r64_r64(buf, r1, r2) {
+    buf_emit(buf, 72); buf_emit(buf, 133);
+    buf_emit(buf, 192 + r2 * 8 + r1);
+}
+
+// === CMP r64, r64: REX.W 39 /r ===
+fn emit_cmp_r64_r64(buf, r1, r2) {
+    buf_emit(buf, 72); buf_emit(buf, 57);
+    buf_emit(buf, 192 + r2 * 8 + r1);
+}
+
+// === SETcc AL: 0F 9x C0 ===
+fn emit_sete_al(buf)  { buf_emit(buf, 15); buf_emit(buf, 148); buf_emit(buf, 192); }
+fn emit_setne_al(buf) { buf_emit(buf, 15); buf_emit(buf, 149); buf_emit(buf, 192); }
+fn emit_setl_al(buf)  { buf_emit(buf, 15); buf_emit(buf, 156); buf_emit(buf, 192); }
+fn emit_setle_al(buf) { buf_emit(buf, 15); buf_emit(buf, 158); buf_emit(buf, 192); }
+fn emit_setg_al(buf)  { buf_emit(buf, 15); buf_emit(buf, 159); buf_emit(buf, 192); }
+fn emit_setge_al(buf) { buf_emit(buf, 15); buf_emit(buf, 157); buf_emit(buf, 192); }
+
+// === MOVZX RAX, AL: REX.W 0F B6 C0 ===
+fn emit_movzx_rax_al(buf) {
+    buf_emit(buf, 72); buf_emit(buf, 15);
+    buf_emit(buf, 182); buf_emit(buf, 192);
+}
+
+// === NEG r64: REX.W F7 /3 ===
+fn emit_neg_r64(buf, r) {
+    buf_emit(buf, 72); buf_emit(buf, 247);
+    buf_emit(buf, 216 + r);
+}
+
+// === NOT r64: REX.W F7 /2 ===
+fn emit_not_r64(buf, r) {
+    buf_emit(buf, 72); buf_emit(buf, 247);
+    buf_emit(buf, 208 + r);
+}
+
+// === LEA r64, [rsp]: REX.W 8D 04 24 ===
+fn emit_lea_r64_rsp(buf, dst) {
+    buf_emit(buf, 72); buf_emit(buf, 141);
+    buf_emit(buf, dst * 8 + 4); buf_emit(buf, 36);
+}
+
+// === Control registers ===
+fn emit_mov_cr0_eax(buf)  { buf_emit(buf, 15); buf_emit(buf, 34); buf_emit(buf, 192); }
+fn emit_mov_eax_cr0(buf)  { buf_emit(buf, 15); buf_emit(buf, 32); buf_emit(buf, 192); }
+fn emit_mov_cr3_eax(buf)  { buf_emit(buf, 15); buf_emit(buf, 34); buf_emit(buf, 216); }
+fn emit_mov_eax_cr4(buf)  { buf_emit(buf, 15); buf_emit(buf, 32); buf_emit(buf, 224); }
+fn emit_mov_cr4_eax(buf)  { buf_emit(buf, 15); buf_emit(buf, 34); buf_emit(buf, 224); }
+
+// === LIDT / LGDT ===
+fn emit_lidt_mem(buf, base) {
+    buf_emit(buf, 15); buf_emit(buf, 1);
+    buf_emit(buf, 24 + base);
+}
+
+fn emit_lgdt_mem(buf, base) {
+    buf_emit(buf, 15); buf_emit(buf, 1);
+    buf_emit(buf, 16 + base);
+}
+
+// === STOSQ (rep stosq): F3 48 AB ===
+fn emit_rep_stosq(buf) { buf_emit(buf, 243); buf_emit(buf, 72); buf_emit(buf, 171); }
+
+// === Buffer size helper (alias for codegen compatibility) ===
+fn emit_x86(buf) {
+    // Placeholder: returns buffer for downstream use
+    return buf;
+}
+
+print("x86enc.hl loaded: 60+ x86_64 instruction encoders");

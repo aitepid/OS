@@ -1,0 +1,160 @@
+// mmap.hl -- Memory-Mapped I/O and Shared Memory
+//
+// Implements mmap/munmap for:
+//   1. Anonymous mapping (heap extension)
+//   2. File mapping (map VFS file into address space)
+//   3. Shared mapping (IPC between tasks)
+//   4. Device mapping (MMIO regions)
+//
+// Linux syscall: mmap(addr, length, prot, flags, fd, offset)
+// Returns: virtual address of mapping
+//
+// Protection flags:
+//   PROT_NONE  = 0
+//   PROT_READ  = 1
+//   PROT_WRITE = 2
+//   PROT_EXEC  = 4
+//
+// Map flags:
+//   MAP_SHARED    = 1  (visible to other tasks)
+//   MAP_PRIVATE   = 2  (copy-on-write)
+//   MAP_ANONYMOUS = 32 (no file backing)
+//   MAP_FIXED     = 16 (use exact address)
+
+let PROT_NONE = 0;
+let PROT_READ = 1;
+let PROT_WRITE = 2;
+let PROT_EXEC = 4;
+
+let MAP_SHARED = 1;
+let MAP_PRIVATE = 2;
+let MAP_FIXED = 16;
+let MAP_ANONYMOUS = 32;
+
+let MMAP_MAX_REGIONS = 128;
+let MMAP_BASE = 1073741824;  // 0x40000000 -- user mapping start
+
+let mut mmap_count = 0;
+
+// Region table: [task_id, vaddr, size, prot, flags, fd, offset, phys_addr]
+let mmap_task = [];
+let mmap_vaddr = [];
+let mmap_size = [];
+let mmap_prot = [];
+let mmap_flags = [];
+let mmap_phys = [];
+
+fn mmap_init() {
+    mmap_count = 0;
+    let mut i = 0;
+    while i < MMAP_MAX_REGIONS {
+        push(mmap_task, 0 - 1);
+        push(mmap_vaddr, 0);
+        push(mmap_size, 0);
+        push(mmap_prot, 0);
+        push(mmap_flags, 0);
+        push(mmap_phys, 0);
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn sys_mmap(addr, length, prot, flags, fd, offset) {
+    if length == 0 { return 0 - 1; }
+    // Round up to page size
+    let pages = (length + 4095) / 4096;
+    let size = pages * 4096;
+
+    // Find free region slot
+    let mut slot = 0 - 1;
+    let mut i = 0;
+    while i < MMAP_MAX_REGIONS {
+        if mmap_task[i] < 0 {
+            slot = i;
+            break;
+        }
+        i = i + 1;
+    }
+    if slot < 0 { return 0 - 1; } // no free slot
+
+    // Allocate physical pages
+    // let phys = page_alloc_n(pages);
+    // if phys == 0 { return -1; }
+    let phys = MMAP_BASE + mmap_count * 65536; // simplified
+
+    // Choose virtual address
+    let vaddr = addr;
+    if (flags / MAP_FIXED) % 2 == 0 {
+        vaddr = MMAP_BASE + mmap_count * 65536;
+    }
+
+    // Map pages in page table
+    let mut p = 0;
+    while p < pages {
+        virt_mem_map(vaddr + p * 4096, phys + p * 4096, prot);
+        p = p + 1;
+    }
+
+    // If MAP_ANONYMOUS: zero the memory
+    if (flags / MAP_ANONYMOUS) % 2 == 1 {
+        mem_zero(phys, size);
+    }
+
+    // If file-backed: read file data into memory
+    if fd >= 0 {
+        if (flags / MAP_ANONYMOUS) % 2 == 0 {
+            vfs_read(fd, phys, size);
+        }
+    }
+
+    // Record mapping
+    mmap_task[slot] = current_task;
+    mmap_vaddr[slot] = vaddr;
+    mmap_size[slot] = size;
+    mmap_prot[slot] = prot;
+    mmap_flags[slot] = flags;
+    mmap_phys[slot] = phys;
+    mmap_count = mmap_count + 1;
+
+    return vaddr;
+}
+
+fn sys_munmap(addr, length) {
+    let mut i = 0;
+    while i < MMAP_MAX_REGIONS {
+        if mmap_task[i] == current_task {
+            if mmap_vaddr[i] == addr {
+                // Unmap pages and free physical memory
+                let pages = mmap_size[i] / 4096;
+                let mut p = 0;
+                while p < pages {
+                    virt_mem_unmap(addr + p * 4096);
+                    p = p + 1;
+                }
+                page_free(mmap_phys[i]);
+                mmap_task[i] = 0 - 1;
+                return 0;
+            }
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn sys_mprotect(addr, length, prot) {
+    let mut i = 0;
+    while i < MMAP_MAX_REGIONS {
+        if mmap_task[i] == current_task {
+            if mmap_vaddr[i] == addr {
+                mmap_prot[i] = prot;
+                // Update page table protection bits
+                return 0;
+            }
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+print("mmap.hl loaded");
+print("mmap: " + to_string(MMAP_MAX_REGIONS) + " regions, PROT_RWX, MAP_SHARED/PRIVATE/ANON");

@@ -1,0 +1,200 @@
+// test_build_chain.hl -- Phase 0.4 端到端验证
+// 模拟 image_builder.build() 调用链中的所有关键模式
+// 验证: set_at + byte_array + !expr + else-if + floor + le_u32 + 数组索引赋值
+
+// ============================================================
+// T1: set_at 内置函数
+// ============================================================
+let mut arr = [10, 20, 30, 40];
+set_at(arr, 1, 99);
+print("T1 set_at: " + to_string(arr[1]));
+
+// ============================================================
+// T2: byte_array 内置函数
+// ============================================================
+let mut img = byte_array(8);
+print("T2 byte_array len: " + to_string(len(img)));
+print("T2 byte_array[0]: " + to_string(img[0]));
+
+// ============================================================
+// T3: 数组索引赋值 arr[i] = val
+// ============================================================
+img[0] = 170;
+img[7] = 85;
+print("T3 img[0]: " + to_string(img[0]));
+print("T3 img[7]: " + to_string(img[7]));
+
+// ============================================================
+// T4: 复合索引赋值 arr[expr] = val
+// ============================================================
+let mut offset = 3;
+img[offset + 1] = 255;
+print("T4 img[4]: " + to_string(img[4]));
+
+// ============================================================
+// T5: !expr 逻辑非
+// ============================================================
+let mut has_err = false;
+if !has_err {
+    print("T5 !false: ok");
+}
+let flag = 1;
+if !flag {
+    print("T5 ERROR: should not reach");
+}
+
+// ============================================================
+// T6: else if 链 (inline)
+// ============================================================
+fn test_elseif(ch) {
+    let mut code = 32;
+    if ch == "\r" { code = 13; }
+    else if ch == "\n" { code = 10; }
+    else { code = 65; }
+    return code;
+}
+print("T6 elseif CR: " + to_string(test_elseif("\r")));
+print("T6 elseif LF: " + to_string(test_elseif("\n")));
+print("T6 elseif other: " + to_string(test_elseif("A")));
+
+// ============================================================
+// T7: else if 链 (multi-line else block)
+// ============================================================
+fn test_elseif_multi(ch) {
+    let mut code = 32;
+    if ch == "\r" { code = 13; }
+    else if ch == "\n" { code = 10; }
+    else {
+        let ascii = " !A";
+        let mut ai = 0;
+        while ai < len(ascii) {
+            if ascii[ai] == ch { code = ai + 32; }
+            ai = ai + 1;
+        }
+    }
+    return code;
+}
+print("T7 multi else A: " + to_string(test_elseif_multi("A")));
+print("T7 multi else !: " + to_string(test_elseif_multi("!")));
+
+// ============================================================
+// T8: floor 内置函数
+// ============================================================
+print("T8 floor(3.7): " + to_string(floor(7 / 2)));
+print("T8 floor(100/256): " + to_string(floor(100 / 256)));
+
+// ============================================================
+// T9: le_u32 内置函数
+// ============================================================
+let le = le_u32(2097152);
+print("T9 le_u32[0]: " + to_string(le[0]));
+print("T9 le_u32[1]: " + to_string(le[1]));
+print("T9 le_u32[2]: " + to_string(le[2]));
+print("T9 le_u32[3]: " + to_string(le[3]));
+
+// ============================================================
+// T10: 负数模运算 + set_at (反向 patch)
+// ============================================================
+let mut patch_buf = [0, 0, 0, 0];
+let back_off = 10 - 100 - 4;
+set_at(patch_buf, 0, back_off % 256);
+set_at(patch_buf, 1, (back_off / 256) % 256);
+print("T10 neg mod[0]: " + to_string(patch_buf[0]));
+print("T10 neg mod[1]: " + to_string(patch_buf[1]));
+
+// ============================================================
+// T11: 模拟 x86enc + image_builder 核心流程
+// ============================================================
+quadrant sim_x86enc {
+    fn new_buf(origin) { return [[], origin, [], []]; }
+    fn buf_len(buf) { return len(buf[0]); }
+    fn buf_emit(buf, b) { push(buf[0], b % 256); }
+    fn buf_emit16(buf, v) { buf_emit(buf, v % 256); buf_emit(buf, (v / 256) % 256); }
+    fn buf_emit32(buf, v) { buf_emit16(buf, v % 65536); buf_emit16(buf, (v / 65536) % 65536); }
+    fn buf_pad_to(buf, n) { while len(buf[0]) < n { push(buf[0], 0); } }
+    fn emit_cli(buf) { buf_emit(buf, 250); }
+    fn emit_sti(buf) { buf_emit(buf, 251); }
+    fn emit_hlt(buf) { buf_emit(buf, 244); }
+}
+
+fn sim_build_kernel() {
+    let buf = sim_x86enc.new_buf(1048576);
+    sim_x86enc.emit_cli(buf);
+    sim_x86enc.emit_sti(buf);
+    sim_x86enc.emit_hlt(buf);
+    // Pad to simulate kernel
+    sim_x86enc.buf_pad_to(buf, 16);
+    return buf[0];
+}
+
+fn sim_build_stage1(sectors) {
+    let buf = sim_x86enc.new_buf(31744);
+    sim_x86enc.emit_cli(buf);
+    // Simulate MBR: pad to 510 + signature
+    sim_x86enc.buf_pad_to(buf, 510);
+    sim_x86enc.buf_emit(buf, 85);
+    sim_x86enc.buf_emit(buf, 170);
+    return buf[0];
+}
+
+fn sim_build() {
+    let kern_bytes = sim_build_kernel();
+    let kern_sectors = (len(kern_bytes) + 511) / 512;
+    let s2_sectors = 1;
+    let total_sectors = 1 + s2_sectors + kern_sectors;
+    let s1_bytes = sim_build_stage1(s2_sectors + kern_sectors);
+
+    // Simulate stage2 (just a few bytes)
+    let s2_buf = sim_x86enc.new_buf(32768);
+    sim_x86enc.emit_cli(s2_buf);
+    sim_x86enc.emit_sti(s2_buf);
+    let s2_bytes = s2_buf[0];
+
+    let img_size = total_sectors * 512;
+    let mut img = byte_array(img_size);
+
+    // Copy stage 1
+    let mut i = 0;
+    while i < len(s1_bytes) {
+        if i < img_size { img[i] = s1_bytes[i]; }
+        i = i + 1;
+    }
+
+    // Copy stage 2
+    i = 0;
+    while i < len(s2_bytes) {
+        if 512 + i < img_size { img[512 + i] = s2_bytes[i]; }
+        i = i + 1;
+    }
+
+    // Copy kernel
+    let kern_start = (1 + s2_sectors) * 512;
+    i = 0;
+    while i < len(kern_bytes) {
+        if kern_start + i < img_size { img[kern_start + i] = kern_bytes[i]; }
+        i = i + 1;
+    }
+
+    return img;
+}
+
+let test_img = sim_build();
+print("T11 img_len: " + to_string(len(test_img)));
+print("T11 mbr_sig[510]: " + to_string(test_img[510]));
+print("T11 mbr_sig[511]: " + to_string(test_img[511]));
+print("T11 s1_byte0: " + to_string(test_img[0]));
+print("T11 s2_byte0: " + to_string(test_img[512]));
+print("T11 kern_byte0: " + to_string(test_img[1024]));
+
+// ============================================================
+// T12: file_write + file_read 验证
+// ============================================================
+let mut test_data = byte_array(4);
+test_data[0] = 72;
+test_data[1] = 76;
+test_data[2] = 33;
+test_data[3] = 10;
+file_write("test_output.bin", test_data);
+print("T12 file_write: ok");
+
+print("=== All Phase 0.4 tests complete ===");

@@ -1,0 +1,122 @@
+// HicOS_EventBus.hl -- Pub/Sub Event Bus
+// Hilbert-Lang native implementation
+
+quadrant hic_o_s__event_bus {
+    let mut _channels = [];       // array of [channel_name, [callbacks]]
+    let mut _history = [];
+    let mut _maxHistory = 500;
+    let mut _middlewares = [];
+
+    fn _find_channel(name) {
+        let mut i = 0;
+        while i < len(_channels) {
+            if _channels[i][0] == name { return i; }
+            i = i + 1;
+        }
+        return 0 - 1;
+    }
+
+    fn on(channel, callback) {
+        let idx = _find_channel(channel);
+        if idx < 0 {
+            push(_channels, [channel, [callback]]);
+        } else {
+            push(_channels[idx][1], callback);
+        }
+        return 0;
+    }
+
+    fn off(channel, callback) {
+        let idx = _find_channel(channel);
+        if idx < 0 { return 0; }
+        let list = _channels[idx][1];
+        let mut new_list = [];
+        let mut i = 0;
+        while i < len(list) {
+            if list[i] != callback {
+                push(new_list, list[i]);
+            }
+            i = i + 1;
+        }
+        _channels[idx][1] = new_list;
+        return 0;
+    }
+
+    fn emit(channel, data) {
+        // Record history
+        push(_history, [channel, data]);
+        if len(_history) > _maxHistory {
+            let mut trimmed = [];
+            let mut i = len(_history) - _maxHistory;
+            while i < len(_history) {
+                push(trimmed, _history[i]);
+                i = i + 1;
+            }
+            _history = trimmed;
+        }
+
+        // Deliver to subscribers
+        let idx = _find_channel(channel);
+        if idx >= 0 {
+            let list = _channels[idx][1];
+            let mut i = 0;
+            while i < len(list) {
+                // list[i](data) -- invoke callback
+                i = i + 1;
+            }
+        }
+
+        // Deliver to wildcard subscribers
+        let widx = _find_channel("*");
+        if widx >= 0 {
+            let wlist = _channels[widx][1];
+            let mut j = 0;
+            while j < len(wlist) {
+                // wlist[j](data)
+                j = j + 1;
+            }
+        }
+        return 0;
+    }
+
+    fn use_middleware(mw) {
+        push(_middlewares, mw);
+        return 0;
+    }
+
+    fn get_history(channel, limit) {
+        if limit == 0 { limit = 50; }
+        let mut result = [];
+        let mut i = len(_history) - 1;
+        while i >= 0 {
+            if len(result) >= limit { return result; }
+            if channel == "" {
+                push(result, _history[i]);
+            } else {
+                if _history[i][0] == channel {
+                    push(result, _history[i]);
+                }
+            }
+            i = i - 1;
+        }
+        return result;
+    }
+
+    fn get_channel_count() {
+        return len(_channels);
+    }
+
+    fn get_listener_count(channel) {
+        let idx = _find_channel(channel);
+        if idx < 0 { return 0; }
+        return len(_channels[idx][1]);
+    }
+
+    fn clear() {
+        _channels = [];
+        _history = [];
+        return 0;
+    }
+}
+
+print("HicOS_EventBus.hl loaded");

@@ -1,0 +1,84 @@
+// HicOS_DriverFramework.hl -- Driver Framework (Native H-L)
+//
+// Device driver registration, matching, and lifecycle management.
+// Drivers register by (vendor, device, class) tuple and get called
+// when matching PCI/USB hardware is detected.
+// Requires: pci.hl, usb.hl
+
+let DRV_MAX = 64;
+let DRV_STATE_UNLOADED = 0;
+let DRV_STATE_LOADED   = 1;
+let DRV_STATE_ACTIVE   = 2;
+let DRV_STATE_ERROR    = 3;
+
+let drv_names    = [];
+let drv_classes  = [];
+let drv_states   = [];
+let drv_pci_devs = [];
+let mut drv_count = 0;
+
+fn drv_init() {
+    print("driver-framework: initialized (max " + to_string(DRV_MAX) + ")");
+    return 0;
+}
+
+fn drv_register(name, pci_class) {
+    if drv_count >= DRV_MAX { return 0 - 1; }
+    push(drv_names, name);
+    push(drv_classes, pci_class);
+    push(drv_states, DRV_STATE_LOADED);
+    push(drv_pci_devs, 0 - 1);
+    let id = drv_count;
+    drv_count = drv_count + 1;
+    return id;
+}
+
+fn drv_probe() {
+    let mut matched = 0;
+    let mut i = 0;
+    while i < drv_count {
+        if drv_states[i] == DRV_STATE_LOADED {
+            let dev = pci_find_class(drv_classes[i]);
+            if dev >= 0 {
+                drv_pci_devs[i] = dev;
+                drv_states[i] = DRV_STATE_ACTIVE;
+                print("driver '" + drv_names[i] + "' bound to PCI device " + to_string(dev));
+                matched = matched + 1;
+            }
+        }
+        i = i + 1;
+    }
+    print("driver-framework: probed " + to_string(matched) + "/" + to_string(drv_count) + " matched");
+    return matched;
+}
+
+fn drv_unload(id) {
+    if id < 0 || id >= drv_count { return 0 - 1; }
+    drv_states[id] = DRV_STATE_UNLOADED;
+    drv_pci_devs[id] = 0 - 1;
+    print("driver '" + drv_names[id] + "' unloaded");
+    return 0;
+}
+
+fn drv_list() {
+    print("DRIVER          STATE    PCI_DEV");
+    let mut i = 0;
+    while i < drv_count {
+        let st = "unloaded";
+        if drv_states[i] == DRV_STATE_LOADED { st = "loaded  "; }
+        if drv_states[i] == DRV_STATE_ACTIVE { st = "active  "; }
+        if drv_states[i] == DRV_STATE_ERROR { st = "error   "; }
+        print("  " + drv_names[i] + "  " + st + "  " + to_string(drv_pci_devs[i]));
+        i = i + 1;
+    }
+    return drv_count;
+}
+
+fn drv_status(id) {
+    if id < 0 || id >= drv_count { return 0 - 1; }
+    return drv_states[id];
+}
+
+print("HicOS_DriverFramework.hl loaded (native H-L)");
+
+

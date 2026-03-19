@@ -1,0 +1,64 @@
+// hilbert.hl -- Hilbert Curve Encoding/Decoding
+//
+// Core HicOS spatial primitive. Used by:
+//   - ipc.hl: spatial message routing
+//   - syscall.hl: SYS_HILBERT_ENCODE/DECODE/DIST
+//   - shell.hl: Hilbert addressing commands
+//   - hilbert_alloc.hl: spatial memory allocation
+
+// 2D Hilbert curve: map (x,y) on NxN grid to 1D index
+// N must be power of 2. Standard rotation-based algorithm.
+fn hilbert_xy_to_d(n, x, y) {
+    let mut rx = 0;
+    let mut ry = 0;
+    let mut d = 0;
+    let mut s = n / 2;
+    let mut px = x;
+    let mut py = y;
+    while s > 0 {
+        if (px % (s * 2)) >= s { rx = 1; } else { rx = 0; }
+        if (py % (s * 2)) >= s { ry = 1; } else { ry = 0; }
+        d = d + s * s * ((3 * rx) ^ ry);
+        // Rotate quadrant
+        if ry == 0 {
+            if rx == 1 {
+                px = s - 1 - px;
+                py = s - 1 - py;
+            }
+            let tmp = px;
+            px = py;
+            py = tmp;
+        }
+        s = s / 2;
+    }
+    return d;
+}
+
+// 3D encoding: simple linearization (sector, x, y)
+fn hilbert_encode(x, y, z) {
+    return x * 1048576 + y * 1024 + z;
+}
+
+fn hilbert_decode(key) {
+    let x = key / 1048576;
+    let y = (key / 1024) % 1024;
+    let z = key % 1024;
+    return [x, y, z];
+}
+
+// Manhattan distance in Hilbert space
+fn hilbert_dist(a, b) {
+    if a >= b { return a - b; }
+    return b - a;
+}
+
+// Self-test
+fn _hilbert_selftest() {
+    let k1 = hilbert_encode(1, 2, 3);
+    let k2 = hilbert_encode(2, 2, 3);
+    let d = hilbert_dist(k1, k2);
+    print("hilbert selftest: encode(1,2,3)=" + to_string(k1) + " dist=" + to_string(d));
+    return 0;
+}
+
+_hilbert_selftest();

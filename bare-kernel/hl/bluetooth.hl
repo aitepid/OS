@@ -1,0 +1,116 @@
+// bluetooth.hl -- Bluetooth 4.0+ (BLE) Framework
+//
+// Provides HCI command interface for USB Bluetooth adapters.
+// BT uses USB HID class or dedicated BT USB interface.
+//
+// HCI (Host Controller Interface) layers:
+//   HCI commands -> Controller (via USB bulk)
+//   HCI events   <- Controller (via USB interrupt)
+//   ACL data     <-> Controller (via USB bulk)
+//
+// HCI command format:
+//   +0: OpCode (2) -- OGF(6 bits) + OCF(10 bits)
+//   +2: Parameter Total Length (1)
+//   +3: Parameters (variable)
+//
+// BLE advertising: scan for nearby devices broadcasting
+
+let BT_STATE_OFF = 0;
+let BT_STATE_ON = 1;
+let BT_STATE_SCANNING = 2;
+let BT_STATE_CONNECTED = 3;
+
+let mut bt_state = 0;
+
+// HCI OGF (Opcode Group Field)
+let HCI_OGF_LINK_CTL = 1;
+let HCI_OGF_LINK_POLICY = 2;
+let HCI_OGF_CTRL_BASEBAND = 3;
+let HCI_OGF_INFO = 4;
+let HCI_OGF_LE = 8;
+
+// Common HCI commands (OGF << 10 | OCF)
+let HCI_RESET = 3075;               // OGF=3, OCF=3: 0x0C03
+let HCI_READ_BD_ADDR = 4105;        // OGF=4, OCF=9: 0x1009
+let HCI_LE_SET_SCAN_PARAMS = 8203;  // OGF=8, OCF=11: 0x200B
+let HCI_LE_SET_SCAN_ENABLE = 8204;  // OGF=8, OCF=12: 0x200C
+let HCI_LE_CREATE_CONN = 8205;      // OGF=8, OCF=13: 0x200D
+
+// Device scan results (8 max)
+let BT_MAX_DEVICES = 8;
+let mut bt_scan_count = 0;
+let bt_scan_addrs = [
+    [0,0,0,0,0,0], [0,0,0,0,0,0], [0,0,0,0,0,0], [0,0,0,0,0,0],
+    [0,0,0,0,0,0], [0,0,0,0,0,0], [0,0,0,0,0,0], [0,0,0,0,0,0]
+];
+let bt_scan_rssi = [0, 0, 0, 0, 0, 0, 0, 0];
+let bt_scan_names = ["", "", "", "", "", "", "", ""];
+
+fn bt_init() {
+    bt_state = BT_STATE_OFF;
+    // Send HCI_RESET
+    // bt_hci_cmd(HCI_RESET, []);
+    // Wait for Command Complete event
+    bt_state = BT_STATE_ON;
+    return 0;
+}
+
+fn bt_hci_cmd(opcode, params) {
+    let mut pkt = [];
+    // HCI command indicator (0x01 for USB)
+    push(pkt, 1);
+    // OpCode (little-endian)
+    push(pkt, opcode % 256);
+    push(pkt, (opcode / 256) % 256);
+    // Parameter length
+    push(pkt, len(params));
+    // Parameters
+    let mut i = 0;
+    while i < len(params) {
+        push(pkt, params[i]);
+        i = i + 1;
+    }
+    // Send via USB bulk OUT
+    return 0;
+}
+
+fn bt_scan_start() {
+    if bt_state == BT_STATE_OFF { return 0 - 1; }
+    bt_state = BT_STATE_SCANNING;
+    bt_scan_count = 0;
+    // Set scan parameters: active scan, 10ms interval
+    // bt_hci_cmd(HCI_LE_SET_SCAN_PARAMS, [1, 16, 0, 16, 0, 0, 0]);
+    // Enable scanning
+    // bt_hci_cmd(HCI_LE_SET_SCAN_ENABLE, [1, 0]);
+    return 0;
+}
+
+fn bt_scan_stop() {
+    // bt_hci_cmd(HCI_LE_SET_SCAN_ENABLE, [0, 0]);
+    bt_state = BT_STATE_ON;
+    return bt_scan_count;
+}
+
+fn bt_connect(device_index) {
+    if device_index < 0 { return 0 - 1; }
+    if device_index >= bt_scan_count { return 0 - 1; }
+    // bt_hci_cmd(HCI_LE_CREATE_CONN, addr + params);
+    bt_state = BT_STATE_CONNECTED;
+    return 0;
+}
+
+fn bt_disconnect() {
+    // Send HCI Disconnect command
+    bt_state = BT_STATE_ON;
+    return 0;
+}
+
+fn bt_status() {
+    if bt_state == BT_STATE_OFF { return "Bluetooth OFF"; }
+    if bt_state == BT_STATE_SCANNING { return "Scanning BLE..."; }
+    if bt_state == BT_STATE_CONNECTED { return "Connected"; }
+    return "Bluetooth ON (idle)";
+}
+
+print("bluetooth.hl loaded");
+print("Bluetooth 4.0 BLE: HCI over USB, scan, connect");

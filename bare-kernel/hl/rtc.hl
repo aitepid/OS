@@ -1,0 +1,40 @@
+// rtc.hl -- Real-Time Clock (CMOS RTC) -- Extended Functions
+//
+// Core RTC functions (rtc_read_reg, rtc_read_time, get_ticks) are in timer.hl.
+// This module provides extended formatting and convenience wrappers.
+//
+// CMOS registers:
+//   0x00: Seconds (BCD)
+//   0x02: Minutes (BCD)
+//   0x04: Hours   (BCD, 24h)
+//   0x07: Day of month (BCD)
+//   0x08: Month (BCD)
+//   0x09: Year (BCD, 00-99)
+//   0x0A: Status Register A (bit 7 = update in progress)
+
+fn rtc_wait_ready() {
+    // Wait until update-in-progress flag clears
+    let mut timeout = 10000;
+    while timeout > 0 {
+        let status = rtc_read_reg(10); // register 0x0A
+        if (status / 128) % 2 == 0 { return 0; }
+        timeout = timeout - 1;
+    }
+    return 0;
+}
+
+// Format: "YYYY-MM-DD HH:MM:SS"
+fn rtc_format_time() {
+    let t = rtc_read_time();
+    return to_string(t[0]) + "-"
+         + to_string(t[1]) + "-"
+         + to_string(t[2]) + " "
+         + to_string(t[3]) + ":"
+         + to_string(t[4]) + ":"
+         + to_string(t[5]);
+}
+
+// Note: uptime_secs() is defined in timer.hl
+
+print("rtc.hl loaded");
+print("CMOS RTC: BCD date/time via ports 0x70/0x71");

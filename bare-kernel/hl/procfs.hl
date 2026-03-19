@@ -1,0 +1,79 @@
+// procfs.hl -- /proc Pseudo-Filesystem
+//
+// Exposes kernel state as readable files under /proc.
+// Modeled after Linux procfs.
+//
+// Virtual files:
+//   /proc/version     -- kernel version string
+//   /proc/uptime      -- seconds since boot
+//   /proc/meminfo     -- memory statistics
+//   /proc/cpuinfo     -- CPU information
+//   /proc/mounts      -- mounted filesystems
+//   /proc/stat        -- scheduler statistics
+//   /proc/net/arp     -- ARP table
+//   /proc/net/tcp     -- TCP connections
+//   /proc/self/status -- current task info
+//   /proc/<pid>/status -- per-task info
+
+fn procfs_init() {
+    // Register /proc as a VFS mount point
+    // vfs_mount("/proc", "procfs", 0);
+    return 0;
+}
+
+fn procfs_read(path) {
+    if path == "/proc/version" {
+        return "HicOS 4.0 (Hilbert-Lang Kernel, 99 modules, x86_64)";
+    }
+
+    if path == "/proc/uptime" {
+        let secs = uptime_secs();
+        return to_string(secs) + " " + to_string(secs);  // uptime idle_time
+    }
+
+    if path == "/proc/meminfo" {
+        let total_kb = 32768 * 4;  // 128 MB
+        let free_kb = (32768 - 1025) * 4;
+        return "MemTotal: " + to_string(total_kb) + " kB\n"
+             + "MemFree:  " + to_string(free_kb) + " kB\n"
+             + "SwapTotal: 65536 kB\n"
+             + "SwapFree:  " + to_string((16384 - swap_used) * 4) + " kB\n";
+    }
+
+    if path == "/proc/cpuinfo" {
+        return "processor: 0\n"
+             + "model name: H-L Virtual CPU @ 100 MHz\n"
+             + "cpu cores: " + to_string(smp_cpu_count()) + "\n";
+    }
+
+    if path == "/proc/mounts" {
+        return "ramfs / ramfs rw 0 0\n"
+             + "devfs /dev devfs rw 0 0\n"
+             + "procfs /proc procfs ro 0 0\n";
+    }
+
+    if path == "/proc/stat" {
+        return "tasks: 64 max\n"
+             + "scheduler: CFS\n"
+             + "context_switches: 0\n";
+    }
+
+    if path == "/proc/net/arp" {
+        return "IP address    HW address         Flags\n";
+    }
+
+    if path == "/proc/net/tcp" {
+        return "sl  local_address  rem_address  st\n";
+    }
+
+    if path == "/proc/self/status" {
+        return "Pid: " + to_string(current_task) + "\n"
+             + "Uid: " + to_string(current_uid) + "\n"
+             + "Gid: " + to_string(current_gid) + "\n";
+    }
+
+    return "";  // unknown proc file
+}
+
+print("procfs.hl loaded");
+print("/proc: version uptime meminfo cpuinfo mounts stat net/arp net/tcp self/status");

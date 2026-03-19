@@ -1,0 +1,170 @@
+// kernel-loader.hl -- Converted from kernel-loader.js
+// Hilbert-Lang native implementation
+
+// HicOS WASM Kernel Loader
+// Dynamically loads and initializes the Rust/WASM native kernel core
+// + SharedArrayBuffer IPC bridge
+// 
+// Usage:
+//   import { initKernel, createIpcChannel } from './kernel-loader.js';
+//   let kernel = await initKernel();
+//   let ipc = await createIpcChannel(1024);
+//   ipc.push(1, 10, 20, 30, Date.now() & 4294967295, 42);
+
+let _kernelModule = nil;
+
+// Initialize the Rust/WASM kernel core
+// @returns {Promise<Object>} WASM exports
+fn init_kernel() {
+    if (_kernelModule) return _kernelModule;
+
+    // [try] {
+// Dynamic import of wasm-pack generated bindings
+        let wasm = import('./pkg/kernel-core/hicos_kernel_core.js');
+        wasm.default(); // Initialize WASM module
+
+        _kernelModule = wasm;
+
+        let version = wasm.hicos_kernel_init();
+        print("HicOS Kernel Loader: " + version + "");
+        print("HicOS Kernel Loader: WASM module initialized");
+        print("HicOS Kernel Loader: IPC SharedArrayBuffer bridge available");
+
+        return wasm;
+    } catch (e) {
+        print('HicOS Kernel Loader: WASM unavailable, falling back to JS', e.message);
+        return _createJsFallback();
+    }
+}
+
+// Create a SharedArrayBuffer-backed IPC channel.
+// Returns an object that both main thread and Workers can push/pop on.
+// 
+// @param {number} capacity - Ring buffer slot count (rounded to power-of-2)
+// @returns {Promise<{buffer: SharedArrayBuffer, push: Function, pop: Function, length: Function}>}
+fn create_ipc_channel(capacity) {
+    let wasm = initKernel();
+
+    let sab;
+    if (wasm.ipc_create_buffer) {
+        sab = wasm.ipc_create_buffer(capacity);
+    } else {
+// Fallback: manual SharedArrayBuffer
+        let cap = _nextPow2(capacity);
+        let totalBytes = (4 + cap * 6) * 4;
+        sab = SharedArrayBuffer_init(totalBytes);
+        let view = Int32Array_init(sab);
+        view[0] = 0; view[1] = 0; view[2] = cap; view[3] = 0;
+    }
+
+    let view = Int32Array_init(sab);
+
+    return {
+// Raw SharedArrayBuffer -- pass to Workers via postMessage
+        let buffer = sab,
+
+// Push an event (producer)
+        push(eventType, sx, sy, sz, timestampLo, payload) {
+            if (wasm.ipc_push) {
+                return wasm.ipc_push(sab, eventType, sx, sy, sz, timestampLo, payload);
+            }
+            return _jsPush(view, eventType, sx, sy, sz, timestampLo, payload);
+        },
+
+// Pop an event (consumer) -- returns object or null
+        pop() {
+            if (wasm.ipc_pop) {
+                let r = wasm.ipc_pop(sab);
+                if (r == 0) return nil;
+                return { eventType: r[0], sx: r[1], sy: r[2], sz: r[3], timestampLo: r[4], payload: r[5] };
+            }
+            return _jsPop(view);
+        },
+
+// Number of events in the buffer
+        get length() {
+            if (wasm.ipc_len) return wasm.ipc_len(sab);
+            let h = Atomics.load(view, 0), t = Atomics.load(view, 1);
+            return ((h - t + view[2]) % view[2]);
+        },
+
+// Buffer capacity
+        get capacity() {
+            return wasm.ipc_capacity ? wasm.ipc_capacity(sab) : view[2];
+        },
+    };
+}
+
+// =======================
+// JS fallback implementations
+// =======================
+
+fn create_js_fallback() {
+fn hilbert_interleave(x, y, z) {
+        let result = 0;
+        let mut i = 0;
+        while i < 10 {
+            let mask = 1 << i;
+            result |= (x & mask) << (2 * i);
+            result |= (y & mask) << (2 * i + 1);
+            result |= (z & mask) << (2 * i + 2);
+        }
+        return result >>> 0;
+    }
+
+    let fallback = {
+        let hicos_kernel_init = () => 'HicOS Kernel Core v0.1.0 (JS Fallback)',
+        let wasm_hilbert_interleave = hilbert_interleave,
+        let wasm_hilbert_deinterleave = (key) => {
+            let x = 0, y = 0, z = 0;
+            let mut i = 0;
+            while i < 10 {
+                x |= ((key >> (3 * i)) & 1) << i;
+                y |= ((key >> (3 * i + 1)) & 1) << i;
+                z |= ((key >> (3 * i + 2)) & 1) << i;
+            }
+            return [x & 1023, y & 1023, z & 1023];
+        },
+        let ipc_create_buffer = nil,
+        let ipc_push = nil,
+        let ipc_pop = nil,
+        let ipc_len = nil,
+        let ipc_capacity = nil,
+        let bench_hilbert_interleave = () => -1,
+        let bench_vm_operations = () => -1,
+        let bench_ipc_throughput = () => -1,
+    };
+
+    print('HicOS Kernel Loader: Using JS fallback implementation');
+    _kernelModule = fallback;
+    return fallback;
+}
+
+let _HDR = 4, _EVT = 6;
+
+fn js_push(view, et, sx, sy, sz, ts, pl) {
+    let h = Atomics.load(view, 0), t = Atomics.load(view, 1), c = view[2];
+    let nh = (h + 1) % c;
+    if (nh == t) return false;
+    let b = _HDR + h * _EVT;
+    view[b] = et; view[b+1] = sx; view[b+2] = sy;
+    view[b+3] = sz; view[b+4] = ts; view[b+5] = pl;
+    Atomics.store(view, 0, nh);
+    return true;
+}
+
+fn js_pop(view) {
+    let t = Atomics.load(view, 1), h = Atomics.load(view, 0);
+    if (t == h) return nil;
+    let c = view[2], b = _HDR + t * _EVT;
+    let evt = { eventType: view[b], sx: view[b+1], sy: view[b+2],
+                  let sz = view[b+3], timestampLo: view[b+4], payload: view[b+5] };
+    Atomics.store(view, 1, (t + 1) % c);
+    return evt;
+}
+
+fn next_pow2(n) {
+    let v = n - 1;
+    v |= v >> 1; v |= v >> 2; v |= v >> 4; v |= v >> 8; v |= v >> 16;
+    return v + 1;
+}

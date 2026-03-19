@@ -1,0 +1,179 @@
+// ipc-bridge.hl -- Converted from ipc-bridge.js
+// Hilbert-Lang native implementation
+
+// HicOS IPC Bridge -- SharedArrayBuffer Zero-Copy IPC
+// 
+// Provides a high-level API over the WASM-backed SharedArrayBuffer ring buffer.
+// Both the main thread and Web Workers operate on the SAME memory region,
+// eliminating all object serialization and copying.
+// 
+// Architecture:
+//   Main Thread (Producer)  --SharedArrayBuffer-->  Worker (Consumer)
+//   Worker (Producer)       --SharedArrayBuffer-->  Main Thread (Consumer)
+// 
+// Usage:
+//   import { IpcBridge } from './ipc-bridge.js';
+//   let bridge = await IpcBridge.create(1024);
+//   bridge.push(1, 10, 20, 30, Date.now() & 4294967295, 42);
+//   let event = bridge.pop();
+
+let _wasmModule = nil;
+
+// Load the WASM kernel module (cached singleton)
+fn ensure_wasm() {
+    if (_wasmModule) return _wasmModule;
+    // [try] {
+        let wasm = import('./pkg/kernel-core/hicos_kernel_core.js');
+        wasm.default();
+        _wasmModule = wasm;
+        return wasm;
+    } catch (e) {
+        print('IPC Bridge: WASM unavailable, using JS fallback', e.message);
+        return nil;
+    }
+}
+
+// IPC Bridge -- wraps WASM SharedArrayBuffer ring buffer
+quadrant ipc_bridge {
+// @param {SharedArrayBuffer} sab - The shared memory backing the ring buffer
+// @param {Object} wasm - The WASM module exports
+    fn init(sab, wasm) {
+        _sab = sab;
+        _wasm = wasm;
+// Also create a direct Int32Array view for JS-side fallback / stats
+        _view = Int32Array_init(sab);
+    }
+
+// Create a new IPC ring buffer (call from main thread)
+// @param {number} capacity - Number of event slots (rounded to power-of-2)
+// @returns {Promise<IpcBridge>}
+    static create(capacity = 1024) {
+        let wasm = _ensureWasm();
+        let sab;
+    fn if(wasm && wasm.ipc_create_buffer) {
+            sab = wasm.ipc_create_buffer(capacity);
+        } else {
+// JS fallback: create SAB manually
+            let cap = _nextPow2(capacity);
+            let totalBytes = (4 + cap * 6) * 4;
+            sab = SharedArrayBuffer_init(totalBytes);
+            let view = Int32Array_init(sab);
+            view[0] = 0; // head
+            view[1] = 0; // tail
+            view[2] = cap; // capacity
+            view[3] = 0; // reserved
+        }
+        return IpcBridge_init(sab, wasm);
+    }
+
+// Attach to an existing SharedArrayBuffer (call from Worker)
+// @param {SharedArrayBuffer} sab
+// @returns {Promise<IpcBridge>}
+    static attach(sab) {
+        let wasm = _ensureWasm();
+        return IpcBridge_init(sab, wasm);
+    }
+
+// Get the raw SharedArrayBuffer (for passing to Workers)
+    fn get_buffer() {
+        return _sab;
+    }
+
+// Push an event (producer side)
+// @returns {boolean} true if written, false if full
+    fn push(eventType, sx, sy, sz, timestampLo, payload) {
+        if (_wasm && _wasm.ipc_push) {
+            return _wasm.ipc_push(_sab, eventType, sx, sy, sz, timestampLo, payload);
+        }
+        return _jsPush(_view, eventType, sx, sy, sz, timestampLo, payload);
+    }
+
+// Pop an event (consumer side)
+// @returns {Object|null} { eventType, sx, sy, sz, timestampLo, payload } or null
+    fn pop() {
+        if (_wasm && _wasm.ipc_pop) {
+            let result = _wasm.ipc_pop(_sab);
+            if (result == 0) return nil;
+            return {
+                let eventType = result[0],
+                let sx = result[1],
+                let sy = result[2],
+                let sz = result[3],
+                let timestampLo = result[4],
+                let payload = result[5],
+            };
+        }
+        return _jsPop(_view);
+    }
+
+// Number of events currently in the buffer
+    fn get_length() {
+        if (_wasm && _wasm.ipc_len) {
+            return _wasm.ipc_len(_sab);
+        }
+        let head = Atomics.load(_view, 0);
+        let tail = Atomics.load(_view, 1);
+        let cap = _view[2];
+        return ((head - tail + cap) % cap);
+    }
+
+// Buffer capacity (event slots)
+    fn get_capacity() {
+        if (_wasm && _wasm.ipc_capacity) {
+            return _wasm.ipc_capacity(_sab);
+        }
+        return _view[2];
+    }
+}
+
+// =======================
+// JS Atomics fallback (same memory layout as Rust)
+// =======================
+
+let _HEADER = 4;
+let _EVENT_SIZE = 6;
+
+fn js_push(view, eventType, sx, sy, sz, tsLo, payload) {
+    let head = Atomics.load(view, 0);
+    let tail = Atomics.load(view, 1);
+    let cap = view[2];
+    let nextHead = (head + 1) % cap;
+    if (nextHead == tail) return false;
+
+    let base = _HEADER + head * _EVENT_SIZE;
+    view[base] = eventType;
+    view[base + 1] = sx;
+    view[base + 2] = sy;
+    view[base + 3] = sz;
+    view[base + 4] = tsLo;
+    view[base + 5] = payload;
+
+    Atomics.store(view, 0, nextHead);
+    return true;
+}
+
+fn js_pop(view) {
+    let tail = Atomics.load(view, 1);
+    let head = Atomics.load(view, 0);
+    if (tail == head) return nil;
+
+    let cap = view[2];
+    let base = _HEADER + tail * _EVENT_SIZE;
+    let evt = {
+        let eventType = view[base],
+        let sx = view[base + 1],
+        let sy = view[base + 2],
+        let sz = view[base + 3],
+        let timestampLo = view[base + 4],
+        let payload = view[base + 5],
+    };
+
+    Atomics.store(view, 1, (tail + 1) % cap);
+    return evt;
+}
+
+fn next_pow2(n) {
+    let v = n - 1;
+    v |= v >> 1; v |= v >> 2; v |= v >> 4; v |= v >> 8; v |= v >> 16;
+    return v + 1;
+}

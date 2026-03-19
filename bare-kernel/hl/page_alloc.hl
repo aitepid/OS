@@ -1,0 +1,221 @@
+// page_alloc.hl -- Physical Page Frame Allocator (Bitmap)
+//
+// Manages physical memory in 4KB page frames using a bitmap.
+// Each bit represents one 4KB page: 1 = used, 0 = free.
+//
+// Memory layout:
+//   Bitmap at 0x400000 (4MB), size scales with detected RAM
+//   E820 detection: reads memory map from stage1 E820 data at 0x500
+//   Fallback: 128 MB if no E820 data available
+//
+// Reserved pages (marked used at init):
+//   0x000000 - 0x0FFFFF : BIOS, IVT, page tables, boot code (256 pages)
+//   0x100000 - 0x1FFFFF : Kernel code (256 pages)
+//   0x200000 - 0x200FFF : IDT (1 page)
+//   0x300000 - 0x300FFF : Kernel data (tick counter, scancode) (1 page)
+//   0x400000 - 0x40FFFF : Bitmap (up to 64 KB for 2GB RAM)
+//   0x500000 - 0x5FFFFF : Page table pool (256 pages)
+//
+// Free pages start at 0x600000 (page index 1536)
+
+let PAGE_SIZE = 4096;
+let BITMAP_ADDR = 4194304;        // 0x400000
+let mut TOTAL_PAGES = 32768;      // default 128 MB, updated by E820
+let FIRST_FREE_PAGE = 1536;       // 0x600000 / 4096
+let mut RESERVED_PAGES = 1536;    // pages 0..1535 reserved
+let mut BITMAP_BYTES = 4096;      // bytes needed for bitmap
+
+// Initialize from E820 memory map (call after mem.hl loaded)
+fn page_alloc_init_e820() {
+    let e_count = e820_count();
+    if e_count > 0 {
+        // Find total usable RAM from E820
+        let mut max_addr = 0;
+        let mut i = 0;
+        while i < e_count {
+            if e820_entry_type(i) == E820_TYPE_USABLE {
+                let end = e820_entry_base(i) + e820_entry_length(i);
+                if end > max_addr { max_addr = end; }
+            }
+            i = i + 1;
+        }
+        // Cap at 2GB (bitmap limit with 64KB bitmap = 2^19 pages * 4KB)
+        if max_addr > 2147483648 { max_addr = 2147483648; }
+        TOTAL_PAGES = max_addr / PAGE_SIZE;
+        BITMAP_BYTES = (TOTAL_PAGES + 7) / 8;
+        // If bitmap exceeds 64KB, cap it
+        if BITMAP_BYTES > 65536 { BITMAP_BYTES = 65536; TOTAL_PAGES = 65536 * 8; }
+    }
+    page_alloc_init();
+    // Mark E820 non-usable regions as used
+    if e_count > 0 {
+        let mut i = 0;
+        while i < e_count {
+            let etype = e820_entry_type(i);
+            if etype != E820_TYPE_USABLE {
+                let base = e820_entry_base(i);
+                let length = e820_entry_length(i);
+                let start_page = base / PAGE_SIZE;
+                let end_page = (base + length + PAGE_SIZE - 1) / PAGE_SIZE;
+                let mut p = start_page;
+                while p < end_page {
+                    if p < TOTAL_PAGES { _page_mark_used(p); }
+                    p = p + 1;
+                }
+            }
+            i = i + 1;
+        }
+    }
+    return 0;
+}
+
+// Mark a single page as used in bitmap
+fn _page_mark_used(page) {
+    let byte_idx = page / 8;
+    let bit_idx = page % 8;
+    let mut shift = 1;
+    let mut s = 0;
+    while s < bit_idx { shift = shift * 2; s = s + 1; }
+    let byte_val = mem_read_byte(BITMAP_ADDR + byte_idx);
+    if byte_val / shift % 2 == 0 {
+        mem_write_byte(BITMAP_ADDR + byte_idx, byte_val + shift);
+    }
+    return 0;
+}
+
+// Initialize bitmap: mark reserved pages as used (bit=1), rest as free (bit=0)
+fn page_alloc_init() {
+    // Zero the entire bitmap
+    let mut i = 0;
+    while i < BITMAP_BYTES {
+        mem_write_byte(BITMAP_ADDR + i, 0);
+        i = i + 1;
+    }
+    // Mark pages 0..RESERVED_PAGES-1 as used
+    let full_bytes = RESERVED_PAGES / 8;
+    i = 0;
+    while i < full_bytes {
+        mem_write_byte(BITMAP_ADDR + i, 255);
+        i = i + 1;
+    }
+    // Remaining bits
+    let rem = RESERVED_PAGES % 8;
+    if rem > 0 {
+        let mut mask = 0;
+        let mut b = 0;
+        while b < rem {
+            let mut shift = 1;
+            let mut s = 0;
+            while s < b { shift = shift * 2; s = s + 1; }
+            mask = mask + shift;
+            b = b + 1;
+        }
+        mem_write_byte(BITMAP_ADDR + full_bytes, mask);
+    }
+    return 0;
+}
+
+// Allocate one page. Returns physical address or 0 on failure.
+fn page_alloc() {
+    let mut page = FIRST_FREE_PAGE;
+    while page < TOTAL_PAGES {
+        let byte_idx = page / 8;
+        let bit_idx = page % 8;
+        let mut shift = 1;
+        let mut s = 0;
+        while s < bit_idx { shift = shift * 2; s = s + 1; }
+        let byte_val = mem_read_byte(BITMAP_ADDR + byte_idx);
+        if byte_val / shift % 2 == 0 {
+            // Page is free -- mark as used
+            mem_write_byte(BITMAP_ADDR + byte_idx, byte_val + shift);
+            return page * PAGE_SIZE;
+        }
+        page = page + 1;
+    }
+    return 0; // out of memory
+}
+
+// Allocate contiguous pages. Returns base physical address or 0 on failure.
+fn page_alloc_contiguous(count) {
+    let mut start = FIRST_FREE_PAGE;
+    while start + count <= TOTAL_PAGES {
+        let mut ok = true;
+        let mut i = 0;
+        while i < count {
+            let page = start + i;
+            let byte_idx = page / 8;
+            let bit_idx = page % 8;
+            let mut shift = 1;
+            let mut s = 0;
+            while s < bit_idx { shift = shift * 2; s = s + 1; }
+            let byte_val = mem_read_byte(BITMAP_ADDR + byte_idx);
+            if byte_val / shift % 2 == 1 {
+                ok = false;
+                i = count; // break
+            }
+            i = i + 1;
+        }
+        if ok {
+            // Mark all pages as used
+            i = 0;
+            while i < count {
+                _page_mark_used(start + i);
+                i = i + 1;
+            }
+            return start * PAGE_SIZE;
+        }
+        start = start + 1;
+    }
+    return 0;
+}
+
+// Free a page given its physical address.
+fn page_free(addr) {
+    let page = addr / PAGE_SIZE;
+    if page < FIRST_FREE_PAGE { return 0; } // can't free reserved
+    if page >= TOTAL_PAGES { return 0; }
+    let byte_idx = page / 8;
+    let bit_idx = page % 8;
+    let mut shift = 1;
+    let mut s = 0;
+    while s < bit_idx { shift = shift * 2; s = s + 1; }
+    let byte_val = mem_read_byte(BITMAP_ADDR + byte_idx);
+    mem_write_byte(BITMAP_ADDR + byte_idx, byte_val - shift);
+    return 1;
+}
+
+// Count free pages
+fn page_count_free() {
+    let mut count = 0;
+    let mut page = FIRST_FREE_PAGE;
+    while page < TOTAL_PAGES {
+        let byte_idx = page / 8;
+        let bit_idx = page % 8;
+        let mut shift = 1;
+        let mut s = 0;
+        while s < bit_idx { shift = shift * 2; s = s + 1; }
+        let byte_val = mem_read_byte(BITMAP_ADDR + byte_idx);
+        if byte_val / shift % 2 == 0 {
+            count = count + 1;
+        }
+        page = page + 1;
+    }
+    return count;
+}
+
+// Aliases for watchdog.hl compatibility
+fn page_alloc_free_count() {
+    return page_count_free();
+}
+
+fn page_alloc_total_count() {
+    return TOTAL_PAGES;
+}
+
+// Self-test
+print("page_alloc.hl loaded");
+print("Total pages: " + to_string(TOTAL_PAGES) + " (" + to_string(TOTAL_PAGES * PAGE_SIZE / 1048576) + " MB)");
+print("Reserved pages: " + to_string(RESERVED_PAGES));
+print("Bitmap bytes: " + to_string(BITMAP_BYTES));
+print("Free pages: " + to_string(TOTAL_PAGES - RESERVED_PAGES));
+print("Free memory: " + to_string((TOTAL_PAGES - RESERVED_PAGES) * PAGE_SIZE / 1024) + " KB");

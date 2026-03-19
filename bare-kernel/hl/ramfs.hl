@@ -1,0 +1,227 @@
+// ramfs.hl -- In-Memory Filesystem (RAM Filesystem)
+//
+// Simple flat filesystem stored entirely in RAM.
+// No disk I/O required -- files persist only during runtime.
+//
+// Memory layout:
+//   0x600000 (6MB) -- File table: 128 entries x 128 bytes = 16 KB
+//   0x610000 (6.0625MB) -- File data area: 1 MB
+//
+// Each file entry (128 bytes):
+//   +0   : flags (u64)  -- bit0=used, bit1=directory
+//   +8   : name (64 bytes, null-terminated ASCII)
+//   +72  : size (u64)   -- file size in bytes
+//   +80  : data_offset (u64) -- offset into data area
+//   +88  : created_tick (u64)
+//   +96  : modified_tick (u64)
+//   +104 : parent_idx (u64) -- parent directory index (-1 = root)
+//   +112 : reserved (16 bytes)
+
+let FS_TABLE = 6291456;       // 0x600000
+let FS_DATA  = 6356992;       // 0x610000
+let FS_ENTRY_SIZE = 128;
+let FS_MAX_FILES = 128;
+let FS_DATA_SIZE = 1048576;   // 1 MB
+
+let FS_USED = 1;
+let FS_DIR  = 2;
+
+let mut fs_data_next = 0;  // next free offset in data area
+
+// Helper: write string to memory at addr (max 63 bytes + null)
+fn _fs_write_name(addr, name) {
+    let mut i = 0;
+    while i < len(name) && i < 63 {
+        mem_write_u8(addr + i, char_code_at(name, i));
+        i = i + 1;
+    }
+    mem_write_u8(addr + i, 0); // null terminator
+    return 0;
+}
+
+// Helper: compare name at addr with string
+fn _fs_name_match(addr, name) {
+    let mut i = 0;
+    while i < len(name) && i < 63 {
+        let c = mem_read_u8(addr + i);
+        if c != char_code_at(name, i) { return 0; }
+        i = i + 1;
+    }
+    if mem_read_u8(addr + i) != 0 { return 0; }
+    return 1;
+}
+
+// Initialize filesystem with root directory
+fn fs_init() {
+    mem_zero(FS_TABLE, FS_MAX_FILES * FS_ENTRY_SIZE);
+    fs_data_next = 0;
+    // Create root directory at index 0
+    let addr = FS_TABLE;
+    mem_write_u64(addr, FS_USED + FS_DIR);
+    _fs_write_name(addr + 8, "/");
+    mem_write_u64(addr + 72, 0);
+    mem_write_u64(addr + 80, 0);
+    mem_write_u64(addr + 104, 0 - 1); // root has no parent
+    return 0;
+}
+
+// Find file by name in a directory
+fn fs_find(parent_idx, name) {
+    let mut i = 0;
+    while i < FS_MAX_FILES {
+        let addr = FS_TABLE + i * FS_ENTRY_SIZE;
+        let flags = mem_read_u64(addr);
+        if flags % 2 == 1 { // FS_USED
+            let p = mem_read_u64(addr + 104);
+            if p == parent_idx {
+                if _fs_name_match(addr + 8, name) == 1 { return i; }
+            }
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+// Create a file
+fn fs_create(parent_idx, name, is_dir) {
+    let mut i = 0;
+    while i < FS_MAX_FILES {
+        let addr = FS_TABLE + i * FS_ENTRY_SIZE;
+        let flags = mem_read_u64(addr);
+        if flags == 0 {
+            let mut f = FS_USED;
+            if is_dir == 1 { f = f + FS_DIR; }
+            mem_write_u64(addr, f);
+            _fs_write_name(addr + 8, name);
+            mem_write_u64(addr + 72, 0);              // size = 0
+            mem_write_u64(addr + 80, fs_data_next);   // data offset
+            mem_write_u64(addr + 104, parent_idx);
+            return i;
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+// Write data to a file
+fn fs_write(file_idx, data, data_len) {
+    let addr = FS_TABLE + file_idx * FS_ENTRY_SIZE;
+    let data_off = mem_read_u64(addr + 80);
+    // Copy data to data area
+    let mut i = 0;
+    while i < data_len {
+        mem_write_u8(FS_DATA + data_off + i, mem_read_u8(data + i));
+        i = i + 1;
+    }
+    mem_write_u64(addr + 72, data_len);
+    if data_off + data_len > fs_data_next {
+        fs_data_next = data_off + data_len;
+    }
+    return data_len;
+}
+
+// Read data from a file
+fn fs_read(file_idx, buf, max_len) {
+    let addr = FS_TABLE + file_idx * FS_ENTRY_SIZE;
+    let size = mem_read_u64(addr + 72);
+    let data_off = mem_read_u64(addr + 80);
+    let mut to_read = size;
+    if max_len < to_read { to_read = max_len; }
+    let mut i = 0;
+    while i < to_read {
+        mem_write_u8(buf + i, mem_read_u8(FS_DATA + data_off + i));
+        i = i + 1;
+    }
+    return to_read;
+}
+
+// VFS-compatible wrappers
+fn ramfs_read(inode, buf, pos, count) {
+    let addr = FS_TABLE + inode * FS_ENTRY_SIZE;
+    let size = mem_read_u64(addr + 72);
+    let data_off = mem_read_u64(addr + 80);
+    if pos >= size { return 0; }
+    let mut avail = size - pos;
+    if count < avail { avail = count; }
+    let mut i = 0;
+    while i < avail {
+        mem_write_u8(buf + i, mem_read_u8(FS_DATA + data_off + pos + i));
+        i = i + 1;
+    }
+    return avail;
+}
+
+fn ramfs_write(inode, data, pos, count) {
+    let addr = FS_TABLE + inode * FS_ENTRY_SIZE;
+    let data_off = mem_read_u64(addr + 80);
+    let mut i = 0;
+    while i < count {
+        mem_write_u8(FS_DATA + data_off + pos + i, mem_read_u8(data + i));
+        i = i + 1;
+    }
+    let new_size = pos + count;
+    let old_size = mem_read_u64(addr + 72);
+    if new_size > old_size { mem_write_u64(addr + 72, new_size); }
+    if data_off + new_size > fs_data_next { fs_data_next = data_off + new_size; }
+    return count;
+}
+
+fn ramfs_stat(path) {
+    let idx = fs_find(0, path);
+    if idx < 0 { return [0, 0, 0, 0]; }
+    let addr = FS_TABLE + idx * FS_ENTRY_SIZE;
+    let size = mem_read_u64(addr + 72);
+    let flags = mem_read_u64(addr);
+    let ftype = 1; // regular
+    if (flags / 2) % 2 == 1 { ftype = 2; } // directory
+    return [size, ftype, 0, 0];
+}
+
+fn ramfs_readdir(path) {
+    let parent = fs_find(0, path);
+    if parent < 0 { parent = 0; }
+    return fs_list(parent);
+}
+
+fn ramfs_mkdir(path) { return fs_create(0, path, 1); }
+fn ramfs_unlink(path) {
+    let idx = fs_find(0, path);
+    if idx < 0 { return 0 - 1; }
+    return fs_delete(idx);
+}
+
+// List files in a directory
+fn fs_list(parent_idx) {
+    let mut result = [];
+    let mut i = 0;
+    while i < FS_MAX_FILES {
+        let addr = FS_TABLE + i * FS_ENTRY_SIZE;
+        let flags = mem_read_u64(addr);
+        if flags % 2 == 1 {
+            let p = mem_read_u64(addr + 104);
+            if p == parent_idx {
+                push(result, i);
+            }
+        }
+        i = i + 1;
+    }
+    return result;
+}
+
+// Delete a file
+fn fs_delete(file_idx) {
+    let addr = FS_TABLE + file_idx * FS_ENTRY_SIZE;
+    mem_write_u64(addr, 0);
+    return 0;
+}
+
+// Get file size
+fn fs_size(file_idx) {
+    let addr = FS_TABLE + file_idx * FS_ENTRY_SIZE;
+    return mem_read_u64(addr + 72);
+}
+
+// Self-test
+print("ramfs.hl loaded");
+print("File table at: 0x600000 (" + to_string(FS_MAX_FILES) + " entries)");
+print("Data area at: 0x610000 (" + to_string(FS_DATA_SIZE / 1024) + " KB)");

@@ -1,0 +1,301 @@
+// syscall.hl -- System Call Dispatch Table
+//
+// HicOS syscall interface via SYSCALL/SYSRET instruction pair.
+// User programs invoke SYSCALL with:
+//   RAX = syscall number
+//   RDI = arg0, RSI = arg1, RDX = arg2, R10 = arg3, R8 = arg4, R9 = arg5
+// Return value in RAX.
+//
+// Syscall numbers follow a spatial layout:
+//   0-15  : Process management
+//   16-31 : Memory management
+//   32-47 : I/O
+//   48-63 : IPC
+//   64-79 : Filesystem
+//   80+   : Extended / Hilbert-specific
+//
+// To enable SYSCALL in long mode, kernel must set up:
+//   MSR 0xC0000081 (STAR):  SYSRET CS/SS << 48 | SYSCALL CS/SS << 32
+//   MSR 0xC0000082 (LSTAR): syscall entry point address
+//   MSR 0xC0000084 (FMASK): RFLAGS mask (clear IF on syscall)
+
+// === Syscall numbers ===
+
+// Process
+let SYS_EXIT      = 0;
+let SYS_FORK      = 1;
+let SYS_EXEC      = 2;
+let SYS_WAIT      = 3;
+let SYS_GETPID    = 4;
+let SYS_KILL      = 5;
+let SYS_YIELD     = 6;
+let SYS_SLEEP     = 7;
+
+// Memory
+let SYS_MMAP      = 16;
+let SYS_MUNMAP    = 17;
+let SYS_BRK       = 18;
+
+// I/O
+let SYS_READ      = 32;
+let SYS_WRITE     = 33;
+let SYS_OPEN      = 34;
+let SYS_CLOSE     = 35;
+let SYS_IOCTL     = 36;
+
+// IPC
+let SYS_SEND      = 48;
+let SYS_RECV      = 49;
+let SYS_PIPE      = 50;
+
+// Filesystem
+let SYS_STAT      = 64;
+let SYS_READDIR   = 65;
+let SYS_MKDIR     = 66;
+let SYS_UNLINK    = 67;
+
+// Hilbert-specific
+let SYS_HILBERT_ENCODE = 80;
+let SYS_HILBERT_DECODE = 81;
+let SYS_HILBERT_DIST   = 82;
+let SYS_UPTIME         = 83;
+
+// Meta
+let SYS_VERSION        = 255;
+
+// ABI version
+let ABI_MAJOR = 4;
+let ABI_MINOR = 3;
+let ABI_PATCH = 0;
+
+// User-space address boundary (below 0x800000 is user, above is kernel)
+let USER_SPACE_MAX = 8388608;  // 0x800000
+
+// Validate that a pointer is in user space (security: prevent ring3 reading kernel)
+fn syscall_validate_ptr(ptr, len) {
+    if ptr < 0 { return 0; }
+    if ptr + len > USER_SPACE_MAX { return 0; }
+    return 1;
+}
+
+// === Dispatch handler ===
+// Called from syscall entry handler with RAX = syscall number
+fn syscall_dispatch(num, arg0, arg1, arg2) {
+    if num == SYS_EXIT {
+        task_kill(current_task);
+        return 0;
+    }
+
+    if num == SYS_GETPID {
+        return current_task;
+    }
+
+    if num == SYS_YIELD {
+        // Voluntarily give up CPU -- scheduler picks next
+        return 0;
+    }
+
+    if num == SYS_SLEEP {
+        // arg0 = milliseconds
+        // Set task wakeup_tick = get_ticks() + arg0 * TICK_HZ / 1000
+        let wake = get_ticks() + arg0 / 10;
+        return wake;
+    }
+
+    if num == SYS_WRITE {
+        // arg0 = fd, arg1 = buffer address, arg2 = length
+        if arg0 == 1 {
+            // Validate user pointer before reading
+            if syscall_validate_ptr(arg1, arg2) == 0 { return 0 - 14; } // -EFAULT
+            let mut wi = 0;
+            while wi < arg2 {
+                let byte = mem_read_u8(arg1 + wi);
+                serial_write_byte(byte);
+                wi = wi + 1;
+            }
+            return arg2;
+        }
+        return 0;
+    }
+
+    if num == SYS_READ {
+        // arg0 = fd, arg1 = buffer address, arg2 = max length
+        if arg0 == 0 {
+            if syscall_validate_ptr(arg1, arg2) == 0 { return 0 - 14; } // -EFAULT
+            // stdin -> serial (poll one byte)
+            let key_ready = mem_read_u64(3145744); // 0x300010
+            if key_ready != 0 {
+                let scancode = mem_read_u64(3145736); // 0x300008
+                mem_write_u64(3145744, 0); // clear flag
+                mem_write_u8(arg1, scancode % 256);
+                return 1;
+            }
+            return 0;
+        }
+        return 0;
+    }
+
+    if num == SYS_MMAP {
+        let addr = page_alloc();
+        if arg1 > 4096 {
+            // Allocate multiple pages
+            let pages = (arg1 + 4095) / 4096;
+            let mut pi = 1;
+            while pi < pages { page_alloc(); pi = pi + 1; }
+        }
+        return addr;
+    }
+
+    if num == SYS_MUNMAP {
+        page_free(arg0);
+        return 0;
+    }
+
+    if num == SYS_UPTIME {
+        return get_ticks();
+    }
+
+    // --- Process management ---
+    if num == SYS_FORK { return sys_fork(); }
+    if num == SYS_EXEC { return sys_exec(arg0); }
+    if num == SYS_WAIT { return sys_wait(arg0); }
+    if num == SYS_KILL { return signal_send(arg0, arg1); }
+
+    // --- IPC ---
+    if num == SYS_PIPE {
+        let fds = sys_pipe();
+        // Write [read_fd, write_fd] to user buffer at arg0
+        mem_write_u32(arg0, fds[0]);
+        mem_write_u32(arg0 + 4, fds[1]);
+        return 0;
+    }
+    if num == SYS_SEND { return ipc_send(arg0, arg1, arg2); }
+    if num == SYS_RECV { return ipc_recv(arg0, arg1, arg2); }
+
+    // --- Filesystem ---
+    if num == SYS_OPEN { return vfs_open(arg0, arg1); }
+    if num == SYS_CLOSE { return vfs_close(arg0); }
+    if num == SYS_STAT { return vfs_stat(arg0); }
+    if num == SYS_READDIR { return vfs_readdir(arg0); }
+    if num == SYS_MKDIR { return vfs_mkdir(arg0); }
+    if num == SYS_UNLINK { return vfs_unlink(arg0); }
+
+    // --- Memory ---
+    if num == SYS_BRK {
+        // arg0 = new break; 0 = query current
+        if arg0 == 0 { return mem_read_u64(task_addr(current_task) + 192); }
+        mem_write_u64(task_addr(current_task) + 192, arg0);
+        return arg0;
+    }
+
+    // --- Device ---
+    if num == SYS_IOCTL { return 0; }
+
+    // --- Hilbert ---
+    if num == SYS_HILBERT_DIST { return hilbert_dist(arg0, arg1); }
+
+    // --- Meta ---
+    if num == SYS_VERSION {
+        // Encode version as (major << 16) | (minor << 8) | patch
+        return ABI_MAJOR * 65536 + ABI_MINOR * 256 + ABI_PATCH;
+    }
+
+    // Unknown syscall
+    return 0;
+}
+
+// === MSR setup for SYSCALL/SYSRET ===
+// Called during kernel init to configure SYSCALL instruction.
+// Must be called AFTER GDT is loaded (by Stage2).
+//
+// GDT layout assumed:
+//   0x08 = kernel code (CS)    GDT[1]
+//   0x10 = kernel data (SS)    GDT[2]
+//   0x18 = user code   (CS)    GDT[3]  (for SYSRET)
+//   0x20 = user data   (SS)    GDT[4]  (for SYSRET)
+//
+// STAR MSR (0xC0000081):
+//   bits 47:32 = SYSCALL CS/SS selector base = 0x0008 (kernel CS)
+//   bits 63:48 = SYSRET  CS/SS selector base = 0x0018 (user CS - 16)
+//     SYSRET loads CS = base+16 (0x0028?), SS = base+8 (0x0020)
+//     Adjust: For 64-bit SYSRET, base should be 0x0010 so CS = 0x0010+16=0x0020
+//     Actually: SYSCALL loads CS from STAR[47:32], SS from STAR[47:32]+8
+//               SYSRET  loads CS from STAR[63:48]+16 (64-bit), SS from STAR[63:48]+8
+//
+// LSTAR MSR (0xC0000082):
+//   = address of syscall_entry handler
+//
+// FMASK MSR (0xC0000084):
+//   = 0x200 (clear IF on SYSCALL entry -- disable interrupts)
+
+fn syscall_msr_init() {
+    // MSR 0xC0000080 (IA32_EFER): Set SCE (bit 0) to enable SYSCALL
+    let efer = rdmsr(3221225600);  // 0xC0000080
+    wrmsr(3221225600, efer | 1);
+
+    // MSR 0xC0000081 (STAR):
+    //   Low 32 bits: reserved (EIP for compat SYSCALL -- unused in long mode)
+    //   Bits 47:32: SYSCALL CS selector = 0x08
+    //   Bits 63:48: SYSRET CS base = 0x18 (CS loaded = base+16, SS = base+8)
+    let star_hi = 24 * 65536 + 8;  // 0x00180008
+    wrmsr(3221225601, star_hi * 4294967296);  // shift left 32
+
+    // MSR 0xC0000082 (LSTAR): syscall entry address
+    // Set to address of syscall_entry_stub (generated by codegen)
+    // For now: 0x200000 (2MB mark -- kernel code region)
+    let entry = 2097152;  // 0x200000 -- TODO: set by codegen
+    wrmsr(3221225602, entry);
+
+    // MSR 0xC0000084 (FMASK): RFLAGS bits to clear on SYSCALL
+    // Clear IF (bit 9) = 0x200 -- disable interrupts on entry
+    wrmsr(3221225604, 512);
+
+    serial_print("  SYSCALL MSR: STAR/LSTAR/FMASK configured");
+    return 0;
+}
+
+// === SYSCALL entry stub (machine code description) ===
+// The codegen (image_builder.build_kernel) must emit this sequence:
+//
+// syscall_entry_stub:
+//   ; On entry: RCX=user_rip, R11=user_rflags, RSP=user_rsp
+//   ; Switch to kernel stack
+//   swapgs                     ; 0F 01 F8
+//   mov [gs:8], rsp            ; save user RSP to per-cpu
+//   mov rsp, [gs:0]            ; load kernel RSP from per-cpu
+//   ; Save user context
+//   push rcx                   ; user RIP
+//   push r11                   ; user RFLAGS
+//   push rsp_saved             ; user RSP (from gs:8)
+//   push rax                   ; syscall number
+//   push rdi                   ; arg0
+//   push rsi                   ; arg1
+//   push rdx                   ; arg2
+//   push r10                   ; arg3
+//   push r8                    ; arg4
+//   push r9                    ; arg5
+//   ; Enable interrupts
+//   sti
+//   ; Call H-L dispatcher: syscall_dispatch(rax, rdi, rsi, rdx)
+//   mov rdi, rax               ; syscall number as first arg
+//   ; (rsi, rdx already in place for System V ABI arg1, arg2)
+//   call syscall_dispatch
+//   ; Return value in RAX
+//   cli
+//   ; Restore user context
+//   pop r9; pop r8; pop r10; pop rdx; pop rsi; pop rdi
+//   pop rax_saved              ; discard saved syscall number
+//   pop rsp_user
+//   pop r11                    ; user RFLAGS
+//   pop rcx                    ; user RIP
+//   mov rsp, rsp_user          ; restore user RSP
+//   swapgs
+//   sysretq                    ; 48 0F 07
+
+// Self-test
+print("syscall.hl loaded");
+print("SYS_WRITE = " + to_string(SYS_WRITE));
+print("SYS_HILBERT_ENCODE = " + to_string(SYS_HILBERT_ENCODE));
+
+let result = syscall_dispatch(SYS_HILBERT_ENCODE, 42, 17, 9);
+print("syscall hilbert_encode(42,17,9) = " + to_string(result));

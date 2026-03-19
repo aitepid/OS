@@ -1,0 +1,147 @@
+// signal.hl -- POSIX-like Signal Mechanism
+//
+// Delivers asynchronous notifications to tasks.
+// Signal numbers follow common convention:
+//   1=SIGHUP, 2=SIGINT, 3=SIGQUIT, 9=SIGKILL, 11=SIGSEGV,
+//   14=SIGALRM, 15=SIGTERM, 17=SIGCHLD, 10=SIGUSR1, 12=SIGUSR2
+//
+// Per-task signal state stored in task structure extension at +200:
+//   +200: pending_mask (u64)  -- bitmask of pending signals
+//   +208: blocked_mask (u64)  -- bitmask of blocked signals
+//   +216: handler_table_ptr (u64) -- pointer to 64-entry handler table
+//
+// Handler table: 64 entries x 8 bytes = 512 bytes per task
+//   Each entry: handler function address (0 = default action)
+//   Default actions: SIGKILL/SIGSTOP always kill/stop
+//
+// Signal delivery:
+//   1. Set bit in pending_mask
+//   2. On return to userspace (or task switch), check pending & ~blocked
+//   3. Push signal frame on user stack, redirect to handler
+//   4. On handler return (sigreturn), restore original context
+
+let SIG_DFL = 0;
+let SIG_IGN = 1;
+
+let SIGHUP   = 1;
+let SIGINT   = 2;
+let SIGQUIT  = 3;
+let SIGKILL  = 9;
+let SIGSEGV  = 11;
+let SIGALRM  = 14;
+let SIGTERM  = 15;
+let SIGCHLD  = 17;
+let SIGUSR1  = 10;
+let SIGUSR2  = 12;
+let SIGSTOP  = 19;
+let SIGCONT  = 18;
+
+let MAX_SIGNALS = 64;
+let HANDLER_TABLE_SIZE = 512;  // 64 * 8
+
+// Helper: compute 2^signum (bitmask for signal)
+fn _sig_bit(signum) {
+    let mut bit = 1;
+    let mut s = 0;
+    while s < signum { bit = bit * 2; s = s + 1; }
+    return bit;
+}
+
+// Send signal to a task
+fn signal_send(target_pid, signum) {
+    if signum < 1 { return 0; }
+    if signum >= MAX_SIGNALS { return 0; }
+
+    let mut i = 0;
+    while i < 64 {
+        let addr = task_addr(i);
+        let task_pid = mem_read_u64(addr + 8);
+        if task_pid == target_pid {
+            let state = mem_read_u64(addr);
+            if state == 0 { i = i + 1; } // STATE_FREE, skip
+            else {
+                let pending = mem_read_u64(addr + 200);
+                let bit = _sig_bit(signum);
+                // Set pending bit (if not already set)
+                if (pending / bit) % 2 == 0 {
+                    mem_write_u64(addr + 200, pending + bit);
+                }
+                // SIGKILL: immediately kill
+                if signum == SIGKILL {
+                    mem_write_u64(addr, 4); // STATE_DEAD
+                    rq_remove(i);
+                }
+                return 1;
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Register signal handler for current task
+fn signal_handler(signum, handler_addr) {
+    if signum == SIGKILL { return 0; }
+    if signum == SIGSTOP { return 0; }
+    // Handler table stored at task_addr(current_task) + 216 (pointer)
+    // For simplicity: use fixed memory region per task
+    // Handler table base = 0x340000 + task_idx * 512
+    let htable = 3407872 + current_task * HANDLER_TABLE_SIZE;
+    mem_write_u64(htable + signum * 8, handler_addr);
+    return 1;
+}
+
+// Block a signal
+fn signal_block(signum) {
+    let addr = task_addr(current_task);
+    let mask = mem_read_u64(addr + 208);
+    let bit = _sig_bit(signum);
+    if (mask / bit) % 2 == 0 {
+        mem_write_u64(addr + 208, mask + bit);
+    }
+    return 0;
+}
+
+// Unblock a signal
+fn signal_unblock(signum) {
+    let addr = task_addr(current_task);
+    let mask = mem_read_u64(addr + 208);
+    let bit = _sig_bit(signum);
+    if (mask / bit) % 2 == 1 {
+        mem_write_u64(addr + 208, mask - bit);
+    }
+    return 0;
+}
+
+// Check and deliver pending signals (called on kernel exit path)
+fn signal_deliver() {
+    let addr = task_addr(current_task);
+    let pending = mem_read_u64(addr + 200);
+    let blocked = mem_read_u64(addr + 208);
+    let htable = 3407872 + current_task * HANDLER_TABLE_SIZE;
+    let mut sig = 1;
+    while sig < MAX_SIGNALS {
+        let sig_mask = _sig_bit(sig);
+        let is_pending = (pending / sig_mask) % 2;
+        let is_blocked = (blocked / sig_mask) % 2;
+        if is_pending == 1 && is_blocked == 0 {
+            // Clear pending bit
+            mem_write_u64(addr + 200, pending - sig_mask);
+            let handler = mem_read_u64(htable + sig * 8);
+            if handler != 0 {
+                return sig;
+            }
+            if sig == SIGKILL || sig == SIGTERM {
+                task_kill(mem_read_u64(addr + 8));
+                return sig;
+            }
+            return sig;
+        }
+        sig = sig + 1;
+    }
+    return 0;
+}
+
+print("signal.hl loaded");
+print("Signals: 1-" + to_string(MAX_SIGNALS - 1));
+print("SIGKILL=" + to_string(SIGKILL) + " SIGTERM=" + to_string(SIGTERM));

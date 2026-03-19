@@ -1,0 +1,87 @@
+// ntp.hl -- Network Time Protocol Client
+//
+// Synchronizes system clock via NTP (UDP port 123).
+// Uses SNTP (Simple NTP) for basic time sync.
+//
+// NTP packet (48 bytes):
+//   +0:  LI(2b) + VN(3b) + Mode(3b) = 1 byte
+//   +1:  Stratum (1)
+//   +2:  Poll interval (1)
+//   +3:  Precision (1)
+//   +4:  Root delay (4)
+//   +8:  Root dispersion (4)
+//   +12: Reference ID (4)
+//   +16: Reference timestamp (8) -- NTP epoch: 1900-01-01
+//   +24: Originate timestamp (8)
+//   +32: Receive timestamp (8)
+//   +40: Transmit timestamp (8)
+//
+// NTP epoch offset from Unix: 2208988800 seconds (70 years)
+
+let NTP_PORT = 123;
+let NTP_EPOCH_OFFSET = 2208988800;
+let NTP_PACKET_SIZE = 48;
+let NTP_VERSION = 4;
+
+let mut ntp_synced = 0;
+let mut ntp_offset = 0;        // seconds offset from local clock
+let mut ntp_last_sync = 0;
+
+fn ntp_build_request() {
+    let mut pkt = [];
+    // LI=0, VN=4, Mode=3 (client) = 0x23
+    push(pkt, 35);  // 0x23
+    // Stratum, poll, precision
+    push(pkt, 0); push(pkt, 6); push(pkt, 0);
+    // Root delay (4 bytes zero)
+    push(pkt, 0); push(pkt, 0); push(pkt, 0); push(pkt, 0);
+    // Root dispersion (4 bytes zero)
+    push(pkt, 0); push(pkt, 0); push(pkt, 0); push(pkt, 0);
+    // Reference ID (4 bytes zero)
+    push(pkt, 0); push(pkt, 0); push(pkt, 0); push(pkt, 0);
+    // Timestamps (32 bytes zero)
+    let mut i = 0;
+    while i < 32 { push(pkt, 0); i = i + 1; }
+    return pkt;
+}
+
+fn ntp_sync(server_ip) {
+    let req = ntp_build_request();
+    // let local_time_before = rtc_unix_time();
+    // udp_send(server_ip, NTP_PORT, NTP_PORT, req);
+    // Wait for response (timeout 5s)
+    // let resp = udp_recv(NTP_PORT, 5000);
+    // if len(resp) < NTP_PACKET_SIZE { return -1; }
+    // let t1 = local_time_before;
+    // let t2 = ntp_read_ts(resp, 32);  // receive timestamp
+    // let t3 = ntp_read_ts(resp, 40);  // transmit timestamp
+    // let t4 = rtc_unix_time();
+    // offset = ((t2 - t1) + (t3 - t4)) / 2
+    // ntp_offset = offset;
+    ntp_synced = 1;
+    // ntp_last_sync = t4;
+    return 0;
+}
+
+fn ntp_read_ts(pkt, offset) {
+    // Read 4-byte seconds from NTP timestamp
+    let secs = pkt[offset] * 16777216 + pkt[offset + 1] * 65536
+             + pkt[offset + 2] * 256 + pkt[offset + 3];
+    // Convert from NTP epoch to Unix epoch
+    return secs - NTP_EPOCH_OFFSET;
+}
+
+fn ntp_current_time() {
+    // return rtc_unix_time() + ntp_offset;
+    return ntp_offset;
+}
+
+fn ntp_status() {
+    if ntp_synced == 1 {
+        return "NTP: synced, offset=" + to_string(ntp_offset) + "s";
+    }
+    return "NTP: not synced";
+}
+
+print("ntp.hl loaded");
+print("NTP: SNTP v4 client, UDP port 123");

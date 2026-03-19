@@ -1,0 +1,53 @@
+// alloc.hl -- H-L Memory Allocator Configuration
+// Spatial-aware heap configuration using Hilbert-curve locality.
+
+let PAGE_SIZE = 4096;
+let HEAP_SIZE_KB = 512;
+let HEAP_SIZE = HEAP_SIZE_KB * 1024;
+let HEAP_START = 1145324612;  // 17476_4444_0000 doesn't fit i48; use symbolic
+
+// Hilbert-curve-based slab size classes
+// Objects of similar size are placed in spatially adjacent slabs
+// to maximize cache locality during allocation bursts.
+
+let SLAB_16  = hilbert_encode(0, 0, 0);
+let SLAB_32  = hilbert_encode(1, 0, 0);
+let SLAB_64  = hilbert_encode(2, 0, 0);
+let SLAB_128 = hilbert_encode(3, 0, 0);
+let SLAB_256 = hilbert_encode(4, 0, 0);
+let SLAB_512 = hilbert_encode(5, 0, 0);
+let SLAB_1K  = hilbert_encode(6, 0, 0);
+let SLAB_4K  = hilbert_encode(7, 0, 0);
+
+// Verify spatial locality: adjacent slab classes should be close
+let d01 = hilbert_dist(SLAB_16, SLAB_32);
+let d12 = hilbert_dist(SLAB_32, SLAB_64);
+let d07 = hilbert_dist(SLAB_16, SLAB_4K);
+
+print(d01);
+print(d12);
+print(d07);
+
+// Size class selection
+fn size_to_class(size) {
+    if size <= 16 { return 0; }
+    if size <= 32 { return 1; }
+    if size <= 64 { return 2; }
+    if size <= 128 { return 3; }
+    if size <= 256 { return 4; }
+    if size <= 512 { return 5; }
+    if size <= 1024 { return 6; }
+    return 7;
+}
+
+// Alignment helper
+fn align_up(addr, align) {
+    let mask = align - 1;
+    return (addr + mask) / align * align;
+}
+
+print(align_up(1000, 4096));
+print(align_up(4096, 4096));
+print(size_to_class(100));
+
+print("alloc.hl loaded");

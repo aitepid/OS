@@ -1,0 +1,176 @@
+// block_cache.hl -- Block Device Cache (Buffer Cache)
+//
+// Caches disk blocks in memory to reduce I/O.
+// Write-back policy: dirty blocks written on sync or eviction.
+// LRU replacement for cache misses.
+//
+// Critical for filesystem performance (ext2, ext4, FAT16, NTFS).
+// Linux equivalent: buffer_head / page cache.
+
+let BCACHE_SIZE = 64;          // 64 cached blocks
+let BCACHE_BLOCK_SIZE = 4096;  // match ext4 block size
+let BCACHE_DATA_BASE = 11534336;  // 0xB00000
+
+let mut bcache_count = 0;
+
+// Cache entry: [device_id, block_num, dirty, age, data_addr]
+let bcache_dev = [];
+let bcache_block = [];
+let bcache_dirty = [];
+let bcache_age = [];
+let bcache_valid = [];
+
+fn bcache_init() {
+    let mut i = 0;
+    while i < BCACHE_SIZE {
+        push(bcache_dev, 0);
+        push(bcache_block, 0);
+        push(bcache_dirty, 0);
+        push(bcache_age, 0);
+        push(bcache_valid, 0);
+        i = i + 1;
+    }
+    bcache_count = 0;
+    return 0;
+}
+
+fn bcache_data_addr(slot) {
+    return BCACHE_DATA_BASE + slot * BCACHE_BLOCK_SIZE;
+}
+
+fn bcache_lookup(dev, block) {
+    let mut i = 0;
+    while i < BCACHE_SIZE {
+        if bcache_valid[i] == 1 {
+            if bcache_dev[i] == dev {
+                if bcache_block[i] == block {
+                    bcache_age[i] = bcache_age[i] + 1; // LRU bump
+                    return i;
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return 0 - 1; // cache miss
+}
+
+fn bcache_evict_lru() {
+    let mut min_age = 999999;
+    let mut victim = 0;
+    let mut i = 0;
+    while i < BCACHE_SIZE {
+        if bcache_valid[i] == 1 {
+            if bcache_age[i] < min_age {
+                min_age = bcache_age[i];
+                victim = i;
+            }
+        }
+        i = i + 1;
+    }
+    // Write back if dirty
+    if bcache_dirty[victim] == 1 {
+        bcache_writeback(victim);
+    }
+    bcache_valid[victim] = 0;
+    return victim;
+}
+
+fn bcache_writeback(slot) {
+    // Write block back to disk via VirtIO-blk
+    let sector = bcache_block[slot] * (BCACHE_BLOCK_SIZE / 512);
+    let sectors = BCACHE_BLOCK_SIZE / 512;
+    virtio_blk_write(sector, sectors, bcache_data_addr(slot));
+    bcache_dirty[slot] = 0;
+    return 0;
+}
+
+fn bcache_read(dev, block) {
+    // Check cache first
+    let slot = bcache_lookup(dev, block);
+    if slot >= 0 {
+        return bcache_data_addr(slot); // cache hit
+    }
+    // Cache miss: find free slot or evict
+    let mut free_slot = 0 - 1;
+    let mut i = 0;
+    while i < BCACHE_SIZE {
+        if bcache_valid[i] == 0 { free_slot = i; break; }
+        i = i + 1;
+    }
+    if free_slot < 0 { free_slot = bcache_evict_lru(); }
+
+    // Read from disk into cache via VirtIO-blk
+    let sector = block * (BCACHE_BLOCK_SIZE / 512);
+    let sectors = BCACHE_BLOCK_SIZE / 512;
+    virtio_blk_read(sector, sectors, bcache_data_addr(free_slot));
+
+    bcache_dev[free_slot] = dev;
+    bcache_block[free_slot] = block;
+    bcache_dirty[free_slot] = 0;
+    bcache_age[free_slot] = 1;
+    bcache_valid[free_slot] = 1;
+    bcache_count = bcache_count + 1;
+
+    return bcache_data_addr(free_slot);
+}
+
+fn bcache_write(dev, block, data_addr) {
+    let slot = bcache_lookup(dev, block);
+    if slot < 0 {
+        // Not cached: bring into cache first
+        bcache_read(dev, block);
+        slot = bcache_lookup(dev, block);
+    }
+    if slot >= 0 {
+        // Copy data and mark dirty
+        mem_copy(bcache_data_addr(slot), data_addr, BCACHE_BLOCK_SIZE);
+        bcache_dirty[slot] = 1;
+    }
+    return 0;
+}
+
+fn bcache_sync() {
+    // Write all dirty blocks
+    let mut i = 0;
+    let mut written = 0;
+    while i < BCACHE_SIZE {
+        if bcache_valid[i] == 1 {
+            if bcache_dirty[i] == 1 {
+                bcache_writeback(i);
+                written = written + 1;
+            }
+        }
+        i = i + 1;
+    }
+    return written;
+}
+
+fn bcache_invalidate(dev) {
+    // Invalidate all blocks for a device (on unmount)
+    let mut i = 0;
+    while i < BCACHE_SIZE {
+        if bcache_valid[i] == 1 {
+            if bcache_dev[i] == dev {
+                if bcache_dirty[i] == 1 { bcache_writeback(i); }
+                bcache_valid[i] = 0;
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn bcache_status() {
+    let mut valid = 0;
+    let mut dirty = 0;
+    let mut i = 0;
+    while i < BCACHE_SIZE {
+        if bcache_valid[i] == 1 { valid = valid + 1; }
+        if bcache_dirty[i] == 1 { dirty = dirty + 1; }
+        i = i + 1;
+    }
+    return to_string(valid) + "/" + to_string(BCACHE_SIZE) + " cached, " + to_string(dirty) + " dirty";
+}
+
+print("block_cache.hl loaded");
+print("Block cache: " + to_string(BCACHE_SIZE) + " blocks, LRU, write-back");

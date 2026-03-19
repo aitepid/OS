@@ -1,0 +1,139 @@
+// mixer.hl -- Audio Mixer (Multi-Stream)
+//
+// Mixes multiple audio streams into the AC97 output buffer.
+// Each stream has volume, pan, mute state.
+// Software mixing: sum samples with clamping.
+//
+// Supports up to 8 simultaneous audio streams.
+// Each stream: sample buffer pointer, position, length, volume, loop flag.
+
+let MIXER_MAX_STREAMS = 8;
+let MIXER_SAMPLE_RATE = 44100;
+let MIXER_BUF_SAMPLES = 4096;
+let MIXER_OUTPUT_ADDR = 9830400;  // 0x960000
+
+let mut mixer_stream_count = 0;
+
+// Stream state (per stream)
+let mixer_active = [0, 0, 0, 0, 0, 0, 0, 0];
+let mixer_buf_addr = [0, 0, 0, 0, 0, 0, 0, 0];
+let mixer_buf_len = [0, 0, 0, 0, 0, 0, 0, 0];
+let mixer_position = [0, 0, 0, 0, 0, 0, 0, 0];
+let mixer_volume = [255, 255, 255, 255, 255, 255, 255, 255]; // 0-255
+let mixer_loop = [0, 0, 0, 0, 0, 0, 0, 0];
+let mixer_pan = [128, 128, 128, 128, 128, 128, 128, 128]; // 0=left, 128=center, 255=right
+
+fn mixer_init() {
+    mixer_stream_count = 0;
+    let mut i = 0;
+    while i < MIXER_MAX_STREAMS {
+        mixer_active[i] = 0;
+        mixer_volume[i] = 255;
+        mixer_pan[i] = 128;
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn mixer_play(buf_addr, buf_len, volume, do_loop) {
+    // Find free stream slot
+    let mut i = 0;
+    while i < MIXER_MAX_STREAMS {
+        if mixer_active[i] == 0 {
+            mixer_active[i] = 1;
+            mixer_buf_addr[i] = buf_addr;
+            mixer_buf_len[i] = buf_len;
+            mixer_position[i] = 0;
+            mixer_volume[i] = volume;
+            mixer_loop[i] = do_loop;
+            mixer_stream_count = mixer_stream_count + 1;
+            return i;
+        }
+        i = i + 1;
+    }
+    return 0 - 1; // no free slot
+}
+
+fn mixer_stop(stream_id) {
+    if stream_id < 0 { return 0; }
+    if stream_id >= MIXER_MAX_STREAMS { return 0; }
+    mixer_active[stream_id] = 0;
+    mixer_stream_count = mixer_stream_count - 1;
+    return 0;
+}
+
+fn mixer_set_volume(stream_id, vol) {
+    if stream_id < 0 { return 0; }
+    if stream_id >= MIXER_MAX_STREAMS { return 0; }
+    mixer_volume[stream_id] = vol;
+    return 0;
+}
+
+fn mixer_set_pan(stream_id, pan) {
+    if stream_id < 0 { return 0; }
+    if stream_id >= MIXER_MAX_STREAMS { return 0; }
+    mixer_pan[stream_id] = pan;
+    return 0;
+}
+
+// Mix all active streams into output buffer
+// Called by AC97 DMA interrupt handler
+fn mixer_mix(num_samples) {
+    // Clear output buffer
+    let mut s = 0;
+    while s < num_samples * 2 { // stereo = 2 samples per frame
+        mem_write_i16(MIXER_OUTPUT_ADDR + s * 2, 0);
+        s = s + 1;
+    }
+
+    // Mix each active stream
+    let mut i = 0;
+    while i < MIXER_MAX_STREAMS {
+        if mixer_active[i] == 1 {
+            let mut s = 0;
+            while s < num_samples {
+                let pos = mixer_position[i] + s;
+                if pos >= mixer_buf_len[i] {
+                    if mixer_loop[i] == 1 {
+                        // pos = pos % mixer_buf_len[i];
+                    } else {
+                        mixer_active[i] = 0;
+                        break;
+                    }
+                }
+                // Read sample from stream buffer
+                // let sample = mem_read_i16(mixer_buf_addr[i] + pos * 2);
+                // Apply volume: sample = sample * mixer_volume[i] / 255
+                // Apply pan to L/R channels
+                // let left_vol = (256 - mixer_pan[i]);
+                // let right_vol = mixer_pan[i];
+                // Add to output buffer (with clamping)
+                // let out_off = MIXER_OUTPUT_ADDR + s * 4;
+                // let cur_l = mem_read_i16(out_off);
+                // let cur_r = mem_read_i16(out_off + 2);
+                mem_write_i16(out_off, clamp(cur_l + sample * left_vol / 256, -32768, 32767));
+                mem_write_i16(out_off + 2, clamp(cur_r + sample * right_vol / 256, -32768, 32767));
+                s = s + 1;
+            }
+            mixer_position[i] = mixer_position[i] + num_samples;
+        }
+        i = i + 1;
+    }
+
+    // Send output buffer to AC97 DMA
+    // ac97_submit_buffer(MIXER_OUTPUT_ADDR, num_samples);
+    return 0;
+}
+
+fn mixer_status() {
+    let active = 0;
+    let mut i = 0;
+    while i < MIXER_MAX_STREAMS {
+        if mixer_active[i] == 1 { active = active + 1; }
+        i = i + 1;
+    }
+    return to_string(active) + "/" + to_string(MIXER_MAX_STREAMS) + " streams active";
+}
+
+print("mixer.hl loaded");
+print("Audio mixer: " + to_string(MIXER_MAX_STREAMS) + " streams, volume, pan, loop");

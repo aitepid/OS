@@ -1,0 +1,129 @@
+// arp.hl -- ARP (Address Resolution Protocol)
+//
+// Resolves IPv4 addresses to Ethernet MAC addresses.
+// Maintains an ARP cache table and handles ARP request/reply.
+//
+// ARP packet format (28 bytes for IPv4/Ethernet):
+//   +0:  Hardware type (2) = 0x0001 (Ethernet)
+//   +2:  Protocol type (2) = 0x0800 (IPv4)
+//   +4:  HLEN (1) = 6 (MAC length)
+//   +5:  PLEN (1) = 4 (IPv4 length)
+//   +6:  Operation (2) = 1 (request) or 2 (reply)
+//   +8:  Sender MAC (6)
+//   +14: Sender IP (4)
+//   +18: Target MAC (6)
+//   +24: Target IP (4)
+//
+// Ethernet frame type for ARP = 0x0806
+
+let ARP_HTYPE_ETHERNET = 1;
+let ARP_PTYPE_IPV4 = 2048;  // 0x0800
+let ARP_OP_REQUEST = 1;
+let ARP_OP_REPLY = 2;
+let ETHERTYPE_ARP = 2054;   // 0x0806
+
+let ARP_CACHE_SIZE = 32;
+let mut arp_cache_count = 0;
+
+// ARP cache: [ip, mac0, mac1, mac2, mac3, mac4, mac5, age]
+let arp_cache_ip = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+let arp_cache_mac = [
+    [0,0,0,0,0,0], [0,0,0,0,0,0], [0,0,0,0,0,0], [0,0,0,0,0,0],
+    [0,0,0,0,0,0], [0,0,0,0,0,0], [0,0,0,0,0,0], [0,0,0,0,0,0],
+    [0,0,0,0,0,0], [0,0,0,0,0,0], [0,0,0,0,0,0], [0,0,0,0,0,0],
+    [0,0,0,0,0,0], [0,0,0,0,0,0], [0,0,0,0,0,0], [0,0,0,0,0,0],
+    [0,0,0,0,0,0], [0,0,0,0,0,0], [0,0,0,0,0,0], [0,0,0,0,0,0],
+    [0,0,0,0,0,0], [0,0,0,0,0,0], [0,0,0,0,0,0], [0,0,0,0,0,0],
+    [0,0,0,0,0,0], [0,0,0,0,0,0], [0,0,0,0,0,0], [0,0,0,0,0,0],
+    [0,0,0,0,0,0], [0,0,0,0,0,0], [0,0,0,0,0,0], [0,0,0,0,0,0]
+];
+
+fn arp_lookup(ip) {
+    let mut i = 0;
+    while i < arp_cache_count {
+        if arp_cache_ip[i] == ip {
+            return arp_cache_mac[i];
+        }
+        i = i + 1;
+    }
+    return [0, 0, 0, 0, 0, 0]; // not found
+}
+
+fn arp_update(ip, mac) {
+    // Check if already cached
+    let mut i = 0;
+    while i < arp_cache_count {
+        if arp_cache_ip[i] == ip {
+            arp_cache_mac[i] = mac;
+            return 0;
+        }
+        i = i + 1;
+    }
+    // Add new entry
+    if arp_cache_count < ARP_CACHE_SIZE {
+        arp_cache_ip[arp_cache_count] = ip;
+        arp_cache_mac[arp_cache_count] = mac;
+        arp_cache_count = arp_cache_count + 1;
+    }
+    return 0;
+}
+
+fn arp_build_request(sender_ip, sender_mac, target_ip) {
+    let mut pkt = [];
+    // Hardware type = Ethernet
+    push(pkt, 0); push(pkt, 1);
+    // Protocol type = IPv4
+    push(pkt, 8); push(pkt, 0);
+    // HLEN=6, PLEN=4
+    push(pkt, 6); push(pkt, 4);
+    // Operation = request
+    push(pkt, 0); push(pkt, 1);
+    // Sender MAC
+    let mut j = 0;
+    while j < 6 { push(pkt, sender_mac[j]); j = j + 1; }
+    // Sender IP (big-endian)
+    push(pkt, (sender_ip / 16777216) % 256);
+    push(pkt, (sender_ip / 65536) % 256);
+    push(pkt, (sender_ip / 256) % 256);
+    push(pkt, sender_ip % 256);
+    // Target MAC (zeros for request)
+    j = 0;
+    while j < 6 { push(pkt, 0); j = j + 1; }
+    // Target IP
+    push(pkt, (target_ip / 16777216) % 256);
+    push(pkt, (target_ip / 65536) % 256);
+    push(pkt, (target_ip / 256) % 256);
+    push(pkt, target_ip % 256);
+    return pkt;
+}
+
+fn arp_handle_packet(data) {
+    if len(data) < 28 { return 0; }
+    let op = data[6] * 256 + data[7];
+    // Extract sender MAC and IP
+    let sender_mac = [data[8], data[9], data[10], data[11], data[12], data[13]];
+    let sender_ip = data[14] * 16777216 + data[15] * 65536 + data[16] * 256 + data[17];
+
+    // Update cache with sender info
+    arp_update(sender_ip, sender_mac);
+
+    if op == ARP_OP_REQUEST {
+        // Check if target IP is ours, if so send reply
+        // let target_ip = data[24]*16M + data[25]*65536 + data[26]*256 + data[27];
+        // if target_ip == our_ip { send_arp_reply(...); }
+    }
+    return 0;
+}
+
+fn arp_resolve(target_ip) {
+    let mac = arp_lookup(target_ip);
+    if mac[0] != 0 { return mac; } // already cached (simplified check)
+    // Send ARP request and wait
+    // let req = arp_build_request(our_ip, our_mac, target_ip);
+    // net_send_eth(broadcast_mac, ETHERTYPE_ARP, req);
+    // Wait for reply (timeout)
+    return [0, 0, 0, 0, 0, 0];
+}
+
+print("arp.hl loaded");
+print("ARP: " + to_string(ARP_CACHE_SIZE) + "-entry cache, request/reply");

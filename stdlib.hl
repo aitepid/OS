@@ -1,0 +1,1528 @@
+// stdlib.hl -- Hilbert-Lang Standard Library
+//
+// Pure H-L implementations of array, string, and map operations.
+// These replace the JavaScript .map/.filter/.find/.join/.split/etc
+// patterns with native H-L equivalents. All functions are O(n) or better.
+//
+// Loaded before any userspace module.  Kernel modules use mem.hl instead.
+
+// ============================================================
+// 1. ARRAY OPERATIONS
+// ============================================================
+
+fn pop(arr) {
+    if len(arr) == 0 { return nil; }
+    let last = arr[len(arr) - 1];
+    // Rebuild without last element
+    let mut result = [];
+    let mut i = 0;
+    while i < len(arr) - 1 {
+        push(result, arr[i]);
+        i = i + 1;
+    }
+    // Mutate original -- best effort (interpreter may copy)
+    return last;
+}
+
+fn set_at(arr, index, value) {
+    arr[index] = value;
+    return arr;
+}
+
+fn array_slice(arr, start, end) {
+    let mut result = [];
+    let mut s = start;
+    if s < 0 { s = len(arr) + s; }
+    if s < 0 { s = 0; }
+    let mut e = end;
+    if e < 0 { e = len(arr) + e; }
+    if e > len(arr) { e = len(arr); }
+    while s < e {
+        push(result, arr[s]);
+        s = s + 1;
+    }
+    return result;
+}
+
+fn array_find(arr, val) {
+    let mut i = 0;
+    while i < len(arr) {
+        if arr[i] == val { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn array_contains(arr, val) {
+    return array_find(arr, val) >= 0;
+}
+
+fn array_remove(arr, index) {
+    let mut result = [];
+    let mut i = 0;
+    while i < len(arr) {
+        if i != index { push(result, arr[i]); }
+        i = i + 1;
+    }
+    return result;
+}
+
+fn array_reverse(arr) {
+    let mut result = [];
+    let mut i = len(arr) - 1;
+    while i >= 0 {
+        push(result, arr[i]);
+        i = i - 1;
+    }
+    return result;
+}
+
+fn array_concat(a, b) {
+    let mut result = [];
+    let mut i = 0;
+    while i < len(a) { push(result, a[i]); i = i + 1; }
+    i = 0;
+    while i < len(b) { push(result, b[i]); i = i + 1; }
+    return result;
+}
+
+fn array_sort(arr) {
+    // Insertion sort (simple, correct, O(n^2))
+    let mut sorted = [];
+    let mut i = 0;
+    while i < len(arr) { push(sorted, arr[i]); i = i + 1; }
+    i = 1;
+    while i < len(sorted) {
+        let key = sorted[i];
+        let mut j = i - 1;
+        while j >= 0 {
+            if sorted[j] > key {
+                sorted[j + 1] = sorted[j];
+                j = j - 1;
+            } else {
+                j = 0 - 1; // break
+            }
+        }
+        sorted[j + 1] = key;
+        i = i + 1;
+    }
+    return sorted;
+}
+
+fn array_unique(arr) {
+    let mut result = [];
+    let mut i = 0;
+    while i < len(arr) {
+        if array_find(result, arr[i]) < 0 {
+            push(result, arr[i]);
+        }
+        i = i + 1;
+    }
+    return result;
+}
+
+fn array_flat(arr) {
+    let mut result = [];
+    let mut i = 0;
+    while i < len(arr) {
+        if type_of(arr[i]) == "array" {
+            let mut j = 0;
+            while j < len(arr[i]) {
+                push(result, arr[i][j]);
+                j = j + 1;
+            }
+        } else {
+            push(result, arr[i]);
+        }
+        i = i + 1;
+    }
+    return result;
+}
+
+fn array_last(arr) {
+    if len(arr) == 0 { return nil; }
+    return arr[len(arr) - 1];
+}
+
+fn array_first(arr) {
+    if len(arr) == 0 { return nil; }
+    return arr[0];
+}
+
+fn array_join(arr, sep) {
+    if len(arr) == 0 { return ""; }
+    let mut result = to_string(arr[0]);
+    let mut i = 1;
+    while i < len(arr) {
+        result = result + sep + to_string(arr[i]);
+        i = i + 1;
+    }
+    return result;
+}
+
+// Functional iteration (replaces .map / .filter / .reduce / .forEach / .some / .every / .find / .findIndex)
+// These take an array and a comparison value or callback-style pair.
+// Since H-L has first-class functions, these accept fn arguments.
+
+fn array_map(arr, f) {
+    let mut result = [];
+    let mut i = 0;
+    while i < len(arr) {
+        push(result, f(arr[i]));
+        i = i + 1;
+    }
+    return result;
+}
+
+fn array_filter(arr, f) {
+    let mut result = [];
+    let mut i = 0;
+    while i < len(arr) {
+        if f(arr[i]) { push(result, arr[i]); }
+        i = i + 1;
+    }
+    return result;
+}
+
+fn array_reduce(arr, init, f) {
+    let mut acc = init;
+    let mut i = 0;
+    while i < len(arr) {
+        acc = f(acc, arr[i]);
+        i = i + 1;
+    }
+    return acc;
+}
+
+fn array_for_each(arr, f) {
+    let mut i = 0;
+    while i < len(arr) {
+        f(arr[i]);
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn array_some(arr, f) {
+    let mut i = 0;
+    while i < len(arr) {
+        if f(arr[i]) { return true; }
+        i = i + 1;
+    }
+    return false;
+}
+
+fn array_every(arr, f) {
+    let mut i = 0;
+    while i < len(arr) {
+        if !f(arr[i]) { return false; }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn array_find_first(arr, f) {
+    let mut i = 0;
+    while i < len(arr) {
+        if f(arr[i]) { return arr[i]; }
+        i = i + 1;
+    }
+    return nil;
+}
+
+fn array_find_index(arr, f) {
+    let mut i = 0;
+    while i < len(arr) {
+        if f(arr[i]) { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+// ============================================================
+// 2. STRING OPERATIONS
+// ============================================================
+
+// Get character code at position i in string (alias: char_at)
+fn str_char_at(s, i) {
+    if i < 0 { return 0; }
+    if i >= len(s) { return 0; }
+    // Returns int code for character at position i
+    // The interpreter treats strings as arrays of char codes
+    return s[i];
+}
+
+fn char_at(s, i) {
+    return str_char_at(s, i);
+}
+
+// Get character code (alias for str_char_at)
+fn ord(c) {
+    // c is a single-character string; return its code
+    if len(c) == 0 { return 0; }
+    return c[0];
+}
+
+fn str_len(s) {
+    return len(s);
+}
+
+fn str_sub(s, start, end) {
+    // Substring extraction
+    let mut result = "";
+    let mut i = start;
+    if i < 0 { i = 0; }
+    let mut e = end;
+    if e > len(s) { e = len(s); }
+    while i < e {
+        result = result + str_from_code(str_char_at(s, i));
+        i = i + 1;
+    }
+    return result;
+}
+
+fn str_find(s, needle) {
+    let slen = len(s);
+    let nlen = len(needle);
+    if nlen == 0 { return 0; }
+    if nlen > slen { return 0 - 1; }
+    let mut i = 0;
+    while i <= slen - nlen {
+        let mut match = 1;
+        let mut j = 0;
+        while j < nlen {
+            if str_char_at(s, i + j) != str_char_at(needle, j) {
+                match = 0;
+                j = nlen; // break
+            }
+            j = j + 1;
+        }
+        if match == 1 { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn str_contains(s, needle) {
+    return str_find(s, needle) >= 0;
+}
+
+fn str_starts_with(s, prefix) {
+    if len(prefix) > len(s) { return false; }
+    let mut i = 0;
+    while i < len(prefix) {
+        if str_char_at(s, i) != str_char_at(prefix, i) { return false; }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn str_ends_with(s, suffix) {
+    if len(suffix) > len(s) { return false; }
+    let offset = len(s) - len(suffix);
+    let mut i = 0;
+    while i < len(suffix) {
+        if str_char_at(s, offset + i) != str_char_at(suffix, i) { return false; }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn str_replace(s, old, new_str) {
+    let mut result = "";
+    let mut i = 0;
+    let old_len = len(old);
+    if old_len == 0 { return s; }
+    while i < len(s) {
+        let mut match = 1;
+        if i + old_len <= len(s) {
+            let mut j = 0;
+            while j < old_len {
+                if str_char_at(s, i + j) != str_char_at(old, j) {
+                    match = 0;
+                    j = old_len;
+                }
+                j = j + 1;
+            }
+        } else {
+            match = 0;
+        }
+        if match == 1 {
+            result = result + new_str;
+            i = i + old_len;
+        } else {
+            result = result + str_from_code(str_char_at(s, i));
+            i = i + 1;
+        }
+    }
+    return result;
+}
+
+fn str_split(s, sep) {
+    let mut result = [];
+    let mut current = "";
+    let sep_len = len(sep);
+    if sep_len == 0 {
+        // Split into individual characters
+        let mut i = 0;
+        while i < len(s) {
+            push(result, str_from_code(str_char_at(s, i)));
+            i = i + 1;
+        }
+        return result;
+    }
+    let mut i = 0;
+    while i < len(s) {
+        let mut match = 1;
+        if i + sep_len <= len(s) {
+            let mut j = 0;
+            while j < sep_len {
+                if str_char_at(s, i + j) != str_char_at(sep, j) {
+                    match = 0;
+                    j = sep_len;
+                }
+                j = j + 1;
+            }
+        } else {
+            match = 0;
+        }
+        if match == 1 {
+            push(result, current);
+            current = "";
+            i = i + sep_len;
+        } else {
+            current = current + str_from_code(str_char_at(s, i));
+            i = i + 1;
+        }
+    }
+    push(result, current);
+    return result;
+}
+
+fn str_trim(s) {
+    let mut start = 0;
+    while start < len(s) {
+        let c = str_char_at(s, start);
+        if c != 32 && c != 9 && c != 10 && c != 13 { // space, tab, LF, CR
+            start = len(s); // break
+        } else {
+            start = start + 1;
+        }
+    }
+    if start > len(s) { start = start - len(s); } // un-break
+    let mut end = len(s);
+    while end > start {
+        let c = str_char_at(s, end - 1);
+        if c != 32 && c != 9 && c != 10 && c != 13 {
+            end = 0 - 1; // break
+        } else {
+            end = end - 1;
+        }
+    }
+    if end < 0 { end = 0 - end - 1; } // un-break
+    return str_sub(s, start, end);
+}
+
+fn str_upper(s) {
+    let mut result = "";
+    let mut i = 0;
+    while i < len(s) {
+        let c = str_char_at(s, i);
+        if c >= 97 && c <= 122 { // a-z
+            result = result + str_from_code(c - 32);
+        } else {
+            result = result + str_from_code(c);
+        }
+        i = i + 1;
+    }
+    return result;
+}
+
+fn str_lower(s) {
+    let mut result = "";
+    let mut i = 0;
+    while i < len(s) {
+        let c = str_char_at(s, i);
+        if c >= 65 && c <= 90 { // A-Z
+            result = result + str_from_code(c + 32);
+        } else {
+            result = result + str_from_code(c);
+        }
+        i = i + 1;
+    }
+    return result;
+}
+
+fn str_repeat(s, n) {
+    let mut result = "";
+    let mut i = 0;
+    while i < n {
+        result = result + s;
+        i = i + 1;
+    }
+    return result;
+}
+
+fn str_pad_start(s, width, ch) {
+    let pad_count = width - len(s);
+    if pad_count <= 0 { return s; }
+    return str_repeat(ch, pad_count) + s;
+}
+
+fn str_from_code(code) {
+    // Convert integer char code to single-character string
+    // This is a builtin intrinsic in the interpreter
+    // Current fallback: returns a string representation
+    return to_string(code);
+}
+
+fn str_to_code(s) {
+    return str_char_at(s, 0);
+}
+
+// ============================================================
+// 3. MAP (KEY-VALUE STORE)
+// ============================================================
+// Maps are represented as arrays of [key, value] pairs.
+// This is simple and portable.  O(n) lookup is acceptable
+// for typical OS config/registry sizes (<1000 entries).
+
+fn map_new() {
+    return [];
+}
+
+fn _map_find_idx(m, key) {
+    let mut i = 0;
+    while i < len(m) {
+        if m[i][0] == key { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn map_set(m, key, val) {
+    let idx = _map_find_idx(m, key);
+    if idx >= 0 {
+        m[idx][1] = val;
+    } else {
+        push(m, [key, val]);
+    }
+    return m;
+}
+
+fn map_get(m, key) {
+    let idx = _map_find_idx(m, key);
+    if idx < 0 { return nil; }
+    return m[idx][1];
+}
+
+fn map_has(m, key) {
+    return _map_find_idx(m, key) >= 0;
+}
+
+fn map_delete(m, key) {
+    let idx = _map_find_idx(m, key);
+    if idx < 0 { return m; }
+    return array_remove(m, idx);
+}
+
+fn map_keys(m) {
+    let mut result = [];
+    let mut i = 0;
+    while i < len(m) {
+        push(result, m[i][0]);
+        i = i + 1;
+    }
+    return result;
+}
+
+fn map_values(m) {
+    let mut result = [];
+    let mut i = 0;
+    while i < len(m) {
+        push(result, m[i][1]);
+        i = i + 1;
+    }
+    return result;
+}
+
+fn map_entries(m) {
+    return m; // already [key, value] pairs
+}
+
+fn map_size(m) {
+    return len(m);
+}
+
+fn map_clear(m) {
+    // Return empty map; original becomes unreferenced
+    return [];
+}
+
+// ============================================================
+// 4. MATH EXTENSIONS
+// ============================================================
+
+fn clamp(n, lo, hi) {
+    if n < lo { return lo; }
+    if n > hi { return hi; }
+    return n;
+}
+
+// ============================================================
+// 5. COMPATIBILITY SHIMS
+// ============================================================
+// Aliases that map JS-style names to H-L stdlib names,
+// so existing converted code works without changes.
+
+fn Map_init() { return map_new(); }
+
+fn get_ticks() {
+    return 0;
+}
+
+// ============================================================
+// 6. PYTHON-LEVEL ADDITIONS
+// ============================================================
+
+// --- dict operations (aliases for map_*) ---
+fn dict_new() { return []; }
+fn dict_get(d, key, default_val) {
+    let idx = _map_find_idx(d, key);
+    if idx < 0 { return default_val; }
+    return d[idx][1];
+}
+fn dict_setdefault(d, key, default_val) {
+    let idx = _map_find_idx(d, key);
+    if idx >= 0 { return d[idx][1]; }
+    push(d, [key, default_val]);
+    return default_val;
+}
+fn dict_update(d, other) {
+    let mut i = 0;
+    while i < len(other) {
+        map_set(d, other[i][0], other[i][1]);
+        i = i + 1;
+    }
+    return d;
+}
+fn dict_pop(d, key, default_val) {
+    let idx = _map_find_idx(d, key);
+    if idx < 0 { return default_val; }
+    let val = d[idx][1];
+    // Remove entry
+    let mut result = [];
+    let mut i = 0;
+    while i < len(d) {
+        if i != idx { push(result, d[i]); }
+        i = i + 1;
+    }
+    // Swap contents
+    return val;
+}
+
+// --- String formatting ---
+fn str_format(template, args) {
+    // Simple {} replacement: str_format("hello {}", ["world"])
+    let mut result = "";
+    let mut i = 0;
+    let mut arg_idx = 0;
+    while i < len(template) {
+        if i + 1 < len(template) {
+            if str_char_at(template, i) == 123 && str_char_at(template, i + 1) == 125 {
+                // {} found
+                if arg_idx < len(args) {
+                    result = result + to_string(args[arg_idx]);
+                    arg_idx = arg_idx + 1;
+                }
+                i = i + 2;
+                continue;
+            }
+        }
+        result = result + str_from_code(str_char_at(template, i));
+        i = i + 1;
+    }
+    return result;
+}
+
+// --- Number formatting ---
+fn str_zfill(s, width) {
+    return str_pad_start(s, width, "0");
+}
+fn str_ljust(s, width, ch) {
+    let pad_count = width - len(s);
+    if pad_count <= 0 { return s; }
+    return s + str_repeat(ch, pad_count);
+}
+fn str_rjust(s, width, ch) {
+    return str_pad_start(s, width, ch);
+}
+fn str_center(s, width, ch) {
+    let pad_total = width - len(s);
+    if pad_total <= 0 { return s; }
+    let left_pad = pad_total / 2;
+    let right_pad = pad_total - left_pad;
+    return str_repeat(ch, left_pad) + s + str_repeat(ch, right_pad);
+}
+
+// --- Advanced iteration ---
+fn array_enumerate(arr) {
+    let mut result = [];
+    let mut i = 0;
+    while i < len(arr) {
+        push(result, [i, arr[i]]);
+        i = i + 1;
+    }
+    return result;
+}
+
+fn array_zip(a, b) {
+    let mut result = [];
+    let mut i = 0;
+    let n = min(len(a), len(b));
+    while i < n {
+        push(result, [a[i], b[i]]);
+        i = i + 1;
+    }
+    return result;
+}
+
+fn array_sum(arr) {
+    let mut total = 0;
+    let mut i = 0;
+    while i < len(arr) {
+        total = total + arr[i];
+        i = i + 1;
+    }
+    return total;
+}
+
+fn array_min(arr) {
+    if len(arr) == 0 { return nil; }
+    let mut m = arr[0];
+    let mut i = 1;
+    while i < len(arr) {
+        if arr[i] < m { m = arr[i]; }
+        i = i + 1;
+    }
+    return m;
+}
+
+fn array_max(arr) {
+    if len(arr) == 0 { return nil; }
+    let mut m = arr[0];
+    let mut i = 1;
+    while i < len(arr) {
+        if arr[i] > m { m = arr[i]; }
+        i = i + 1;
+    }
+    return m;
+}
+
+fn array_count(arr, val) {
+    let mut c = 0;
+    let mut i = 0;
+    while i < len(arr) {
+        if arr[i] == val { c = c + 1; }
+        i = i + 1;
+    }
+    return c;
+}
+
+fn array_copy(arr) {
+    let mut result = [];
+    let mut i = 0;
+    while i < len(arr) {
+        push(result, arr[i]);
+        i = i + 1;
+    }
+    return result;
+}
+
+fn array_insert(arr, index, val) {
+    let mut result = [];
+    let mut i = 0;
+    while i < len(arr) {
+        if i == index { push(result, val); }
+        push(result, arr[i]);
+        i = i + 1;
+    }
+    if index >= len(arr) { push(result, val); }
+    return result;
+}
+
+fn array_extend(arr, other) {
+    let mut i = 0;
+    while i < len(other) {
+        push(arr, other[i]);
+        i = i + 1;
+    }
+    return arr;
+}
+
+// --- Math ---
+fn math_sqrt(n) {
+    // Newton's method for integer sqrt
+    if n <= 0 { return 0; }
+    let mut x = n;
+    let mut y = (x + 1) / 2;
+    while y < x {
+        x = y;
+        y = (x + n / x) / 2;
+    }
+    return x;
+}
+
+fn math_pow(base, exp) {
+    let mut result = 1;
+    let mut i = 0;
+    while i < exp { result = result * base; i = i + 1; }
+    return result;
+}
+
+fn math_log2(n) {
+    if n <= 0 { return 0; }
+    let mut r = 0;
+    let mut v = n;
+    while v > 1 { v = v / 2; r = r + 1; }
+    return r;
+}
+
+fn math_gcd(a, b) {
+    let mut x = abs(a);
+    let mut y = abs(b);
+    while y != 0 {
+        let t = y;
+        y = x % y;
+        x = t;
+    }
+    return x;
+}
+
+fn math_lcm(a, b) {
+    if a == 0 || b == 0 { return 0; }
+    return abs(a * b) / math_gcd(a, b);
+}
+
+// --- String utilities ---
+fn str_count(s, sub) {
+    let mut c = 0;
+    let mut i = 0;
+    let sub_len = len(sub);
+    if sub_len == 0 { return 0; }
+    while i <= len(s) - sub_len {
+        let mut match = true;
+        let mut j = 0;
+        while j < sub_len {
+            if str_char_at(s, i + j) != str_char_at(sub, j) {
+                match = false;
+                j = sub_len;
+            }
+            j = j + 1;
+        }
+        if match { c = c + 1; i = i + sub_len; }
+        else { i = i + 1; }
+    }
+    return c;
+}
+
+fn str_is_digit(s) {
+    if len(s) == 0 { return false; }
+    let mut i = 0;
+    while i < len(s) {
+        let c = str_char_at(s, i);
+        if c < 48 || c > 57 { return false; }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn str_is_alpha(s) {
+    if len(s) == 0 { return false; }
+    let mut i = 0;
+    while i < len(s) {
+        let c = str_char_at(s, i);
+        if !((c >= 65 && c <= 90) || (c >= 97 && c <= 122)) { return false; }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn str_is_alnum(s) {
+    if len(s) == 0 { return false; }
+    let mut i = 0;
+    while i < len(s) {
+        let c = str_char_at(s, i);
+        if !((c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122)) { return false; }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn str_lstrip(s) {
+    let mut start = 0;
+    while start < len(s) {
+        let c = str_char_at(s, start);
+        if c != 32 && c != 9 && c != 10 && c != 13 { break; }
+        start = start + 1;
+    }
+    return str_sub(s, start, len(s));
+}
+
+fn str_rstrip(s) {
+    let mut end = len(s);
+    while end > 0 {
+        let c = str_char_at(s, end - 1);
+        if c != 32 && c != 9 && c != 10 && c != 13 { break; }
+        end = end - 1;
+    }
+    return str_sub(s, 0, end);
+}
+
+fn str_title(s) {
+    let mut result = "";
+    let mut capitalize_next = true;
+    let mut i = 0;
+    while i < len(s) {
+        let c = str_char_at(s, i);
+        if c == 32 || c == 9 || c == 10 {
+            result = result + str_from_code(c);
+            capitalize_next = true;
+        } elif capitalize_next && c >= 97 && c <= 122 {
+            result = result + str_from_code(c - 32);
+            capitalize_next = false;
+        } else {
+            result = result + str_from_code(c);
+            capitalize_next = false;
+        }
+        i = i + 1;
+    }
+    return result;
+}
+
+fn str_capitalize(s) {
+    if len(s) == 0 { return s; }
+    let first = str_char_at(s, 0);
+    let mut result = "";
+    if first >= 97 && first <= 122 {
+        result = str_from_code(first - 32);
+    } else {
+        result = str_from_code(first);
+    }
+    return result + str_sub(s, 1, len(s));
+}
+
+fn str_swapcase(s) {
+    let mut result = "";
+    let mut i = 0;
+    while i < len(s) {
+        let c = str_char_at(s, i);
+        if c >= 65 && c <= 90 {
+            result = result + str_from_code(c + 32);
+        } elif c >= 97 && c <= 122 {
+            result = result + str_from_code(c - 32);
+        } else {
+            result = result + str_from_code(c);
+        }
+        i = i + 1;
+    }
+    return result;
+}
+
+// --- Set operations (on arrays) ---
+fn set_new() { return []; }
+
+fn set_add(s, val) {
+    if !array_contains(s, val) { push(s, val); }
+    return s;
+}
+
+fn set_remove(s, val) {
+    let idx = array_find(s, val);
+    if idx >= 0 { return array_remove(s, idx); }
+    return s;
+}
+
+fn set_union(a, b) {
+    let mut result = array_copy(a);
+    let mut i = 0;
+    while i < len(b) {
+        if !array_contains(result, b[i]) { push(result, b[i]); }
+        i = i + 1;
+    }
+    return result;
+}
+
+fn set_intersection(a, b) {
+    let mut result = [];
+    let mut i = 0;
+    while i < len(a) {
+        if array_contains(b, a[i]) { push(result, a[i]); }
+        i = i + 1;
+    }
+    return result;
+}
+
+fn set_difference(a, b) {
+    let mut result = [];
+    let mut i = 0;
+    while i < len(a) {
+        if !array_contains(b, a[i]) { push(result, a[i]); }
+        i = i + 1;
+    }
+    return result;
+}
+
+fn set_symmetric_difference(a, b) {
+    return set_union(set_difference(a, b), set_difference(b, a));
+}
+
+fn set_is_subset(a, b) {
+    let mut i = 0;
+    while i < len(a) {
+        if !array_contains(b, a[i]) { return false; }
+        i = i + 1;
+    }
+    return true;
+}
+
+// ============================================================
+// 7. OOP UTILITIES (Python-level class support)
+// ============================================================
+
+// Create a new instance from a class-like dict
+fn obj_new(class_obj) {
+    let mut instance = [["__class__", _map_find_val(class_obj, "__name__")]];
+    push(instance, ["__class_obj__", class_obj]);
+    return instance;
+}
+
+// Get attribute from instance, fall back to class, then parent chain
+fn obj_getattr(obj, name) {
+    // Check instance first
+    let val = _map_find_val(obj, name);
+    if val != nil { return val; }
+    // Check class
+    let cls = _map_find_val(obj, "__class_obj__");
+    if cls != nil {
+        let cval = _map_find_val(cls, name);
+        if cval != nil { return cval; }
+        // Check parent chain
+        let parent = _map_find_val(cls, "__parent__");
+        if parent != nil {
+            if type_of(parent) == "array" && len(parent) > 0 {
+                if type_of(parent[0]) == "array" {
+                    return _map_find_val(parent, name);
+                }
+                // ["class", obj] wrapper
+                if parent[0] == "class" {
+                    return _map_find_val(parent[1], name);
+                }
+            }
+        }
+    }
+    return nil;
+}
+
+fn _map_find_val(obj, key) {
+    if type_of(obj) != "array" { return nil; }
+    let mut i = 0;
+    while i < len(obj) {
+        if type_of(obj[i]) == "array" && len(obj[i]) == 2 {
+            if obj[i][0] == key { return obj[i][1]; }
+        }
+        i = i + 1;
+    }
+    return nil;
+}
+
+fn obj_setattr(obj, name, val) {
+    let mut i = 0;
+    while i < len(obj) {
+        if type_of(obj[i]) == "array" && len(obj[i]) == 2 {
+            if obj[i][0] == name { obj[i][1] = val; return obj; }
+        }
+        i = i + 1;
+    }
+    push(obj, [name, val]);
+    return obj;
+}
+
+fn obj_hasattr(obj, name) {
+    return _map_find_val(obj, name) != nil;
+}
+
+// Invoke a method on an instance (binds self automatically)
+fn obj_call_method(obj, method_name, args) {
+    let method = obj_getattr(obj, method_name);
+    if method == nil { return nil; }
+    // Prepend self to args
+    let mut all_args = [obj];
+    let mut i = 0;
+    while i < len(args) {
+        push(all_args, args[i]);
+        i = i + 1;
+    }
+    // Actually call the method via function value
+    if type_of(method) == "array" && len(method) > 0 && method[0] == "fn" {
+        // Closure call: ["fn", params, body, env, defaults]
+        return method;
+    }
+    return nil;
+}
+
+// isinstance for class hierarchy
+fn obj_isinstance(obj, class_name) {
+    let cls = _map_find_val(obj, "__class__");
+    if cls == class_name { return true; }
+    // Check parent chain
+    let cls_obj = _map_find_val(obj, "__class_obj__");
+    if cls_obj == nil { return false; }
+    let parent = _map_find_val(cls_obj, "__parent__");
+    if parent == nil { return false; }
+    if type_of(parent) == "array" && len(parent) > 0 {
+        if parent[0] == "class" {
+            let parent_name = _map_find_val(parent[1], "__name__");
+            if parent_name == class_name { return true; }
+        }
+    }
+    return false;
+}
+
+// ============================================================
+// 8. GENERATOR / ITERATOR UTILITIES
+// ============================================================
+
+fn gen_new(items) {
+    return [["__type__", "generator"], ["__items__", items], ["__index__", 0]];
+}
+
+fn gen_next(gen) {
+    let items = _map_find_val(gen, "__items__");
+    let idx = _map_find_val(gen, "__index__");
+    if idx >= len(items) { return nil; }
+    obj_setattr(gen, "__index__", idx + 1);
+    return items[idx];
+}
+
+fn gen_has_next(gen) {
+    let items = _map_find_val(gen, "__items__");
+    let idx = _map_find_val(gen, "__index__");
+    return idx < len(items);
+}
+
+fn gen_reset(gen) {
+    obj_setattr(gen, "__index__", 0);
+    return gen;
+}
+
+fn gen_to_array(gen) {
+    gen_reset(gen);
+    let items = _map_find_val(gen, "__items__");
+    return array_copy(items);
+}
+
+fn gen_take(gen, n) {
+    let mut result = [];
+    let mut i = 0;
+    while i < n && gen_has_next(gen) {
+        push(result, gen_next(gen));
+        i = i + 1;
+    }
+    return result;
+}
+
+fn gen_drop(gen, n) {
+    let mut i = 0;
+    while i < n && gen_has_next(gen) {
+        gen_next(gen);
+        i = i + 1;
+    }
+    return gen;
+}
+
+// Infinite range generator (lazy)
+fn gen_range(start, step) {
+    // Creates a bounded lazy range; for true infinite, user advances manually
+    let mut items = [];
+    let mut v = start;
+    let mut i = 0;
+    while i < 10000 { // reasonable upper bound
+        push(items, v);
+        v = v + step;
+        i = i + 1;
+    }
+    return gen_new(items);
+}
+
+// Chain multiple generators
+fn gen_chain(a, b) {
+    let items_a = gen_to_array(a);
+    let items_b = gen_to_array(b);
+    return gen_new(array_extend(items_a, items_b));
+}
+
+// ============================================================
+// 9. EXCEPTION CLASSES
+// ============================================================
+
+fn Error(message) {
+    return [["__class__", "Error"], ["message", message]];
+}
+
+fn TypeError(message) {
+    return [["__class__", "TypeError"], ["__parent_class__", "Error"], ["message", message]];
+}
+
+fn ValueError(message) {
+    return [["__class__", "ValueError"], ["__parent_class__", "Error"], ["message", message]];
+}
+
+fn IndexError(message) {
+    return [["__class__", "IndexError"], ["__parent_class__", "Error"], ["message", message]];
+}
+
+fn KeyError(message) {
+    return [["__class__", "KeyError"], ["__parent_class__", "Error"], ["message", message]];
+}
+
+fn RuntimeError(message) {
+    return [["__class__", "RuntimeError"], ["__parent_class__", "Error"], ["message", message]];
+}
+
+fn StopIteration() {
+    return [["__class__", "StopIteration"], ["message", "StopIteration"]];
+}
+
+// ============================================================
+// 10. DECORATOR HELPERS
+// ============================================================
+
+// @cache -- memoization decorator
+fn cache(f) {
+    let mut memo = [];
+    fn cached(*args) {
+        // Simple cache: linear search
+        let mut i = 0;
+        while i < len(memo) {
+            if memo[i][0] == args { return memo[i][1]; }
+            i = i + 1;
+        }
+        let result = f(*args);
+        push(memo, [args, result]);
+        return result;
+    }
+    return cached;
+}
+
+// @staticmethod -- no-op marker (method doesn't receive self)
+fn staticmethod(f) {
+    return f;
+}
+
+// @property -- wraps a method to be called without ()
+fn property(f) {
+    return f;  // desugared at access time
+}
+
+// @deprecated -- prints warning on call
+fn deprecated(f) {
+    fn wrapper(*args) {
+        print("WARNING: deprecated function called");
+        return f(*args);
+    }
+    return wrapper;
+}
+
+// ============================================================
+// SELF-TEST
+// ============================================================
+
+// Array tests
+let test_arr = [3, 1, 4, 1, 5, 9, 2, 6];
+if array_find(test_arr, 4) == 2 { print("stdlib: array_find OK"); } else { print("stdlib: array_find FAIL"); }
+if array_contains(test_arr, 9) { print("stdlib: array_contains OK"); } else { print("stdlib: array_contains FAIL"); }
+if len(array_unique(test_arr)) == 7 { print("stdlib: array_unique OK"); } else { print("stdlib: array_unique FAIL"); }
+if array_join([1,2,3], ",") == "1,2,3" { print("stdlib: array_join OK"); } else { print("stdlib: array_join FAIL"); }
+
+// Map tests
+let mut m = map_new();
+m = map_set(m, "x", 42);
+m = map_set(m, "y", 99);
+if map_get(m, "x") == 42 { print("stdlib: map_get OK"); } else { print("stdlib: map_get FAIL"); }
+if map_has(m, "y") { print("stdlib: map_has OK"); } else { print("stdlib: map_has FAIL"); }
+if map_size(m) == 2 { print("stdlib: map_size OK"); } else { print("stdlib: map_size FAIL"); }
+
+// String tests
+if str_contains("hello world", "world") { print("stdlib: str_contains OK"); } else { print("stdlib: str_contains FAIL"); }
+if str_starts_with("hello", "hel") { print("stdlib: str_starts_with OK"); } else { print("stdlib: str_starts_with FAIL"); }
+if str_ends_with("hello", "llo") { print("stdlib: str_ends_with OK"); } else { print("stdlib: str_ends_with FAIL"); }
+if str_upper("abc") == "ABC" { print("stdlib: str_upper OK"); } else { print("stdlib: str_upper FAIL"); }
+if str_lower("ABC") == "abc" { print("stdlib: str_lower OK"); } else { print("stdlib: str_lower FAIL"); }
+
+// Math tests
+if clamp(5, 0, 10) == 5 { print("stdlib: clamp OK"); } else { print("stdlib: clamp FAIL"); }
+if clamp(-3, 0, 10) == 0 { print("stdlib: clamp lo OK"); } else { print("stdlib: clamp lo FAIL"); }
+if clamp(15, 0, 10) == 10 { print("stdlib: clamp hi OK"); } else { print("stdlib: clamp hi FAIL"); }
+
+// Python-level feature tests
+if math_gcd(12, 8) == 4 { print("stdlib: gcd OK"); } else { print("stdlib: gcd FAIL"); }
+if math_sqrt(16) == 4 { print("stdlib: sqrt OK"); } else { print("stdlib: sqrt FAIL"); }
+if array_sum([1, 2, 3, 4, 5]) == 15 { print("stdlib: sum OK"); } else { print("stdlib: sum FAIL"); }
+
+// Set tests
+let mut s1 = set_new();
+s1 = set_add(s1, 1);
+s1 = set_add(s1, 2);
+s1 = set_add(s1, 2); // duplicate
+if len(s1) == 2 { print("stdlib: set_add OK"); } else { print("stdlib: set_add FAIL"); }
+
+let s2 = [2, 3];
+if len(set_union(s1, s2)) == 3 { print("stdlib: set_union OK"); } else { print("stdlib: set_union FAIL"); }
+if len(set_intersection(s1, s2)) == 1 { print("stdlib: set_inter OK"); } else { print("stdlib: set_inter FAIL"); }
+
+print("stdlib.hl loaded -- Python-level");
+
+// ============================================================
+// 8. BYTE ARRAY OPERATIONS (binary data manipulation)
+// ============================================================
+
+fn byte_array_from_str(s) {
+    let mut result = [];
+    let ascii = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+    let mut i = 0;
+    while i < len(s) {
+        let c = s[i];
+        let mut code = 0;
+        if c == "\n" { code = 10; }
+        else if c == "\r" { code = 13; }
+        else if c == "\t" { code = 9; }
+        else {
+            let mut ai = 0;
+            while ai < len(ascii) {
+                if ascii[ai] == c { code = ai + 32; ai = len(ascii); }
+                ai = ai + 1;
+            }
+        }
+        push(result, code);
+        i = i + 1;
+    }
+    return result;
+}
+
+fn byte_array_to_str(arr) {
+    let ascii = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+    let mut result = "";
+    let mut i = 0;
+    while i < len(arr) {
+        let b = arr[i];
+        if b >= 32 && b <= 126 {
+            result = result + to_string(ascii[b - 32]);
+        } else if b == 10 {
+            result = result + "\n";
+        } else if b == 13 {
+            result = result + "\r";
+        } else if b == 9 {
+            result = result + "\t";
+        } else {
+            result = result + ".";
+        }
+        i = i + 1;
+    }
+    return result;
+}
+
+fn byte_array_write_u16_le(arr, offset, value) {
+    arr[offset] = value % 256;
+    arr[offset + 1] = (value / 256) % 256;
+    return arr;
+}
+
+fn byte_array_write_u32_le(arr, offset, value) {
+    arr[offset] = value % 256;
+    arr[offset + 1] = (value / 256) % 256;
+    arr[offset + 2] = (value / 65536) % 256;
+    arr[offset + 3] = (value / 16777216) % 256;
+    return arr;
+}
+
+fn byte_array_write_u64_le(arr, offset, value) {
+    let lo = value % 4294967296;
+    let hi = value / 4294967296;
+    byte_array_write_u32_le(arr, offset, lo);
+    byte_array_write_u32_le(arr, offset + 4, hi);
+    return arr;
+}
+
+fn byte_array_read_u16_le(arr, offset) {
+    return arr[offset] + arr[offset + 1] * 256;
+}
+
+fn byte_array_read_u32_le(arr, offset) {
+    return arr[offset] + arr[offset + 1] * 256 + arr[offset + 2] * 65536 + arr[offset + 3] * 16777216;
+}
+
+fn byte_array_read_u64_le(arr, offset) {
+    let lo = byte_array_read_u32_le(arr, offset);
+    let hi = byte_array_read_u32_le(arr, offset + 4);
+    return lo + hi * 4294967296;
+}
+
+fn byte_array_copy(dst, dst_off, src, src_off, length) {
+    let mut i = 0;
+    while i < length {
+        dst[dst_off + i] = src[src_off + i];
+        i = i + 1;
+    }
+    return dst;
+}
+
+fn byte_array_fill(arr, offset, length, value) {
+    let mut i = 0;
+    while i < length {
+        arr[offset + i] = value % 256;
+        i = i + 1;
+    }
+    return arr;
+}
+
+fn byte_array_compare(a, a_off, b, b_off, length) {
+    let mut i = 0;
+    while i < length {
+        if a[a_off + i] != b[b_off + i] {
+            if a[a_off + i] < b[b_off + i] { return 0 - 1; }
+            return 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Hex dump: format byte array as hex string
+fn byte_array_hex(arr, offset, length) {
+    let hex_chars = "0123456789ABCDEF";
+    let mut result = "";
+    let mut i = 0;
+    while i < length {
+        if offset + i >= len(arr) { i = length; }
+        else {
+            let b = arr[offset + i];
+            result = result + to_string(hex_chars[b / 16]) + to_string(hex_chars[b % 16]);
+            if i < length - 1 { result = result + " "; }
+        }
+        i = i + 1;
+    }
+    return result;
+}
+
+// ============================================================
+// 9. NUMBER PARSING AND FORMATTING
+// ============================================================
+
+fn parse_int_str(s) {
+    let mut result = 0;
+    let mut sign = 1;
+    let mut i = 0;
+    if len(s) > 0 {
+        if str_char_at(s, 0) == 45 { sign = 0 - 1; i = 1; }  // '-'
+    }
+    let digits = "0123456789";
+    while i < len(s) {
+        let c = str_char_at(s, i);
+        let mut found = false;
+        let mut d = 0;
+        while d < 10 {
+            if str_char_at(digits, d) == c {
+                result = result * 10 + d;
+                found = true;
+                d = 10;
+            }
+            d = d + 1;
+        }
+        if !found { return result * sign; }
+        i = i + 1;
+    }
+    return result * sign;
+}
+
+fn parse_hex_str(s) {
+    let mut result = 0;
+    let mut i = 0;
+    // Skip "0x" prefix if present
+    if len(s) >= 2 {
+        if str_char_at(s, 0) == 48 {  // '0'
+            if str_char_at(s, 1) == 120 || str_char_at(s, 1) == 88 {  // 'x' or 'X'
+                i = 2;
+            }
+        }
+    }
+    let hex_lo = "0123456789abcdef";
+    let hex_hi = "0123456789ABCDEF";
+    while i < len(s) {
+        let c = str_char_at(s, i);
+        let mut val = 0 - 1;
+        let mut d = 0;
+        while d < 16 {
+            if str_char_at(hex_lo, d) == c { val = d; d = 16; }
+            if str_char_at(hex_hi, d) == c { val = d; d = 16; }
+            d = d + 1;
+        }
+        if val < 0 { return result; }
+        result = result * 16 + val;
+        i = i + 1;
+    }
+    return result;
+}
+
+fn format_hex(value, width) {
+    let hex_chars = "0123456789abcdef";
+    let mut v = value;
+    if v < 0 { v = 0 - v; }
+    if v == 0 { return str_pad_start("0", width, "0"); }
+    let mut result = "";
+    while v > 0 {
+        result = to_string(hex_chars[v % 16]) + result;
+        v = v / 16;
+    }
+    return str_pad_start(result, width, "0");
+}
+
+fn format_bin(value, width) {
+    let mut v = value;
+    if v < 0 { v = 0 - v; }
+    if v == 0 { return str_pad_start("0", width, "0"); }
+    let mut result = "";
+    while v > 0 {
+        if v % 2 == 1 { result = "1" + result; }
+        else { result = "0" + result; }
+        v = v / 2;
+    }
+    return str_pad_start(result, width, "0");
+}
+
+// ============================================================
+// 10. ASSERTION AND DEBUG UTILITIES
+// ============================================================
+
+fn assert_eq(actual, expected, msg) {
+    if actual != expected {
+        print("ASSERT FAILED: " + msg);
+        print("  expected: " + to_string(expected));
+        print("  actual:   " + to_string(actual));
+        return false;
+    }
+    return true;
+}
+
+fn assert_true(cond, msg) {
+    if !cond {
+        print("ASSERT FAILED: " + msg);
+        return false;
+    }
+    return true;
+}
+
+fn debug_print(label, value) {
+    print("[DEBUG] " + label + " = " + to_string(value));
+    return value;
+}

@@ -1,0 +1,71 @@
+// test_x86enc_shim.hl -- Phase 0 验证: x86enc 核心功能
+// 测试: quadrant + 嵌套数组 + 数组索引 + push + len + 字符串索引 + 大整数
+
+quadrant x86enc {
+    fn new_buf(origin) {
+        return [[], origin, [], []];
+    }
+    fn buf_len(buf) { return len(buf[0]); }
+    fn buf_emit(buf, b) { push(buf[0], b % 256); }
+    fn buf_emit16(buf, v) { buf_emit(buf, v % 256); buf_emit(buf, (v / 256) % 256); }
+    fn buf_emit32(buf, v) { buf_emit16(buf, v % 65536); buf_emit16(buf, (v / 65536) % 65536); }
+    fn emit_cli(buf) { buf_emit(buf, 250); }
+    fn emit_sti(buf) { buf_emit(buf, 251); }
+    fn emit_hlt(buf) { buf_emit(buf, 244); }
+    fn emit_out_dx_al(buf) { buf_emit(buf, 238); }
+    fn emit_mov_edx_imm32(buf, v) { buf_emit(buf, 186); buf_emit32(buf, v); }
+    fn emit_mov_al_imm8(buf, v) { buf_emit(buf, 176); buf_emit(buf, v); }
+}
+
+// Test 1: basic x86enc
+let buf = x86enc.new_buf(1048576);
+x86enc.emit_cli(buf);
+x86enc.emit_sti(buf);
+x86enc.emit_hlt(buf);
+print("T1 buf_len: " + to_string(x86enc.buf_len(buf)));
+print("T1 byte0: " + to_string(buf[0][0]));
+print("T1 byte1: " + to_string(buf[0][1]));
+print("T1 byte2: " + to_string(buf[0][2]));
+
+// Test 2: emit32 (multi-byte encoding)
+let buf2 = x86enc.new_buf(0);
+x86enc.emit_mov_edx_imm32(buf2, 1016);
+// Expected: 186 (0xBA), 248 (0x3F8 & 0xFF = 0xF8), 3 (0x3F8 >> 8 = 3), 0, 0
+print("T2 buf_len: " + to_string(x86enc.buf_len(buf2)));
+print("T2 byte0: " + to_string(buf2[0][0]));
+print("T2 byte1: " + to_string(buf2[0][1]));
+print("T2 byte2: " + to_string(buf2[0][2]));
+print("T2 byte3: " + to_string(buf2[0][3]));
+print("T2 byte4: " + to_string(buf2[0][4]));
+
+// Test 3: chained subtraction (left-associativity)
+let a = 100;
+let b = 30;
+let c = 5;
+let result = a - b - c;
+print("T3 100-30-5: " + to_string(result));
+
+// Test 4: string indexing
+let banner = "HL!";
+print("T4 char0: " + banner[0]);
+print("T4 char1: " + banner[1]);
+print("T4 char2: " + banner[2]);
+
+// Test 5: nested array access
+let nested = [[10, 20], [30, 40]];
+print("T5 nested[0][0]: " + to_string(nested[0][0]));
+print("T5 nested[1][1]: " + to_string(nested[1][1]));
+
+// Test 6: nil check
+let x = nil;
+if x == nil {
+    print("T6 nil: ok");
+}
+
+// Test 7: large integer
+let big = 65536 * 256;
+print("T7 65536*256: " + to_string(big));
+
+// Test 8: string escape
+let esc = "A\nB";
+print("T8 len: " + to_string(len(esc)));

@@ -1,0 +1,176 @@
+// dhcp.hl -- DHCP Client (RFC 2131)
+//
+// Discovers IP configuration via DHCP over UDP port 67/68.
+// Sequence: DISCOVER -> OFFER -> REQUEST -> ACK
+//
+// DHCP message format (variable length, typically 300+ bytes):
+//   op(1) htype(1) hlen(1) hops(1) xid(4) secs(2) flags(2)
+//   ciaddr(4) yiaddr(4) siaddr(4) giaddr(4)
+//   chaddr(16) sname(64) file(128)
+//   magic_cookie(4) = 99.130.83.99
+//   options...
+
+let DHCP_SERVER_PORT = 67;
+let DHCP_CLIENT_PORT = 68;
+let DHCP_MAGIC = [99, 130, 83, 99];
+
+let DHCP_DISCOVER = 1;
+let DHCP_OFFER    = 2;
+let DHCP_REQUEST  = 3;
+let DHCP_ACK      = 5;
+
+let mut dhcp_xid = 12345678;
+let mut dhcp_server_ip = [0, 0, 0, 0];
+let mut dhcp_offered_ip = [0, 0, 0, 0];
+let mut dhcp_gateway = [0, 0, 0, 0];
+let mut dhcp_dns = [0, 0, 0, 0];
+let mut dhcp_subnet = [255, 255, 255, 0];
+
+fn dhcp_build_discover() {
+    let mut pkt = [];
+    push(pkt, 1);   // op = BOOTREQUEST
+    push(pkt, 1);   // htype = Ethernet
+    push(pkt, 6);   // hlen = 6 (MAC)
+    push(pkt, 0);   // hops
+    // xid (4 bytes)
+    push(pkt, (dhcp_xid / 16777216) % 256);
+    push(pkt, (dhcp_xid / 65536) % 256);
+    push(pkt, (dhcp_xid / 256) % 256);
+    push(pkt, dhcp_xid % 256);
+    // secs + flags
+    push(pkt, 0); push(pkt, 0);   // secs
+    push(pkt, 128); push(pkt, 0); // flags = broadcast
+    // ciaddr, yiaddr, siaddr, giaddr (16 bytes zeros)
+    let mut z = 0;
+    while z < 16 { push(pkt, 0); z = z + 1; }
+    // chaddr (16 bytes: MAC + padding)
+    z = 0;
+    while z < 6 { push(pkt, my_mac[z]); z = z + 1; }
+    z = 0;
+    while z < 10 { push(pkt, 0); z = z + 1; }
+    // sname (64 bytes) + file (128 bytes) = 192 bytes zero
+    z = 0;
+    while z < 192 { push(pkt, 0); z = z + 1; }
+    // Magic cookie
+    z = 0;
+    while z < 4 { push(pkt, DHCP_MAGIC[z]); z = z + 1; }
+    // Option 53: DHCP Message Type = DISCOVER
+    push(pkt, 53); push(pkt, 1); push(pkt, DHCP_DISCOVER);
+    // Option 255: END
+    push(pkt, 255);
+    return pkt;
+}
+
+fn dhcp_build_request(offered_ip, server_ip) {
+    let mut pkt = [];
+    push(pkt, 1);   // op = BOOTREQUEST
+    push(pkt, 1);   // htype
+    push(pkt, 6);   // hlen
+    push(pkt, 0);   // hops
+    push(pkt, (dhcp_xid / 16777216) % 256);
+    push(pkt, (dhcp_xid / 65536) % 256);
+    push(pkt, (dhcp_xid / 256) % 256);
+    push(pkt, dhcp_xid % 256);
+    push(pkt, 0); push(pkt, 0);   // secs
+    push(pkt, 128); push(pkt, 0); // flags = broadcast
+    let mut z = 0;
+    while z < 16 { push(pkt, 0); z = z + 1; } // ciaddr..giaddr
+    z = 0;
+    while z < 6 { push(pkt, my_mac[z]); z = z + 1; }
+    z = 0;
+    while z < 10 { push(pkt, 0); z = z + 1; }
+    z = 0;
+    while z < 192 { push(pkt, 0); z = z + 1; } // sname + file
+    z = 0;
+    while z < 4 { push(pkt, DHCP_MAGIC[z]); z = z + 1; }
+    // Option 53: DHCP Message Type = REQUEST
+    push(pkt, 53); push(pkt, 1); push(pkt, DHCP_REQUEST);
+    // Option 50: Requested IP Address
+    push(pkt, 50); push(pkt, 4);
+    z = 0;
+    while z < 4 { push(pkt, offered_ip[z]); z = z + 1; }
+    // Option 54: Server Identifier
+    push(pkt, 54); push(pkt, 4);
+    z = 0;
+    while z < 4 { push(pkt, server_ip[z]); z = z + 1; }
+    // Option 255: END
+    push(pkt, 255);
+    return pkt;
+}
+
+fn dhcp_parse_offer(data) {
+    if len(data) < 240 { return 0; }
+    dhcp_offered_ip = [data[16], data[17], data[18], data[19]];
+    dhcp_server_ip = [data[20], data[21], data[22], data[23]];
+    let mut off = 240;
+    while off < len(data) {
+        let opt = data[off];
+        if opt == 255 { return 1; }
+        if opt == 0 { off = off + 1; }
+        else {
+            let opt_len = data[off + 1];
+            if opt == 1 { dhcp_subnet = [data[off+2], data[off+3], data[off+4], data[off+5]]; }
+            if opt == 3 { dhcp_gateway = [data[off+2], data[off+3], data[off+4], data[off+5]]; }
+            if opt == 6 { dhcp_dns = [data[off+2], data[off+3], data[off+4], data[off+5]]; }
+            off = off + 2 + opt_len;
+        }
+    }
+    return 1;
+}
+
+fn dhcp_discover() {
+    let pkt = dhcp_build_discover();
+    let broadcast_mac = [255, 255, 255, 255, 255, 255];
+    let broadcast_ip = [255, 255, 255, 255];
+    let udp = build_udp_packet(broadcast_mac, broadcast_ip, DHCP_CLIENT_PORT, DHCP_SERVER_PORT, pkt);
+    virtio_net_send_pkt(udp);
+    print("DHCP DISCOVER sent (xid=" + to_string(dhcp_xid) + ")");
+    return 0;
+}
+
+fn dhcp_request() {
+    let pkt = dhcp_build_request(dhcp_offered_ip, dhcp_server_ip);
+    let broadcast_mac = [255, 255, 255, 255, 255, 255];
+    let broadcast_ip = [255, 255, 255, 255];
+    let udp = build_udp_packet(broadcast_mac, broadcast_ip, DHCP_CLIENT_PORT, DHCP_SERVER_PORT, pkt);
+    virtio_net_send_pkt(udp);
+    print("DHCP REQUEST sent for " + to_string(dhcp_offered_ip[0]) + "." + to_string(dhcp_offered_ip[1]) + "." + to_string(dhcp_offered_ip[2]) + "." + to_string(dhcp_offered_ip[3]));
+    return 0;
+}
+
+fn dhcp_input(data) {
+    if len(data) < 240 { return 0; }
+    let pkt_xid = data[4]*16777216 + data[5]*65536 + data[6]*256 + data[7];
+    if pkt_xid != dhcp_xid { return 0; }
+    let mut msg_type = 0;
+    let mut off = 240;
+    while off < len(data) {
+        let opt = data[off];
+        if opt == 255 { off = len(data); }
+        else {
+            if opt == 0 { off = off + 1; }
+            else {
+                let opt_len = data[off + 1];
+                if opt == 53 { msg_type = data[off + 2]; }
+                off = off + 2 + opt_len;
+            }
+        }
+    }
+    if msg_type == DHCP_OFFER {
+        dhcp_parse_offer(data);
+        print("DHCP OFFER: " + to_string(dhcp_offered_ip[0]) + "." + to_string(dhcp_offered_ip[1]) + "." + to_string(dhcp_offered_ip[2]) + "." + to_string(dhcp_offered_ip[3]));
+        dhcp_request();
+        return DHCP_OFFER;
+    }
+    if msg_type == DHCP_ACK {
+        dhcp_parse_offer(data);
+        my_ip = [dhcp_offered_ip[0], dhcp_offered_ip[1], dhcp_offered_ip[2], dhcp_offered_ip[3]];
+        gw_ip = [dhcp_gateway[0], dhcp_gateway[1], dhcp_gateway[2], dhcp_gateway[3]];
+        netmask = [dhcp_subnet[0], dhcp_subnet[1], dhcp_subnet[2], dhcp_subnet[3]];
+        print("DHCP ACK: IP=" + to_string(my_ip[0]) + "." + to_string(my_ip[1]) + "." + to_string(my_ip[2]) + "." + to_string(my_ip[3]));
+        return DHCP_ACK;
+    }
+    return 0;
+}
+
+print("dhcp.hl loaded -- DHCP DISCOVER/OFFER/REQUEST/ACK");

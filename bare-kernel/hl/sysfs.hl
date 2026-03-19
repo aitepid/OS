@@ -1,0 +1,160 @@
+// sysfs.hl -- System Filesystem (/sys)
+//
+// Exports kernel object attributes as a virtual filesystem tree.
+// Linux equivalent: /sys (sysfs)
+//
+// Structure:
+//   /sys/devices/         -- all devices by bus
+//   /sys/class/           -- devices grouped by class (net, block, tty)
+//   /sys/kernel/          -- kernel tunables
+//   /sys/module/          -- loaded modules info
+//   /sys/power/           -- power management state
+//
+// Each node: directory (container) or file (attribute, read/write string).
+// Unlike procfs (which is process-centric), sysfs is device-centric.
+
+let SYSFS_MAX_NODES = 128;
+let mut sysfs_count = 0;
+
+// Node types: 0=free, 1=dir, 2=file_ro, 3=file_rw
+let sysfs_type = [];
+let sysfs_name = [];
+let sysfs_parent = [];
+let sysfs_value = [];
+
+fn sysfs_init() {
+    let mut i = 0;
+    while i < SYSFS_MAX_NODES {
+        push(sysfs_type, 0);
+        push(sysfs_name, "");
+        push(sysfs_parent, 0);
+        push(sysfs_value, "");
+        i = i + 1;
+    }
+    // Create root directories
+    sysfs_mkdir(0, "devices");   // inode 1
+    sysfs_mkdir(0, "class");     // inode 2
+    sysfs_mkdir(0, "kernel");    // inode 3
+    sysfs_mkdir(0, "module");    // inode 4
+    sysfs_mkdir(0, "power");     // inode 5
+
+    // Populate /sys/class/
+    let cls = 2;
+    let net_cls = sysfs_mkdir(cls, "net");
+    let blk_cls = sysfs_mkdir(cls, "block");
+    let tty_cls = sysfs_mkdir(cls, "tty");
+
+    // Populate /sys/kernel/
+    let kern = 3;
+    sysfs_mkfile(kern, "hostname", "HicOS");
+    sysfs_mkfile(kern, "version", "4.0");
+    sysfs_mkfile(kern, "modules", "90");
+
+    // Populate /sys/power/
+    let pwr = 5;
+    sysfs_mkfile(pwr, "state", "running");
+    sysfs_mkfile(pwr, "wakeup_count", "0");
+
+    return 0;
+}
+
+fn sysfs_alloc() {
+    let mut i = 1;
+    while i < SYSFS_MAX_NODES {
+        if sysfs_type[i] == 0 { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn sysfs_mkdir(parent, name) {
+    let id = sysfs_alloc();
+    if id < 0 { return 0 - 1; }
+    sysfs_type[id] = 1;
+    sysfs_name[id] = name;
+    sysfs_parent[id] = parent;
+    sysfs_count = sysfs_count + 1;
+    return id;
+}
+
+fn sysfs_mkfile(parent, name, value) {
+    let id = sysfs_alloc();
+    if id < 0 { return 0 - 1; }
+    sysfs_type[id] = 2;
+    sysfs_name[id] = name;
+    sysfs_parent[id] = parent;
+    sysfs_value[id] = value;
+    sysfs_count = sysfs_count + 1;
+    return id;
+}
+
+fn sysfs_mkfile_rw(parent, name, value) {
+    let id = sysfs_alloc();
+    if id < 0 { return 0 - 1; }
+    sysfs_type[id] = 3;
+    sysfs_name[id] = name;
+    sysfs_parent[id] = parent;
+    sysfs_value[id] = value;
+    sysfs_count = sysfs_count + 1;
+    return id;
+}
+
+fn sysfs_read(id) {
+    if id < 0 { return ""; }
+    if id >= SYSFS_MAX_NODES { return ""; }
+    if sysfs_type[id] < 2 { return ""; }
+    return sysfs_value[id];
+}
+
+fn sysfs_write(id, value) {
+    if id < 0 { return 0 - 1; }
+    if id >= SYSFS_MAX_NODES { return 0 - 1; }
+    if sysfs_type[id] != 3 { return 0 - 1; } // read-only
+    sysfs_value[id] = value;
+    return 0;
+}
+
+fn sysfs_lookup(parent, name) {
+    let mut i = 1;
+    while i < SYSFS_MAX_NODES {
+        if sysfs_type[i] != 0 {
+            if sysfs_parent[i] == parent {
+                if sysfs_name[i] == name { return i; }
+            }
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn sysfs_list(parent) {
+    let mut result = "";
+    let mut i = 1;
+    while i < SYSFS_MAX_NODES {
+        if sysfs_type[i] != 0 {
+            if sysfs_parent[i] == parent {
+                if result != "" { result = result + " "; }
+                result = result + sysfs_name[i];
+                if sysfs_type[i] == 1 { result = result + "/"; }
+            }
+        }
+        i = i + 1;
+    }
+    return result;
+}
+
+// Register a device in /sys/devices/ and /sys/class/<class>/
+fn sysfs_register_device(dev_name, class_name) {
+    let dev_dir = sysfs_mkdir(1, dev_name); // /sys/devices/<name>
+    sysfs_mkfile(dev_dir, "driver", "");
+    sysfs_mkfile(dev_dir, "power_state", "on");
+    // Also link in class
+    let cls = sysfs_lookup(2, class_name);
+    if cls >= 0 {
+        sysfs_mkfile(cls, dev_name, "-> /sys/devices/" + dev_name);
+    }
+    return dev_dir;
+}
+
+print("sysfs.hl loaded");
+print("sysfs: " + to_string(SYSFS_MAX_NODES) + " nodes, /sys/devices + /sys/class + /sys/kernel");

@@ -1,0 +1,228 @@
+// nvme.hl -- NVMe (Non-Volatile Memory Express) Driver
+//
+// PCIe-based SSD controller driver.
+// Uses memory-mapped I/O (MMIO) via BAR0.
+// Implements Admin + I/O queue pair for basic read/write.
+//
+// NVMe spec version: 1.4 (base command set)
+//
+// == Queue Architecture ==
+//   Admin Queue: submissions at AQA + ASQ, completions at AQA + ACQ
+//   I/O Queue 1: created via Admin command
+//   Each queue: 64 entries, 64 bytes per submission, 16 bytes per completion
+//
+// == Limitations ==
+//   - Single namespace (NSID=1)
+//   - Single I/O queue pair
+//   - No interrupt coalescing
+//   - No multi-path I/O
+
+let NVME_CLASS = 1;      // Mass Storage
+let NVME_SUBCLASS = 8;   // NVMe
+let NVME_PROG_IF = 2;    // NVM Express
+
+// Controller registers (BAR0 offsets)
+let NVME_CAP  = 0;       // Controller Capabilities (64-bit)
+let NVME_VS   = 8;       // Version
+let NVME_CC   = 20;      // Controller Configuration
+let NVME_CSTS = 28;      // Controller Status
+let NVME_AQA  = 36;      // Admin Queue Attributes
+let NVME_ASQ  = 40;      // Admin Submission Queue Base (64-bit)
+let NVME_ACQ  = 48;      // Admin Completion Queue Base (64-bit)
+
+// Queue sizes
+let NVME_QUEUE_SIZE = 64;
+let NVME_SQ_ENTRY_SIZE = 64;  // Submission queue entry
+let NVME_CQ_ENTRY_SIZE = 16;  // Completion queue entry
+
+let mut nvme_bar = 0;
+let mut nvme_asq_addr = 0;
+let mut nvme_acq_addr = 0;
+let mut nvme_iosq_addr = 0;
+let mut nvme_iocq_addr = 0;
+let mut nvme_sq_tail = 0;
+let mut nvme_cq_head = 0;
+let mut nvme_cq_phase = 1;
+let mut nvme_ready = 0;
+let mut nvme_ns_size = 0;  // namespace size in blocks
+
+fn nvme_reg_read32(offset) {
+    return mem_read_u32(nvme_bar + offset);
+}
+
+fn nvme_reg_write32(offset, val) {
+    mem_write_u32(nvme_bar + offset, val);
+    return 0;
+}
+
+fn nvme_reg_read64(offset) {
+    return mem_read_u64(nvme_bar + offset);
+}
+
+fn nvme_reg_write64(offset, val) {
+    mem_write_u64(nvme_bar + offset, val);
+    return 0;
+}
+
+// Initialize NVMe controller found at PCI bus/dev/func
+fn nvme_init(bus, dev, func) {
+    // Read BAR0 (memory-mapped)
+    nvme_bar = pci_bar(bus, dev, func, 0);
+    nvme_bar = nvme_bar - (nvme_bar % 16);  // mask type bits
+
+    // Check version
+    let vs = nvme_reg_read32(NVME_VS);
+    let major = vs / 65536;
+    let minor = (vs / 256) % 256;
+    print("nvme: controller v" + to_string(major) + "." + to_string(minor));
+
+    // Disable controller
+    nvme_reg_write32(NVME_CC, 0);
+    // Wait for CSTS.RDY = 0
+    let mut timeout = 10000;
+    while (nvme_reg_read32(NVME_CSTS) % 2) == 1 {
+        timeout = timeout - 1;
+        if timeout == 0 {
+            print("nvme: timeout waiting for disable");
+            return 0 - 1;
+        }
+    }
+
+    // Allocate admin queues (page-aligned)
+    nvme_asq_addr = page_alloc();
+    nvme_acq_addr = page_alloc();
+    mem_zero(nvme_asq_addr, 4096);
+    mem_zero(nvme_acq_addr, 4096);
+
+    // Set Admin Queue Attributes: SQ size | CQ size
+    let aqa = (NVME_QUEUE_SIZE - 1) * 65536 + (NVME_QUEUE_SIZE - 1);
+    nvme_reg_write32(NVME_AQA, aqa);
+
+    // Set Admin Submission Queue Base Address
+    nvme_reg_write64(NVME_ASQ, nvme_asq_addr);
+
+    // Set Admin Completion Queue Base Address
+    nvme_reg_write64(NVME_ACQ, nvme_acq_addr);
+
+    // Enable controller: MPS=0 (4K pages), CSS=0 (NVM), EN=1
+    // CC = (0 << 20) | (0 << 16) | (6 << 7) | (4 << 4) | 1
+    //    = 0 | 0 | 0x300 | 0x40 | 1 = 0x341
+    let cc = 6 * 128 + 4 * 16 + 1;  // IOSQES=6(64B), IOCQES=4(16B), EN=1
+    nvme_reg_write32(NVME_CC, cc);
+
+    // Wait for CSTS.RDY = 1
+    timeout = 100000;
+    while (nvme_reg_read32(NVME_CSTS) % 2) == 0 {
+        timeout = timeout - 1;
+        if timeout == 0 {
+            print("nvme: timeout waiting for ready");
+            return 0 - 1;
+        }
+    }
+
+    nvme_sq_tail = 0;
+    nvme_cq_head = 0;
+    nvme_cq_phase = 1;
+    nvme_ready = 1;
+
+    print("nvme: controller enabled, admin queues active");
+
+    // Create I/O queue pair via admin commands
+    nvme_create_io_queues();
+
+    // Identify namespace to get size
+    nvme_identify_ns(1);
+
+    return 0;
+}
+
+// Submit admin command and wait for completion
+fn nvme_admin_cmd(opcode, nsid, prp1, cdw10, cdw11) {
+    let sq_entry = nvme_asq_addr + nvme_sq_tail * NVME_SQ_ENTRY_SIZE;
+    mem_zero(sq_entry, NVME_SQ_ENTRY_SIZE);
+
+    // CDW0: opcode | CID
+    let cid = nvme_sq_tail;
+    mem_write_u32(sq_entry + 0, opcode + cid * 65536);
+    // NSID
+    mem_write_u32(sq_entry + 4, nsid);
+    // PRP1
+    mem_write_u64(sq_entry + 24, prp1);
+    // CDW10, CDW11
+    mem_write_u32(sq_entry + 40, cdw10);
+    mem_write_u32(sq_entry + 44, cdw11);
+
+    // Ring doorbell (Admin SQ tail = offset 0x1000)
+    nvme_sq_tail = (nvme_sq_tail + 1) % NVME_QUEUE_SIZE;
+    nvme_reg_write32(4096, nvme_sq_tail);
+
+    // Poll completion queue
+    let mut timeout = 100000;
+    let cq_entry = nvme_acq_addr + nvme_cq_head * NVME_CQ_ENTRY_SIZE;
+    while timeout > 0 {
+        let status_phase = mem_read_u16(cq_entry + 14);
+        let phase = status_phase % 2;
+        if phase == nvme_cq_phase {
+            // Completion received
+            let status = status_phase / 2;
+            // Advance CQ head
+            nvme_cq_head = (nvme_cq_head + 1) % NVME_QUEUE_SIZE;
+            if nvme_cq_head == 0 { nvme_cq_phase = 1 - nvme_cq_phase; }
+            // Ring CQ doorbell (Admin CQ head = offset 0x1004)
+            nvme_reg_write32(4100, nvme_cq_head);
+            return status;
+        }
+        timeout = timeout - 1;
+    }
+    print("nvme: admin command timeout");
+    return 0 - 1;
+}
+
+fn nvme_create_io_queues() {
+    nvme_iocq_addr = page_alloc();
+    nvme_iosq_addr = page_alloc();
+    mem_zero(nvme_iocq_addr, 4096);
+    mem_zero(nvme_iosq_addr, 4096);
+
+    // Create I/O Completion Queue (opcode 0x05)
+    // CDW10: QSIZE | QID=1
+    let cdw10_cq = (NVME_QUEUE_SIZE - 1) * 65536 + 1;
+    // CDW11: PC=1 (physically contiguous)
+    let status = nvme_admin_cmd(5, 0, nvme_iocq_addr, cdw10_cq, 1);
+    if status != 0 {
+        print("nvme: create IOCQ failed: " + to_string(status));
+        return 0 - 1;
+    }
+
+    // Create I/O Submission Queue (opcode 0x01)
+    // CDW10: QSIZE | QID=1
+    let cdw10_sq = (NVME_QUEUE_SIZE - 1) * 65536 + 1;
+    // CDW11: PC=1 | CQID=1
+    status = nvme_admin_cmd(1, 0, nvme_iosq_addr, cdw10_sq, 1 + 1 * 65536);
+    if status != 0 {
+        print("nvme: create IOSQ failed: " + to_string(status));
+        return 0 - 1;
+    }
+
+    print("nvme: I/O queue pair created (QID=1)");
+    return 0;
+}
+
+fn nvme_identify_ns(nsid) {
+    let id_buf = page_alloc();
+    mem_zero(id_buf, 4096);
+    let status = nvme_admin_cmd(6, nsid, id_buf, 0, 0);
+    if status == 0 {
+        nvme_ns_size = mem_read_u64(id_buf + 0);  // NSZE (namespace size in blocks)
+        let lba_exp = mem_read_u8(id_buf + 26 + 4 * (mem_read_u8(id_buf + 26) % 16));
+        print("nvme: ns1 size=" + to_string(nvme_ns_size) + " blocks");
+    }
+    page_free(id_buf);
+    return status;
+}
+
+fn nvme_capacity() {
+    return nvme_ns_size;
+}
+
+print("nvme.hl loaded: NVMe 1.4 driver");

@@ -1,0 +1,61 @@
+// HicOS_Storage.hl -- Storage Manager (Native H-L)
+//
+// User-space storage/disk interface. Delegates to bare-kernel/hl/
+// virtio_blk.hl, fat16.hl, ext2.hl, vfs.hl, block_cache.hl.
+
+fn hicos_storage_init() {
+    fs_init();
+    vfs_init();
+    print("HicOS storage initialized");
+    return 0;
+}
+
+fn hicos_storage_disk_info() {
+    let cap = virtio_blk_capacity();
+    let mb = cap * 512 / 1048576;
+    print("Disk: VirtIO-blk");
+    print("  Sectors:  " + to_string(cap));
+    print("  Capacity: " + to_string(mb) + " MB");
+    return cap;
+}
+
+fn hicos_storage_mount(dev, mountpoint, fstype) {
+    // fstype: "fat16", "ext2", "ramfs", "tmpfs"
+    let r = vfs_mount(dev, mountpoint, fstype);
+    if r == 0 {
+        print("Mounted " + dev + " at " + mountpoint + " (" + fstype + ")");
+    } else {
+        print("Mount failed: " + dev);
+    }
+    return r;
+}
+
+fn hicos_storage_umount(mountpoint) {
+    return vfs_umount(mountpoint);
+}
+
+fn hicos_storage_df() {
+    print("Filesystem     Blocks  Used  Avail  Mount");
+    let cap = virtio_blk_capacity();
+    let free = page_count_free() * 8; // 4K pages -> 512B sectors
+    print("virtio0  " + to_string(cap) + "  -  " + to_string(free) + "  /");
+    return 0;
+}
+
+fn hicos_storage_format(fstype) {
+    if fstype == "fat16" {
+        let cap = virtio_blk_capacity();
+        fat16_format(cap);
+        print("Formatted as FAT16");
+        return 0;
+    }
+    print("Unsupported format: " + fstype);
+    return 0 - 1;
+}
+
+fn hicos_storage_cache_stats() {
+    print("Block cache: 64 LRU entries");
+    return 0;
+}
+
+print("HicOS_Storage.hl loaded (native H-L)");

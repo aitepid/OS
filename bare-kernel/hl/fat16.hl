@@ -1,0 +1,430 @@
+// fat16.hl -- FAT16 Filesystem Driver
+//
+// Read/write FAT16 partitions on VirtIO block devices.
+// FAT16 supports volumes up to 2GB, filenames 8.3 format.
+//
+// Boot sector layout (sector 0):
+//   +11: bytes_per_sector (2)
+//   +13: sectors_per_cluster (1)
+//   +14: reserved_sectors (2)
+//   +16: num_fats (1)
+//   +17: root_entry_count (2)
+//   +19: total_sectors_16 (2)
+//   +22: sectors_per_fat (2)
+//   +36: volume_label (11)
+//
+// Directory entry (32 bytes):
+//   +0:  name (8), ext (3)
+//   +11: attr (1)  -- 0x10=dir, 0x20=archive
+//   +22: time (2), date (2)
+//   +26: first_cluster (2)
+//   +28: file_size (4)
+
+let FAT16_ATTR_DIR     = 16;
+let FAT16_ATTR_ARCHIVE = 32;
+
+let mut fat_bytes_per_sector = 512;
+let mut fat_sectors_per_cluster = 1;
+let mut fat_reserved_sectors = 1;
+let mut fat_num_fats = 2;
+let mut fat_root_entries = 512;
+let mut fat_sectors_per_fat = 0;
+let mut fat_root_start = 0;     // sector number of root dir
+let mut fat_data_start = 0;     // sector number of data area
+let mut fat_table_start = 0;    // sector of first FAT
+
+fn fat16_init(boot_sector) {
+    if len(boot_sector) < 64 { return 0; }
+    fat_bytes_per_sector = boot_sector[11] + boot_sector[12] * 256;
+    fat_sectors_per_cluster = boot_sector[13];
+    fat_reserved_sectors = boot_sector[14] + boot_sector[15] * 256;
+    fat_num_fats = boot_sector[16];
+    fat_root_entries = boot_sector[17] + boot_sector[18] * 256;
+    fat_sectors_per_fat = boot_sector[22] + boot_sector[23] * 256;
+
+    fat_table_start = fat_reserved_sectors;
+    fat_root_start = fat_table_start + fat_num_fats * fat_sectors_per_fat;
+    let root_sectors = (fat_root_entries * 32 + fat_bytes_per_sector - 1) / fat_bytes_per_sector;
+    fat_data_start = fat_root_start + root_sectors;
+
+    return 1;
+}
+
+// Convert cluster number to sector number
+fn cluster_to_sector(cluster) {
+    return fat_data_start + (cluster - 2) * fat_sectors_per_cluster;
+}
+
+// Read FAT entry for a cluster (returns next cluster or 0xFFF8+ for end)
+fn fat16_read_fat(cluster) {
+    let fat_offset = cluster * 2;
+    let fat_sector = fat_table_start + fat_offset / fat_bytes_per_sector;
+    let offset_in_sector = fat_offset % fat_bytes_per_sector;
+    // Read the FAT sector via block cache
+    let buf = bcache_read(0, fat_sector);
+    // Read 16-bit value at offset
+    let lo = mem_read_u8(buf + offset_in_sector);
+    let hi = mem_read_u8(buf + offset_in_sector + 1);
+    return lo + hi * 256;
+}
+
+// Write FAT entry for a cluster
+fn fat16_write_fat(cluster, value) {
+    let fat_offset = cluster * 2;
+    let fat_sector = fat_table_start + fat_offset / fat_bytes_per_sector;
+    let offset_in_sector = fat_offset % fat_bytes_per_sector;
+    let buf = bcache_read(0, fat_sector);
+    mem_write_u8(buf + offset_in_sector, value % 256);
+    mem_write_u8(buf + offset_in_sector + 1, (value / 256) % 256);
+    // Mark dirty in cache (write to both FAT copies)
+    bcache_write(0, fat_sector, buf);
+    // Write to second FAT if present
+    if fat_num_fats > 1 {
+        let fat2_sector = fat_sector + fat_sectors_per_fat;
+        let buf2 = bcache_read(0, fat2_sector);
+        mem_write_u8(buf2 + offset_in_sector, value % 256);
+        mem_write_u8(buf2 + offset_in_sector + 1, (value / 256) % 256);
+        bcache_write(0, fat2_sector, buf2);
+    }
+    return 0;
+}
+
+// Allocate a free cluster from FAT
+fn fat16_alloc_cluster() {
+    let max_clusters = fat_sectors_per_fat * fat_bytes_per_sector / 2;
+    let mut c = 2;  // clusters 0,1 are reserved
+    while c < max_clusters {
+        let entry = fat16_read_fat(c);
+        if entry == 0 {
+            // Mark as end-of-chain
+            fat16_write_fat(c, 65535);  // 0xFFFF
+            return c;
+        }
+        c = c + 1;
+    }
+    return 0;  // disk full
+}
+
+// Parse 8.3 filename from directory entry
+fn fat16_parse_name(entry) {
+    let mut name = [];
+    let mut i = 0;
+    while i < 8 {
+        if entry[i] != 32 { push(name, entry[i]); }
+        i = i + 1;
+    }
+    if entry[8] != 32 {
+        push(name, 46); // '.'
+        i = 8;
+        while i < 11 {
+            if entry[i] != 32 { push(name, entry[i]); }
+            i = i + 1;
+        }
+    }
+    return name;
+}
+
+// List files in root directory
+fn fat16_list_root() {
+    let mut files = [];
+    let root_sectors = (fat_root_entries * 32 + fat_bytes_per_sector - 1) / fat_bytes_per_sector;
+    let mut sec = 0;
+    while sec < root_sectors {
+        let buf = bcache_read(0, fat_root_start + sec);
+        let mut off = 0;
+        while off < fat_bytes_per_sector {
+            let first_byte = mem_read_u8(buf + off);
+            if first_byte == 0 { return files; }     // end of directory
+            if first_byte == 229 { off = off + 32; sec = sec; }  // 0xE5 = deleted, skip
+            else {
+                let attr = mem_read_u8(buf + off + 11);
+                if attr != 15 {  // 0x0F = LFN entry, skip
+                    // Read 8.3 name
+                    let mut name = "";
+                    let mut ni = 0;
+                    while ni < 8 {
+                        let c = mem_read_u8(buf + off + ni);
+                        if c != 32 { name = name + chr(c); }
+                        ni = ni + 1;
+                    }
+                    let ext_first = mem_read_u8(buf + off + 8);
+                    if ext_first != 32 {
+                        name = name + ".";
+                        ni = 8;
+                        while ni < 11 {
+                            let c = mem_read_u8(buf + off + ni);
+                            if c != 32 { name = name + chr(c); }
+                            ni = ni + 1;
+                        }
+                    }
+                    let cluster = mem_read_u16(buf + off + 26);
+                    let size = mem_read_u32(buf + off + 28);
+                    let is_dir = 0;
+                    if attr / 16 % 2 == 1 { is_dir = 1; }
+                    push(files, [name, cluster, size, is_dir, attr]);
+                }
+            }
+            off = off + 32;
+        }
+        sec = sec + 1;
+    }
+    return files;
+}
+
+// Read a file by directory entry (follows cluster chain)
+fn fat16_read_file(first_cluster, file_size) {
+    let mut data = [];
+    let mut cluster = first_cluster;
+    let mut remaining = file_size;
+    let cluster_bytes = fat_sectors_per_cluster * fat_bytes_per_sector;
+
+    while remaining > 0 {
+        if cluster >= 65528 { return data; } // 0xFFF8+ = end of chain
+        if cluster < 2 { return data; }       // invalid cluster
+        let sector = cluster_to_sector(cluster);
+        // Read cluster sectors
+        let mut si = 0;
+        while si < fat_sectors_per_cluster {
+            let buf = bcache_read(0, sector + si);
+            let mut bi = 0;
+            let limit = fat_bytes_per_sector;
+            if remaining < limit { limit = remaining; }
+            while bi < limit {
+                push(data, mem_read_u8(buf + bi));
+                bi = bi + 1;
+            }
+            remaining = remaining - limit;
+            if remaining <= 0 { return data; }
+            si = si + 1;
+        }
+        cluster = fat16_read_fat(cluster);
+    }
+    return data;
+}
+
+// Create a file in the root directory
+// Returns directory entry index or -1 on failure
+fn fat16_create_file(name, is_dir) {
+    let root_sectors = (fat_root_entries * 32 + fat_bytes_per_sector - 1) / fat_bytes_per_sector;
+    // Find first free entry in root directory
+    let mut sec = 0;
+    while sec < root_sectors {
+        let buf = bcache_read(0, fat_root_start + sec);
+        let mut off = 0;
+        while off < fat_bytes_per_sector {
+            let first_byte = mem_read_u8(buf + off);
+            if first_byte == 0 || first_byte == 229 {
+                // Free entry found -- write new entry
+                // Build 8.3 name
+                let mut padded_name = [];
+                let mut ni = 0;
+                let mut ext_start = 0 - 1;
+                // Find dot position
+                while ni < len(name) {
+                    if char_at(name, ni) == "." { ext_start = ni; }
+                    ni = ni + 1;
+                }
+                // Write base name (8 bytes, space padded)
+                let mut base_end = len(name);
+                if ext_start >= 0 { base_end = ext_start; }
+                ni = 0;
+                while ni < 8 {
+                    if ni < base_end {
+                        let c = ord(char_at(name, ni));
+                        // Convert to uppercase
+                        if c >= 97 && c <= 122 { c = c - 32; }
+                        mem_write_u8(buf + off + ni, c);
+                    } else {
+                        mem_write_u8(buf + off + ni, 32); // space pad
+                    }
+                    ni = ni + 1;
+                }
+                // Write extension (3 bytes, space padded)
+                ni = 0;
+                while ni < 3 {
+                    if ext_start >= 0 && ext_start + 1 + ni < len(name) {
+                        let c = ord(char_at(name, ext_start + 1 + ni));
+                        if c >= 97 && c <= 122 { c = c - 32; }
+                        mem_write_u8(buf + off + 8 + ni, c);
+                    } else {
+                        mem_write_u8(buf + off + 8 + ni, 32);
+                    }
+                    ni = ni + 1;
+                }
+                // Attributes
+                let attr = 32;  // archive
+                if is_dir == 1 { attr = 16; }
+                mem_write_u8(buf + off + 11, attr);
+                // Zero out time/date and reserved
+                ni = 12;
+                while ni < 26 { mem_write_u8(buf + off + ni, 0); ni = ni + 1; }
+                // Allocate first cluster
+                let cluster = fat16_alloc_cluster();
+                mem_write_u16(buf + off + 26, cluster);
+                // File size = 0
+                mem_write_u32(buf + off + 28, 0);
+                // Write back
+                bcache_write(0, fat_root_start + sec, buf);
+                return sec * (fat_bytes_per_sector / 32) + off / 32;
+            }
+            off = off + 32;
+        }
+        sec = sec + 1;
+    }
+    return 0 - 1;  // root directory full
+}
+
+// Write data to a file (overwrites existing content)
+fn fat16_write_file(first_cluster, data, data_len) {
+    let mut cluster = first_cluster;
+    let cluster_bytes = fat_sectors_per_cluster * fat_bytes_per_sector;
+    let mut written = 0;
+
+    while written < data_len {
+        if cluster < 2 { return written; }
+        let sector = cluster_to_sector(cluster);
+        // Write cluster sectors
+        let mut si = 0;
+        while si < fat_sectors_per_cluster {
+            let buf = bcache_read(0, sector + si);
+            let mut bi = 0;
+            while bi < fat_bytes_per_sector && written < data_len {
+                mem_write_u8(buf + bi, data[written]);
+                bi = bi + 1;
+                written = written + 1;
+            }
+            bcache_write(0, sector + si, buf);
+            si = si + 1;
+        }
+        // Need more clusters?
+        if written < data_len {
+            let next = fat16_read_fat(cluster);
+            if next >= 65528 || next < 2 {
+                // Allocate new cluster
+                let new_cluster = fat16_alloc_cluster();
+                if new_cluster == 0 { return written; }  // disk full
+                fat16_write_fat(cluster, new_cluster);
+                cluster = new_cluster;
+            } else {
+                cluster = next;
+            }
+        }
+    }
+    return written;
+}
+
+// Update file size in root directory entry
+fn fat16_update_size(entry_index, new_size) {
+    let sec = entry_index / (fat_bytes_per_sector / 32);
+    let off = (entry_index % (fat_bytes_per_sector / 32)) * 32;
+    let buf = bcache_read(0, fat_root_start + sec);
+    mem_write_u32(buf + off + 28, new_size);
+    bcache_write(0, fat_root_start + sec, buf);
+    return 0;
+}
+
+// Delete a file from root directory
+fn fat16_delete_file(entry_index) {
+    let sec = entry_index / (fat_bytes_per_sector / 32);
+    let off = (entry_index % (fat_bytes_per_sector / 32)) * 32;
+    let buf = bcache_read(0, fat_root_start + sec);
+    // Get first cluster
+    let cluster = mem_read_u16(buf + off + 26);
+    // Mark entry as deleted (0xE5)
+    mem_write_u8(buf + off, 229);
+    bcache_write(0, fat_root_start + sec, buf);
+    // Free cluster chain
+    let mut c = cluster;
+    while c >= 2 && c < 65528 {
+        let next = fat16_read_fat(c);
+        fat16_write_fat(c, 0);  // free cluster
+        c = next;
+    }
+    return 0;
+}
+
+// Format a FAT16 filesystem on disk
+// total_sectors: total disk size in sectors
+fn fat16_format(total_sectors) {
+    // Calculate geometry
+    let bps = 512;
+    let spc = 4;  // sectors per cluster (2KB clusters)
+    let reserved = 1;  // 1 reserved sector (boot sector)
+    let num_fats = 2;
+    let root_entries = 512;
+    let root_sectors = (root_entries * 32 + bps - 1) / bps;
+    let data_sectors = total_sectors - reserved - root_sectors;
+    let spf = (data_sectors / spc * 2 + bps - 1) / bps;  // sectors per FAT
+
+    // Write boot sector (sector 0)
+    let boot_buf = page_alloc();
+    mem_zero(boot_buf, bps);
+    // Jump instruction: EB 3C 90
+    mem_write_u8(boot_buf, 235);
+    mem_write_u8(boot_buf + 1, 60);
+    mem_write_u8(boot_buf + 2, 144);
+    // OEM name: "HICOS   "
+    let oem = "HICOS   ";
+    let mut oi = 0;
+    while oi < 8 { mem_write_u8(boot_buf + 3 + oi, ord(char_at(oem, oi))); oi = oi + 1; }
+    // BPB
+    mem_write_u16(boot_buf + 11, bps);      // bytes per sector
+    mem_write_u8(boot_buf + 13, spc);       // sectors per cluster
+    mem_write_u16(boot_buf + 14, reserved); // reserved sectors
+    mem_write_u8(boot_buf + 16, num_fats);  // number of FATs
+    mem_write_u16(boot_buf + 17, root_entries);
+    if total_sectors < 65536 {
+        mem_write_u16(boot_buf + 19, total_sectors);
+    } else {
+        mem_write_u16(boot_buf + 19, 0);
+        mem_write_u32(boot_buf + 32, total_sectors);
+    }
+    mem_write_u8(boot_buf + 21, 248);       // media descriptor (hard disk)
+    mem_write_u16(boot_buf + 22, spf);      // sectors per FAT
+    // Boot signature
+    mem_write_u16(boot_buf + 510, 43605);   // 0xAA55
+    // Write boot sector to disk
+    virtio_blk_write(0, 1, boot_buf);
+
+    // Zero FAT tables
+    let zero_buf = page_alloc();
+    mem_zero(zero_buf, bps);
+    let mut s = reserved;
+    while s < reserved + num_fats * spf {
+        virtio_blk_write(s, 1, zero_buf);
+        s = s + 1;
+    }
+    // Write FAT[0] = 0xFFF8 (media), FAT[1] = 0xFFFF (reserved)
+    mem_write_u16(zero_buf, 65528);   // 0xFFF8
+    mem_write_u16(zero_buf + 2, 65535); // 0xFFFF
+    virtio_blk_write(reserved, 1, zero_buf);
+    // Second FAT copy
+    virtio_blk_write(reserved + spf, 1, zero_buf);
+
+    // Zero root directory
+    mem_zero(zero_buf, bps);
+    s = reserved + num_fats * spf;
+    while s < reserved + num_fats * spf + root_sectors {
+        virtio_blk_write(s, 1, zero_buf);
+        s = s + 1;
+    }
+
+    page_free(boot_buf);
+    page_free(zero_buf);
+
+    // Initialize FAT16 driver with the new parameters
+    fat_bytes_per_sector = bps;
+    fat_sectors_per_cluster = spc;
+    fat_reserved_sectors = reserved;
+    fat_num_fats = num_fats;
+    fat_root_entries = root_entries;
+    fat_sectors_per_fat = spf;
+    fat_table_start = reserved;
+    fat_root_start = reserved + num_fats * spf;
+    fat_data_start = fat_root_start + root_sectors;
+
+    print("FAT16 formatted: " + to_string(total_sectors) + " sectors, " + to_string(spf) + " sectors/FAT");
+    return 1;
+}
+
+print("fat16.hl loaded -- FAT16 filesystem driver (read/write/format)");

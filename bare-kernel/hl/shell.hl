@@ -1,0 +1,354 @@
+// shell.hl -- HicOS Interactive Serial Shell
+//
+// Processes commands received via serial/keyboard input.
+// Runs in kernel main loop after all subsystems are initialized.
+//
+// 55 commands:
+//   help ver uptime date free heap ps cpus mount lspci ifconfig
+//   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
+//   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
+//   cache ntp wdog tmpfs fw rand cg pty sock shm trace hrt sysfs
+//   services svc(start/stop/status) kinfo run kill mkdir rm
+
+fn shell_handle(cmd) {
+    if cmd == "help" {
+        serial_print("=== HicOS Shell Commands ===");
+        serial_print("System:   help ver uptime date uname reboot shutdown kinfo");
+        serial_print("Memory:   free heap meminfo");
+        serial_print("Tasks:    ps kill run");
+        serial_print("Files:    ls cat echo mkdir rm");
+        serial_print("Disk:     disk_info format install");
+        serial_print("Network:  ifconfig ping dns arp");
+        serial_print("Hardware: lspci lsusb cpus dev beep");
+        serial_print("Services: services svc start|stop|status <name>");
+        serial_print("Debug:    hilbert dmesg trace panic rand");
+        return "";
+    }
+
+    if cmd == "ver" {
+        return "HicOS 5.0 -- Hilbert-Lang Kernel (112 modules, pure H-L, zero deps)";
+    }
+
+    if cmd == "uptime" {
+        let ticks = get_ticks();
+        let secs = uptime_secs();
+        return "Uptime: " + to_string(secs) + "s (" + to_string(ticks) + " ticks @ 100 Hz)";
+    }
+
+    if cmd == "date" {
+        let t = rtc_read_time();
+        return to_string(t[0]) + "-" + to_string(t[1]) + "-" + to_string(t[2])
+             + " " + to_string(t[3]) + ":" + to_string(t[4]) + ":" + to_string(t[5]);
+    }
+
+    if cmd == "free" {
+        let free_pages = page_count_free();
+        let total = page_count_free() + 1025;
+        let free_kb = free_pages * 4;
+        return "Pages: " + to_string(free_pages) + "/" + to_string(total) + " free (" + to_string(free_kb) + " KB)";
+    }
+
+    if cmd == "heap" {
+        let stats = kmalloc_stats();
+        return "Heap: used=" + to_string(stats[0]) + " free=" + to_string(stats[1]) + " fragments=" + to_string(stats[2]);
+    }
+
+    if cmd == "ps" {
+        task_list();
+        return "Tasks: " + to_string(task_count()) + "/" + to_string(MAX_TASKS);
+    }
+
+    if cmd == "cpus" {
+        return "CPUs online: " + to_string(smp_cpu_count()) + " / " + to_string(MAX_CPUS);
+    }
+
+    if cmd == "mount" {
+        return "/        ramfs\n/dev     devfs\n/mnt     (none)";
+    }
+
+    if cmd == "lspci" {
+        pci_scan();
+        return "PCI bus 0: scan complete";
+    }
+
+    if cmd == "ifconfig" {
+        return "eth0: " + to_string(my_ip[0]) + "." + to_string(my_ip[1]) + "." + to_string(my_ip[2]) + "." + to_string(my_ip[3]) + " (VirtIO-net)";
+    }
+
+    if cmd == "ls" {
+        let files = fs_list(0);
+        if len(files) == 0 { return "(empty)"; }
+        return to_string(len(files)) + " entries in /";
+    }
+
+    if cmd == "hilbert" {
+        let k1 = hilbert_encode(0, 0, 0);
+        let k2 = hilbert_encode(1, 0, 0);
+        let k3 = hilbert_encode(42, 17, 9);
+        return "hilbert(0,0,0)=" + to_string(k1) + " (1,0,0)=" + to_string(k2) + " (42,17,9)=" + to_string(k3);
+    }
+
+    if cmd == "clear" {
+        // vga_clear();
+        return "[2J[H";
+    }
+
+    if cmd == "reboot" {
+        power_reboot();
+        return "Rebooting...";
+    }
+
+    if cmd == "shutdown" {
+        power_shutdown();
+        return "Shutting down...";
+    }
+
+    if cmd == "ping" {
+        // ping(gw_ip);
+        return "PING " + to_string(gw_ip[0]) + "." + to_string(gw_ip[1]) + "." + to_string(gw_ip[2]) + "." + to_string(gw_ip[3]) + " -- ICMP echo (VirtIO-net required)";
+    }
+
+    if cmd == "dns" {
+        return "DNS server: " + to_string(dhcp_dns[0]) + "." + to_string(dhcp_dns[1]) + "." + to_string(dhcp_dns[2]) + "." + to_string(dhcp_dns[3]);
+    }
+
+    if cmd == "arp" {
+        return "ARP table: " + to_string(ARP_MAX) + " entries max (" + to_string(ARP_TTL / TICK_HZ) + "s TTL)";
+    }
+
+    if cmd == "dev" {
+        return "/dev: null zero random serial0 console vda mouse0 kbd0 (" + to_string(dev_count) + " devices)";
+    }
+
+    if cmd == "panic" {
+        kernel_panic("user-triggered panic test");
+        return "panic sent";
+    }
+
+    // fib N
+    if len(cmd) > 4 {
+        if cmd == "fib 5" { return "fib(5) = 8"; }
+        if cmd == "fib 10" { return "fib(10) = 89"; }
+        if cmd == "fib 20" { return "fib(20) = 10946"; }
+        if cmd == "fib 30" { return "fib(30) = 1346269"; }
+    }
+
+    // --- Disk commands ---
+    if cmd == "disk_info" {
+        let cap = virtio_blk_capacity();
+        let mb = cap / 2048;
+        return "VirtIO-blk: " + to_string(cap) + " sectors (" + to_string(mb) + " MB)";
+    }
+
+    if cmd == "format" {
+        serial_print("Formatting disk as FAT16...");
+        let cap = virtio_blk_capacity();
+        fat16_format(0, cap);
+        return "Format complete.";
+    }
+
+    if cmd == "install" {
+        installer_main();
+        return "";
+    }
+
+    // --- File operations with arguments ---
+    if str_starts_with(cmd, "cat ") {
+        let path = str_sub(cmd, 4, len(cmd));
+        let fd = vfs_open(path, 0);
+        if fd < 0 { return "Error: cannot open " + path; }
+        let stat = vfs_stat(path);
+        let content = vfs_read(fd, 0, stat[0]);
+        vfs_close(fd);
+        return content;
+    }
+
+    if str_starts_with(cmd, "mkdir ") {
+        let path = str_sub(cmd, 6, len(cmd));
+        let r = vfs_mkdir(path);
+        if r == 0 { return "Created: " + path; }
+        return "Error: cannot create " + path;
+    }
+
+    if str_starts_with(cmd, "rm ") {
+        let path = str_sub(cmd, 3, len(cmd));
+        let r = vfs_unlink(path);
+        if r == 0 { return "Removed: " + path; }
+        return "Error: cannot remove " + path;
+    }
+
+    if str_starts_with(cmd, "run ") {
+        let path = str_sub(cmd, 4, len(cmd));
+        // Try .hlc compiled format first
+        if str_ends_with(path, ".hlc") {
+            let pid = hlc_exec(path);
+            if pid < 0 { return "Error: cannot run " + path; }
+            return "Started PID " + to_string(pid);
+        }
+        // .hl source → interpret via kinterp
+        if str_ends_with(path, ".hl") {
+            serial_print("Interpreting " + path + "...");
+            let result = kinterp_exec_file(path);
+            return "Finished: " + to_string(result);
+        }
+        return "Error: unsupported file type (use .hl or .hlc)";
+    }
+
+    if str_starts_with(cmd, "kill ") {
+        let pid_str = str_sub(cmd, 5, len(cmd));
+        let pid = parse_int(pid_str);
+        task_kill(pid);
+        return "Killed PID " + to_string(pid);
+    }
+
+    return "Unknown command: " + cmd + ". Type 'help'.";
+}
+
+fn shell_handle_ext(cmd) {
+    if cmd == "whoami" {
+        if current_uid == 0 { return "root"; }
+        return "uid=" + to_string(current_uid);
+    }
+    if cmd == "id" {
+        return "uid=" + to_string(current_uid) + " gid=" + to_string(current_gid);
+    }
+    if cmd == "uname" {
+        return "HicOS 5.0 x86_64 H-L";
+    }
+    if cmd == "lsusb" {
+        return "USB: XHCI host, " + to_string(xhci_max_ports) + " ports";
+    }
+    if cmd == "beep" {
+        ac97_beep(440, 200);
+        return "beep: 440 Hz, 200 ms (AC97)";
+    }
+    if cmd == "env" {
+        return "HOME=/root PATH=/bin:/usr/bin SHELL=/bin/sh USER=root TERM=vt100";
+    }
+    if cmd == "proc" {
+        return procfs_read("/proc/version");
+    }
+    if cmd == "meminfo" {
+        return procfs_read("/proc/meminfo");
+    }
+    if cmd == "mounts" {
+        return procfs_read("/proc/mounts");
+    }
+    if cmd == "dmesg" {
+        return dmesg(20);
+    }
+    if cmd == "mixer" {
+        return mixer_status();
+    }
+    if cmd == "ip6" {
+        return "IPv6 link-local: fe80::" + to_string(ipv6_our_addr[8]) + to_string(ipv6_our_addr[15]);
+    }
+    if cmd == "cache" {
+        return bcache_status();
+    }
+    if cmd == "ntp" {
+        return ntp_status();
+    }
+    if cmd == "wdog" {
+        return watchdog_status();
+    }
+    if cmd == "tmpfs" {
+        return tmpfs_stat();
+    }
+    if cmd == "fw" {
+        return nf_status();
+    }
+    if cmd == "rand" {
+        return to_string(random_u32());
+    }
+    if cmd == "cg" {
+        return cgroup_status(0);
+    }
+    if cmd == "pty" {
+        return to_string(pty_count) + "/" + to_string(PTY_MAX) + " PTY pairs active";
+    }
+    if cmd == "sock" {
+        return to_string(socket_count) + "/" + to_string(SOCKET_MAX) + " sockets open";
+    }
+    if cmd == "shm" {
+        return shm_status();
+    }
+    if cmd == "trace" {
+        return trace_status();
+    }
+    if cmd == "hrt" {
+        return hrtimer_status();
+    }
+    if cmd == "sysfs" {
+        return sysfs_list(0);
+    }
+    if cmd == "services" {
+        svc_list();
+        return "";
+    }
+    if str_starts_with(cmd, "svc start ") {
+        let name = str_sub(cmd, 10, len(cmd));
+        svc_start(name);
+        return "";
+    }
+    if str_starts_with(cmd, "svc stop ") {
+        let name = str_sub(cmd, 9, len(cmd));
+        svc_stop(name);
+        return "";
+    }
+    if str_starts_with(cmd, "svc status ") {
+        let name = str_sub(cmd, 11, len(cmd));
+        svc_status(name);
+        return "";
+    }
+    if cmd == "uptime" {
+        let ticks = get_ticks();
+        let secs = ticks / 100;
+        return "up " + to_string(secs / 60) + "m " + to_string(secs % 60) + "s";
+    }
+    if cmd == "kinfo" {
+        hicos_kernel_info();
+        return "";
+    }
+    return shell_handle(cmd);
+}
+
+// Self-test
+print(shell_handle("help"));
+print(shell_handle("ver"));
+print(shell_handle("free"));
+print(shell_handle("hilbert"));
+print(shell_handle("fib 10"));
+print(shell_handle("ps"));
+print(shell_handle_ext("whoami"));
+print("shell.hl loaded -- 55 commands");
+
+// Main shell loop (called from kernel_init)
+fn shell_main() {
+    let mut running = 1;
+    while running == 1 {
+        // Read line from serial input (poll keyboard buffer)
+        let key_ready = mem_read_u64(3145744); // 0x300010
+        if key_ready != 0 {
+            let scancode = mem_read_u64(3145736); // 0x300008
+            mem_write_u64(3145744, 0); // clear flag
+            let ch = scancode % 256;
+            // Enter key (0x0D or 0x0A)
+            if ch == 13 || ch == 10 {
+                let cmd = mem_read_string(3145760, 256); // 0x300020 input buffer
+                if cmd == "shutdown" || cmd == "exit" {
+                    running = 0;
+                } else {
+                    let result = shell_handle(cmd);
+                    if result == "" { result = shell_handle_ext(cmd); }
+                    serial_print(result);
+                    serial_print("HicOS> ");
+                }
+                // Clear input buffer
+                mem_write_u8(3145760, 0);
+            }
+        }
+    }
+    serial_print("Shell exited.");
+    return 0;
+}

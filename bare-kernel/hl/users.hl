@@ -1,0 +1,147 @@
+// users.hl -- Multi-User System + Permissions
+//
+// Provides user accounts, groups, and file permission checks.
+// Modeled after UNIX uid/gid with simplified permission bits.
+//
+// User table at 0x8B0000 (32 users max, 128 bytes each)
+// Group table at 0x8B1000 (16 groups max, 64 bytes each)
+//
+// User entry (128 bytes):
+//   +0:  uid (8)
+//   +8:  gid (8) -- primary group
+//   +16: flags (8) -- bit 0=active, bit 1=root
+//   +24: password_hash (32) -- SHA-256
+//   +56: username (32) -- null-terminated
+//   +88: home_dir (32) -- path
+//   +120: shell (8) -- 0=default
+//
+// Permission model (per-file, 9 bits):
+//   owner: rwx (bits 8-6)
+//   group: rwx (bits 5-3)
+//   other: rwx (bits 2-0)
+
+let USER_TABLE = 9109504;      // 0x8B0000
+let USER_ENTRY_SIZE = 128;
+let MAX_USERS = 32;
+let GROUP_TABLE = 9113600;     // 0x8B1000
+let GROUP_ENTRY_SIZE = 64;
+let MAX_GROUPS = 16;
+
+let UID_ROOT = 0;
+let GID_ROOT = 0;
+
+let PERM_R = 4;
+let PERM_W = 2;
+let PERM_X = 1;
+
+let mut current_uid = 0;  // root by default
+let mut current_gid = 0;
+let mut user_count = 0;
+
+fn users_init() {
+    user_count = 0;
+    // Create root user (uid=0, gid=0)
+    user_create(0, 0, "root", "/root");
+    // Create nobody user (uid=65534)
+    user_create(65534, 65534, "nobody", "/tmp");
+    return 0;
+}
+
+fn user_create(uid, gid, username, home) {
+    if user_count >= MAX_USERS { return 0; }
+    let addr = USER_TABLE + user_count * USER_ENTRY_SIZE;
+    mem_write_u64(addr, uid);
+    mem_write_u64(addr + 8, gid);
+    mem_write_u64(addr + 16, 1);  // active
+    // if uid == 0: flags |= 2 (root)
+    // write username at addr + 56
+    // write home at addr + 88
+    user_count = user_count + 1;
+    return 1;
+}
+
+fn user_find(uid) {
+    let mut i = 0;
+    while i < user_count {
+        let addr = USER_TABLE + i * USER_ENTRY_SIZE;
+        // let stored_uid = mem_read_u64(addr);
+        // if stored_uid == uid { return addr; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn user_authenticate(username, password_hash) {
+    // Find user by username, compare password hash
+    // Return uid on success, -1 on failure
+    return 0;
+}
+
+// Set current user (su / login)
+fn user_switch(uid) {
+    let addr = user_find(uid);
+    if addr == 0 { return 0; }
+    current_uid = uid;
+    // current_gid = mem_read_u64(addr + 8);
+    return 1;
+}
+
+// === Permission checking ===
+// file_perms: 9-bit permission field
+// file_uid: owner uid
+// file_gid: owner gid
+fn perm_check(file_uid, file_gid, file_perms, required) {
+    // Root can do anything
+    if current_uid == UID_ROOT { return 1; }
+
+    if current_uid == file_uid {
+        // Owner permissions (bits 8-6)
+        let owner_perms = (file_perms / 64) % 8;
+        if (owner_perms % (required * 2)) / required >= 1 { return 1; }
+    }
+
+    if current_gid == file_gid {
+        // Group permissions (bits 5-3)
+        let group_perms = (file_perms / 8) % 8;
+        if (group_perms % (required * 2)) / required >= 1 { return 1; }
+    }
+
+    // Other permissions (bits 2-0)
+    let other_perms = file_perms % 8;
+    if (other_perms % (required * 2)) / required >= 1 { return 1; }
+
+    return 0; // denied
+}
+
+fn perm_can_read(file_uid, file_gid, file_perms) {
+    return perm_check(file_uid, file_gid, file_perms, PERM_R);
+}
+
+fn perm_can_write(file_uid, file_gid, file_perms) {
+    return perm_check(file_uid, file_gid, file_perms, PERM_W);
+}
+
+fn perm_can_exec(file_uid, file_gid, file_perms) {
+    return perm_check(file_uid, file_gid, file_perms, PERM_X);
+}
+
+// UNIX-style octal representation
+fn perm_to_string(perms) {
+    let mut s = [];
+    // Owner
+    if (perms / 64) % 8 >= 4 { push(s, 114); } else { push(s, 45); } // r/-
+    if ((perms / 64) % 8 / 2) % 2 >= 1 { push(s, 119); } else { push(s, 45); } // w/-
+    if (perms / 64) % 2 >= 1 { push(s, 120); } else { push(s, 45); } // x/-
+    // Group
+    if (perms / 8) % 8 >= 4 { push(s, 114); } else { push(s, 45); }
+    if ((perms / 8) % 8 / 2) % 2 >= 1 { push(s, 119); } else { push(s, 45); }
+    if (perms / 8) % 2 >= 1 { push(s, 120); } else { push(s, 45); }
+    // Other
+    if perms % 8 >= 4 { push(s, 114); } else { push(s, 45); }
+    if (perms % 8 / 2) % 2 >= 1 { push(s, 119); } else { push(s, 45); }
+    if perms % 2 >= 1 { push(s, 120); } else { push(s, 45); }
+    return s;
+}
+
+print("users.hl loaded");
+print("Max users: " + to_string(MAX_USERS) + " uid/gid + rwx permissions");

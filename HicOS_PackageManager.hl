@@ -1,0 +1,75 @@
+// HicOS_PackageManager.hl -- Package Manager (Native H-L)
+//
+// Simple package management for H-L modules.
+// Packages are .hl source files stored in /usr/lib/hl/.
+// Manifest: each package has name, version, dependencies.
+
+let PKG_DIR = "/usr/lib/hl";
+let PKG_DB = "/var/lib/hlpkg";
+let mut pkg_count = 0;
+
+fn hlpkg_init() {
+    vfs_mkdir(PKG_DIR);
+    vfs_mkdir(PKG_DB);
+    pkg_count = 0;
+    print("hlpkg: package manager initialized");
+    return 0;
+}
+
+fn hlpkg_install(name, source_path) {
+    // Read source file
+    let fd = vfs_open(source_path, 0);
+    if fd < 0 {
+        print("hlpkg: cannot open " + source_path);
+        return 0 - 1;
+    }
+    let stat = vfs_stat(source_path);
+    let size = stat[0];
+    let content = vfs_read(fd, 0, size);
+    vfs_close(fd);
+
+    // Write to package directory
+    let dest = PKG_DIR + "/" + name + ".hl";
+    let dfd = vfs_open(dest, 1);
+    if dfd < 0 {
+        print("hlpkg: cannot create " + dest);
+        return 0 - 1;
+    }
+    vfs_write(dfd, content, size);
+    vfs_close(dfd);
+
+    pkg_count = pkg_count + 1;
+    print("hlpkg: installed " + name + " (" + to_string(size) + " bytes)");
+    return 0;
+}
+
+fn hlpkg_remove(name) {
+    let path = PKG_DIR + "/" + name + ".hl";
+    let r = vfs_unlink(path);
+    if r == 0 {
+        pkg_count = pkg_count - 1;
+        print("hlpkg: removed " + name);
+    } else {
+        print("hlpkg: " + name + " not found");
+    }
+    return r;
+}
+
+fn hlpkg_list() {
+    let entries = vfs_readdir(PKG_DIR);
+    print("hlpkg: installed packages:");
+    let mut i = 0;
+    while i < len(entries) {
+        print("  " + entries[i]);
+        i = i + 1;
+    }
+    return len(entries);
+}
+
+fn hlpkg_info() {
+    print("hlpkg: " + to_string(pkg_count) + " package(s) installed");
+    print("hlpkg: package dir = " + PKG_DIR);
+    return pkg_count;
+}
+
+print("HicOS_PackageManager.hl loaded (native H-L)");

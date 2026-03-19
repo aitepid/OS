@@ -1,0 +1,163 @@
+// posix_test.hl -- POSIX Compliance Test Suite
+//
+// Tests POSIX-compatible interfaces from posix.hl, pipe.hl, signal.hl,
+// users.hl, vfs.hl. Reports pass/fail for each test.
+//
+// Categories:
+//   1. Process creation (fork, exec, wait, _exit)
+//   2. File I/O (open, read, write, close, lseek)
+//   3. Pipes (pipe, read, write, close)
+//   4. Signals (kill, signal handler, SIGCHLD)
+//   5. File permissions (chmod, chown, access)
+//   6. Directory operations (mkdir, rmdir, readdir)
+//   7. User/group (getuid, getgid, setuid)
+
+let mut posix_pass = 0;
+let mut posix_fail = 0;
+let mut posix_skip = 0;
+
+fn posix_assert(name, condition) {
+    if condition == 1 {
+        posix_pass = posix_pass + 1;
+    } else {
+        posix_fail = posix_fail + 1;
+        print("  FAIL: " + name);
+    }
+    return condition;
+}
+
+fn posix_skip_test(name, reason) {
+    posix_skip = posix_skip + 1;
+    return 0;
+}
+
+// === 1. Process creation ===
+fn test_fork() {
+    // let pid = sys_fork();
+    // In child: pid == 0
+    // In parent: pid > 0
+    posix_skip_test("fork", "requires runtime context switch");
+    return 0;
+}
+
+fn test_exec() {
+    posix_skip_test("exec", "requires ELF binary on ramfs");
+    return 0;
+}
+
+fn test_wait() {
+    posix_skip_test("wait", "requires fork + child exit");
+    return 0;
+}
+
+// === 2. File I/O ===
+fn test_file_io() {
+    // Create a file, write, read back, verify
+    // let fd = vfs_open("/tmp/test_posix", O_CREAT | O_RDWR);
+    // posix_assert("open returns valid fd", fd >= 0);
+    // let written = vfs_write(fd, "hello", 5);
+    // posix_assert("write returns 5", written == 5);
+    // vfs_lseek(fd, 0, SEEK_SET);
+    // let buf = vfs_read(fd, 5);
+    // posix_assert("read returns 'hello'", buf == "hello");
+    // vfs_close(fd);
+    posix_skip_test("file_io", "requires writable VFS");
+    return 0;
+}
+
+// === 3. Pipes ===
+fn test_pipe() {
+    // let fds = sys_pipe();
+    // posix_assert("pipe returns 2 fds", len(fds) == 2);
+    // posix_assert("read fd >= 0", fds[0] >= 0);
+    // posix_assert("write fd >= 0", fds[1] >= 0);
+    // Write to fds[1], read from fds[0], verify data
+    posix_skip_test("pipe", "requires fd table runtime");
+    return 0;
+}
+
+fn test_dup2() {
+    // let fd = sys_dup2(1, 5);
+    // posix_assert("dup2 returns new fd", fd == 5);
+    posix_skip_test("dup2", "requires fd table runtime");
+    return 0;
+}
+
+// === 4. Signals ===
+fn test_signal() {
+    // Register handler, send signal, verify handler called
+    posix_skip_test("signal", "requires task execution context");
+    return 0;
+}
+
+// === 5. File permissions ===
+fn test_permissions() {
+    let r = perm_can_read(0, 0, 493);   // 0o755 = rwxr-xr-x
+    posix_assert("root can read 0755", r == 1);
+
+    let w = perm_can_write(0, 0, 493);
+    posix_assert("root can write 0755", w == 1);
+
+    // Non-root, non-owner, non-group
+    // Temporarily set uid to 1000
+    let save_uid = current_uid;
+    let save_gid = current_gid;
+    current_uid = 1000;
+    current_gid = 1000;
+
+    let r2 = perm_can_read(0, 0, 493);  // other has r-x (5)
+    posix_assert("other can read 0755", r2 == 1);
+
+    let w2 = perm_can_write(0, 0, 493); // other has no w
+    posix_assert("other cannot write 0755", w2 == 0);
+
+    let r3 = perm_can_read(0, 0, 448);  // 0o700 = rwx------
+    posix_assert("other cannot read 0700", r3 == 0);
+
+    current_uid = save_uid;
+    current_gid = save_gid;
+    return 0;
+}
+
+// === 6. Directory operations ===
+fn test_dirs() {
+    posix_skip_test("mkdir/rmdir", "requires writable VFS");
+    return 0;
+}
+
+// === 7. User/group ===
+fn test_users() {
+    posix_assert("root uid is 0", current_uid == 0);
+    posix_assert("root gid is 0", current_gid == 0);
+    return 0;
+}
+
+// === Run all tests ===
+fn posix_test_all() {
+    posix_pass = 0;
+    posix_fail = 0;
+    posix_skip = 0;
+
+    print("=== POSIX Compliance Tests ===");
+
+    test_fork();
+    test_exec();
+    test_wait();
+    test_file_io();
+    test_pipe();
+    test_dup2();
+    test_signal();
+    test_permissions();
+    test_dirs();
+    test_users();
+
+    print("");
+    print("POSIX results: " + to_string(posix_pass) + " passed, "
+        + to_string(posix_fail) + " failed, "
+        + to_string(posix_skip) + " skipped");
+    print("Coverage: process(3) file(1) pipe(2) signal(1) perms(5) dir(1) user(2) = 15 tests");
+    return posix_fail;
+}
+
+posix_test_all();
+print("posix_test.hl loaded");

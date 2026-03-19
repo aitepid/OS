@@ -1,0 +1,197 @@
+// vesa.hl -- VESA VBE Framebuffer (Graphics Mode)
+//
+// Switches from VGA text mode to a linear framebuffer via VBE 2.0.
+// VBE info obtained during real mode (stage2) via INT 10h AX=4F00/4F01.
+//
+// Preferred mode: 1024x768x32 or 800x600x32
+//
+// VBE mode info block (256 bytes, obtained by INT 10h AX=4F01):
+//   +0:  mode_attributes (2)
+//   +18: x_resolution (2)
+//   +20: y_resolution (2)
+//   +25: bits_per_pixel (1)
+//   +40: phys_base_ptr (4) -- linear framebuffer address
+//   +50: pitch (2) -- bytes per scanline
+//
+// Framebuffer format (32bpp): each pixel = [B, G, R, A] (little-endian)
+
+let mut vesa_fb_addr = 0;     // physical address of framebuffer
+let mut vesa_width = 0;
+let mut vesa_height = 0;
+let mut vesa_bpp = 0;
+let mut vesa_pitch = 0;
+let mut vesa_enabled = 0;     // 1 if VBE mode was set by stage2
+
+// VBE mode info block stored at 0x8000 by stage2
+let VBE_MODE_INFO_ADDR = 32768;  // 0x8000
+
+// Initialize VESA from VBE mode info block
+fn vesa_init(mode_info_addr) {
+    let attr = mem_read_u16(mode_info_addr);
+    // Check if mode info looks valid (attributes should have bit 0 set)
+    if attr % 2 == 1 {
+        vesa_width = mem_read_u16(mode_info_addr + 18);
+        vesa_height = mem_read_u16(mode_info_addr + 20);
+        vesa_bpp = mem_read_u8(mode_info_addr + 25);
+        vesa_fb_addr = mem_read_u32(mode_info_addr + 40);
+        vesa_pitch = mem_read_u16(mode_info_addr + 50);
+        // Validate: reasonable dimensions and bpp
+        if vesa_width >= 640 && vesa_height >= 480 && vesa_bpp >= 16 {
+            if vesa_fb_addr > 0 {
+                vesa_enabled = 1;
+                return 1;
+            }
+        }
+    }
+    // Fallback: use default values (text mode compatible)
+    vesa_width = 1024;
+    vesa_height = 768;
+    vesa_bpp = 32;
+    vesa_pitch = 4096;  // 1024 * 4
+    vesa_fb_addr = 0;
+    vesa_enabled = 0;
+    return 0;
+}
+
+// Auto-detect and initialize VESA from stage2 data
+fn vesa_auto_init() {
+    vesa_init(VBE_MODE_INFO_ADDR);
+    return 0;
+}
+
+// Direct mode setup from UEFI GOP (no VBE mode info block needed)
+fn vesa_set_mode_direct(fb_addr, width, height, pitch, bpp) {
+    vesa_fb_addr = fb_addr;
+    vesa_width = width;
+    vesa_height = height;
+    vesa_pitch = pitch;
+    vesa_bpp = bpp;
+    if fb_addr != 0 && width > 0 && height > 0 {
+        vesa_enabled = 1;
+    }
+    return 0;
+}
+
+// Query VESA state
+fn vesa_info() {
+    if vesa_enabled == 1 {
+        print("VESA: " + to_string(vesa_width) + "x" + to_string(vesa_height) + "x" + to_string(vesa_bpp));
+        print("  Framebuffer: 0x" + format_hex(vesa_fb_addr, 8));
+        print("  Pitch: " + to_string(vesa_pitch) + " bytes/line");
+    } else {
+        print("VESA: not available (text mode)");
+    }
+    return vesa_enabled;
+}
+
+// Scroll the framebuffer up by one text line (16 pixels)
+fn vesa_scroll_up(line_height, bg_color) {
+    if vesa_enabled == 0 { return 0; }
+    let bytes_per_line = vesa_pitch * line_height;
+    let total_bytes = vesa_pitch * vesa_height;
+    // Copy rows up
+    let mut dst = vesa_fb_addr;
+    let mut src = vesa_fb_addr + bytes_per_line;
+    let copy_bytes = total_bytes - bytes_per_line;
+    mem_copy(dst, src, copy_bytes);
+    // Clear bottom line
+    mem_set(vesa_fb_addr + copy_bytes, bg_color % 256, bytes_per_line);
+    return 1;
+}
+
+// Put pixel at (x, y) with color (32-bit ARGB)
+fn vesa_putpixel(x, y, color) {
+    if x < 0 { return 0; } if x >= vesa_width { return 0; }
+    if y < 0 { return 0; } if y >= vesa_height { return 0; }
+    let off = y * vesa_pitch + x * (vesa_bpp / 8);
+    mem_write_u32(vesa_fb_addr + off, color);
+    return 0;
+}
+
+// Fill rectangle
+fn vesa_fill_rect(x, y, w, h, color) {
+    let mut row = y;
+    while row < y + h {
+        if row >= 0 {
+            if row < vesa_height {
+                let mut col = x;
+                while col < x + w {
+                    if col >= 0 {
+                        if col < vesa_width {
+                            let off = row * vesa_pitch + col * (vesa_bpp / 8);
+                            mem_write_u32(vesa_fb_addr + off, color);
+                        }
+                    }
+                    col = col + 1;
+                }
+            }
+        }
+        row = row + 1;
+    }
+    return 0;
+}
+
+// Clear screen with color
+fn vesa_clear(color) {
+    vesa_fill_rect(0, 0, vesa_width, vesa_height, color);
+    return 0;
+}
+
+// Draw horizontal line
+fn vesa_hline(x, y, w, color) {
+    vesa_fill_rect(x, y, w, 1, color);
+    return 0;
+}
+
+// Draw vertical line
+fn vesa_vline(x, y, h, color) {
+    vesa_fill_rect(x, y, 1, h, color);
+    return 0;
+}
+
+// Draw rectangle outline
+fn vesa_rect(x, y, w, h, color) {
+    vesa_hline(x, y, w, color);
+    vesa_hline(x, y + h - 1, w, color);
+    vesa_vline(x, y, h, color);
+    vesa_vline(x + w - 1, y, h, color);
+    return 0;
+}
+
+// Draw 8x8 bitmap glyph at (x, y) from a font table
+// glyph: array of 8 bytes, each byte = 8 pixels
+fn vesa_draw_glyph(x, y, glyph, fg, bg) {
+    let mut row = 0;
+    while row < 8 {
+        let bits = glyph[row];
+        let mut col = 0;
+        while col < 8 {
+            let mut bit = bits;
+            let mut s = 7 - col;
+            while s > 0 { bit = bit / 2; s = s - 1; }
+            if bit % 2 == 1 {
+                vesa_putpixel(x + col, y + row, fg);
+            } else {
+                if bg != 0 { vesa_putpixel(x + col, y + row, bg); }
+            }
+            col = col + 1;
+        }
+        row = row + 1;
+    }
+    return 0;
+}
+
+// Color helpers (32-bit ARGB)
+fn rgb(r, g, b) {
+    return 255 * 16777216 + r * 65536 + g * 256 + b;
+}
+
+let VESA_BLACK  = 4278190080;  // 0xFF000000
+let VESA_WHITE  = 4294967295;  // 0xFFFFFFFF
+let VESA_RED    = 4294901760;  // 0xFFFF0000
+let VESA_GREEN  = 4278255360;  // 0xFF00FF00
+let VESA_BLUE   = 4278190335;  // 0xFF0000FF
+let VESA_GRAY   = 4286611584;  // 0xFF808080
+
+print("vesa.hl loaded");
+print("VESA: " + to_string(vesa_width) + "x" + to_string(vesa_height) + "x" + to_string(vesa_bpp) + " (enabled=" + to_string(vesa_enabled) + ")");

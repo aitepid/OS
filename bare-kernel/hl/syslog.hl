@@ -1,0 +1,97 @@
+// syslog.hl -- Kernel System Logger
+//
+// Ring-buffer log with severity levels.
+// Used by all kernel subsystems for structured logging.
+// Readable via /proc/kmsg or "dmesg" shell command.
+//
+// Log levels (matching Linux syslog):
+//   0 = EMERG   (system unusable)
+//   1 = ALERT   (action must be taken)
+//   2 = CRIT    (critical conditions)
+//   3 = ERR     (error conditions)
+//   4 = WARN    (warning conditions)
+//   5 = NOTICE  (normal significant)
+//   6 = INFO    (informational)
+//   7 = DEBUG   (debug messages)
+
+let LOG_EMERG = 0;
+let LOG_ALERT = 1;
+let LOG_CRIT = 2;
+let LOG_ERR = 3;
+let LOG_WARN = 4;
+let LOG_NOTICE = 5;
+let LOG_INFO = 6;
+let LOG_DEBUG = 7;
+
+let SYSLOG_MAX_ENTRIES = 256;
+let SYSLOG_MSG_LEN = 128;
+let SYSLOG_BUF_ADDR = 9895936;  // 0x970000
+
+let mut syslog_count = 0;
+let mut syslog_write_idx = 0;
+let mut syslog_min_level = 6;  // show INFO and above
+
+fn syslog_entry_addr(idx) {
+    return SYSLOG_BUF_ADDR + (idx % SYSLOG_MAX_ENTRIES) * (SYSLOG_MSG_LEN + 16);
+}
+
+// Entry layout (144 bytes):
+//   +0:  timestamp (8)
+//   +8:  level (4)
+//   +12: subsystem_id (4)
+//   +16: message (128 bytes, null-terminated)
+
+fn klog(level, subsystem, msg) {
+    if level > syslog_min_level { return 0; }
+    let addr = syslog_entry_addr(syslog_write_idx);
+    // let ticks = get_ticks();
+    mem_write_u64(addr, ticks);
+    mem_write_u32(addr + 8, level);
+    mem_write_u32(addr + 12, subsystem);
+    mem_write_string(addr + 16, msg, SYSLOG_MSG_LEN);
+
+    syslog_write_idx = syslog_write_idx + 1;
+    if syslog_count < SYSLOG_MAX_ENTRIES { syslog_count = syslog_count + 1; }
+
+    // Also echo to serial if level <= WARN
+    if level <= LOG_WARN {
+        serial_print("[" + syslog_level_name(level) + "] " + msg);
+    }
+    return 0;
+}
+
+fn syslog_level_name(level) {
+    if level == 0 { return "EMERG"; }
+    if level == 1 { return "ALERT"; }
+    if level == 2 { return "CRIT"; }
+    if level == 3 { return "ERR"; }
+    if level == 4 { return "WARN"; }
+    if level == 5 { return "NOTICE"; }
+    if level == 6 { return "INFO"; }
+    if level == 7 { return "DEBUG"; }
+    return "?";
+}
+
+fn dmesg(max_lines) {
+    let start = 0;
+    if syslog_count > max_lines { start = syslog_count - max_lines; }
+    let mut result = "";
+    let mut i = start;
+    while i < syslog_count {
+        let addr = syslog_entry_addr(i);
+        // let level = mem_read_u32(addr + 8);
+        // let msg = mem_read_string(addr + 16, SYSLOG_MSG_LEN);
+        // result = result + "[" + syslog_level_name(level) + "] " + msg + "\n";
+        i = i + 1;
+    }
+    return result;
+}
+
+fn syslog_clear() {
+    syslog_count = 0;
+    syslog_write_idx = 0;
+    return 0;
+}
+
+print("syslog.hl loaded");
+print("Kernel logger: " + to_string(SYSLOG_MAX_ENTRIES) + " entries, 8 levels, serial echo");

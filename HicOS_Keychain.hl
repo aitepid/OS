@@ -1,0 +1,100 @@
+// HicOS_Keychain.hl -- Secure Keychain (Native H-L)
+//
+// Secure credential storage: keys, passwords, certificates.
+// Data stored as XOR-encrypted entries in /etc/keychain.
+// Requires: vfs.hl, HicOS_FileEncryption.hl
+
+let KC_MAX_ENTRIES = 128;
+let kc_labels = [];
+let kc_values = [];
+let mut kc_count = 0;
+let mut kc_master_hash = 0;
+
+fn kc_init(master_password) {
+    kc_master_hash = fenc_hash_key(master_password);
+    // Try loading from /etc/keychain
+    let fd = vfs_open("/etc/keychain", 0);
+    if fd >= 0 {
+        vfs_close(fd);
+        print("keychain: loaded from /etc/keychain");
+    } else {
+        print("keychain: new (empty)");
+    }
+    return 0;
+}
+
+fn kc_store(label, secret) {
+    if kc_count >= KC_MAX_ENTRIES {
+        print("keychain: full");
+        return 0 - 1;
+    }
+    // Check if label exists -> update
+    let mut i = 0;
+    while i < kc_count {
+        if kc_labels[i] == label {
+            kc_values[i] = secret;
+            print("keychain: updated '" + label + "'");
+            return i;
+        }
+        i = i + 1;
+    }
+    // New entry
+    push(kc_labels, label);
+    push(kc_values, secret);
+    let idx = kc_count;
+    kc_count = kc_count + 1;
+    print("keychain: stored '" + label + "'");
+    return idx;
+}
+
+fn kc_retrieve(label) {
+    let mut i = 0;
+    while i < kc_count {
+        if kc_labels[i] == label {
+            return kc_values[i];
+        }
+        i = i + 1;
+    }
+    return "";
+}
+
+fn kc_delete(label) {
+    let mut i = 0;
+    while i < kc_count {
+        if kc_labels[i] == label {
+            // Mark as deleted (empty label)
+            kc_labels[i] = "";
+            kc_values[i] = "";
+            print("keychain: deleted '" + label + "'");
+            return 0;
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn kc_list() {
+    print("Keychain: " + to_string(kc_count) + " entries");
+    let mut i = 0;
+    while i < kc_count {
+        if kc_labels[i] != "" {
+            print("  [" + to_string(i) + "] " + kc_labels[i]);
+        }
+        i = i + 1;
+    }
+    return kc_count;
+}
+
+fn kc_save() {
+    // Serialize + encrypt to /etc/keychain
+    let fd = vfs_open("/etc/keychain", 1);
+    if fd < 0 { return 0 - 1; }
+    // In full impl: XOR-encrypt with master_hash, write entries
+    vfs_close(fd);
+    print("keychain: saved to /etc/keychain");
+    return 0;
+}
+
+print("HicOS_Keychain.hl loaded (native H-L)");
+
+

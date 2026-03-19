@@ -1,0 +1,159 @@
+// netfilter.hl -- Packet Filtering / Firewall
+//
+// Stateless packet filter with chain-based rule matching.
+// Equivalent to Linux iptables/nftables at a basic level.
+//
+// Chains: INPUT, OUTPUT, FORWARD
+// Actions: ACCEPT=1, DROP=2, REJECT=3, LOG=4
+//
+// Rule: [chain, proto, src_ip, src_mask, dst_ip, dst_mask,
+//        src_port_min, src_port_max, dst_port_min, dst_port_max, action]
+//
+// Matching: first matching rule wins; default policy per chain.
+
+let NF_CHAIN_INPUT = 0;
+let NF_CHAIN_OUTPUT = 1;
+let NF_CHAIN_FORWARD = 2;
+
+let NF_ACCEPT = 1;
+let NF_DROP = 2;
+let NF_REJECT = 3;
+let NF_LOG = 4;
+
+let NF_PROTO_ANY = 0;
+let NF_PROTO_TCP = 6;
+let NF_PROTO_UDP = 17;
+let NF_PROTO_ICMP = 1;
+
+let NF_MAX_RULES = 64;
+let mut nf_rule_count = 0;
+
+// Default policies
+let nf_default_policy = [1, 1, 2]; // INPUT=ACCEPT, OUTPUT=ACCEPT, FORWARD=DROP
+
+// Rule table (flat arrays for H-L compatibility)
+let nf_chain = [];
+let nf_proto = [];
+let nf_src_ip = [];
+let nf_src_mask = [];
+let nf_dst_ip = [];
+let nf_dst_mask = [];
+let nf_sport_min = [];
+let nf_sport_max = [];
+let nf_dport_min = [];
+let nf_dport_max = [];
+let nf_action = [];
+let nf_active = [];
+
+// Counters
+let nf_match_count = [];
+let nf_byte_count = [];
+
+fn netfilter_init() {
+    let mut i = 0;
+    while i < NF_MAX_RULES {
+        push(nf_chain, 0);
+        push(nf_proto, 0);
+        push(nf_src_ip, 0);
+        push(nf_src_mask, 0);
+        push(nf_dst_ip, 0);
+        push(nf_dst_mask, 0);
+        push(nf_sport_min, 0);
+        push(nf_sport_max, 65535);
+        push(nf_dport_min, 0);
+        push(nf_dport_max, 65535);
+        push(nf_action, 1);
+        push(nf_active, 0);
+        push(nf_match_count, 0);
+        push(nf_byte_count, 0);
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn nf_add_rule(chain, proto, src_ip, src_mask, dst_ip, dst_mask,
+               sport_min, sport_max, dport_min, dport_max, action) {
+    if nf_rule_count >= NF_MAX_RULES { return 0 - 1; }
+    let idx = nf_rule_count;
+    nf_chain[idx] = chain;
+    nf_proto[idx] = proto;
+    nf_src_ip[idx] = src_ip;
+    nf_src_mask[idx] = src_mask;
+    nf_dst_ip[idx] = dst_ip;
+    nf_dst_mask[idx] = dst_mask;
+    nf_sport_min[idx] = sport_min;
+    nf_sport_max[idx] = sport_max;
+    nf_dport_min[idx] = dport_min;
+    nf_dport_max[idx] = dport_max;
+    nf_action[idx] = action;
+    nf_active[idx] = 1;
+    nf_rule_count = nf_rule_count + 1;
+    return idx;
+}
+
+fn nf_del_rule(idx) {
+    if idx < 0 { return 0 - 1; }
+    if idx >= NF_MAX_RULES { return 0 - 1; }
+    nf_active[idx] = 0;
+    return 0;
+}
+
+fn nf_set_policy(chain, action) {
+    if chain < 0 { return 0; }
+    if chain > 2 { return 0; }
+    nf_default_policy[chain] = action;
+    return 0;
+}
+
+fn nf_match(chain, proto, src_ip, dst_ip, src_port, dst_port, pkt_len) {
+    let mut i = 0;
+    while i < nf_rule_count {
+        if nf_active[i] == 1 {
+            if nf_chain[i] == chain {
+                // Protocol match (0 = any)
+                if nf_proto[i] == NF_PROTO_ANY { }
+                else { if nf_proto[i] != proto { i = i + 1; continue; } }
+                // Source IP match (with mask)
+                if nf_src_mask[i] != 0 {
+                    if (src_ip & nf_src_mask[i]) != (nf_src_ip[i] & nf_src_mask[i]) {
+                        i = i + 1; continue;
+                    }
+                }
+                // Dest IP match
+                if nf_dst_mask[i] != 0 {
+                    if (dst_ip & nf_dst_mask[i]) != (nf_dst_ip[i] & nf_dst_mask[i]) {
+                        i = i + 1; continue;
+                    }
+                }
+                // Port range match
+                if src_port < nf_sport_min[i] { i = i + 1; continue; }
+                if src_port > nf_sport_max[i] { i = i + 1; continue; }
+                if dst_port < nf_dport_min[i] { i = i + 1; continue; }
+                if dst_port > nf_dport_max[i] { i = i + 1; continue; }
+
+                // Match found
+                nf_match_count[i] = nf_match_count[i] + 1;
+                nf_byte_count[i] = nf_byte_count[i] + pkt_len;
+
+                if nf_action[i] == NF_LOG {
+                    // klog(LOG_INFO, 0, "netfilter: LOG rule " + to_string(i));
+                    i = i + 1;
+                    continue; // LOG doesn't terminate, continue matching
+                }
+                return nf_action[i];
+            }
+        }
+        i = i + 1;
+    }
+    // No rule matched: return default policy
+    return nf_default_policy[chain];
+}
+
+fn nf_status() {
+    return to_string(nf_rule_count) + "/" + to_string(NF_MAX_RULES) + " rules, policies: I=" +
+           to_string(nf_default_policy[0]) + " O=" + to_string(nf_default_policy[1]) +
+           " F=" + to_string(nf_default_policy[2]);
+}
+
+print("netfilter.hl loaded");
+print("Firewall: " + to_string(NF_MAX_RULES) + " rules, INPUT/OUTPUT/FORWARD chains, counters");

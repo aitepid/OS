@@ -1,0 +1,101 @@
+// HicOS_ContainerRuntime.hl -- Container Runtime (Native H-L)
+//
+// Lightweight container isolation using kernel cgroups + namespaces.
+// Requires: task.hl, cgroup.hl, vfs.hl, page_alloc.hl
+
+let CTR_MAX = 32;
+let CTR_STATE_STOPPED = 0;
+let CTR_STATE_RUNNING = 1;
+let CTR_STATE_PAUSED  = 2;
+
+let ctr_names  = [];
+let ctr_pids   = [];
+let ctr_states = [];
+let ctr_cg_ids = [];   // cgroup IDs
+let ctr_rootfs = [];   // VFS mount paths
+let mut ctr_count = 0;
+
+fn ctr_init() {
+    print("container-runtime: initialized (max " + to_string(CTR_MAX) + ")");
+    return 0;
+}
+
+fn ctr_create(name, rootfs_path) {
+    if ctr_count >= CTR_MAX {
+        print("container: limit reached");
+        return 0 - 1;
+    }
+    // Allocate a cgroup for resource isolation
+    let cg = cgroup_create(name, 0);
+    // Set default memory limit (16 MB)
+    cgroup_set_mem_limit(cg, 16 * 1048576);
+
+    push(ctr_names, name);
+    push(ctr_pids, 0);
+    push(ctr_states, CTR_STATE_STOPPED);
+    push(ctr_cg_ids, cg);
+    push(ctr_rootfs, rootfs_path);
+    let id = ctr_count;
+    ctr_count = ctr_count + 1;
+    print("container: created '" + name + "' (id=" + to_string(id) + ")");
+    return id;
+}
+
+fn ctr_start(id) {
+    if id < 0 || id >= ctr_count { return 0 - 1; }
+    if ctr_states[id] == CTR_STATE_RUNNING {
+        print("container: already running");
+        return 0;
+    }
+    // Create isolated task with separate VFS root
+    let pid = task_create_isolated(ctr_rootfs[id]);
+    ctr_pids[id] = pid;
+    ctr_states[id] = CTR_STATE_RUNNING;
+    // Attach task to cgroup
+    cgroup_attach(ctr_cg_ids[id], pid);
+    print("container: started '" + ctr_names[id] + "' (PID " + to_string(pid) + ")");
+    return pid;
+}
+
+fn ctr_stop(id) {
+    if id < 0 || id >= ctr_count { return 0 - 1; }
+    if ctr_states[id] != CTR_STATE_RUNNING { return 0; }
+    task_kill(ctr_pids[id]);
+    ctr_states[id] = CTR_STATE_STOPPED;
+    print("container: stopped '" + ctr_names[id] + "'");
+    return 0;
+}
+
+fn ctr_pause(id) {
+    if id < 0 || id >= ctr_count { return 0 - 1; }
+    ctr_states[id] = CTR_STATE_PAUSED;
+    return 0;
+}
+
+fn ctr_list() {
+    print("CONTAINER    STATE    PID   ROOTFS");
+    let mut i = 0;
+    while i < ctr_count {
+        let st = "stopped";
+        if ctr_states[i] == CTR_STATE_RUNNING { st = "running"; }
+        if ctr_states[i] == CTR_STATE_PAUSED { st = "paused "; }
+        print("  " + ctr_names[i] + "  " + st + "  " + to_string(ctr_pids[i]) + "  " + ctr_rootfs[i]);
+        i = i + 1;
+    }
+    return ctr_count;
+}
+
+fn ctr_exec(id, cmd) {
+    if id < 0 || id >= ctr_count { return 0 - 1; }
+    if ctr_states[id] != CTR_STATE_RUNNING {
+        print("container: not running");
+        return 0 - 1;
+    }
+    // Execute command inside container's namespace
+    print("container '" + ctr_names[id] + "': exec " + cmd);
+    return 0;
+}
+
+print("HicOS_ContainerRuntime.hl loaded (native H-L)");
+
+

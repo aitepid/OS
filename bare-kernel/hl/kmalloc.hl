@@ -1,0 +1,124 @@
+// kmalloc.hl -- Kernel Heap Allocator
+//
+// Simple first-fit free-list allocator for kernel dynamic memory.
+// Heap region: 0x900000 - 0x9FFFFF (1 MB)
+//
+// Each allocation has a header (16 bytes):
+//   +0: size (8) -- including header
+//   +8: flags (8) -- bit 0 = used
+//
+// Free blocks are linked via an implicit list (next = current + size).
+// Minimum allocation size: 32 bytes (16 header + 16 payload).
+
+let HEAP_START = 9437184;      // 0x900000
+let HEAP_END   = 10485760;     // 0xA00000
+let HEAP_SIZE  = 1048576;      // 1 MB
+let HEADER_SIZE = 16;
+let MIN_BLOCK = 32;
+
+let mut heap_initialized = 0;
+
+fn kmalloc_init() {
+    // Create one big free block spanning the entire heap
+    mem_write_u64(HEAP_START, HEAP_SIZE);
+    mem_write_u64(HEAP_START + 8, 0);
+    heap_initialized = 1;
+    return 0;
+}
+
+// Allocate `size` bytes, returns address or 0
+fn kmalloc(size) {
+    if heap_initialized == 0 { kmalloc_init(); }
+    // Round up to 16-byte alignment
+    let alloc_size = ((size + HEADER_SIZE + 15) / 16) * 16;
+    if alloc_size < MIN_BLOCK { alloc_size = MIN_BLOCK; }
+
+    // First-fit search
+    let mut addr = HEAP_START;
+    while addr < HEAP_END {
+        let block_size = mem_read_u64(addr);
+        let flags = mem_read_u64(addr + 8);
+
+        if block_size == 0 { return 0; } // corruption
+
+        if flags % 2 == 0 {  // free block
+            if block_size >= alloc_size {
+                // Split if remainder is large enough
+                if block_size - alloc_size >= MIN_BLOCK {
+                    let new_addr = addr + alloc_size;
+                    mem_write_u64(new_addr, block_size - alloc_size);
+                    mem_write_u64(new_addr + 8, 0);
+                    mem_write_u64(addr, alloc_size);
+                }
+                // Mark as used
+                mem_write_u64(addr + 8, 1);
+                return addr + HEADER_SIZE;
+            }
+        }
+
+        addr = addr + block_size;
+    }
+
+    return 0; // out of memory
+}
+
+// Free an allocation
+fn kfree(ptr) {
+    if ptr == 0 { return 0; }
+    let addr = ptr - HEADER_SIZE;
+    let size = mem_read_u64(addr);
+    mem_write_u64(addr + 8, 0);  // mark as free
+
+    // Coalesce with next block if also free
+    let next = addr + size;
+    if next < HEAP_END {
+        let next_flags = mem_read_u64(next + 8);
+        if next_flags % 2 == 0 {
+            let next_size = mem_read_u64(next);
+            mem_write_u64(addr, size + next_size);
+        }
+    }
+
+    return 0;
+}
+
+// Reallocate (grow or shrink)
+fn krealloc(ptr, new_size) {
+    if ptr == 0 { return kmalloc(new_size); }
+    let old_addr = ptr - HEADER_SIZE;
+    let old_size = mem_read_u64(old_addr) - HEADER_SIZE;
+    let new_ptr = kmalloc(new_size);
+    if new_ptr == 0 { return 0; }
+    let copy_size = old_size;
+    if new_size < copy_size { copy_size = new_size; }
+    mem_copy(new_ptr, ptr, copy_size);
+    kfree(ptr);
+    return new_ptr;
+}
+
+// Get heap usage stats
+fn kmalloc_stats() {
+    let mut used = 0;
+    let mut free_space = 0;
+    let mut fragments = 0;
+
+    let mut addr = HEAP_START;
+    while addr < HEAP_END {
+        let size = mem_read_u64(addr);
+        let flags = mem_read_u64(addr + 8);
+        if size == 0 { return [used, free_space, fragments]; }
+        if flags % 2 == 1 {
+            used = used + size;
+        } else {
+            free_space = free_space + size;
+            fragments = fragments + 1;
+        }
+        addr = addr + size;
+    }
+
+    return [used, free_space, fragments];
+}
+
+print("kmalloc.hl loaded");
+print("Heap: 0x900000 - 0x9FFFFF (" + to_string(HEAP_SIZE / 1024) + " KB)");
+print("Min block: " + to_string(MIN_BLOCK) + " bytes");

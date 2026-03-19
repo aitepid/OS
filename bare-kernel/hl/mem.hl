@@ -1,0 +1,369 @@
+// mem.hl -- Memory and I/O Port Intrinsics
+//
+// Fundamental read/write primitives for bare-metal kernel code.
+// These map directly to x86_64 MOV and IN/OUT instructions.
+// The native code generator (codegen.hl) emits inline machine code
+// for each intrinsic; in the interpreter they operate on a flat
+// simulated address space (array-backed).
+//
+// ALL kernel modules that touch hardware or memory-mapped structures
+// must use these functions instead of ad-hoc comments.
+//
+// == Memory intrinsics ==
+//   mem_read_u8(addr)            -> u8
+//   mem_read_u16(addr)           -> u16
+//   mem_read_u32(addr)           -> u32
+//   mem_read_u64(addr)           -> u64
+//   mem_write_u8(addr, val)
+//   mem_write_u16(addr, val)
+//   mem_write_u32(addr, val)
+//   mem_write_u64(addr, val)
+//
+// == I/O port intrinsics ==
+//   port_in_u8(port)             -> u8
+//   port_in_u16(port)            -> u16
+//   port_in_u32(port)            -> u32
+//   port_out_u8(port, val)
+//   port_out_u16(port, val)
+//   port_out_u32(port, val)
+//
+// == Bulk operations ==
+//   mem_set(addr, val, count)    -- memset
+//   mem_copy(dst, src, count)    -- memcpy
+//
+// Native compilation:
+//   mem_read_u64(addr)  -> mov rax, [rdi]
+//   mem_write_u64(addr, val) -> mov [rdi], rsi
+//   port_in_u8(port)    -> mov dx, di; in al, dx; movzx rax, al
+//   port_out_u8(port, v)-> mov dx, di; mov al, sil; out dx, al
+
+// ============================================================
+// Interpreter-mode backing store
+// ============================================================
+// When running under hl-bootstrap interpreter, memory is simulated
+// as a large array.  Each index = one byte.  The native kernel
+// bypasses this entirely (codegen emits raw MOV/IN/OUT).
+
+let MEM_SIM_SIZE = 16777216;  // 16 MB simulated RAM
+let mut _mem = [];             // allocated lazily on first access
+let mut _mem_ready = 0;
+
+fn _mem_ensure() {
+    if _mem_ready == 0 {
+        // Pre-fill with zeroes (only first use)
+        let mut i = 0;
+        while i < MEM_SIM_SIZE {
+            push(_mem, 0);
+            i = i + 1;
+        }
+        _mem_ready = 1;
+    }
+    return 0;
+}
+
+// ============================================================
+// Byte-level memory access
+// ============================================================
+
+fn mem_read_u8(addr) {
+    _mem_ensure();
+    if addr < 0 { return 0; }
+    if addr >= MEM_SIM_SIZE { return 0; }
+    return _mem[addr];
+}
+
+fn mem_write_u8(addr, val) {
+    _mem_ensure();
+    if addr < 0 { return 0; }
+    if addr >= MEM_SIM_SIZE { return 0; }
+    _mem[addr] = val % 256;
+    return 0;
+}
+
+// Alias used by page_alloc and others
+fn mem_read_byte(addr)      { return mem_read_u8(addr); }
+fn mem_write_byte(addr, val){ return mem_write_u8(addr, val); }
+
+// ============================================================
+// 16-bit memory access (little-endian)
+// ============================================================
+
+fn mem_read_u16(addr) {
+    let lo = mem_read_u8(addr);
+    let hi = mem_read_u8(addr + 1);
+    return lo + hi * 256;
+}
+
+fn mem_write_u16(addr, val) {
+    mem_write_u8(addr, val % 256);
+    mem_write_u8(addr + 1, (val / 256) % 256);
+    return 0;
+}
+
+// ============================================================
+// 32-bit memory access (little-endian)
+// ============================================================
+
+fn mem_read_u32(addr) {
+    let lo = mem_read_u16(addr);
+    let hi = mem_read_u16(addr + 2);
+    return lo + hi * 65536;
+}
+
+fn mem_write_u32(addr, val) {
+    mem_write_u16(addr, val % 65536);
+    mem_write_u16(addr + 2, (val / 65536) % 65536);
+    return 0;
+}
+
+// ============================================================
+// 64-bit memory access (little-endian)
+// ============================================================
+
+fn mem_read_u64(addr) {
+    let lo = mem_read_u32(addr);
+    let hi = mem_read_u32(addr + 4);
+    return lo + hi * 4294967296;
+}
+
+fn mem_write_u64(addr, val) {
+    mem_write_u32(addr, val % 4294967296);
+    mem_write_u32(addr + 4, (val / 4294967296) % 4294967296);
+    return 0;
+}
+
+// ============================================================
+// I/O port access (interpreter stubs; native = IN/OUT)
+// ============================================================
+// In interpreter mode these are no-ops that return 0.
+// The native codegen replaces them with real IN/OUT instructions.
+
+fn port_in_u8(port) {
+    // Native: mov dx, di; in al, dx; movzx rax, al; ret
+    return 0;
+}
+
+fn port_in_u16(port) {
+    // Native: mov dx, di; in ax, dx; movzx rax, ax; ret
+    return 0;
+}
+
+fn port_in_u32(port) {
+    // Native: mov dx, di; in eax, dx; ret
+    return 0;
+}
+
+fn port_out_u8(port, val) {
+    // Native: mov dx, di; mov al, sil; out dx, al; ret
+    return 0;
+}
+
+fn port_out_u16(port, val) {
+    // Native: mov dx, di; mov ax, si; out dx, ax; ret
+    return 0;
+}
+
+fn port_out_u32(port, val) {
+    // Native: mov dx, di; mov eax, esi; out dx, eax; ret
+    return 0;
+}
+
+// ============================================================
+// Bulk operations
+// ============================================================
+
+fn mem_set(addr, val, count) {
+    let mut i = 0;
+    while i < count {
+        mem_write_u8(addr + i, val);
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn mem_copy(dst, src, count) {
+    let mut i = 0;
+    while i < count {
+        mem_write_u8(dst + i, mem_read_u8(src + i));
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn mem_zero(addr, count) {
+    return mem_set(addr, 0, count);
+}
+
+// ============================================================
+// Signed 16-bit memory access (for audio PCM)
+// ============================================================
+
+fn mem_read_i16(addr) {
+    let val = mem_read_u16(addr);
+    if val >= 32768 { return val - 65536; }
+    return val;
+}
+
+fn mem_write_i16(addr, val) {
+    let mut uval = val;
+    if uval < 0 { uval = uval + 65536; }
+    mem_write_u16(addr, uval % 65536);
+    return 0;
+}
+
+// ============================================================
+// String read/write (for syslog, etc.)
+// ============================================================
+
+fn mem_write_string(addr, s) {
+    let mut i = 0;
+    while i < len(s) {
+        mem_write_u8(addr + i, char_code_at(s, i));
+        i = i + 1;
+    }
+    mem_write_u8(addr + i, 0); // null terminator
+    return i;
+}
+
+fn mem_read_string(addr, max_len) {
+    let mut result = "";
+    let mut i = 0;
+    while i < max_len {
+        let b = mem_read_u8(addr + i);
+        if b == 0 { return result; }
+        result = result + str_from_code(b);
+        i = i + 1;
+    }
+    return result;
+}
+
+// ============================================================
+// Numeric clamping (used by mixer, audio)
+// ============================================================
+
+fn clamp(val, lo, hi) {
+    if val < lo { return lo; }
+    if val > hi { return hi; }
+    return val;
+}
+
+fn char_code_at(s, i) {
+    let c = char_at(s, i);
+    if c == "" { return 0; }
+    return ord(c);
+}
+
+// ============================================================
+// Self-test
+// ============================================================
+
+_mem_ensure();
+mem_write_u8(0, 42);
+if mem_read_u8(0) == 42 { print("mem: u8  OK"); } else { print("mem: u8  FAIL"); }
+
+mem_write_u16(16, 4660);
+if mem_read_u16(16) == 4660 { print("mem: u16 OK"); } else { print("mem: u16 FAIL"); }
+
+mem_write_u32(32, 305419896);
+if mem_read_u32(32) == 305419896 { print("mem: u32 OK"); } else { print("mem: u32 FAIL"); }
+
+mem_write_u64(64, 1234567890);
+if mem_read_u64(64) == 1234567890 { print("mem: u64 OK"); } else { print("mem: u64 FAIL"); }
+
+mem_set(128, 255, 8);
+if mem_read_u8(128) == 255 { print("mem: set OK"); } else { print("mem: set FAIL"); }
+
+mem_write_u32(256, 12345);
+mem_copy(260, 256, 4);
+if mem_read_u32(260) == 12345 { print("mem: cpy OK"); } else { print("mem: cpy FAIL"); }
+
+print("mem.hl loaded");
+
+// ============================================================
+// E820 Memory Map
+// ============================================================
+// The BIOS E820 memory map is stored at 0x500 by the stage1 bootloader.
+// Format: count (u32) at 0x500, then entries at 0x504
+// Each entry: base(8) length(8) type(4) = 20 bytes
+//   Type 1 = Usable RAM
+//   Type 2 = Reserved
+//   Type 3 = ACPI Reclaimable
+//   Type 4 = ACPI NVS
+//   Type 5 = Bad Memory
+
+let E820_ADDR = 1280;         // 0x500
+let E820_ENTRY_SIZE = 20;
+let E820_TYPE_USABLE = 1;
+let E820_TYPE_RESERVED = 2;
+let E820_TYPE_ACPI = 3;
+let E820_TYPE_NVS = 4;
+let E820_TYPE_BAD = 5;
+
+fn e820_count() {
+    return mem_read_u32(E820_ADDR);
+}
+
+fn e820_entry_base(index) {
+    let off = E820_ADDR + 4 + index * E820_ENTRY_SIZE;
+    return mem_read_u64(off);
+}
+
+fn e820_entry_length(index) {
+    let off = E820_ADDR + 4 + index * E820_ENTRY_SIZE + 8;
+    return mem_read_u64(off);
+}
+
+fn e820_entry_type(index) {
+    let off = E820_ADDR + 4 + index * E820_ENTRY_SIZE + 16;
+    return mem_read_u32(off);
+}
+
+fn e820_total_usable() {
+    let count = e820_count();
+    let mut total = 0;
+    let mut i = 0;
+    while i < count {
+        if e820_entry_type(i) == E820_TYPE_USABLE {
+            total = total + e820_entry_length(i);
+        }
+        i = i + 1;
+    }
+    return total;
+}
+
+fn e820_find_largest_usable() {
+    let count = e820_count();
+    let mut best_base = 0;
+    let mut best_len = 0;
+    let mut i = 0;
+    while i < count {
+        if e820_entry_type(i) == E820_TYPE_USABLE {
+            let entry_len = e820_entry_length(i);
+            if entry_len > best_len {
+                best_base = e820_entry_base(i);
+                best_len = entry_len;
+            }
+        }
+        i = i + 1;
+    }
+    return [best_base, best_len];
+}
+
+fn e820_dump() {
+    let count = e820_count();
+    print("E820 Memory Map (" + to_string(count) + " entries):");
+    let type_names = ["", "Usable", "Reserved", "ACPI", "NVS", "Bad"];
+    let mut i = 0;
+    while i < count {
+        let base = e820_entry_base(i);
+        let length = e820_entry_length(i);
+        let etype = e820_entry_type(i);
+        let mut tname = "Unknown";
+        if etype >= 1 && etype <= 5 { tname = type_names[etype]; }
+        print("  [" + to_string(i) + "] base=0x" + format_hex(base, 8) + " len=0x" + format_hex(length, 8) + " " + tname);
+        i = i + 1;
+    }
+    let total = e820_total_usable();
+    print("  Total usable: " + to_string(total / 1048576) + " MB");
+    return count;
+}

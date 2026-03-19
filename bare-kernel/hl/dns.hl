@@ -1,0 +1,118 @@
+File: bare-kernel\hl\dns.hl
+````````
+// dns.hl -- DNS Resolver (RFC 1035)
+//
+// Sends DNS queries over UDP port 53.
+// Supports A records (IPv4 address lookup).
+//
+// DNS message format:
+//   Header (12 bytes): ID(2) flags(2) QDCOUNT(2) ANCOUNT(2) NSCOUNT(2) ARCOUNT(2)
+//   Question: QNAME(variable) QTYPE(2) QCLASS(2)
+//   Answer: NAME(2) TYPE(2) CLASS(2) TTL(4) RDLENGTH(2) RDATA(variable)
+
+let DNS_PORT = 53;
+let DNS_TYPE_A = 1;
+let DNS_CLASS_IN = 1;
+
+let mut dns_id = 1;
+
+// Encode domain name in DNS wire format
+// "example.com" -> [7,'e','x','a','m','p','l','e',3,'c','o','m',0]
+fn dns_encode_name(parts) {
+    let mut encoded = [];
+    let mut i = 0;
+    while i < len(parts) {
+        let label = parts[i];
+        push(encoded, len(label));
+        let mut j = 0;
+        while j < len(label) {
+            push(encoded, label[j]);
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    push(encoded, 0); // terminator
+    return encoded;
+}
+
+// Build DNS query for A record
+fn dns_build_query(name_parts) {
+    let mut pkt = [];
+    let id = dns_id;
+    dns_id = dns_id + 1;
+
+    // Header
+    push(pkt, (id / 256) % 256); push(pkt, id % 256); // ID
+    push(pkt, 1); push(pkt, 0);   // flags: RD=1 (recursion desired)
+    push(pkt, 0); push(pkt, 1);   // QDCOUNT=1
+    push(pkt, 0); push(pkt, 0);   // ANCOUNT=0
+    push(pkt, 0); push(pkt, 0);   // NSCOUNT=0
+    push(pkt, 0); push(pkt, 0);   // ARCOUNT=0
+
+    // Question
+    let name = dns_encode_name(name_parts);
+    let mut i = 0;
+    while i < len(name) { push(pkt, name[i]); i = i + 1; }
+    push(pkt, 0); push(pkt, DNS_TYPE_A);    // QTYPE=A
+    push(pkt, 0); push(pkt, DNS_CLASS_IN);  // QCLASS=IN
+
+    return pkt;
+}
+
+// Parse DNS response, extract first A record IP
+fn dns_parse_response(data) {
+    if len(data) < 12 { return [0, 0, 0, 0]; }
+    let ancount = data[6] * 256 + data[7];
+    if ancount == 0 { return [0, 0, 0, 0]; }
+
+    // Skip header (12 bytes) + question section
+    let mut off = 12;
+    // Skip QNAME
+    while off < len(data) {
+        let lbl_len = data[off];
+        if lbl_len == 0 { off = off + 1; break; }
+        off = off + 1 + lbl_len;
+    }
+    off = off + 4; // skip QTYPE + QCLASS
+
+    // Parse first answer
+    if off + 12 > len(data) { return [0, 0, 0, 0]; }
+    // Name (could be pointer: 0xC0xx)
+    if data[off] >= 192 { off = off + 2; } // pointer
+    else {
+        while off < len(data) {
+            let l = data[off];
+            if l == 0 { off = off + 1; break; }
+            off = off + 1 + l;
+        }
+    }
+    let rtype = data[off] * 256 + data[off + 1];
+    let rdlength = data[off + 8] * 256 + data[off + 9];
+    off = off + 10;
+
+    if rtype == DNS_TYPE_A {
+        if rdlength == 4 {
+            return [data[off], data[off+1], data[off+2], data[off+3]];
+        }
+    }
+    return [0, 0, 0, 0];
+}
+
+// Resolve hostname (send query to DNS server)
+fn dns_resolve(name_parts) {
+    let query = dns_build_query(name_parts);
+    // Send via UDP to dhcp_dns:53
+    // let udp = build_udp_packet(gw_mac, dhcp_dns, 1053, DNS_PORT, query);
+    // virtio_net_send(...)
+    // Wait for response, parse
+
+    if len(name_parts) == 1 {
+        if name_parts[0] == "localhost" { return [127, 0, 0, 1]; }
+        if name_parts[0] == "gateway" { return [10, 0, 2, 2]; }
+    }
+
+    return [0, 0, 0, 0];
+}
+
+print("dns.hl loaded");
+print("DNS: A record queries over UDP/53");

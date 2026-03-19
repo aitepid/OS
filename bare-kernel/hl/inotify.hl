@@ -1,0 +1,181 @@
+// inotify.hl -- Filesystem Event Notification
+//
+// Monitors filesystem changes (create, delete, modify, access, move).
+// Linux equivalent: inotify(7)
+//
+// API:
+//   inotify_init()           -> instance fd
+//   inotify_add_watch(fd, path, mask) -> watch descriptor
+//   inotify_rm_watch(fd, wd)
+//   inotify_read(fd)         -> list of events
+//
+// Event mask bits:
+//   IN_ACCESS    = 1    (file read)
+//   IN_MODIFY    = 2    (file written)
+//   IN_CREATE    = 256  (file/dir created in watched dir)
+//   IN_DELETE    = 512  (file/dir deleted)
+//   IN_MOVED_FROM = 64  (source of rename)
+//   IN_MOVED_TO   = 128 (dest of rename)
+//   IN_OPEN      = 32   (file opened)
+//   IN_CLOSE     = 16   (file closed)
+
+let IN_ACCESS = 1;
+let IN_MODIFY = 2;
+let IN_CLOSE = 16;
+let IN_OPEN = 32;
+let IN_MOVED_FROM = 64;
+let IN_MOVED_TO = 128;
+let IN_CREATE = 256;
+let IN_DELETE = 512;
+let IN_ALL = 1023;
+
+let INOTIFY_MAX_INSTANCES = 8;
+let INOTIFY_MAX_WATCHES = 32;
+let INOTIFY_EVENT_QUEUE_SIZE = 64;
+
+let mut inotify_inst_count = 0;
+
+// Instance table
+let inot_active = [];
+
+// Watch table: [instance, path_hash, mask, active]
+let watch_inst = [];
+let watch_path = [];
+let watch_mask = [];
+let watch_active = [];
+let mut watch_count = 0;
+
+// Event queue (ring buffer)
+let evt_wd = [];       // watch descriptor
+let evt_mask = [];     // event type
+let evt_name = [];     // filename
+let mut evt_write = 0;
+let mut evt_read = 0;
+let mut evt_count = 0;
+
+fn inotify_init_subsystem() {
+    let mut i = 0;
+    while i < INOTIFY_MAX_INSTANCES {
+        push(inot_active, 0);
+        i = i + 1;
+    }
+    i = 0;
+    while i < INOTIFY_MAX_WATCHES {
+        push(watch_inst, 0);
+        push(watch_path, "");
+        push(watch_mask, 0);
+        push(watch_active, 0);
+        i = i + 1;
+    }
+    i = 0;
+    while i < INOTIFY_EVENT_QUEUE_SIZE {
+        push(evt_wd, 0);
+        push(evt_mask, 0);
+        push(evt_name, "");
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn sys_inotify_init() {
+    let mut i = 0;
+    while i < INOTIFY_MAX_INSTANCES {
+        if inot_active[i] == 0 {
+            inot_active[i] = 1;
+            inotify_inst_count = inotify_inst_count + 1;
+            return i;
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn sys_inotify_add_watch(inst, path, mask) {
+    if inst < 0 { return 0 - 1; }
+    if inot_active[inst] == 0 { return 0 - 1; }
+    let mut i = 0;
+    while i < INOTIFY_MAX_WATCHES {
+        if watch_active[i] == 0 {
+            watch_inst[i] = inst;
+            watch_path[i] = path;
+            watch_mask[i] = mask;
+            watch_active[i] = 1;
+            watch_count = watch_count + 1;
+            return i;
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn sys_inotify_rm_watch(inst, wd) {
+    if wd < 0 { return 0 - 1; }
+    if wd >= INOTIFY_MAX_WATCHES { return 0 - 1; }
+    if watch_inst[wd] != inst { return 0 - 1; }
+    watch_active[wd] = 0;
+    watch_count = watch_count - 1;
+    return 0;
+}
+
+// Called by VFS on any filesystem operation
+fn inotify_emit(path, event_mask, name) {
+    // Check all watches
+    let mut i = 0;
+    while i < INOTIFY_MAX_WATCHES {
+        if watch_active[i] == 1 {
+            if watch_path[i] == path {
+                if (watch_mask[i] & event_mask) != 0 {
+                    // Queue event
+                    if evt_count < INOTIFY_EVENT_QUEUE_SIZE {
+                        evt_wd[evt_write] = i;
+                        evt_mask[evt_write] = event_mask;
+                        evt_name[evt_write] = name;
+                        evt_write = (evt_write + 1) % INOTIFY_EVENT_QUEUE_SIZE;
+                        evt_count = evt_count + 1;
+                    }
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn sys_inotify_read(inst) {
+    // Return pending events for this instance
+    let mut events = [];
+    let mut scanned = 0;
+    while scanned < evt_count {
+        let idx = (evt_read + scanned) % INOTIFY_EVENT_QUEUE_SIZE;
+        let wd = evt_wd[idx];
+        if watch_inst[wd] == inst {
+            push(events, evt_mask[idx]);
+            push(events, evt_name[idx]);
+        }
+        scanned = scanned + 1;
+    }
+    return events;
+}
+
+fn sys_inotify_close(inst) {
+    if inst < 0 { return 0; }
+    if inst >= INOTIFY_MAX_INSTANCES { return 0; }
+    inot_active[inst] = 0;
+    // Remove all watches for this instance
+    let mut i = 0;
+    while i < INOTIFY_MAX_WATCHES {
+        if watch_active[i] == 1 {
+            if watch_inst[i] == inst {
+                watch_active[i] = 0;
+                watch_count = watch_count - 1;
+            }
+        }
+        i = i + 1;
+    }
+    inotify_inst_count = inotify_inst_count - 1;
+    return 0;
+}
+
+print("inotify.hl loaded");
+print("inotify: " + to_string(INOTIFY_MAX_WATCHES) + " watches, " +
+      to_string(INOTIFY_EVENT_QUEUE_SIZE) + " event queue");

@@ -1,0 +1,118 @@
+// acpi.hl -- ACPI Table Parser (RSDP + RSDT/XSDT)
+//
+// Discovers ACPI tables for hardware enumeration.
+// Searches for RSDP signature in BIOS memory areas.
+//
+// RSDP signature: "RSD PTR " at 16-byte boundaries
+// Search areas: 0x000E0000 - 0x000FFFFF (BIOS ROM)
+//
+// RSDT: array of 32-bit pointers to other ACPI tables
+// XSDT: array of 64-bit pointers (preferred on 64-bit)
+//
+// Key tables:
+//   MADT (APIC) -- processor and I/O APIC info
+//   FADT        -- power management
+//   HPET        -- high-precision timer
+//   MCFG        -- PCIe config space
+
+let RSDP_SIG = [82, 83, 68, 32, 80, 84, 82, 32]; // "RSD PTR "
+
+// Search for RSDP in BIOS memory
+fn acpi_find_rsdp() {
+    let search_start = 917504;   // 0xE0000
+    let search_end = 1048576;    // 0x100000
+    // RSDP signature: "RSD PTR " = [82,83,68,32,80,84,82,32]
+    let sig = [82, 83, 68, 32, 80, 84, 82, 32];
+    let mut addr = search_start;
+    while addr < search_end {
+        // Check 8-byte signature
+        let mut match_ok = 1;
+        let mut i = 0;
+        while i < 8 {
+            if mem_read_u8(addr + i) != sig[i] { match_ok = 0; i = 8; }
+            i = i + 1;
+        }
+        if match_ok == 1 {
+            // Verify checksum (sum of first 20 bytes mod 256 == 0)
+            let mut sum = 0;
+            i = 0;
+            while i < 20 { sum = sum + mem_read_u8(addr + i); i = i + 1; }
+            if sum % 256 == 0 { return addr; }
+        }
+        addr = addr + 16; // RSDP aligned to 16 bytes
+    }
+    return 0;
+}
+
+// Parse RSDP, return [revision, rsdt_addr, xsdt_addr]
+fn acpi_parse_rsdp(rsdp_addr) {
+    let revision = mem_read_u8(rsdp_addr + 15);
+    let rsdt_addr = mem_read_u32(rsdp_addr + 16);
+    let mut xsdt_addr = 0;
+    if revision >= 2 {
+        xsdt_addr = mem_read_u64(rsdp_addr + 24);
+    }
+    return [revision, rsdt_addr, xsdt_addr];
+}
+
+// Parse RSDT/XSDT, return list of table addresses
+fn acpi_parse_rsdt(rsdt_addr) {
+    let mut tables = [];
+    let length = mem_read_u32(rsdt_addr + 4);
+    let num_entries = (length - 36) / 4;
+    let mut i = 0;
+    while i < num_entries {
+        let tbl = mem_read_u32(rsdt_addr + 36 + i * 4);
+        push(tables, tbl);
+        i = i + 1;
+    }
+    return tables;
+}
+
+// Read 4-byte table signature
+fn acpi_table_sig(addr) {
+    return [mem_read_u8(addr), mem_read_u8(addr+1),
+            mem_read_u8(addr+2), mem_read_u8(addr+3)];
+}
+
+// Find a specific table by signature (e.g., "APIC" for MADT)
+fn acpi_find_table(rsdt_addr, sig) {
+    let tables = acpi_parse_rsdt(rsdt_addr);
+    let mut i = 0;
+    while i < len(tables) {
+        let s = acpi_table_sig(tables[i]);
+        if s[0]==sig[0] {
+            if s[1]==sig[1] {
+                if s[2]==sig[2] {
+                    if s[3]==sig[3] {
+                        return tables[i];
+                    }
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Parse MADT (Multiple APIC Description Table)
+// Returns [lapic_addr, ioapic_addr, num_cpus]
+fn acpi_parse_madt(madt_addr) {
+    let lapic_addr = mem_read_u32(madt_addr + 36);
+    let flags = mem_read_u32(madt_addr + 40);
+    let length = mem_read_u32(madt_addr + 4);
+    let mut num_cpus = 0;
+    let mut ioapic_addr = 0;
+    let mut off = 44;
+    while off < length {
+        let entry_type = mem_read_u8(madt_addr + off);
+        let entry_len = mem_read_u8(madt_addr + off + 1);
+        if entry_type == 0 { num_cpus = num_cpus + 1; }
+        if entry_type == 1 { ioapic_addr = mem_read_u32(madt_addr + off + 4); }
+        off = off + entry_len;
+    }
+    return [lapic_addr, ioapic_addr, num_cpus];
+}
+
+print("acpi.hl loaded");
+print("RSDP search: 0xE0000 - 0xFFFFF");

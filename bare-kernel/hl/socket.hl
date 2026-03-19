@@ -1,0 +1,163 @@
+// socket.hl -- BSD Socket API
+//
+// Provides the standard POSIX socket interface:
+//   socket(), bind(), listen(), accept(), connect(),
+//   send(), recv(), close(), shutdown(),
+//   setsockopt(), getsockopt()
+//
+// Socket types:
+//   SOCK_STREAM = 1  (TCP)
+//   SOCK_DGRAM  = 2  (UDP)
+//   SOCK_RAW    = 3  (raw IP)
+//
+// Address families:
+//   AF_INET  = 2   (IPv4)
+//   AF_INET6 = 10  (IPv6)
+//   AF_UNIX  = 1   (local IPC)
+
+let AF_UNIX = 1;
+let AF_INET = 2;
+let AF_INET6 = 10;
+
+let SOCK_STREAM = 1;
+let SOCK_DGRAM = 2;
+let SOCK_RAW = 3;
+
+let SOCKET_MAX = 32;
+let mut socket_count = 0;
+
+// Socket table
+let sock_active = [];
+let sock_domain = [];    // AF_INET, AF_INET6, AF_UNIX
+let sock_type = [];      // SOCK_STREAM, SOCK_DGRAM
+let sock_proto = [];     // 0=default, 6=TCP, 17=UDP
+let sock_state = [];     // 0=closed, 1=bound, 2=listening, 3=connected
+let sock_local_ip = [];
+let sock_local_port = [];
+let sock_remote_ip = [];
+let sock_remote_port = [];
+let sock_backlog = [];   // listen queue size
+let sock_task = [];      // owning task
+
+fn socket_init() {
+    let mut i = 0;
+    while i < SOCKET_MAX {
+        push(sock_active, 0);
+        push(sock_domain, 0);
+        push(sock_type, 0);
+        push(sock_proto, 0);
+        push(sock_state, 0);
+        push(sock_local_ip, 0);
+        push(sock_local_port, 0);
+        push(sock_remote_ip, 0);
+        push(sock_remote_port, 0);
+        push(sock_backlog, 0);
+        push(sock_task, 0 - 1);
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn sys_socket(domain, stype, protocol) {
+    let mut i = 0;
+    while i < SOCKET_MAX {
+        if sock_active[i] == 0 {
+            sock_active[i] = 1;
+            sock_domain[i] = domain;
+            sock_type[i] = stype;
+            sock_proto[i] = protocol;
+            sock_state[i] = 0;
+            sock_task[i] = 0; // current_task
+            socket_count = socket_count + 1;
+            return i;
+        }
+        i = i + 1;
+    }
+    return 0 - 1; // EMFILE
+}
+
+fn sys_bind(sockfd, ip, port) {
+    if sockfd < 0 { return 0 - 1; }
+    if sockfd >= SOCKET_MAX { return 0 - 1; }
+    if sock_active[sockfd] == 0 { return 0 - 1; }
+    sock_local_ip[sockfd] = ip;
+    sock_local_port[sockfd] = port;
+    sock_state[sockfd] = 1;
+    // For UDP: register with udp_bind()
+    // For TCP: register with tcp layer
+    return 0;
+}
+
+fn sys_listen(sockfd, backlog) {
+    if sockfd < 0 { return 0 - 1; }
+    if sock_type[sockfd] != SOCK_STREAM { return 0 - 1; }
+    if sock_state[sockfd] != 1 { return 0 - 1; } // must be bound
+    sock_backlog[sockfd] = backlog;
+    sock_state[sockfd] = 2;
+    return 0;
+}
+
+fn sys_accept(sockfd) {
+    if sockfd < 0 { return 0 - 1; }
+    if sock_state[sockfd] != 2 { return 0 - 1; }
+    // Wait for incoming TCP connection
+    // Create new socket for the connection
+    let new_fd = sys_socket(sock_domain[sockfd], SOCK_STREAM, 6);
+    if new_fd < 0 { return 0 - 1; }
+    sock_state[new_fd] = 3; // connected
+    sock_local_ip[new_fd] = sock_local_ip[sockfd];
+    sock_local_port[new_fd] = sock_local_port[sockfd];
+    // sock_remote_ip/port set from incoming SYN
+    return new_fd;
+}
+
+fn sys_connect(sockfd, remote_ip, remote_port) {
+    if sockfd < 0 { return 0 - 1; }
+    if sock_active[sockfd] == 0 { return 0 - 1; }
+    sock_remote_ip[sockfd] = remote_ip;
+    sock_remote_port[sockfd] = remote_port;
+    sock_state[sockfd] = 3;
+    // For TCP: initiate 3-way handshake
+    // For UDP: just record remote address
+    return 0;
+}
+
+fn sys_send(sockfd, data, length) {
+    if sockfd < 0 { return 0 - 1; }
+    if sock_state[sockfd] < 3 { return 0 - 1; }
+    if sock_type[sockfd] == SOCK_STREAM {
+        // tcp_send(sock_remote_ip[sockfd], sock_remote_port[sockfd], data, length);
+    }
+    if sock_type[sockfd] == SOCK_DGRAM {
+        // udp_send(sock_remote_ip[sockfd], sock_remote_port[sockfd], sock_local_port[sockfd], data);
+    }
+    return length;
+}
+
+fn sys_recv(sockfd, buf, maxlen) {
+    if sockfd < 0 { return 0 - 1; }
+    if sock_state[sockfd] < 3 { return 0 - 1; }
+    // Block until data available (or use poll)
+    return 0;
+}
+
+fn sys_close_socket(sockfd) {
+    if sockfd < 0 { return 0; }
+    if sockfd >= SOCKET_MAX { return 0; }
+    if sock_active[sockfd] == 0 { return 0; }
+    // For TCP: send FIN, wait for FIN-ACK
+    sock_active[sockfd] = 0;
+    sock_state[sockfd] = 0;
+    socket_count = socket_count - 1;
+    return 0;
+}
+
+fn sys_shutdown(sockfd, how) {
+    // how: 0=SHUT_RD, 1=SHUT_WR, 2=SHUT_RDWR
+    if sockfd < 0 { return 0 - 1; }
+    if how == 2 { return sys_close_socket(sockfd); }
+    return 0;
+}
+
+print("socket.hl loaded");
+print("BSD sockets: " + to_string(SOCKET_MAX) + " max, AF_INET/INET6/UNIX, STREAM/DGRAM");

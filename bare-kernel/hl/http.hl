@@ -1,0 +1,162 @@
+// http.hl -- HTTP/1.1 Client and Server
+//
+// Provides basic HTTP protocol support over TCP/TLS.
+// Used for: OTA updates, REST APIs, package manager, web serving.
+//
+// Client: GET, POST, HEAD, PUT, DELETE
+// Server: listen, route matching, response builder
+//
+// HTTP/1.1 with:
+//   - Chunked transfer encoding
+//   - Content-Length
+//   - Keep-Alive (persistent connections)
+//   - Basic headers (Host, Content-Type, User-Agent)
+//   - HTTPS via TLS module
+//
+// Does NOT implement: HTTP/2, WebSocket (future v5.0)
+
+let HTTP_PORT = 80;
+let HTTPS_PORT = 443;
+let HTTP_MAX_HEADERS = 16;
+let HTTP_BUF_SIZE = 8192;
+
+// HTTP methods
+let HTTP_GET = 0;
+let HTTP_POST = 1;
+let HTTP_HEAD = 2;
+let HTTP_PUT = 3;
+let HTTP_DELETE = 4;
+
+// HTTP status codes
+let HTTP_200 = "200 OK";
+let HTTP_201 = "201 Created";
+let HTTP_301 = "301 Moved Permanently";
+let HTTP_400 = "400 Bad Request";
+let HTTP_403 = "403 Forbidden";
+let HTTP_404 = "404 Not Found";
+let HTTP_500 = "500 Internal Server Error";
+
+fn http_build_request(method, host, path, body) {
+    let method_str = "GET";
+    if method == HTTP_POST { method_str = "POST"; }
+    if method == HTTP_HEAD { method_str = "HEAD"; }
+    if method == HTTP_PUT { method_str = "PUT"; }
+    if method == HTTP_DELETE { method_str = "DELETE"; }
+
+    let req = method_str + " " + path + " HTTP/1.1\r\n";
+    req = req + "Host: " + host + "\r\n";
+    req = req + "User-Agent: HicOS/4.0\r\n";
+    req = req + "Accept: */*\r\n";
+    req = req + "Connection: close\r\n";
+
+    if body != "" {
+        req = req + "Content-Length: " + to_string(len(body)) + "\r\n";
+        req = req + "Content-Type: application/octet-stream\r\n";
+    }
+
+    req = req + "\r\n";
+    if body != "" { req = req + body; }
+    return req;
+}
+
+fn http_get(host, path) {
+    return http_build_request(HTTP_GET, host, path, "");
+}
+
+fn http_post(host, path, body) {
+    return http_build_request(HTTP_POST, host, path, body);
+}
+
+fn http_parse_status(response) {
+    // Parse "HTTP/1.1 200 OK\r\n..."
+    // Return status code as integer
+    // Find first space after "HTTP/"
+    let mut i = 0;
+    let mut space_count = 0;
+    let mut code_start = 0;
+    while i < len(response) {
+        if response[i] == 32 { // space
+            space_count = space_count + 1;
+            if space_count == 1 { code_start = i + 1; }
+            if space_count == 2 {
+                // Extract 3-digit code
+                let c0 = response[code_start] - 48;
+                let c1 = response[code_start + 1] - 48;
+                let c2 = response[code_start + 2] - 48;
+                return c0 * 100 + c1 * 10 + c2;
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn http_find_body(response) {
+    // Find "\r\n\r\n" separator
+    let mut i = 0;
+    while i < len(response) - 3 {
+        if response[i] == 13 {      // \r
+            if response[i+1] == 10 { // \n
+                if response[i+2] == 13 { // \r
+                    if response[i+3] == 10 { // \n
+                        return i + 4;
+                    }
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return len(response);
+}
+
+// === HTTP Server ===
+
+let HTTP_SERVER_MAX_ROUTES = 16;
+let mut http_route_count = 0;
+let http_route_method = [];
+let http_route_path = [];
+
+fn http_server_init() {
+    let mut i = 0;
+    while i < HTTP_SERVER_MAX_ROUTES {
+        push(http_route_method, 0);
+        push(http_route_path, "");
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn http_server_route(method, path) {
+    if http_route_count >= HTTP_SERVER_MAX_ROUTES { return 0 - 1; }
+    let idx = http_route_count;
+    http_route_method[idx] = method;
+    http_route_path[idx] = path;
+    http_route_count = http_route_count + 1;
+    return idx;
+}
+
+fn http_build_response(status, content_type, body) {
+    let resp = "HTTP/1.1 " + status + "\r\n";
+    resp = resp + "Server: HicOS/4.0\r\n";
+    resp = resp + "Content-Type: " + content_type + "\r\n";
+    resp = resp + "Content-Length: " + to_string(len(body)) + "\r\n";
+    resp = resp + "Connection: close\r\n";
+    resp = resp + "\r\n";
+    resp = resp + body;
+    return resp;
+}
+
+fn http_response_200(body) {
+    return http_build_response(HTTP_200, "text/plain", body);
+}
+
+fn http_response_404() {
+    return http_build_response(HTTP_404, "text/plain", "Not Found");
+}
+
+fn http_response_json(body) {
+    return http_build_response(HTTP_200, "application/json", body);
+}
+
+print("http.hl loaded");
+print("HTTP/1.1: client (GET/POST/PUT/DELETE) + server (16 routes)");

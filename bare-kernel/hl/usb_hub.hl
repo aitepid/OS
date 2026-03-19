@@ -1,0 +1,106 @@
+// usb_hub.hl -- USB Hub Driver
+//
+// Supports cascaded USB hubs via XHCI.
+// Hub descriptor defines number of ports, power characteristics.
+// Hub uses interrupt endpoint for port status change notifications.
+//
+// USB Hub Class: bDeviceClass = 0x09
+//
+// Hub descriptor (at least 7 bytes):
+//   +0: bDescLength (1)
+//   +1: bDescriptorType (1) = 0x29 (hub) or 0x2A (SS hub)
+//   +2: bNbrPorts (1) -- number of downstream ports
+//   +3: wHubCharacteristics (2)
+//   +5: bPwrOn2PwrGood (1) -- in 2ms intervals
+//   +6: bHubContrCurrent (1) -- max current in mA
+//
+// Port status/change (GET_PORT_STATUS):
+//   Bits 0-15: status (connected, enabled, suspended, overcurrent, reset, power)
+//   Bits 16-31: change flags
+//
+// Hub operations:
+//   SET_PORT_FEATURE / CLEAR_PORT_FEATURE (power, reset, suspend)
+//   GET_PORT_STATUS
+
+let HUB_CLASS = 9;
+let HUB_DESC_TYPE = 41;        // 0x29
+let SS_HUB_DESC_TYPE = 42;     // 0x2A
+
+let HUB_PORT_CONNECTION = 0;
+let HUB_PORT_ENABLE = 1;
+let HUB_PORT_SUSPEND = 2;
+let HUB_PORT_OVERCURRENT = 3;
+let HUB_PORT_RESET = 4;
+let HUB_PORT_POWER = 8;
+
+let HUB_MAX_DEPTH = 5;         // USB spec: max 5 levels of hubs
+let HUB_MAX_HUBS = 8;
+
+let mut hub_count = 0;
+
+// Hub entry: [slot_id, num_ports, depth]
+let hub_table_slots = [0, 0, 0, 0, 0, 0, 0, 0];
+let hub_table_ports = [0, 0, 0, 0, 0, 0, 0, 0];
+let hub_table_depth = [0, 0, 0, 0, 0, 0, 0, 0];
+
+fn usb_hub_init(slot_id, depth) {
+    if hub_count >= HUB_MAX_HUBS { return 0 - 1; }
+    if depth >= HUB_MAX_DEPTH { return 0 - 1; }
+
+    let idx = hub_count;
+    hub_count = hub_count + 1;
+
+    hub_table_slots[idx] = slot_id;
+    hub_table_depth[idx] = depth;
+
+    // 1. Get hub descriptor
+    // let desc = usb_get_descriptor(slot_id, HUB_DESC_TYPE, 0, 7);
+    // hub_table_ports[idx] = desc[2];  // bNbrPorts
+
+    // 2. Power on all ports
+    // let p = 1;
+    // while p <= hub_table_ports[idx] {
+    //     usb_hub_set_feature(slot_id, p, HUB_PORT_POWER);
+    //     p = p + 1;
+    // }
+
+    // 3. Wait for power good (bPwrOn2PwrGood * 2 ms)
+
+    // 4. Check each port for connected devices
+    // let p = 1;
+    // while p <= hub_table_ports[idx] {
+    //     let status = usb_hub_get_port_status(slot_id, p);
+    //     if (status & 1) == 1 {  // connected
+    //         usb_hub_set_feature(slot_id, p, HUB_PORT_RESET);
+    //         // wait 50ms
+    //         // enumerate device on this port
+    //     }
+    //     p = p + 1;
+    // }
+
+    return idx;
+}
+
+fn usb_hub_set_feature(slot_id, port, feature) {
+    // USB control transfer: SET_FEATURE, wValue=feature, wIndex=port
+    return 0;
+}
+
+fn usb_hub_clear_feature(slot_id, port, feature) {
+    // USB control transfer: CLEAR_FEATURE
+    return 0;
+}
+
+fn usb_hub_get_port_status(slot_id, port) {
+    // USB control transfer: GET_STATUS, wIndex=port, returns 4 bytes
+    return 0;
+}
+
+fn usb_hub_poll(hub_idx) {
+    // Read interrupt endpoint for status change bitmap
+    // For each changed port: get status, handle connect/disconnect
+    return 0;
+}
+
+print("usb_hub.hl loaded");
+print("USB Hub: " + to_string(HUB_MAX_HUBS) + " hubs, " + to_string(HUB_MAX_DEPTH) + " levels deep");

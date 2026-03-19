@@ -1,0 +1,92 @@
+// udp.hl -- UDP Protocol (User Datagram Protocol)
+//
+// Connectionless datagram delivery over IPv4/IPv6.
+// Used by: DNS (port 53), DHCP (ports 67/68), NTP, mDNS.
+//
+// UDP header (8 bytes):
+//   +0: Source Port (2)
+//   +2: Destination Port (2)
+//   +4: Length (2) -- header + data
+//   +6: Checksum (2) -- optional for IPv4, mandatory for IPv6
+//
+// Socket table: 16 UDP sockets max
+
+let UDP_MAX_SOCKETS = 16;
+let mut udp_socket_count = 0;
+
+// Socket entry: [local_port, remote_ip, remote_port, active, callback_id]
+let udp_sock_port = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+let udp_sock_active = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+
+fn udp_bind(local_port) {
+    let mut i = 0;
+    while i < UDP_MAX_SOCKETS {
+        if udp_sock_active[i] == 0 {
+            udp_sock_port[i] = local_port;
+            udp_sock_active[i] = 1;
+            udp_socket_count = udp_socket_count + 1;
+            return i;
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn udp_close(sock_id) {
+    if sock_id < 0 { return 0; }
+    if sock_id >= UDP_MAX_SOCKETS { return 0; }
+    udp_sock_active[sock_id] = 0;
+    udp_socket_count = udp_socket_count - 1;
+    return 0;
+}
+
+fn udp_send(dst_ip, dst_port, src_port, data) {
+    let udp_len = 8 + len(data);
+    let mut pkt = [];
+    // Source port
+    push(pkt, (src_port / 256) % 256);
+    push(pkt, src_port % 256);
+    // Destination port
+    push(pkt, (dst_port / 256) % 256);
+    push(pkt, dst_port % 256);
+    // Length
+    push(pkt, (udp_len / 256) % 256);
+    push(pkt, udp_len % 256);
+    // Checksum (0 = disabled for IPv4)
+    push(pkt, 0); push(pkt, 0);
+    // Data
+    let mut i = 0;
+    while i < len(data) {
+        push(pkt, data[i]);
+        i = i + 1;
+    }
+    // Wrap in IPv4 header (protocol 17) and send
+    // net_send_ipv4(dst_ip, 17, pkt);
+    return len(data);
+}
+
+fn udp_handle(ip_src, data, offset, length) {
+    if length < 8 { return 0; }
+    let src_port = data[offset] * 256 + data[offset + 1];
+    let dst_port = data[offset + 2] * 256 + data[offset + 3];
+    let udp_len = data[offset + 4] * 256 + data[offset + 5];
+    let payload_offset = offset + 8;
+    let payload_len = udp_len - 8;
+
+    // Find matching socket
+    let mut i = 0;
+    while i < UDP_MAX_SOCKETS {
+        if udp_sock_active[i] == 1 {
+            if udp_sock_port[i] == dst_port {
+                // Deliver to socket handler
+                // udp_deliver(i, ip_src, src_port, data, payload_offset, payload_len);
+                return 1;
+            }
+        }
+        i = i + 1;
+    }
+    return 0; // no matching socket
+}
+
+print("udp.hl loaded");
+print("UDP: " + to_string(UDP_MAX_SOCKETS) + " sockets, send/recv/bind");

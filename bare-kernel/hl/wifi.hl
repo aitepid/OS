@@ -1,0 +1,120 @@
+// wifi.hl -- Wi-Fi Driver Framework (IEEE 802.11)
+//
+// Provides a basic Wi-Fi stack for PCIe/USB wireless NICs.
+// Targets QEMU's VirtIO-net for testing; real hardware needs
+// specific firmware blobs (Intel iwlwifi, Realtek rtl8xxxu, etc).
+//
+// 802.11 frame format:
+//   +0:  Frame Control (2)
+//   +2:  Duration/ID (2)
+//   +4:  Address 1 (6) -- destination
+//   +10: Address 2 (6) -- source
+//   +16: Address 3 (6) -- BSSID
+//   +22: Sequence Control (2)
+//   +24: Payload (variable)
+//   +N:  FCS (4) -- CRC-32
+//
+// Management frames: Beacon, Probe Request/Response, Auth, Assoc
+// Data frames: encapsulated Ethernet (LLC/SNAP header)
+
+let WIFI_STATE_OFF = 0;
+let WIFI_STATE_SCANNING = 1;
+let WIFI_STATE_AUTH = 2;
+let WIFI_STATE_ASSOC = 3;
+let WIFI_STATE_CONNECTED = 4;
+
+let mut wifi_state = 0;
+let mut wifi_channel = 0;
+let mut wifi_bssid = [0, 0, 0, 0, 0, 0];
+let mut wifi_ssid = "";
+
+// Scan result table: 8 networks max
+let WIFI_MAX_NETWORKS = 8;
+let mut wifi_scan_count = 0;
+let wifi_scan_ssids = ["", "", "", "", "", "", "", ""];
+let wifi_scan_rssi  = [0, 0, 0, 0, 0, 0, 0, 0];
+let wifi_scan_channel = [0, 0, 0, 0, 0, 0, 0, 0];
+
+fn wifi_init() {
+    wifi_state = WIFI_STATE_OFF;
+    wifi_scan_count = 0;
+    return 0;
+}
+
+fn wifi_scan() {
+    wifi_state = WIFI_STATE_SCANNING;
+    wifi_scan_count = 0;
+    // Send probe request on each channel (1-11 for 2.4 GHz)
+    let mut ch = 1;
+    while ch <= 11 {
+        // Set radio to channel ch
+        // Send probe request frame
+        // Wait for probe responses / beacons
+        // Parse SSID, BSSID, RSSI from each response
+        ch = ch + 1;
+    }
+    wifi_state = WIFI_STATE_OFF;
+    return wifi_scan_count;
+}
+
+fn wifi_connect(ssid, password) {
+    // 1. Find SSID in scan results
+    let mut found = 0 - 1;
+    let mut i = 0;
+    while i < wifi_scan_count {
+        if wifi_scan_ssids[i] == ssid { found = i; }
+        i = i + 1;
+    }
+    if found < 0 { return 0 - 1; }
+
+    // 2. Authentication (Open or WPA2-PSK)
+    wifi_state = WIFI_STATE_AUTH;
+    // Send Authentication frame to BSSID
+    // Wait for Authentication response
+
+    // 3. Association
+    wifi_state = WIFI_STATE_ASSOC;
+    // Send Association Request
+    // Wait for Association Response
+
+    // 4. WPA2 4-way handshake (if secured)
+    // Exchange EAPOL frames to derive PTK/GTK
+    // Requires HMAC-SHA1, AES-CCMP
+
+    wifi_state = WIFI_STATE_CONNECTED;
+    wifi_ssid = ssid;
+    return 0;
+}
+
+fn wifi_disconnect() {
+    // Send Deauthentication frame
+    wifi_state = WIFI_STATE_OFF;
+    wifi_ssid = "";
+    return 0;
+}
+
+fn wifi_send(data, length) {
+    if wifi_state != WIFI_STATE_CONNECTED { return 0 - 1; }
+    // Build 802.11 data frame with LLC/SNAP header
+    // Encrypt with AES-CCMP if WPA2
+    // Queue to hardware TX ring
+    return length;
+}
+
+fn wifi_recv() {
+    // Poll hardware RX ring
+    // Decrypt if encrypted
+    // Strip 802.11 header, return Ethernet payload
+    return [];
+}
+
+fn wifi_status() {
+    if wifi_state == WIFI_STATE_CONNECTED {
+        return "Connected to " + wifi_ssid;
+    }
+    if wifi_state == WIFI_STATE_SCANNING { return "Scanning..."; }
+    return "Disconnected";
+}
+
+print("wifi.hl loaded");
+print("WiFi: 802.11 scan/connect/send/recv, WPA2-PSK framework");

@@ -1,0 +1,269 @@
+// HicOS_UIServer.hl -- UI Display Server (Native H-L)
+//
+// Manages client connections, routes input events, and composites
+// window surfaces to the framebuffer via HicOS_UIRenderer.
+// Clients communicate via IPC (ipc.hl) messages.
+// Requires: ipc.hl, wm.hl, HicOS_UIRenderer.hl
+
+// --- IPC Protocol Constants ---
+let UIS_MSG_CONNECT    = 100;
+let UIS_MSG_DISCONNECT = 101;
+let UIS_MSG_CREATE_WIN = 102;
+let UIS_MSG_DESTROY_WIN = 103;
+let UIS_MSG_MOVE_WIN   = 104;
+let UIS_MSG_RESIZE_WIN = 105;
+let UIS_MSG_SET_TITLE  = 106;
+let UIS_MSG_SURFACE_DIRTY = 107;
+let UIS_MSG_KEY_EVENT  = 200;
+let UIS_MSG_MOUSE_EVENT = 201;
+let UIS_MSG_FOCUS_EVENT = 202;
+
+// --- Server State ---
+let UIS_MAX_CLIENTS = 32;
+let uis_client_pids = [];
+let uis_client_wins = [];
+let uis_client_dirty = [];
+let mut uis_client_count = 0;
+let mut uis_running = 0;
+let mut uis_composite_needed = 0;
+let mut uis_frame_count = 0;
+
+// --- Event Queue ---
+let UIS_EVQ_MAX = 256;
+let uis_evq_type = [];
+let uis_evq_data = [];
+let mut uis_evq_head = 0;
+let mut uis_evq_tail = 0;
+let mut uis_evq_count = 0;
+
+fn uis_evq_push(etype, edata) {
+    if uis_evq_count >= UIS_EVQ_MAX { return 0 - 1; }
+    push(uis_evq_type, etype);
+    push(uis_evq_data, edata);
+    uis_evq_tail = (uis_evq_tail + 1) % UIS_EVQ_MAX;
+    uis_evq_count = uis_evq_count + 1;
+    return 0;
+}
+
+fn uis_evq_pop() {
+    if uis_evq_count <= 0 { return 0 - 1; }
+    let idx = uis_evq_head;
+    uis_evq_head = (uis_evq_head + 1) % UIS_EVQ_MAX;
+    uis_evq_count = uis_evq_count - 1;
+    return idx;
+}
+
+fn uis_evq_pending() {
+    return uis_evq_count;
+}
+
+// --- Server Lifecycle ---
+fn uis_init() {
+    uis_running = 1;
+    uis_client_count = 0;
+    uis_evq_head = 0;
+    uis_evq_tail = 0;
+    uis_evq_count = 0;
+    uis_composite_needed = 1;
+    uis_frame_count = 0;
+    print("ui-server: display server started (max " + to_string(UIS_MAX_CLIENTS) + " clients)");
+    return 0;
+}
+
+fn uis_shutdown() {
+    let mut i = 0;
+    while i < uis_client_count {
+        uis_disconnect(i);
+        i = i + 1;
+    }
+    uis_running = 0;
+    print("ui-server: shut down (rendered " + to_string(uis_frame_count) + " frames)");
+    return 0;
+}
+
+// --- Client Management ---
+fn uis_connect(client_pid) {
+    if uis_client_count >= UIS_MAX_CLIENTS {
+        print("ui-server: max clients reached");
+        return 0 - 1;
+    }
+    push(uis_client_pids, client_pid);
+    push(uis_client_wins, 0 - 1);
+    push(uis_client_dirty, 0);
+    let id = uis_client_count;
+    uis_client_count = uis_client_count + 1;
+    print("ui-server: client PID " + to_string(client_pid) + " connected (slot " + to_string(id) + ")");
+    return id;
+}
+
+fn uis_create_window(client_id, x, y, w, h, title) {
+    if client_id < 0 || client_id >= uis_client_count { return 0 - 1; }
+    let win_id = wm_create_window(x, y, w, h, title);
+    uis_client_wins[client_id] = win_id;
+    uis_client_dirty[client_id] = 1;
+    uis_composite_needed = 1;
+    return win_id;
+}
+
+fn uis_move_window(client_id, new_x, new_y) {
+    if client_id < 0 || client_id >= uis_client_count { return 0 - 1; }
+    let win_id = uis_client_wins[client_id];
+    if win_id < 0 { return 0 - 1; }
+    wm_move_window(win_id, new_x, new_y);
+    uis_composite_needed = 1;
+    return 0;
+}
+
+fn uis_resize_window(client_id, new_w, new_h) {
+    if client_id < 0 || client_id >= uis_client_count { return 0 - 1; }
+    let win_id = uis_client_wins[client_id];
+    if win_id < 0 { return 0 - 1; }
+    wm_resize_window(win_id, new_w, new_h);
+    uis_client_dirty[client_id] = 1;
+    uis_composite_needed = 1;
+    return 0;
+}
+
+fn uis_destroy_window(client_id) {
+    if client_id < 0 || client_id >= uis_client_count { return 0 - 1; }
+    let win_id = uis_client_wins[client_id];
+    if win_id >= 0 {
+        wm_close_window(win_id);
+        uis_client_wins[client_id] = 0 - 1;
+        uis_client_dirty[client_id] = 0;
+        uis_composite_needed = 1;
+    }
+    return 0;
+}
+
+fn uis_disconnect(client_id) {
+    if client_id < 0 || client_id >= uis_client_count { return 0 - 1; }
+    uis_destroy_window(client_id);
+    print("ui-server: client " + to_string(client_id) + " disconnected");
+    return 0;
+}
+
+fn uis_mark_dirty(client_id) {
+    if client_id < 0 || client_id >= uis_client_count { return 0 - 1; }
+    uis_client_dirty[client_id] = 1;
+    uis_composite_needed = 1;
+    return 0;
+}
+
+// --- Input Event Dispatch ---
+fn uis_dispatch_event(event_type, event_data) {
+    let focused = wm_get_focused();
+    if focused >= 0 {
+        let mut i = 0;
+        while i < uis_client_count {
+            if uis_client_wins[i] == focused {
+                ipc_send(uis_client_pids[i], event_type, event_data);
+                return 0;
+            }
+            i = i + 1;
+        }
+    }
+    return 0 - 1;
+}
+
+fn uis_dispatch_key(scancode, pressed) {
+    uis_evq_push(UIS_MSG_KEY_EVENT, scancode);
+    if pressed == 1 {
+        uis_dispatch_event(UIS_MSG_KEY_EVENT, scancode);
+    }
+    return 0;
+}
+
+fn uis_dispatch_mouse(x, y, buttons) {
+    uis_evq_push(UIS_MSG_MOUSE_EVENT, buttons);
+    uis_dispatch_event(UIS_MSG_MOUSE_EVENT, buttons);
+    return 0;
+}
+
+// --- IPC Message Handler ---
+fn uis_handle_message(src_pid, msg_type, msg_data) {
+    if msg_type == UIS_MSG_CONNECT {
+        return uis_connect(src_pid);
+    }
+    if msg_type == UIS_MSG_DISCONNECT {
+        let mut i = 0;
+        while i < uis_client_count {
+            if uis_client_pids[i] == src_pid {
+                return uis_disconnect(i);
+            }
+            i = i + 1;
+        }
+        return 0 - 1;
+    }
+    if msg_type == UIS_MSG_SURFACE_DIRTY {
+        let mut i = 0;
+        while i < uis_client_count {
+            if uis_client_pids[i] == src_pid {
+                return uis_mark_dirty(i);
+            }
+            i = i + 1;
+        }
+        return 0 - 1;
+    }
+    return 0 - 1;
+}
+
+// --- Compositor ---
+fn uis_composite() {
+    if uis_composite_needed == 0 { return 0; }
+    wm_render_all();
+    uir_present();
+    // Clear dirty flags
+    let mut i = 0;
+    while i < uis_client_count {
+        uis_client_dirty[i] = 0;
+        i = i + 1;
+    }
+    uis_composite_needed = 0;
+    uis_frame_count = uis_frame_count + 1;
+    return 0;
+}
+
+fn uis_tick() {
+    // Called from main loop every timer tick
+    // Process pending events
+    while uis_evq_pending() > 0 {
+        let idx = uis_evq_pop();
+        if idx >= 0 {
+            let etype = uis_evq_type[idx];
+            let edata = uis_evq_data[idx];
+            uis_dispatch_event(etype, edata);
+        }
+    }
+    // Composite if needed
+    uis_composite();
+    return 0;
+}
+
+// --- Diagnostics ---
+fn uis_list_clients() {
+    print("UI Server Clients: " + to_string(uis_client_count) + " / " + to_string(UIS_MAX_CLIENTS));
+    print("  Frames rendered: " + to_string(uis_frame_count));
+    print("  Event queue: " + to_string(uis_evq_count) + " / " + to_string(UIS_EVQ_MAX));
+    let mut i = 0;
+    while i < uis_client_count {
+        let dirty_s = "clean";
+        if uis_client_dirty[i] == 1 { dirty_s = "DIRTY"; }
+        print("  [" + to_string(i) + "] PID=" + to_string(uis_client_pids[i]) + " win=" + to_string(uis_client_wins[i]) + " " + dirty_s);
+        i = i + 1;
+    }
+    return uis_client_count;
+}
+
+fn uis_stats() {
+    print("ui-server stats:");
+    print("  clients:    " + to_string(uis_client_count));
+    print("  frames:     " + to_string(uis_frame_count));
+    print("  evt_queued: " + to_string(uis_evq_count));
+    print("  running:    " + to_string(uis_running));
+    return 0;
+}
+
+print("HicOS_UIServer.hl loaded (native H-L)");
+
+

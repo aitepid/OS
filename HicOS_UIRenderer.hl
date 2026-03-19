@@ -1,0 +1,87 @@
+// HicOS_UIRenderer.hl -- UI Renderer (Native H-L)
+//
+// Renders UI elements to the VESA framebuffer.
+// Requires: vesa.hl, font.hl, wm.hl
+
+let mut ui_frame_count = 0;
+let mut ui_fb_addr = 0;
+let mut ui_fb_width = 0;
+let mut ui_fb_height = 0;
+let mut ui_fb_pitch = 0;
+
+fn uir_init() {
+    ui_fb_addr = vesa_fb_addr;
+    ui_fb_width = vesa_xres;
+    ui_fb_height = vesa_yres;
+    ui_fb_pitch = vesa_pitch;
+    print("ui-renderer: " + to_string(ui_fb_width) + "x" + to_string(ui_fb_height) + " @ 0x" + format_hex(ui_fb_addr, 8));
+    return 0;
+}
+
+fn uir_clear(color) {
+    vesa_fill_rect(0, 0, ui_fb_width, ui_fb_height, color);
+    return 0;
+}
+
+fn uir_draw_rect(x, y, w, h, color) {
+    vesa_fill_rect(x, y, w, h, color);
+    return 0;
+}
+
+fn uir_draw_text(x, y, text, fg, bg) {
+    font_draw_string(x, y, text, fg, bg);
+    return 0;
+}
+
+fn uir_draw_button(x, y, w, h, label, active) {
+    let bg = 12632256;  // light gray
+    let fg = 0;          // black
+    if active == 1 {
+        bg = 4474111;    // blue
+        fg = 16777215;   // white
+    }
+    vesa_fill_rect(x, y, w, h, bg);
+    // Border
+    vesa_fill_rect(x, y, w, 1, 8421504);       // top
+    vesa_fill_rect(x, y + h - 1, w, 1, 8421504); // bottom
+    vesa_fill_rect(x, y, 1, h, 8421504);       // left
+    vesa_fill_rect(x + w - 1, y, 1, h, 8421504); // right
+    // Center text
+    let text_x = x + (w - len(label) * 8) / 2;
+    let text_y = y + (h - 16) / 2;
+    font_draw_string(text_x, text_y, label, fg, bg);
+    return 0;
+}
+
+fn uir_draw_window_frame(x, y, w, h, title) {
+    // Title bar
+    vesa_fill_rect(x, y, w, 24, 4474111);   // blue title bar
+    font_draw_string(x + 4, y + 4, title, 16777215, 4474111);
+    // Close button
+    font_draw_string(x + w - 16, y + 4, "X", 16777215, 13369344);
+    // Content area
+    vesa_fill_rect(x, y + 24, w, h - 24, 16777215); // white
+    // Border
+    vesa_fill_rect(x, y, w, 1, 0);
+    vesa_fill_rect(x, y + h - 1, w, 1, 0);
+    vesa_fill_rect(x, y, 1, h, 0);
+    vesa_fill_rect(x + w - 1, y, 1, h, 0);
+    return 0;
+}
+
+fn uir_present() {
+    ui_frame_count = ui_frame_count + 1;
+    // In double-buffered mode: swap front/back
+    return ui_frame_count;
+}
+
+fn uir_fps() {
+    let secs = uptime_secs();
+    if secs > 0 { return ui_frame_count / secs; }
+    return 0;
+}
+
+print("HicOS_UIRenderer.hl loaded (native H-L)");
+
+
+

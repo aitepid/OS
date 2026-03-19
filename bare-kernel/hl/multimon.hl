@@ -1,0 +1,111 @@
+// multimon.hl -- Multi-Monitor Support (VirtIO-GPU)
+//
+// Manages multiple scanouts (displays) via VirtIO-GPU.
+// Each scanout maps to a separate display/output.
+// VirtIO-GPU supports up to 16 scanouts (VIRTIO_GPU_MAX_SCANOUTS).
+//
+// Display layout: each monitor has position (x,y) and size (w,h)
+// forming a virtual desktop coordinate space.
+
+let MULTIMON_MAX = 4;
+
+let mut mon_count = 0;
+let mon_x = [0, 0, 0, 0];
+let mon_y = [0, 0, 0, 0];
+let mon_w = [1024, 1024, 1024, 1024];
+let mon_h = [768, 768, 768, 768];
+let mon_resource = [0, 0, 0, 0];    // GPU resource ID per monitor
+let mon_active = [0, 0, 0, 0];
+
+fn multimon_init() {
+    // Query VirtIO-GPU GET_DISPLAY_INFO for each scanout
+    // For each active scanout: record resolution, create resource
+    mon_count = 1;
+    mon_active[0] = 1;
+    mon_w[0] = 1024;
+    mon_h[0] = 768;
+    return 0;
+}
+
+fn multimon_add(scanout_id, x, y, w, h) {
+    if scanout_id >= MULTIMON_MAX { return 0 - 1; }
+    mon_x[scanout_id] = x;
+    mon_y[scanout_id] = y;
+    mon_w[scanout_id] = w;
+    mon_h[scanout_id] = h;
+    mon_active[scanout_id] = 1;
+
+    // Create GPU resource for this scanout
+    // mon_resource[scanout_id] = gpu_create_resource(w, h);
+    // gpu_attach_backing(mon_resource[scanout_id], ...);
+    // gpu_set_scanout_id(scanout_id, mon_resource[scanout_id]);
+
+    if scanout_id >= mon_count { mon_count = scanout_id + 1; }
+    return 0;
+}
+
+fn multimon_remove(scanout_id) {
+    if scanout_id >= MULTIMON_MAX { return 0; }
+    mon_active[scanout_id] = 0;
+    // gpu_resource_unref(mon_resource[scanout_id]);
+    return 0;
+}
+
+// Get total virtual desktop size
+fn multimon_total_size() {
+    let mut max_x = 0;
+    let mut max_y = 0;
+    let mut i = 0;
+    while i < MULTIMON_MAX {
+        if mon_active[i] == 1 {
+            let right = mon_x[i] + mon_w[i];
+            let bottom = mon_y[i] + mon_h[i];
+            if right > max_x { max_x = right; }
+            if bottom > max_y { max_y = bottom; }
+        }
+        i = i + 1;
+    }
+    return [max_x, max_y];
+}
+
+// Find which monitor contains a point
+fn multimon_find(px, py) {
+    let mut i = 0;
+    while i < MULTIMON_MAX {
+        if mon_active[i] == 1 {
+            if px >= mon_x[i] {
+                if px < mon_x[i] + mon_w[i] {
+                    if py >= mon_y[i] {
+                        if py < mon_y[i] + mon_h[i] {
+                            return i;
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return 0; // default to primary
+}
+
+// Move a window between monitors
+fn multimon_move_window(win_id, target_mon) {
+    if target_mon >= MULTIMON_MAX { return 0; }
+    if mon_active[target_mon] == 0 { return 0; }
+    // Adjust window position to target monitor's coordinate space
+    // wm_set_position(win_id, mon_x[target_mon] + 50, mon_y[target_mon] + 50);
+    return 0;
+}
+
+fn multimon_status() {
+    let mut active = 0;
+    let mut i = 0;
+    while i < MULTIMON_MAX {
+        if mon_active[i] == 1 { active = active + 1; }
+        i = i + 1;
+    }
+    return to_string(active) + " monitor(s) active";
+}
+
+print("multimon.hl loaded");
+print("Multi-monitor: " + to_string(MULTIMON_MAX) + " displays, virtual desktop");

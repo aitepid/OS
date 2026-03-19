@@ -1,0 +1,350 @@
+// ahci.hl -- AHCI/SATA Disk Driver
+//
+// Detects AHCI controller via PCI (class=01, subclass=06, prog_if=01),
+// reads BAR5 (ABAR) for the HBA memory-mapped registers, initializes
+// ports, and provides sector read/write using PRDT-based DMA.
+//
+// HBA registers (ABAR + offset):
+//   +0x00: CAP  (HBA Capabilities)
+//   +0x04: GHC  (Global HBA Control)
+//   +0x08: IS   (Interrupt Status)
+//   +0x0C: PI   (Ports Implemented)
+//   +0x10: VS   (Version)
+//   +0x100 + port*0x80: Port registers
+//
+// Port registers (per-port, offset from ABAR+0x100+port*0x80):
+//   +0x00: CLB  (Command List Base Address)
+//   +0x04: CLBU (upper 32 bits)
+//   +0x08: FB   (FIS Base Address)
+//   +0x0C: FBU
+//   +0x10: IS   (Interrupt Status)
+//   +0x14: IE   (Interrupt Enable)
+//   +0x18: CMD  (Command and Status)
+//   +0x20: TFD  (Task File Data)
+//   +0x24: SIG  (Signature)
+//   +0x28: SSTS (SATA Status)
+//   +0x2C: SCTL (SATA Control)
+//   +0x38: CI   (Command Issue)
+//
+// FIS types:
+//   0x27 = Register H2D (host to device)
+//   0x34 = Register D2H (device to host)
+//   0x41 = DMA Activate D2H
+//   0x46 = PIO Setup D2H
+//
+// ATA commands:
+//   0xEC = IDENTIFY DEVICE
+//   0x25 = READ DMA EXT (48-bit LBA)
+//   0x35 = WRITE DMA EXT (48-bit LBA)
+
+let AHCI_CLASS = 1;
+let AHCI_SUBCLASS = 6;
+
+let ATA_CMD_IDENTIFY = 236;    // 0xEC
+let ATA_CMD_READ_DMA_EXT = 37; // 0x25
+let ATA_CMD_WRITE_DMA_EXT = 53; // 0x35
+
+let FIS_TYPE_REG_H2D = 39;     // 0x27
+
+let mut ahci_abar = 0;         // AHCI Base Address (BAR5)
+let mut ahci_ports_impl = 0;   // Bitmask of implemented ports
+let mut ahci_port_count = 0;   // Number of detected ports
+
+// Command list at 0x900000 (32 entries * 32 bytes = 1024 bytes per port)
+let AHCI_CMD_LIST_BASE = 9437184;   // 0x900000
+// FIS receive area at 0x901000 (256 bytes per port)
+let AHCI_FIS_BASE = 9441280;        // 0x901000
+// Command table at 0x902000 (per-command, 128 + 16*PRDT = 256 bytes)
+let AHCI_CMD_TABLE_BASE = 9445376;  // 0x902000
+// Data buffer at 0x910000 (for transfers)
+let AHCI_DATA_BUF = 9502720;        // 0x910000
+
+// Detect AHCI controller on PCI bus
+fn ahci_detect() {
+    let devices = pci_scan();
+    let mut i = 0;
+    while i < len(devices) {
+        let cls = devices[i][5];
+        let sub = devices[i][6];
+        if cls == AHCI_CLASS && sub == AHCI_SUBCLASS {
+            let bus = devices[i][0];
+            let dev = devices[i][1];
+            let func = devices[i][2];
+            let vendor = devices[i][3];
+            let devid = devices[i][4];
+            print("AHCI found: bus=" + to_string(bus) + " dev=" + to_string(dev) + " vendor=0x" + format_hex(vendor, 4) + " device=0x" + format_hex(devid, 4));
+            return [bus, dev, func];
+        }
+        i = i + 1;
+    }
+    return [];
+}
+
+// Read HBA register (32-bit MMIO)
+fn ahci_read(offset) {
+    return mem_read_u32(ahci_abar + offset);
+}
+
+// Write HBA register
+fn ahci_write(offset, value) {
+    mem_write_u32(ahci_abar + offset, value);
+    return 0;
+}
+
+// Read port register
+fn ahci_port_read(port, offset) {
+    return mem_read_u32(ahci_abar + 256 + port * 128 + offset);
+}
+
+// Write port register
+fn ahci_port_write(port, offset, value) {
+    mem_write_u32(ahci_abar + 256 + port * 128 + offset, value);
+    return 0;
+}
+
+// Enable AHCI mode in GHC
+fn ahci_enable() {
+    let ghc = ahci_read(4);
+    // Set AE (AHCI Enable) bit 31
+    ahci_write(4, ghc + 2147483648);  // bit 31 = 0x80000000
+    return 0;
+}
+
+// Stop command engine on a port
+fn ahci_port_stop(port) {
+    let cmd = ahci_port_read(port, 24);  // PxCMD
+    // Clear ST (bit 0) and FRE (bit 4)
+    let new_cmd = cmd - (cmd % 2) - ((cmd / 16) % 2) * 16;
+    ahci_port_write(port, 24, new_cmd);
+    // Wait for CR (bit 15) and FR (bit 14) to clear
+    return 0;
+}
+
+// Start command engine on a port
+fn ahci_port_start(port) {
+    // Set FRE (bit 4)
+    let cmd = ahci_port_read(port, 24);
+    ahci_port_write(port, 24, cmd + 16);
+    // Set ST (bit 0)
+    let cmd2 = ahci_port_read(port, 24);
+    ahci_port_write(port, 24, cmd2 + 1);
+    return 0;
+}
+
+// Initialize a single port
+fn ahci_port_init(port) {
+    ahci_port_stop(port);
+
+    // Set command list base address
+    let clb = AHCI_CMD_LIST_BASE + port * 1024;
+    mem_zero(clb, 1024);
+    ahci_port_write(port, 0, clb);       // CLB low
+    ahci_port_write(port, 4, 0);          // CLB high
+
+    // Set FIS base address
+    let fb = AHCI_FIS_BASE + port * 256;
+    mem_zero(fb, 256);
+    ahci_port_write(port, 8, fb);         // FB low
+    ahci_port_write(port, 12, 0);         // FB high
+
+    // Clear pending interrupts
+    ahci_port_write(port, 16, 4294967295);  // IS = all 1s to clear
+
+    ahci_port_start(port);
+    return 0;
+}
+
+// Check if port has a device (check SSTS DET field)
+fn ahci_port_connected(port) {
+    let ssts = ahci_port_read(port, 40);  // SSTS
+    let det = ssts % 16;  // DET = bits 0:3
+    return det == 3;  // 3 = device detected, Phy communication established
+}
+
+// Check port signature for device type
+fn ahci_port_signature(port) {
+    return ahci_port_read(port, 36);  // SIG
+}
+
+// Build a command FIS (Register H2D) for ATA command
+fn ahci_build_fis_h2d(cmd_table, ata_cmd, lba, count) {
+    mem_zero(cmd_table, 128);
+    // FIS type = Register H2D (0x27)
+    mem_write_u8(cmd_table, FIS_TYPE_REG_H2D);
+    // C bit (bit 7 of byte 1) = 1 (command, not control)
+    mem_write_u8(cmd_table + 1, 128);
+    // Command
+    mem_write_u8(cmd_table + 2, ata_cmd);
+    // Device (bit 6 = LBA mode)
+    mem_write_u8(cmd_table + 7, 64);  // 0x40 = LBA mode
+
+    // LBA (48-bit)
+    mem_write_u8(cmd_table + 4, lba % 256);           // LBA 7:0
+    mem_write_u8(cmd_table + 5, (lba / 256) % 256);   // LBA 15:8
+    mem_write_u8(cmd_table + 6, (lba / 65536) % 256); // LBA 23:16
+    mem_write_u8(cmd_table + 8, (lba / 16777216) % 256);  // LBA 31:24
+    mem_write_u8(cmd_table + 9, (lba / 4294967296) % 256); // LBA 39:32
+    mem_write_u8(cmd_table + 10, (lba / 1099511627776) % 256); // LBA 47:40
+
+    // Sector count
+    mem_write_u8(cmd_table + 12, count % 256);
+    mem_write_u8(cmd_table + 13, (count / 256) % 256);
+    return 0;
+}
+
+// Issue a command on a port and wait for completion
+fn ahci_issue_cmd(port, slot) {
+    // Set CI (Command Issue) bit for the slot
+    ahci_port_write(port, 56, 1);  // CI bit 0
+    // Poll until CI clears (command completed)
+    let mut timeout = 100000;
+    while timeout > 0 {
+        let ci = ahci_port_read(port, 56);
+        if ci == 0 { return 1; }  // success
+        timeout = timeout - 1;
+    }
+    return 0;  // timeout
+}
+
+// Read sectors via AHCI DMA
+fn ahci_read(port, lba, count, buf_addr) {
+    let clb = AHCI_CMD_LIST_BASE + port * 1024;
+    let cmd_table = AHCI_CMD_TABLE_BASE + port * 256;
+
+    // Build command header (slot 0, 32 bytes)
+    mem_zero(clb, 32);
+    // CFIS length = 5 dwords (20 bytes) in bits 0:4
+    mem_write_u16(clb, 5);
+    // PRDTL = 1 (one PRDT entry) at offset 16
+    mem_write_u16(clb + 2, 1);
+    // Command table base address
+    mem_write_u64(clb + 8, cmd_table);
+
+    // Build FIS
+    ahci_build_fis_h2d(cmd_table, ATA_CMD_READ_DMA_EXT, lba, count);
+
+    // Build PRDT entry (at cmd_table + 128)
+    let prdt = cmd_table + 128;
+    mem_write_u64(prdt, buf_addr);          // data base address
+    mem_write_u32(prdt + 12, count * 512 - 1);  // byte count - 1 (bit 0 of DW3)
+
+    // Issue command
+    return ahci_issue_cmd(port, 0);
+}
+
+// Write sectors via AHCI DMA
+fn ahci_write(port, lba, count, buf_addr) {
+    let clb = AHCI_CMD_LIST_BASE + port * 1024;
+    let cmd_table = AHCI_CMD_TABLE_BASE + port * 256;
+
+    mem_zero(clb, 32);
+    // CFIS length = 5, Write bit (bit 6)
+    mem_write_u16(clb, 5 + 64);  // W=1
+    mem_write_u16(clb + 2, 1);   // PRDTL=1
+    mem_write_u64(clb + 8, cmd_table);
+
+    ahci_build_fis_h2d(cmd_table, ATA_CMD_WRITE_DMA_EXT, lba, count);
+
+    let prdt = cmd_table + 128;
+    mem_write_u64(prdt, buf_addr);
+    mem_write_u32(prdt + 12, count * 512 - 1);
+
+    return ahci_issue_cmd(port, 0);
+}
+
+// IDENTIFY DEVICE: read drive info (512 bytes)
+fn ahci_identify(port) {
+    let clb = AHCI_CMD_LIST_BASE + port * 1024;
+    let cmd_table = AHCI_CMD_TABLE_BASE + port * 256;
+
+    mem_zero(clb, 32);
+    mem_write_u16(clb, 5);       // CFIS length
+    mem_write_u16(clb + 2, 1);   // PRDTL=1
+    mem_write_u64(clb + 8, cmd_table);
+
+    ahci_build_fis_h2d(cmd_table, ATA_CMD_IDENTIFY, 0, 0);
+
+    let prdt = cmd_table + 128;
+    mem_write_u64(prdt, AHCI_DATA_BUF);
+    mem_write_u32(prdt + 12, 511);  // 512 bytes - 1
+
+    let ok = ahci_issue_cmd(port, 0);
+    if ok == 0 { return 0; }
+
+    // Parse IDENTIFY data
+    // Word 60-61 (offset 120): total user addressable sectors (28-bit)
+    let sectors_28 = mem_read_u32(AHCI_DATA_BUF + 120);
+    // Word 100-103 (offset 200): total sectors (48-bit)
+    let sectors_48 = mem_read_u64(AHCI_DATA_BUF + 200);
+    let total_sectors = sectors_48;
+    if total_sectors == 0 { total_sectors = sectors_28; }
+
+    // Word 10-19 (offset 20): serial number (20 chars, ATA string = byte-swapped)
+    // Word 27-46 (offset 54): model number (40 chars)
+    let mb = total_sectors / 2048;  // sectors / 2048 = MB
+    print("  AHCI port " + to_string(port) + ": " + to_string(total_sectors) + " sectors (" + to_string(mb) + " MB)");
+    return total_sectors;
+}
+
+// Full AHCI initialization
+fn ahci_init() {
+    let pci_info = ahci_detect();
+    if len(pci_info) == 0 {
+        print("No AHCI controller found.");
+        return 0;
+    }
+
+    let bus = pci_info[0];
+    let dev = pci_info[1];
+    let func = pci_info[2];
+
+    // Read BAR5 (ABAR) -- mask lower 13 bits for MMIO
+    let bar5 = pci_bar(bus, dev, func, 5);
+    ahci_abar = (bar5 / 16) * 16;  // mask low 4 bits
+
+    // Enable bus mastering + memory space access
+    let pci_cmd = pci_config_read16(bus, dev, func, 4);
+    // Set bits 1 (Memory Space) and 2 (Bus Master)
+    // pci_config_write16(bus, dev, func, 4, pci_cmd | 0x06);
+
+    // Enable AHCI mode
+    ahci_enable();
+
+    // Read ports implemented
+    ahci_ports_impl = ahci_read(12);  // PI register
+    let version = ahci_read(16);
+
+    print("AHCI ABAR: 0x" + format_hex(ahci_abar, 8));
+    print("AHCI version: " + to_string((version / 65536) % 65536) + "." + to_string(version % 65536));
+    print("Ports implemented: 0x" + format_hex(ahci_ports_impl, 8));
+
+    // Initialize each implemented port
+    ahci_port_count = 0;
+    let mut port = 0;
+    while port < 32 {
+        // Check if port is implemented (bit in PI)
+        let mut pi_bit = 1;
+        let mut s = 0;
+        while s < port { pi_bit = pi_bit * 2; s = s + 1; }
+        if (ahci_ports_impl / pi_bit) % 2 == 1 {
+            ahci_port_init(port);
+            if ahci_port_connected(port) == 1 {
+                let sig = ahci_port_signature(port);
+                if sig == 257 {  // 0x00000101 = SATA device
+                    print("  Port " + to_string(port) + ": SATA device detected");
+                    ahci_identify(port);
+                    ahci_port_count = ahci_port_count + 1;
+                }
+                if sig == 3954161385 {  // 0xEB140101 = ATAPI (CD/DVD)
+                    print("  Port " + to_string(port) + ": ATAPI device (CD/DVD)");
+                }
+            }
+        }
+        port = port + 1;
+    }
+
+    print("AHCI: " + to_string(ahci_port_count) + " SATA device(s) initialized");
+    return ahci_port_count;
+}
+
+print("ahci.hl loaded -- AHCI/SATA disk driver");

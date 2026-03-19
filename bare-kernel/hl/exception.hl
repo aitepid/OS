@@ -1,0 +1,83 @@
+// exception.hl -- CPU Exception Handlers
+//
+// IDT vectors 0-31 are CPU exceptions.
+// Each handler prints diagnostic info and halts or kills the task.
+//
+// Key exceptions:
+//   0: Divide-by-zero (#DE)
+//   6: Invalid Opcode (#UD)
+//   8: Double Fault (#DF) -- fatal, requires IST
+//  13: General Protection Fault (#GP)
+//  14: Page Fault (#PF)
+//
+// Page Fault error code (pushed by CPU):
+//   bit 0: present (1=protection violation, 0=not-present)
+//   bit 1: write (1=write, 0=read)
+//   bit 2: user (1=user mode, 0=kernel mode)
+// CR2 contains the faulting virtual address.
+
+let EXC_NAMES = [
+    "Divide-by-zero", "Debug", "NMI", "Breakpoint",
+    "Overflow", "Bound Range", "Invalid Opcode", "Device N/A",
+    "Double Fault", "Coprocessor", "Invalid TSS", "Segment N/P",
+    "Stack-Segment", "General Protection", "Page Fault", "Reserved",
+    "x87 FPU", "Alignment Check", "Machine Check", "SIMD FPU",
+    "Virtualization", "Control Protection", "Reserved", "Reserved",
+    "Reserved", "Reserved", "Reserved", "Reserved",
+    "Hypervisor", "VMM Comm", "Security", "Reserved"
+];
+
+// Generic exception handler
+// vector: exception number (0-31)
+// error_code: CPU-pushed error code (or 0)
+// rip: instruction pointer at fault
+fn exception_handler(vector, error_code, rip) {
+    serial_print("!!! EXCEPTION: " + EXC_NAMES[vector]);
+    serial_print("  error_code=" + to_string(error_code) + " RIP=" + to_string(rip));
+
+    if vector == 14 {
+        // Page fault: log CR2 (faulting address passed via error_code high bits or separate arg)
+        serial_print("  Page Fault (code " + to_string(error_code) + ")");
+        // Demand paging: try to map a new page
+        let page = page_alloc();
+        if page != 0 {
+            // Simple demand paging: map and resume (real kernel would check validity)
+            return 0;
+        }
+        // Cannot allocate — kill task
+        serial_print("  OOM: killing task " + to_string(current_task));
+        task_kill(mem_read_u64(task_addr(current_task) + 8));
+        return 0;
+    }
+
+    if vector == 0 {
+        serial_print("  Divide-by-zero: sending SIGFPE to task " + to_string(current_task));
+        signal_send(mem_read_u64(task_addr(current_task) + 8), 8); // SIGFPE=8
+        return 0;
+    }
+
+    if vector == 6 {
+        serial_print("  Invalid opcode: sending SIGILL to task " + to_string(current_task));
+        signal_send(mem_read_u64(task_addr(current_task) + 8), 4); // SIGILL=4
+        return 0;
+    }
+
+    if vector == 13 {
+        serial_print("  GPF: sending SIGSEGV to task " + to_string(current_task));
+        signal_send(mem_read_u64(task_addr(current_task) + 8), SIGSEGV);
+        return 0;
+    }
+
+    if vector == 8 {
+        serial_print("DOUBLE FAULT - HALTING");
+        kernel_panic("Double fault (unrecoverable)");
+        return 0;
+    }
+
+    // Default: kill current task
+    task_kill(mem_read_u64(task_addr(current_task) + 8));
+    return 0;
+}
+
+print("exception.hl loaded");
+print("Handles: #DE, #UD, #DF, #GP, #PF");

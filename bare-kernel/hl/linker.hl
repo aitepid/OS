@@ -1,0 +1,162 @@
+// linker.hl -- HicOS Cross-Module Linker
+//
+// Links compiled kernel modules into a single native binary.
+//
+// Pipeline position:
+//   .hl → lexer → parser → AST → IR → codegen → [linker] → kernel.bin
+//
+// Two-pass linking:
+//   Pass 1: Collect exported symbols from all modules
+//           Calculate module offsets in final binary
+//   Pass 2: Resolve relocations (patch call/jmp addresses)
+//
+// Symbol table entry: [name, module_index, offset_in_module, type]
+//   type: "fn" (function), "var" (global variable), "const" (constant)
+//
+// Relocation entry: [call_site_offset, target_symbol_name, reloc_type]
+//   reloc_type: "rel32" (PC-relative 32-bit), "abs64" (absolute 64-bit)
+
+let LINK_TEXT_BASE = 1048576;    // 0x100000 -- .text segment start
+let LINK_TEXT_SIZE = 1048576;    // 0x100000 -- 1 MB max code
+let LINK_DATA_BASE = 3145728;   // 0x300000 -- .data segment start
+let LINK_DATA_SIZE = 1048576;   // 0x100000 -- 1 MB max data
+let LINK_RODATA_BASE = 4194304; // 0x400000 -- .rodata (strings)
+let LINK_RODATA_SIZE = 1048576; // 0x100000 -- 1 MB max rodata
+
+// Global state
+let mut link_symbols = [];      // array of [name, module_idx, offset, type]
+let mut link_relocs = [];       // array of [site_offset, target_name, reloc_type]
+let mut link_module_offsets = []; // array of offsets: module i starts at offset[i]
+let mut link_rodata_buf = [];   // string constant pool bytes
+
+fn linker_init() {
+    link_symbols = [];
+    link_relocs = [];
+    link_module_offsets = [];
+    link_rodata_buf = [];
+    return 0;
+}
+
+// Register an exported symbol
+fn linker_add_symbol(name, module_idx, offset, sym_type) {
+    push(link_symbols, [name, module_idx, offset, sym_type]);
+    return len(link_symbols) - 1;
+}
+
+// Register a relocation
+fn linker_add_reloc(site_offset, target_name, reloc_type) {
+    push(link_relocs, [site_offset, target_name, reloc_type]);
+    return len(link_relocs) - 1;
+}
+
+// Look up a symbol by name
+fn linker_find_symbol(name) {
+    let mut i = len(link_symbols) - 1;
+    while i >= 0 {
+        if link_symbols[i][0] == name {
+            return link_symbols[i];
+        }
+        i = i - 1;
+    }
+    return nil;
+}
+
+// Pass 1: Calculate module layout and collect symbols
+// module_codes: array of [module_path, code_bytes, symbols, relocs]
+fn linker_pass1(module_codes) {
+    let mut offset = 0;
+    let mut mi = 0;
+    while mi < len(module_codes) {
+        push(link_module_offsets, offset);
+        let mod_info = module_codes[mi];
+        let mod_syms = mod_info[2];
+        // Register all exported symbols with absolute offset
+        let mut si = 0;
+        while si < len(mod_syms) {
+            let sym = mod_syms[si];
+            linker_add_symbol(sym[0], mi, offset + sym[2], sym[3]);
+            si = si + 1;
+        }
+        // Accumulate code size
+        let code_size = len(mod_info[1]);
+        offset = offset + code_size;
+        mi = mi + 1;
+    }
+    return offset; // total .text size
+}
+
+// Pass 2: Resolve relocations in the combined binary
+// combined_code: flat byte array of all modules concatenated
+fn linker_pass2(combined_code) {
+    let mut resolved = 0;
+    let mut unresolved = 0;
+    let mut ri = 0;
+    while ri < len(link_relocs) {
+        let reloc = link_relocs[ri];
+        let site = reloc[0];
+        let target_name = reloc[1];
+        let reloc_type = reloc[2];
+        let sym = linker_find_symbol(target_name);
+        if sym != nil {
+            let target_offset = sym[2]; // absolute offset in .text
+            if reloc_type == "rel32" {
+                // PC-relative: target - (site + 4)
+                let rel = target_offset - (site + 4);
+                // Patch 4 bytes at site (little-endian)
+                combined_code[site] = rel % 256;
+                combined_code[site + 1] = (rel / 256) % 256;
+                combined_code[site + 2] = (rel / 65536) % 256;
+                combined_code[site + 3] = (rel / 16777216) % 256;
+                resolved = resolved + 1;
+            }
+            if reloc_type == "abs64" {
+                let addr = LINK_TEXT_BASE + target_offset;
+                combined_code[site] = addr % 256;
+                combined_code[site + 1] = (addr / 256) % 256;
+                combined_code[site + 2] = (addr / 65536) % 256;
+                combined_code[site + 3] = (addr / 16777216) % 256;
+                // High 4 bytes (zero for < 4GB)
+                combined_code[site + 4] = 0;
+                combined_code[site + 5] = 0;
+                combined_code[site + 6] = 0;
+                combined_code[site + 7] = 0;
+                resolved = resolved + 1;
+            }
+        } else {
+            unresolved = unresolved + 1;
+        }
+        ri = ri + 1;
+    }
+    return [resolved, unresolved];
+}
+
+// Add a string to the rodata pool, return its offset
+fn linker_add_string(s) {
+    let offset = len(link_rodata_buf);
+    let mut i = 0;
+    while i < len(s) {
+        let c = s[i];
+        let mut code = 63; // '?' default
+        let ascii = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+        let mut ai = 0;
+        while ai < len(ascii) {
+            if ascii[ai] == c { code = ai + 32; ai = len(ascii); }
+            ai = ai + 1;
+        }
+        if c == "\n" { code = 10; }
+        if c == "\r" { code = 13; }
+        if c == "\t" { code = 9; }
+        push(link_rodata_buf, code);
+        i = i + 1;
+    }
+    push(link_rodata_buf, 0); // null terminator
+    return offset;
+}
+
+fn linker_status() {
+    return to_string(len(link_symbols)) + " symbols, " +
+           to_string(len(link_relocs)) + " relocs, " +
+           to_string(len(link_module_offsets)) + " modules";
+}
+
+print("linker.hl loaded");

@@ -1,0 +1,142 @@
+// tmpfs.hl -- In-Memory Temporary Filesystem
+//
+// POSIX-compatible tmpfs mounted at /tmp (and optionally /dev/shm).
+// All data is stored in kernel memory, lost on reboot.
+// Used for: temp files, POSIX shared memory, build artifacts.
+//
+// Structure: flat inode table + name→inode directory.
+// Each inode: type, size, data pointer, permissions, timestamps.
+
+let TMPFS_MAX_INODES = 256;
+let TMPFS_MAX_FILESIZE = 65536;  // 64KB per file
+let TMPFS_DATA_BASE = 10485760;  // 0xA00000
+
+let mut tmpfs_inode_count = 0;
+
+// Inode table
+let tmpfs_type = [];      // 0=free, 1=file, 2=directory
+let tmpfs_size = [];
+let tmpfs_data_addr = [];
+let tmpfs_name = [];
+let tmpfs_parent = [];    // parent inode (for dirs)
+let tmpfs_mode = [];      // permissions
+
+fn tmpfs_init() {
+    let mut i = 0;
+    while i < TMPFS_MAX_INODES {
+        push(tmpfs_type, 0);
+        push(tmpfs_size, 0);
+        push(tmpfs_data_addr, 0);
+        push(tmpfs_name, "");
+        push(tmpfs_parent, 0);
+        push(tmpfs_mode, 493);  // 0o755
+        i = i + 1;
+    }
+    // Create root directory (inode 0)
+    tmpfs_type[0] = 2;
+    tmpfs_name[0] = "/tmp";
+    tmpfs_parent[0] = 0;
+    tmpfs_inode_count = 1;
+    return 0;
+}
+
+fn tmpfs_alloc_inode() {
+    let mut i = 1; // skip root
+    while i < TMPFS_MAX_INODES {
+        if tmpfs_type[i] == 0 {
+            return i;
+        }
+        i = i + 1;
+    }
+    return 0 - 1; // full
+}
+
+fn tmpfs_create(parent, name, mode) {
+    let inode = tmpfs_alloc_inode();
+    if inode < 0 { return 0 - 1; }
+    tmpfs_type[inode] = 1; // file
+    tmpfs_name[inode] = name;
+    tmpfs_parent[inode] = parent;
+    tmpfs_mode[inode] = mode;
+    tmpfs_size[inode] = 0;
+    tmpfs_data_addr[inode] = TMPFS_DATA_BASE + inode * TMPFS_MAX_FILESIZE;
+    tmpfs_inode_count = tmpfs_inode_count + 1;
+    return inode;
+}
+
+fn tmpfs_mkdir(parent, name) {
+    let inode = tmpfs_alloc_inode();
+    if inode < 0 { return 0 - 1; }
+    tmpfs_type[inode] = 2;
+    tmpfs_name[inode] = name;
+    tmpfs_parent[inode] = parent;
+    tmpfs_mode[inode] = 493;
+    tmpfs_inode_count = tmpfs_inode_count + 1;
+    return inode;
+}
+
+fn tmpfs_write(inode, data, size) {
+    if inode < 0 { return 0 - 1; }
+    if inode >= TMPFS_MAX_INODES { return 0 - 1; }
+    if tmpfs_type[inode] != 1 { return 0 - 1; }
+    if size > TMPFS_MAX_FILESIZE { size = TMPFS_MAX_FILESIZE; }
+    // memcpy(tmpfs_data_addr[inode], data, size);
+    tmpfs_size[inode] = size;
+    return size;
+}
+
+fn tmpfs_read(inode, buf, size) {
+    if inode < 0 { return 0 - 1; }
+    if inode >= TMPFS_MAX_INODES { return 0 - 1; }
+    if tmpfs_type[inode] != 1 { return 0 - 1; }
+    let read_size = size;
+    if read_size > tmpfs_size[inode] { read_size = tmpfs_size[inode]; }
+    // memcpy(buf, tmpfs_data_addr[inode], read_size);
+    return read_size;
+}
+
+fn tmpfs_unlink(inode) {
+    if inode <= 0 { return 0 - 1; } // can't delete root
+    if inode >= TMPFS_MAX_INODES { return 0 - 1; }
+    tmpfs_type[inode] = 0;
+    tmpfs_size[inode] = 0;
+    tmpfs_name[inode] = "";
+    tmpfs_inode_count = tmpfs_inode_count - 1;
+    return 0;
+}
+
+fn tmpfs_lookup(parent, name) {
+    let mut i = 0;
+    while i < TMPFS_MAX_INODES {
+        if tmpfs_type[i] != 0 {
+            if tmpfs_parent[i] == parent {
+                if tmpfs_name[i] == name {
+                    return i;
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn tmpfs_list(parent) {
+    let mut entries = [];
+    let mut i = 0;
+    while i < TMPFS_MAX_INODES {
+        if tmpfs_type[i] != 0 {
+            if tmpfs_parent[i] == parent {
+                push(entries, tmpfs_name[i]);
+            }
+        }
+        i = i + 1;
+    }
+    return entries;
+}
+
+fn tmpfs_stat() {
+    return to_string(tmpfs_inode_count) + "/" + to_string(TMPFS_MAX_INODES) + " inodes used";
+}
+
+print("tmpfs.hl loaded");
+print("tmpfs: " + to_string(TMPFS_MAX_INODES) + " inodes, " + to_string(TMPFS_MAX_FILESIZE / 1024) + "KB/file, /tmp");

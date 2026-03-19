@@ -1,0 +1,744 @@
+// kinterp.hl -- Kernel Embedded H-L Interpreter
+//
+// Minimal Hilbert-Lang interpreter that runs inside the kernel.
+// Used to execute .hl source files as user tasks.
+//
+// == Architecture ==
+//   Source (.hl) → Lexer → Parser → AST → Tree-walk Evaluator
+//
+// == Supported Syntax ==
+//   let [mut] name = expr;
+//   name = expr;
+//   fn name(params) { body }
+//   if cond { body } [else { body }]
+//   while cond { body }
+//   return expr;
+//   print(expr);
+//   // comments
+//   Expressions: +, -, *, /, %, ==, !=, <, >, <=, >=, &&, ||
+//   Strings: "...", concatenation with +
+//   Arrays: [], indexing with []
+//
+// == Memory Layout ==
+//   Each interpreter instance uses a flat value stack (1024 entries)
+//   and a variable environment chain (128 scopes).
+//   Function closures reference their defining scope.
+//
+// == Limitations ==
+//   - No classes, no decorators, no generators (Phase 2)
+//   - No import/require (all functions visible globally)
+//   - Maximum recursion depth: 64
+//   - Maximum source size: 64 KB
+
+// --- Token types ---
+let TOK_EOF    = 0;
+let TOK_NUM    = 1;
+let TOK_STR    = 2;
+let TOK_IDENT  = 3;
+let TOK_OP     = 4;
+let TOK_LPAREN = 5;
+let TOK_RPAREN = 6;
+let TOK_LBRACE = 7;
+let TOK_RBRACE = 8;
+let TOK_LBRACK = 9;
+let TOK_RBRACK = 10;
+let TOK_SEMI   = 11;
+let TOK_COMMA  = 12;
+let TOK_DOT    = 13;
+let TOK_KW     = 14;  // keyword (fn, let, if, while, return, etc.)
+
+let KI_MAX_TOKENS = 8192;
+let KI_MAX_VARS   = 512;
+let KI_MAX_FUNCS  = 256;
+let KI_MAX_DEPTH  = 64;
+let KI_MAX_SOURCE = 65536;
+
+// --- Lexer state ---
+let mut ki_source = "";
+let mut ki_source_len = 0;
+let mut ki_pos = 0;
+
+// Token storage: parallel arrays
+let ki_tok_types = [];
+let ki_tok_vals  = [];
+let mut ki_tok_count = 0;
+let mut ki_tok_idx = 0;
+
+// Variable storage: name→value map (flat, with scope markers)
+let ki_var_names = [];
+let ki_var_vals  = [];
+let mut ki_var_count = 0;
+
+// Function storage
+let ki_fn_names  = [];
+let ki_fn_params = [];  // array of param-name arrays
+let ki_fn_bodies = [];  // array of token-start indices
+let ki_fn_ends   = [];  // array of token-end indices
+let mut ki_fn_count = 0;
+
+// Call depth
+let mut ki_depth = 0;
+
+// Keywords
+fn ki_is_keyword(s) {
+    if s == "fn" { return 1; }
+    if s == "let" { return 1; }
+    if s == "mut" { return 1; }
+    if s == "if" { return 1; }
+    if s == "else" { return 1; }
+    if s == "while" { return 1; }
+    if s == "return" { return 1; }
+    if s == "true" { return 1; }
+    if s == "false" { return 1; }
+    if s == "nil" { return 1; }
+    return 0;
+}
+
+// --- Lexer ---
+fn ki_lex(source) {
+    ki_source = source;
+    ki_source_len = len(source);
+    ki_pos = 0;
+    ki_tok_count = 0;
+
+    while ki_pos < ki_source_len {
+        let ch = str_char_at(ki_source, ki_pos);
+
+        // Skip whitespace
+        if ch == 32 || ch == 9 || ch == 10 || ch == 13 {
+            ki_pos = ki_pos + 1;
+        }
+        // Skip comments
+        else if ch == 47 && ki_pos + 1 < ki_source_len && str_char_at(ki_source, ki_pos + 1) == 47 {
+            while ki_pos < ki_source_len && str_char_at(ki_source, ki_pos) != 10 {
+                ki_pos = ki_pos + 1;
+            }
+        }
+        // Number
+        else if ch >= 48 && ch <= 57 {
+            let start = ki_pos;
+            while ki_pos < ki_source_len {
+                let d = str_char_at(ki_source, ki_pos);
+                if d < 48 || d > 57 { ki_pos = ki_source_len + 1; }  // break
+                else { ki_pos = ki_pos + 1; }
+            }
+            // Fix: rewind to actual end
+            if ki_pos > ki_source_len { ki_pos = ki_pos - ki_source_len - 1 + start; }
+            let num_str = str_sub(ki_source, start, ki_pos);
+            push(ki_tok_types, TOK_NUM);
+            push(ki_tok_vals, num_str);
+            ki_tok_count = ki_tok_count + 1;
+        }
+        // String literal
+        else if ch == 34 {
+            ki_pos = ki_pos + 1;
+            let start = ki_pos;
+            while ki_pos < ki_source_len && str_char_at(ki_source, ki_pos) != 34 {
+                ki_pos = ki_pos + 1;
+            }
+            let sval = str_sub(ki_source, start, ki_pos);
+            ki_pos = ki_pos + 1;  // skip closing quote
+            push(ki_tok_types, TOK_STR);
+            push(ki_tok_vals, sval);
+            ki_tok_count = ki_tok_count + 1;
+        }
+        // Identifier or keyword
+        else if (ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122) || ch == 95 {
+            let start = ki_pos;
+            while ki_pos < ki_source_len {
+                let ic = str_char_at(ki_source, ki_pos);
+                if (ic >= 65 && ic <= 90) || (ic >= 97 && ic <= 122) || (ic >= 48 && ic <= 57) || ic == 95 {
+                    ki_pos = ki_pos + 1;
+                } else {
+                    ki_pos = ki_source_len + 1; // break
+                }
+            }
+            if ki_pos > ki_source_len { ki_pos = ki_pos - ki_source_len - 1 + start; }
+            let ident = str_sub(ki_source, start, ki_pos);
+            if ki_is_keyword(ident) == 1 {
+                push(ki_tok_types, TOK_KW);
+            } else {
+                push(ki_tok_types, TOK_IDENT);
+            }
+            push(ki_tok_vals, ident);
+            ki_tok_count = ki_tok_count + 1;
+        }
+        // Two-character operators
+        else if ch == 61 && ki_pos + 1 < ki_source_len && str_char_at(ki_source, ki_pos + 1) == 61 {
+            push(ki_tok_types, TOK_OP); push(ki_tok_vals, "==");
+            ki_tok_count = ki_tok_count + 1; ki_pos = ki_pos + 2;
+        }
+        else if ch == 33 && ki_pos + 1 < ki_source_len && str_char_at(ki_source, ki_pos + 1) == 61 {
+            push(ki_tok_types, TOK_OP); push(ki_tok_vals, "!=");
+            ki_tok_count = ki_tok_count + 1; ki_pos = ki_pos + 2;
+        }
+        else if ch == 60 && ki_pos + 1 < ki_source_len && str_char_at(ki_source, ki_pos + 1) == 61 {
+            push(ki_tok_types, TOK_OP); push(ki_tok_vals, "<=");
+            ki_tok_count = ki_tok_count + 1; ki_pos = ki_pos + 2;
+        }
+        else if ch == 62 && ki_pos + 1 < ki_source_len && str_char_at(ki_source, ki_pos + 1) == 61 {
+            push(ki_tok_types, TOK_OP); push(ki_tok_vals, ">=");
+            ki_tok_count = ki_tok_count + 1; ki_pos = ki_pos + 2;
+        }
+        else if ch == 38 && ki_pos + 1 < ki_source_len && str_char_at(ki_source, ki_pos + 1) == 38 {
+            push(ki_tok_types, TOK_OP); push(ki_tok_vals, "&&");
+            ki_tok_count = ki_tok_count + 1; ki_pos = ki_pos + 2;
+        }
+        else if ch == 124 && ki_pos + 1 < ki_source_len && str_char_at(ki_source, ki_pos + 1) == 124 {
+            push(ki_tok_types, TOK_OP); push(ki_tok_vals, "||");
+            ki_tok_count = ki_tok_count + 1; ki_pos = ki_pos + 2;
+        }
+        // Single character tokens
+        else if ch == 40 { push(ki_tok_types, TOK_LPAREN); push(ki_tok_vals, "("); ki_tok_count = ki_tok_count + 1; ki_pos = ki_pos + 1; }
+        else if ch == 41 { push(ki_tok_types, TOK_RPAREN); push(ki_tok_vals, ")"); ki_tok_count = ki_tok_count + 1; ki_pos = ki_pos + 1; }
+        else if ch == 123 { push(ki_tok_types, TOK_LBRACE); push(ki_tok_vals, "{"); ki_tok_count = ki_tok_count + 1; ki_pos = ki_pos + 1; }
+        else if ch == 125 { push(ki_tok_types, TOK_RBRACE); push(ki_tok_vals, "}"); ki_tok_count = ki_tok_count + 1; ki_pos = ki_pos + 1; }
+        else if ch == 91 { push(ki_tok_types, TOK_LBRACK); push(ki_tok_vals, "["); ki_tok_count = ki_tok_count + 1; ki_pos = ki_pos + 1; }
+        else if ch == 93 { push(ki_tok_types, TOK_RBRACK); push(ki_tok_vals, "]"); ki_tok_count = ki_tok_count + 1; ki_pos = ki_pos + 1; }
+        else if ch == 59 { push(ki_tok_types, TOK_SEMI); push(ki_tok_vals, ";"); ki_tok_count = ki_tok_count + 1; ki_pos = ki_pos + 1; }
+        else if ch == 44 { push(ki_tok_types, TOK_COMMA); push(ki_tok_vals, ","); ki_tok_count = ki_tok_count + 1; ki_pos = ki_pos + 1; }
+        else if ch == 46 { push(ki_tok_types, TOK_DOT); push(ki_tok_vals, "."); ki_tok_count = ki_tok_count + 1; ki_pos = ki_pos + 1; }
+        // Single-char operators
+        else if ch == 43 || ch == 45 || ch == 42 || ch == 47 || ch == 37 || ch == 60 || ch == 62 || ch == 61 {
+            push(ki_tok_types, TOK_OP);
+            push(ki_tok_vals, str_from_code(ch));
+            ki_tok_count = ki_tok_count + 1;
+            ki_pos = ki_pos + 1;
+        }
+        // Skip unknown characters
+        else {
+            ki_pos = ki_pos + 1;
+        }
+    }
+
+    // Append EOF
+    push(ki_tok_types, TOK_EOF);
+    push(ki_tok_vals, "");
+    ki_tok_count = ki_tok_count + 1;
+    return ki_tok_count;
+}
+
+// --- Parser/Evaluator helpers ---
+fn ki_peek_type() {
+    if ki_tok_idx >= ki_tok_count { return TOK_EOF; }
+    return ki_tok_types[ki_tok_idx];
+}
+
+fn ki_peek_val() {
+    if ki_tok_idx >= ki_tok_count { return ""; }
+    return ki_tok_vals[ki_tok_idx];
+}
+
+fn ki_advance() {
+    ki_tok_idx = ki_tok_idx + 1;
+    return 0;
+}
+
+fn ki_expect_val(expected) {
+    if ki_peek_val() != expected {
+        print("kinterp: expected '" + expected + "' got '" + ki_peek_val() + "'");
+        return 0;
+    }
+    ki_advance();
+    return 1;
+}
+
+// --- Variable environment ---
+fn ki_var_set(name, value) {
+    // Search backwards (inner scope first)
+    let mut i = ki_var_count - 1;
+    while i >= 0 {
+        if ki_var_names[i] == name {
+            ki_var_vals[i] = value;
+            return 0;
+        }
+        i = i - 1;
+    }
+    // New variable
+    push(ki_var_names, name);
+    push(ki_var_vals, value);
+    ki_var_count = ki_var_count + 1;
+    return 0;
+}
+
+fn ki_var_get(name) {
+    let mut i = ki_var_count - 1;
+    while i >= 0 {
+        if ki_var_names[i] == name {
+            return ki_var_vals[i];
+        }
+        i = i - 1;
+    }
+    return 0;  // undefined → 0
+}
+
+// --- Function registry ---
+fn ki_fn_register(name, params, body_start, body_end) {
+    push(ki_fn_names, name);
+    push(ki_fn_params, params);
+    push(ki_fn_bodies, body_start);
+    push(ki_fn_ends, body_end);
+    ki_fn_count = ki_fn_count + 1;
+    return 0;
+}
+
+fn ki_fn_find(name) {
+    let mut i = 0;
+    while i < ki_fn_count {
+        if ki_fn_names[i] == name { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;  // not found
+}
+
+// --- Built-in functions ---
+fn ki_call_builtin(name, args) {
+    if name == "print" {
+        if len(args) > 0 { serial_print(to_string(args[0])); }
+        else { serial_print(""); }
+        return 0;
+    }
+    if name == "to_string" {
+        if len(args) > 0 { return to_string(args[0]); }
+        return "";
+    }
+    if name == "len" {
+        if len(args) > 0 { return len(args[0]); }
+        return 0;
+    }
+    if name == "push" {
+        if len(args) >= 2 { push(args[0], args[1]); }
+        return 0;
+    }
+    // Kernel builtins
+    if name == "mem_read_u8" { return mem_read_u8(args[0]); }
+    if name == "mem_write_u8" { mem_write_u8(args[0], args[1]); return 0; }
+    if name == "mem_read_u32" { return mem_read_u32(args[0]); }
+    if name == "mem_write_u32" { mem_write_u32(args[0], args[1]); return 0; }
+    if name == "page_alloc" { return page_alloc(); }
+    if name == "page_free" { page_free(args[0]); return 0; }
+    if name == "get_ticks" { return get_ticks(); }
+    if name == "hilbert_encode" { return hilbert_encode(args[0], args[1], args[2]); }
+    if name == "hilbert_dist" { return hilbert_dist(args[0], args[1]); }
+    return 0 - 99999;  // sentinel: not a builtin
+}
+
+// --- Expression parser (recursive descent) ---
+// Forward declarations via mutual recursion
+// Precedence: || < && < == != < < > <= >= < + - < * / %
+
+fn ki_parse_expr();      // forward
+fn ki_parse_primary();   // forward
+
+fn ki_parse_primary() {
+    let tt = ki_peek_type();
+    let tv = ki_peek_val();
+
+    // Number literal
+    if tt == TOK_NUM {
+        ki_advance();
+        return parse_int(tv);
+    }
+    // String literal
+    if tt == TOK_STR {
+        ki_advance();
+        return tv;
+    }
+    // true/false/nil
+    if tt == TOK_KW && tv == "true" { ki_advance(); return 1; }
+    if tt == TOK_KW && tv == "false" { ki_advance(); return 0; }
+    if tt == TOK_KW && tv == "nil" { ki_advance(); return 0; }
+    // Parenthesized expression
+    if tt == TOK_LPAREN {
+        ki_advance();
+        let val = ki_parse_expr();
+        ki_expect_val(")");
+        return val;
+    }
+    // Array literal []
+    if tt == TOK_LBRACK {
+        ki_advance();
+        let arr = [];
+        while ki_peek_type() != TOK_RBRACK && ki_peek_type() != TOK_EOF {
+            push(arr, ki_parse_expr());
+            if ki_peek_val() == "," { ki_advance(); }
+        }
+        ki_expect_val("]");
+        return arr;
+    }
+    // Identifier (variable or function call)
+    if tt == TOK_IDENT {
+        let name = tv;
+        ki_advance();
+        // Function call
+        if ki_peek_type() == TOK_LPAREN {
+            ki_advance();
+            let args = [];
+            while ki_peek_type() != TOK_RPAREN && ki_peek_type() != TOK_EOF {
+                push(args, ki_parse_expr());
+                if ki_peek_val() == "," { ki_advance(); }
+            }
+            ki_expect_val(")");
+            // Try builtin first
+            let br = ki_call_builtin(name, args);
+            if br != 0 - 99999 { return br; }
+            // User-defined function
+            let fi = ki_fn_find(name);
+            if fi >= 0 {
+                return ki_call_fn(fi, args);
+            }
+            return 0;
+        }
+        // Array indexing
+        if ki_peek_type() == TOK_LBRACK {
+            ki_advance();
+            let idx = ki_parse_expr();
+            ki_expect_val("]");
+            let arr_val = ki_var_get(name);
+            return arr_val[idx];
+        }
+        // Variable
+        return ki_var_get(name);
+    }
+    // Unary minus
+    if tt == TOK_OP && tv == "-" {
+        ki_advance();
+        return 0 - ki_parse_primary();
+    }
+    ki_advance();
+    return 0;
+}
+
+fn ki_parse_mul() {
+    let mut left = ki_parse_primary();
+    while ki_peek_val() == "*" || ki_peek_val() == "/" || ki_peek_val() == "%" {
+        let op = ki_peek_val();
+        ki_advance();
+        let right = ki_parse_primary();
+        if op == "*" { left = left * right; }
+        if op == "/" { if right != 0 { left = left / right; } }
+        if op == "%" { left = left % right; }
+    }
+    return left;
+}
+
+fn ki_parse_add() {
+    let mut left = ki_parse_mul();
+    while ki_peek_val() == "+" || ki_peek_val() == "-" {
+        let op = ki_peek_val();
+        ki_advance();
+        let right = ki_parse_mul();
+        if op == "+" { left = left + right; }
+        if op == "-" { left = left - right; }
+    }
+    return left;
+}
+
+fn ki_parse_cmp() {
+    let mut left = ki_parse_add();
+    while ki_peek_val() == "<" || ki_peek_val() == ">" || ki_peek_val() == "<=" || ki_peek_val() == ">=" {
+        let op = ki_peek_val();
+        ki_advance();
+        let right = ki_parse_add();
+        if op == "<" { if left < right { left = 1; } else { left = 0; } }
+        if op == ">" { if left > right { left = 1; } else { left = 0; } }
+        if op == "<=" { if left <= right { left = 1; } else { left = 0; } }
+        if op == ">=" { if left >= right { left = 1; } else { left = 0; } }
+    }
+    return left;
+}
+
+fn ki_parse_eq() {
+    let mut left = ki_parse_cmp();
+    while ki_peek_val() == "==" || ki_peek_val() == "!=" {
+        let op = ki_peek_val();
+        ki_advance();
+        let right = ki_parse_cmp();
+        if op == "==" { if left == right { left = 1; } else { left = 0; } }
+        if op == "!=" { if left != right { left = 1; } else { left = 0; } }
+    }
+    return left;
+}
+
+fn ki_parse_expr() {
+    return ki_parse_eq();
+}
+
+// --- Statement execution ---
+// Returns: [continue_flag, return_value]
+//   continue_flag: 1 = keep going, 0 = return encountered
+
+fn ki_exec_block();  // forward
+
+fn ki_exec_stmt() {
+    let tt = ki_peek_type();
+    let tv = ki_peek_val();
+
+    // End of block
+    if tt == TOK_RBRACE || tt == TOK_EOF { return [1, 0]; }
+
+    // fn definition (skip — pre-parsed)
+    if tt == TOK_KW && tv == "fn" {
+        // Skip past the entire function definition
+        ki_advance(); // fn
+        ki_advance(); // name
+        ki_advance(); // (
+        while ki_peek_type() != TOK_RPAREN && ki_peek_type() != TOK_EOF { ki_advance(); }
+        ki_advance(); // )
+        ki_expect_val("{");
+        let mut depth = 1;
+        while depth > 0 && ki_peek_type() != TOK_EOF {
+            if ki_peek_val() == "{" { depth = depth + 1; }
+            if ki_peek_val() == "}" { depth = depth - 1; }
+            if depth > 0 { ki_advance(); }
+        }
+        ki_advance(); // closing }
+        return [1, 0];
+    }
+
+    // let [mut] name = expr;
+    if tt == TOK_KW && tv == "let" {
+        ki_advance(); // let
+        if ki_peek_val() == "mut" { ki_advance(); } // mut
+        let name = ki_peek_val();
+        ki_advance(); // name
+        ki_expect_val("=");
+        let value = ki_parse_expr();
+        if ki_peek_val() == ";" { ki_advance(); }
+        ki_var_set(name, value);
+        return [1, 0];
+    }
+
+    // return expr;
+    if tt == TOK_KW && tv == "return" {
+        ki_advance();
+        let rval = ki_parse_expr();
+        if ki_peek_val() == ";" { ki_advance(); }
+        return [0, rval];
+    }
+
+    // if cond { body } [else { body }]
+    if tt == TOK_KW && tv == "if" {
+        ki_advance(); // if
+        let cond = ki_parse_expr();
+        ki_expect_val("{");
+        if cond != 0 {
+            let r = ki_exec_block();
+            ki_expect_val("}");
+            // Skip else
+            if ki_peek_val() == "else" {
+                ki_advance();
+                ki_expect_val("{");
+                let mut d = 1;
+                while d > 0 && ki_peek_type() != TOK_EOF {
+                    if ki_peek_val() == "{" { d = d + 1; }
+                    if ki_peek_val() == "}" { d = d - 1; }
+                    if d > 0 { ki_advance(); }
+                }
+                ki_advance();
+            }
+            return r;
+        } else {
+            // Skip if-body
+            let mut d = 1;
+            while d > 0 && ki_peek_type() != TOK_EOF {
+                if ki_peek_val() == "{" { d = d + 1; }
+                if ki_peek_val() == "}" { d = d - 1; }
+                if d > 0 { ki_advance(); }
+            }
+            ki_advance();
+            // Check for else
+            if ki_peek_val() == "else" {
+                ki_advance();
+                ki_expect_val("{");
+                let r = ki_exec_block();
+                ki_expect_val("}");
+                return r;
+            }
+        }
+        return [1, 0];
+    }
+
+    // while cond { body }
+    if tt == TOK_KW && tv == "while" {
+        ki_advance(); // while
+        let loop_start = ki_tok_idx;
+        let mut guard = 10000;
+        while guard > 0 {
+            ki_tok_idx = loop_start;
+            let cond = ki_parse_expr();
+            if cond == 0 {
+                // Skip body
+                ki_expect_val("{");
+                let mut d = 1;
+                while d > 0 && ki_peek_type() != TOK_EOF {
+                    if ki_peek_val() == "{" { d = d + 1; }
+                    if ki_peek_val() == "}" { d = d - 1; }
+                    if d > 0 { ki_advance(); }
+                }
+                ki_advance();
+                guard = 0; // break
+            } else {
+                ki_expect_val("{");
+                let r = ki_exec_block();
+                ki_expect_val("}");
+                if r[0] == 0 { return r; } // return in loop
+            }
+            guard = guard - 1;
+        }
+        return [1, 0];
+    }
+
+    // Assignment: name = expr; or function call
+    if tt == TOK_IDENT {
+        let name = tv;
+        ki_advance();
+        // Assignment
+        if ki_peek_val() == "=" {
+            ki_advance();
+            let value = ki_parse_expr();
+            if ki_peek_val() == ";" { ki_advance(); }
+            ki_var_set(name, value);
+            return [1, 0];
+        }
+        // Function call
+        if ki_peek_type() == TOK_LPAREN {
+            ki_tok_idx = ki_tok_idx - 1; // back up
+            ki_parse_expr(); // evaluate call
+            if ki_peek_val() == ";" { ki_advance(); }
+            return [1, 0];
+        }
+        // Array index assignment: was parsed differently — skip for now
+    }
+
+    // Skip unrecognized token
+    ki_advance();
+    return [1, 0];
+}
+
+fn ki_exec_block() {
+    while ki_peek_type() != TOK_RBRACE && ki_peek_type() != TOK_EOF {
+        let r = ki_exec_stmt();
+        if r[0] == 0 { return r; } // return
+    }
+    return [1, 0];
+}
+
+// --- Function call ---
+fn ki_call_fn(fi, args) {
+    if ki_depth >= KI_MAX_DEPTH {
+        print("kinterp: max recursion depth");
+        return 0;
+    }
+    ki_depth = ki_depth + 1;
+    let saved_idx = ki_tok_idx;
+    let saved_var_count = ki_var_count;
+
+    // Bind parameters
+    let params = ki_fn_params[fi];
+    let mut pi = 0;
+    while pi < len(params) {
+        if pi < len(args) {
+            ki_var_set(params[pi], args[pi]);
+        } else {
+            ki_var_set(params[pi], 0);
+        }
+        pi = pi + 1;
+    }
+
+    // Jump to function body
+    ki_tok_idx = ki_fn_bodies[fi];
+    let r = ki_exec_block();
+
+    // Restore
+    ki_tok_idx = saved_idx;
+    ki_var_count = saved_var_count;
+    ki_depth = ki_depth - 1;
+    return r[1];
+}
+
+// --- Pre-parse: collect function definitions ---
+fn ki_preparse() {
+    ki_tok_idx = 0;
+    while ki_tok_idx < ki_tok_count {
+        if ki_peek_type() == TOK_KW && ki_peek_val() == "fn" {
+            ki_advance(); // fn
+            let name = ki_peek_val();
+            ki_advance(); // name
+            ki_advance(); // (
+            let params = [];
+            while ki_peek_type() != TOK_RPAREN && ki_peek_type() != TOK_EOF {
+                if ki_peek_type() == TOK_IDENT {
+                    push(params, ki_peek_val());
+                }
+                ki_advance();
+                if ki_peek_val() == "," { ki_advance(); }
+            }
+            ki_advance(); // )
+            ki_expect_val("{");
+            let body_start = ki_tok_idx;
+            let mut depth = 1;
+            while depth > 0 && ki_peek_type() != TOK_EOF {
+                if ki_peek_val() == "{" { depth = depth + 1; }
+                if ki_peek_val() == "}" { depth = depth - 1; }
+                if depth > 0 { ki_advance(); }
+            }
+            let body_end = ki_tok_idx;
+            ki_advance(); // closing }
+            ki_fn_register(name, params, body_start, body_end);
+        } else {
+            ki_advance();
+        }
+    }
+    return ki_fn_count;
+}
+
+// === Public API ===
+
+// Execute H-L source code string. Returns last expression value.
+fn kinterp_exec(source) {
+    // Reset state
+    ki_tok_count = 0; ki_tok_idx = 0;
+    ki_var_count = 0; ki_fn_count = 0;
+    ki_depth = 0;
+
+    // Lex
+    let tok_count = ki_lex(source);
+
+    // Pre-parse functions
+    ki_preparse();
+
+    // Execute top-level statements
+    ki_tok_idx = 0;
+    let r = ki_exec_block();
+    return r[1];
+}
+
+// Execute H-L file from VFS path
+fn kinterp_exec_file(path) {
+    let fd = vfs_open(path, 0);
+    if fd < 0 {
+        print("kinterp: cannot open " + path);
+        return 0 - 1;
+    }
+    let stat = vfs_stat(path);
+    let size = stat[0];
+    if size > KI_MAX_SOURCE {
+        vfs_close(fd);
+        print("kinterp: file too large (" + to_string(size) + " bytes)");
+        return 0 - 1;
+    }
+    let content = vfs_read(fd, 0, size);
+    vfs_close(fd);
+    return kinterp_exec(content);
+}
+
+// Self-test
+fn _kinterp_test() {
+    print("kinterp: self-test...");
+    let r = kinterp_exec("let x = 6 * 7; print(to_string(x));");
+    print("kinterp: self-test complete");
+    return 0;
+}
+
+print("kinterp.hl loaded: kernel embedded H-L interpreter");

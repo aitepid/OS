@@ -1,0 +1,294 @@
+// net.hl -- Minimal IP/UDP Network Stack
+//
+// Implements just enough for ARP + IPv4 + UDP + DHCP discovery.
+// No TCP yet (that's Phase 3).
+//
+// Ethernet frame layout (14 bytes):
+//   dst_mac(6) | src_mac(6) | ethertype(2)
+//   Ethertype: 0x0800=IPv4, 0x0806=ARP
+//
+// IPv4 header (20 bytes, no options):
+//   ver_ihl(1) | tos(1) | total_len(2) | id(2) | flags_frag(2)
+//   ttl(1) | proto(1) | checksum(2) | src_ip(4) | dst_ip(4)
+//   Proto: 1=ICMP, 6=TCP, 17=UDP
+//
+// UDP header (8 bytes):
+//   src_port(2) | dst_port(2) | length(2) | checksum(2)
+
+let ETH_IP  = 2048;   // 0x0800
+let ETH_ARP = 2054;   // 0x0806
+
+let IP_ICMP = 1;
+let IP_TCP  = 6;
+let IP_UDP  = 17;
+
+// Our network config
+let mut my_ip   = [10, 0, 2, 15];    // QEMU default
+let mut my_mac  = [0, 0, 0, 0, 0, 0];
+let mut gw_ip   = [10, 0, 2, 2];     // QEMU default gateway
+let mut gw_mac  = [0, 0, 0, 0, 0, 0];
+let mut netmask = [255, 255, 255, 0];
+
+// Pack IP address as 32-bit integer
+fn ip_pack(a, b, c, d) {
+    return a * 16777216 + b * 65536 + c * 256 + d;
+}
+
+// Unpack 32-bit IP to array
+fn ip_unpack(ip) {
+    return [
+        (ip / 16777216) % 256,
+        (ip / 65536) % 256,
+        (ip / 256) % 256,
+        ip % 256
+    ];
+}
+
+// Compute IP header checksum (ones' complement sum)
+fn ip_checksum(header_bytes) {
+    let mut sum = 0;
+    let mut i = 0;
+    while i < len(header_bytes) - 1 {
+        sum = sum + header_bytes[i] * 256 + header_bytes[i + 1];
+        i = i + 2;
+    }
+    // Fold carry
+    while sum > 65535 {
+        sum = (sum % 65536) + (sum / 65536);
+    }
+    return 65535 - sum; // ones' complement
+}
+
+// Build Ethernet + IPv4 + UDP packet
+// Returns array of bytes
+fn build_udp_packet(dst_mac, dst_ip, src_port, dst_port, payload) {
+    let mut pkt = [];
+
+    // Ethernet header (14 bytes)
+    let mut i = 0;
+    while i < 6 { push(pkt, dst_mac[i]); i = i + 1; }
+    i = 0;
+    while i < 6 { push(pkt, my_mac[i]); i = i + 1; }
+    push(pkt, 8); push(pkt, 0); // Ethertype = 0x0800 (IPv4)
+
+    // IPv4 header (20 bytes)
+    let ip_total_len = 20 + 8 + len(payload);
+    push(pkt, 69);  // ver=4, ihl=5 (0x45)
+    push(pkt, 0);   // TOS
+    push(pkt, (ip_total_len / 256) % 256);
+    push(pkt, ip_total_len % 256);
+    push(pkt, 0); push(pkt, 0); // ID
+    push(pkt, 64); push(pkt, 0); // flags=DF, frag=0
+    push(pkt, 64);  // TTL=64
+    push(pkt, 17);  // protocol=UDP
+    push(pkt, 0); push(pkt, 0); // checksum field (index 24,25)
+
+    // Source IP
+    i = 0;
+    while i < 4 { push(pkt, my_ip[i]); i = i + 1; }
+    // Dest IP
+    i = 0;
+    while i < 4 { push(pkt, dst_ip[i]); i = i + 1; }
+
+    // Compute IP checksum over bytes 14..33
+    let mut ip_hdr = [];
+    i = 14;
+    while i < 34 { push(ip_hdr, pkt[i]); i = i + 1; }
+    let cksum = ip_checksum(ip_hdr);
+    // Patch checksum at pkt[24], pkt[25]
+    set_at(pkt, 24, (cksum / 256) % 256);
+    set_at(pkt, 25, cksum % 256);
+
+    // UDP header (8 bytes)
+    let udp_len = 8 + len(payload);
+    push(pkt, (src_port / 256) % 256);
+    push(pkt, src_port % 256);
+    push(pkt, (dst_port / 256) % 256);
+    push(pkt, dst_port % 256);
+    push(pkt, (udp_len / 256) % 256);
+    push(pkt, udp_len % 256);
+    push(pkt, 0); push(pkt, 0); // UDP checksum (optional, 0=skip)
+
+    // Payload
+    i = 0;
+    while i < len(payload) { push(pkt, payload[i]); i = i + 1; }
+
+    return pkt;
+}
+
+// Build ARP request
+fn build_arp_request(target_ip) {
+    let mut pkt = [];
+    // Ethernet: broadcast
+    let mut i = 0;
+    while i < 6 { push(pkt, 255); i = i + 1; } // dst = FF:FF:FF:FF:FF:FF
+    i = 0;
+    while i < 6 { push(pkt, my_mac[i]); i = i + 1; } // src
+    push(pkt, 8); push(pkt, 6); // Ethertype = 0x0806 (ARP)
+
+    // ARP header
+    push(pkt, 0); push(pkt, 1);   // hardware type = Ethernet
+    push(pkt, 8); push(pkt, 0);   // protocol type = IPv4
+    push(pkt, 6);                   // hw addr len
+    push(pkt, 4);                   // proto addr len
+    push(pkt, 0); push(pkt, 1);   // operation = request
+
+    // Sender MAC + IP
+    i = 0;
+    while i < 6 { push(pkt, my_mac[i]); i = i + 1; }
+    i = 0;
+    while i < 4 { push(pkt, my_ip[i]); i = i + 1; }
+
+    // Target MAC (unknown) + IP
+    i = 0;
+    while i < 6 { push(pkt, 0); i = i + 1; }
+    i = 0;
+    while i < 4 { push(pkt, target_ip[i]); i = i + 1; }
+
+    return pkt;
+}
+
+// Parse received Ethernet frame
+fn parse_eth_frame(data) {
+    if len(data) < 14 { return nil; }
+    let ethertype = data[12] * 256 + data[13];
+    return [ethertype, 14]; // [type, payload_offset]
+}
+
+// ARP table (simple, max 16 entries)
+let ARP_MAX = 16;
+let mut arp_table_ip = [];
+let mut arp_table_mac = [];
+let mut arp_count = 0;
+
+fn arp_init() {
+    arp_count = 0;
+    let mut i = 0;
+    while i < ARP_MAX {
+        push(arp_table_ip, 0);
+        push(arp_table_mac, [0, 0, 0, 0, 0, 0]);
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn arp_lookup(ip_packed) {
+    let mut i = 0;
+    while i < arp_count {
+        if arp_table_ip[i] == ip_packed { return arp_table_mac[i]; }
+        i = i + 1;
+    }
+    return [0, 0, 0, 0, 0, 0];
+}
+
+fn arp_update(ip_packed, mac) {
+    let mut i = 0;
+    while i < arp_count {
+        if arp_table_ip[i] == ip_packed { arp_table_mac[i] = mac; return 0; }
+        i = i + 1;
+    }
+    if arp_count < ARP_MAX {
+        arp_table_ip[arp_count] = ip_packed;
+        arp_table_mac[arp_count] = mac;
+        arp_count = arp_count + 1;
+    }
+    return 0;
+}
+
+// Parse ARP reply and update table
+fn arp_input(data, offset) {
+    if len(data) < offset + 28 { return 0; }
+    let op = data[offset + 6] * 256 + data[offset + 7];
+    // Sender MAC
+    let smac = [data[offset+8], data[offset+9], data[offset+10], data[offset+11], data[offset+12], data[offset+13]];
+    // Sender IP
+    let sip = ip_pack(data[offset+14], data[offset+15], data[offset+16], data[offset+17]);
+    arp_update(sip, smac);
+    if op == 2 {
+        // ARP reply: update gateway MAC if this is our gateway
+        let gw_packed = ip_pack(gw_ip[0], gw_ip[1], gw_ip[2], gw_ip[3]);
+        if sip == gw_packed {
+            gw_mac = smac;
+        }
+    }
+    return op;
+}
+
+// Main network input handler: dispatch by protocol
+fn net_input(pkt) {
+    let eth = parse_eth_frame(pkt);
+    if eth == nil { return 0; }
+    let ethertype = eth[0];
+    let offset = eth[1];
+
+    if ethertype == ETH_ARP {
+        return arp_input(pkt, offset);
+    }
+    if ethertype == ETH_IP {
+        // Parse IPv4 header
+        if len(pkt) < offset + 20 { return 0; }
+        let ihl = (pkt[offset] % 16) * 4;
+        let proto = pkt[offset + 9];
+        let ip_payload_off = offset + ihl;
+
+        if proto == IP_ICMP {
+            // Extract ICMP data
+            let mut icmp_data = [];
+            let mut i = ip_payload_off;
+            while i < len(pkt) { push(icmp_data, pkt[i]); i = i + 1; }
+            return icmp_input(icmp_data);
+        }
+        if proto == IP_UDP {
+            // Parse UDP header
+            if len(pkt) < ip_payload_off + 8 { return 0; }
+            let dst_port = pkt[ip_payload_off + 2] * 256 + pkt[ip_payload_off + 3];
+            // DHCP response on port 68
+            if dst_port == 68 {
+                let mut udp_data = [];
+                let mut i = ip_payload_off + 8;
+                while i < len(pkt) { push(udp_data, pkt[i]); i = i + 1; }
+                return dhcp_input(udp_data);
+            }
+        }
+        if proto == IP_TCP {
+            let src_ip = ip_pack(pkt[offset+12], pkt[offset+13], pkt[offset+14], pkt[offset+15]);
+            let mut tcp_data = [];
+            let mut i = ip_payload_off;
+            while i < len(pkt) { push(tcp_data, pkt[i]); i = i + 1; }
+            return tcp_input(src_ip, tcp_data);
+        }
+    }
+    return 0;
+}
+
+// Poll network: receive packets and process them
+fn net_poll() {
+    let pkt = virtio_net_recv_pkt();
+    if len(pkt) > 0 {
+        net_input(pkt);
+        return 1;
+    }
+    return 0;
+}
+
+// Network initialization
+fn net_init() {
+    arp_init();
+    let pci_info = virtio_net_detect();
+    if len(pci_info) > 0 {
+        virtio_net_init(pci_info[0], pci_info[1], pci_info[2]);
+        // Send ARP for gateway
+        let arp = build_arp_request(gw_ip);
+        virtio_net_send_pkt(arp);
+        return 1;
+    }
+    print("No VirtIO-net device found.");
+    return 0;
+}
+
+// Self-test
+let cksum_test = ip_checksum([69, 0, 0, 40, 0, 0, 64, 0, 64, 17, 0, 0, 10, 0, 2, 15, 10, 0, 2, 2]);
+print("net.hl loaded");
+print("IP checksum test: " + to_string(cksum_test));
+print("Default IP: 10.0.2.15 (QEMU user-mode)");
+print("Protocols: ARP + IPv4 + UDP + TCP + ICMP dispatch");

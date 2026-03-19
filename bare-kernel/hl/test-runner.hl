@@ -1,0 +1,180 @@
+// test-runner.hl -- H-L Native Test Runner
+// Replaces test-runner.js -- runs ALL tests in H-L
+//
+// Test categories:
+//   1. Hilbert coordinate engine
+//   2. H-L compiler (bytecode generation)
+//   3. H-L micro-VM (execution)
+//   4. Kernel modules (spatial addressing)
+//   5. Userspace (event bus, IPC, scheduler)
+
+print("Bootstrapping H-L: Space-locality initiated.");
+print("== H-L Test Runner v2.0 ==");
+print("");
+
+let mut passed = 0;
+let mut failed = 0;
+
+// == S1 Hilbert Coordinate Engine ==
+print("--- S1 Hilbert Coordinate Engine ---");
+
+let key1 = hilbert_encode(0, 0, 0);
+if key1 == 0 { passed = passed + 1; } else { failed = failed + 1; print("FAIL: encode(0,0,0)"); }
+
+let key2 = hilbert_encode(42, 17, 9);
+if key2 > 0 { passed = passed + 1; } else { failed = failed + 1; print("FAIL: encode(42,17,9)"); }
+
+let key3 = hilbert_encode(1, 0, 0);
+let key4 = hilbert_encode(0, 1, 0);
+if key3 != key4 { passed = passed + 1; } else { failed = failed + 1; print("FAIL: distinct axes"); }
+
+let d1 = hilbert_dist(key1, key2);
+if d1 > 0 { passed = passed + 1; } else { failed = failed + 1; print("FAIL: distance > 0"); }
+
+let d2 = hilbert_dist(key1, key1);
+if d2 == 0 { passed = passed + 1; } else { failed = failed + 1; print("FAIL: self-distance"); }
+
+// == S2 Arithmetic ==
+print("--- S2 Arithmetic ---");
+
+if 2 + 3 == 5 { passed = passed + 1; } else { failed = failed + 1; print("FAIL: add"); }
+if 10 - 7 == 3 { passed = passed + 1; } else { failed = failed + 1; print("FAIL: sub"); }
+if 6 * 7 == 42 { passed = passed + 1; } else { failed = failed + 1; print("FAIL: mul"); }
+if 100 / 4 == 25 { passed = passed + 1; } else { failed = failed + 1; print("FAIL: div"); }
+if 17 % 5 == 2 { passed = passed + 1; } else { failed = failed + 1; print("FAIL: mod"); }
+if 0 - 42 == -42 { passed = passed + 1; } else { failed = failed + 1; print("FAIL: neg"); }
+
+// == S3 Comparison & Logic ==
+print("--- S3 Comparison & Logic ---");
+
+if 5 > 3 { passed = passed + 1; } else { failed = failed + 1; print("FAIL: gt"); }
+if 3 < 5 { passed = passed + 1; } else { failed = failed + 1; print("FAIL: lt"); }
+if 5 >= 5 { passed = passed + 1; } else { failed = failed + 1; print("FAIL: gte"); }
+if 5 <= 5 { passed = passed + 1; } else { failed = failed + 1; print("FAIL: lte"); }
+if 5 == 5 { passed = passed + 1; } else { failed = failed + 1; print("FAIL: eq"); }
+if 5 != 4 { passed = passed + 1; } else { failed = failed + 1; print("FAIL: neq"); }
+if true && true { passed = passed + 1; } else { failed = failed + 1; print("FAIL: and"); }
+if true || false { passed = passed + 1; } else { failed = failed + 1; print("FAIL: or"); }
+if !false { passed = passed + 1; } else { failed = failed + 1; print("FAIL: not"); }
+
+// == S4 Variables & Mutation ==
+print("--- S4 Variables & Mutation ---");
+
+let mut x = 10;
+x = x + 5;
+if x == 15 { passed = passed + 1; } else { failed = failed + 1; print("FAIL: mut assign"); }
+
+let mut sum = 0;
+let mut i = 1;
+while i <= 100 {
+    sum = sum + i;
+    i = i + 1;
+}
+if sum == 5050 { passed = passed + 1; } else { failed = failed + 1; print("FAIL: sum 1..100"); }
+
+// == S5 Functions ==
+print("--- S5 Functions ---");
+
+fn square(n) { return n * n; }
+if square(7) == 49 { passed = passed + 1; } else { failed = failed + 1; print("FAIL: square"); }
+
+fn factorial(n) {
+    if n <= 1 { return 1; }
+    return n * factorial(n - 1);
+}
+if factorial(6) == 720 { passed = passed + 1; } else { failed = failed + 1; print("FAIL: factorial"); }
+
+fn fib(n) {
+    let mut a = 0;
+    let mut b = 1;
+    let mut i = 0;
+    while i < n {
+        let t = a + b;
+        a = b;
+        b = t;
+        i = i + 1;
+    }
+    return b;
+}
+if fib(10) == 89 { passed = passed + 1; } else { failed = failed + 1; print("FAIL: fib(10)"); }
+
+fn gcd(a, b) {
+    while b != 0 {
+        let t = b;
+        b = a % b;
+        a = t;
+    }
+    return a;
+}
+if gcd(48, 18) == 6 { passed = passed + 1; } else { failed = failed + 1; print("FAIL: gcd"); }
+
+fn power(base, exp) {
+    let mut r = 1;
+    let mut i = 0;
+    while i < exp {
+        r = r * base;
+        i = i + 1;
+    }
+    return r;
+}
+if power(2, 10) == 1024 { passed = passed + 1; } else { failed = failed + 1; print("FAIL: power"); }
+
+fn add(a, b) { return a + b; }
+fn double(n) { return n * 2; }
+if add(double(3), double(4)) == 14 { passed = passed + 1; } else { failed = failed + 1; print("FAIL: nested"); }
+
+fn is_even(n) { return n % 2 == 0; }
+if is_even(42) { passed = passed + 1; } else { failed = failed + 1; print("FAIL: is_even"); }
+if !is_even(7) { passed = passed + 1; } else { failed = failed + 1; print("FAIL: !is_even"); }
+
+// == S6 Spatial Locality ==
+print("--- S6 Spatial Locality ---");
+
+let mut max_dist = 0;
+let mut k = 0;
+while k < 255 {
+    let ka = hilbert_encode(k, 0, 0);
+    let kb = hilbert_encode(k + 1, 0, 0);
+    let dist = hilbert_dist(ka, kb);
+    if dist > max_dist { max_dist = dist; }
+    k = k + 1;
+}
+if max_dist > 0 { passed = passed + 1; } else { failed = failed + 1; print("FAIL: locality"); }
+
+// == S7 Scheduler Params ==
+print("--- S7 Scheduler ---");
+
+fn nice_to_weight(nice) {
+    let mut w = 1024;
+    let mut n = nice;
+    if n > 0 {
+        while n > 0 { w = w * 4 / 5; n = n - 1; }
+    } else {
+        while n < 0 { w = w * 5 / 4; n = n + 1; }
+    }
+    return w;
+}
+if nice_to_weight(0) == 1024 { passed = passed + 1; } else { failed = failed + 1; print("FAIL: nice(0)"); }
+
+// == S8 Memory Alignment ==
+print("--- S8 Memory ---");
+
+fn align_up(addr, align) {
+    let remainder = addr % align;
+    if remainder == 0 { return addr; }
+    return addr + align - remainder;
+}
+if align_up(1000, 4096) == 4096 { passed = passed + 1; } else { failed = failed + 1; print("FAIL: align_up"); }
+if align_up(4096, 4096) == 4096 { passed = passed + 1; } else { failed = failed + 1; print("FAIL: align_exact"); }
+
+// == Results ==
+print("");
+print("============");
+print(passed);
+print(failed);
+if failed == 0 {
+    print("ALL TESTS PASSED");
+} else {
+    print("SOME TESTS FAILED");
+}
+print("============");

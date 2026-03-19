@@ -1,0 +1,442 @@
+// PIPELINE_PLAN.hl -- 编译管线打通：项目推进策划案
+//
+// 目标: 使 hl-bootstrap build_kernel() 能够自动将 114 个模块
+//       翻译成可直接挂载运行的 hicos-hl.img
+//
+// 诊断日期: 2025
+// 诊断者:   hl-bootstrap 自动分析
+//
+// ============================================================
+// 一、现状诊断（管线断裂地图）
+// ============================================================
+//
+// hl-bootstrap.hl 已经具备七大子系统:
+//   S1 Hilbert Coordinate Engine     -- 完成 ✓
+//   S2 Lexer (source → tokens)       -- 完成 ✓
+//   S3 Parser (tokens → AST)         -- 完成 ✓
+//   S4 Interpreter / VM              -- 完成 ✓
+//   S5 x86_64 Machine Code Encoder   -- 完成 ✓ (126 条指令)
+//   S6 Boot Image Builder            -- 部分完成 ⚠
+//   S7 CLI                           -- 完成 ✓
+//
+// bare-kernel/hl/ 下的组件:
+//   ir.hl       -- H-IR 中间表示 (37 opcodes + 3 优化 pass) ✓
+//   regalloc.hl -- 线性扫描寄存器分配 (14 GP 寄存器)       ✓
+//   abi.hl      -- System V AMD64 ABI 调用约定              ✓
+//   codegen.hl  -- AST → x86_64 (表达式+变量+二元运算+比较) ⚠ 不完整
+//   x86enc.hl   -- 独立 x86_64 编码器 (kernel module 版)   ✓
+//
+// ============================================================
+// 二、六个断裂点（按严重程度排序）
+// ============================================================
+//
+// 断裂点 ① [致命] build_kernel() 不读源文件
+//   位置: hl-bootstrap.hl 第 3545 行
+//   现象: module_paths 参数被传入但完全未使用
+//         函数生成硬编码 x86 字节序列 (串口+PIC+PIT+IDT+echo)
+//   影响: 113 个 .hl 模块的代码从未进入编译流程
+//
+// 断裂点 ② [致命] 缺少 AST → IR 降低 (Lowering) 层
+//   位置: 需要在 ir.hl / codegen.hl 之间新建
+//   现象: ir.hl 定义了 37 个 opcode 和 emit/optimize 函数
+//         codegen.hl 直接从 AST 生成 x86 (跳过 IR)
+//         没有 ast_to_ir() 函数将 AST 节点翻译为 IR 指令
+//   影响: 优化 pass (常量折叠 / DCE / 强度削减) 形同虚设
+//
+// 断裂点 ③ [严重] codegen.hl 只处理表达式子集
+//   位置: bare-kernel/hl/codegen.hl 第 194 行 compile_expr()
+//   现象: 已实现: Num, Var, BinOp, Unary, Bool, Nil, Str, Array
+//         未实现: FnDef, FnCall, If, While, For, Return
+//                 Let, Assign, Print, Import, Quadrant
+//   影响: 函数定义/调用/控制流/模块系统均无法编译为原生代码
+//
+// 断裂点 ④ [严重] 无跨模块链接器
+//   位置: 缺失
+//   现象: 每个模块编译后是独立字节数组，无符号表/重定位表
+//         模块 A 调用模块 B 的函数时无法解析目标地址
+//   影响: 113 个模块无法组装成一个完整内核二进制
+//
+// 断裂点 ⑤ [中等] cmd_build() 模块列表不完整
+//   位置: hl-bootstrap.hl 第 4110 行
+//   现象: 只列出 55 个模块，实际有 113 个
+//         缺少: smp, usermode, ext2, ntfs, gpu, wifi, bluetooth,
+//               icmp, ipv6, secure_boot, gpt, nvme, font 等 58 个
+//   影响: 即使管线打通，也只能编译一半模块
+//
+// 断裂点 ⑥ [中等] 宿主文件 I/O 桥接
+//   位置: hl-bootstrap-shim.ps1 interpret 命令
+//   现象: VM 内置 file_read/file_write 只操作内存 VFS
+//         build 流程通过 PowerShell rebuild-image.ps1 绕行
+//         自举编译器无法自主读取磁盘 .hl 文件
+//   影响: 即使编译管线打通，也依赖宿主脚本搬运文件
+//
+// ============================================================
+// 三、六阶段推进计划
+// ============================================================
+
+let PHASE_COUNT = 6;
+
+let phases = [
+    // ----------------------------------------------------------
+    // Phase 1: 模块加载器 (Module Loader)
+    // ----------------------------------------------------------
+    // 目标: build_kernel() 能够读取 .hl 源文件并产出 token 流
+    // 工作量: 中等
+    // 优先级: ★★★★★ (没有这一步后续全部阻塞)
+    //
+    // 任务清单:
+    //   1.1  在 hl-bootstrap-shim.ps1 的 build 命令中:
+    //        读取 bare-kernel/hl/*.hl 文件内容，
+    //        注入到 VM 的 _vm_fs 内存文件系统
+    //   1.2  在 image_builder.build_kernel() 中:
+    //        遍历 module_paths，对每个路径调用 file_read()
+    //   1.3  对读取到的源码调用 lexer.tokenize() 产出 token 流
+    //   1.4  验证: 113 个模块均能成功 tokenize，无 panic
+    //
+    // 验收标准:
+    //   hl-bootstrap build 输出:
+    //     [lex] bare-kernel/hl/mem.hl: 847 tokens
+    //     [lex] bare-kernel/hl/serial.hl: 312 tokens
+    //     ...
+    //     [lex] bare-kernel/hl/shell.hl: 2104 tokens
+    //     Total: 113 modules, xxxxx tokens
+    "Phase 1: Module Loader",
+
+    // ----------------------------------------------------------
+    // Phase 2: AST 降低到 IR (AST → H-IR Lowering)
+    // ----------------------------------------------------------
+    // 目标: 每个 .hl 模块产出 H-IR 指令流
+    // 工作量: 大
+    // 优先级: ★★★★★
+    //
+    // 任务清单:
+    //   2.1  在 ir.hl 中新增 fn ast_to_ir(ast_node) 函数
+    //        处理所有 AST 节点类型:
+    //        - Num → IR_CONST
+    //        - Var → IR_LOAD (从栈帧)
+    //        - BinOp → IR_ADD/SUB/MUL/DIV/MOD/AND/OR/XOR/SHL/SHR
+    //                   IR_CMP_EQ/NE/LT/LE/GT/GE
+    //        - Unary → IR_NEG / IR_NOT
+    //        - Let → IR_CONST + IR_STORE (栈分配)
+    //        - Assign → IR_STORE
+    //        - If → IR_JZ + IR_LABEL + IR_JMP
+    //        - While → IR_LABEL + IR_JZ + IR_JMP (back-edge)
+    //        - For → 展开为 While
+    //        - FnDef → IR_LABEL (函数入口) + 参数绑定
+    //        - Call → IR_ARG * N + IR_CALL
+    //        - Return → IR_RET
+    //        - Print → IR_PRINT (串口输出 side effect)
+    //        - Str → IR_STR_CONST (数据段)
+    //        - Array → IR_ALLOC + IR_ARRAY_SET * N
+    //        - Index → IR_ARRAY_GET
+    //   2.2  在 build_kernel() 中调用:
+    //        tokens = lexer.tokenize(source)
+    //        ast = parser.parse_program(tokens)
+    //        ir_init()
+    //        ast_to_ir(ast)
+    //        ir_optimize()
+    //   2.3  输出每个模块的 IR 统计:
+    //        [ir] mem.hl: 342 instrs (280 live, 62 dead), 45 temps
+    //
+    // 验收标准:
+    //   所有 113 模块产出有效 IR，优化 pass 能删除 >10% 死代码
+    "Phase 2: AST to IR Lowering",
+
+    // ----------------------------------------------------------
+    // Phase 3: IR → 原生代码生成 (Full CodeGen)
+    // ----------------------------------------------------------
+    // 目标: codegen.hl 从 IR 生成完整的 x86_64 原生代码
+    // 工作量: 大
+    // 优先级: ★★★★☆
+    //
+    // 任务清单:
+    //   3.1  完善 codegen.hl 新增 fn compile_ir(ir_ops, buf)
+    //        将 IR 指令逐条翻译为 x86_64 机器码:
+    //        - IR_CONST → mov r64, imm
+    //        - IR_COPY → mov r64, r64
+    //        - IR_ADD/SUB/MUL → add/sub/imul
+    //        - IR_DIV/MOD → cqo + idiv
+    //        - IR_AND/OR/XOR → and/or/xor
+    //        - IR_SHL/SHR → shl/shr (CL 或 imm8)
+    //        - IR_NOT/NEG → not/neg
+    //        - IR_CMP_* → cmp + setcc + movzx
+    //        - IR_JMP → jmp rel32
+    //        - IR_JZ/JNZ → je/jne rel32
+    //        - IR_LABEL → 记录地址 (patch 目标)
+    //        - IR_CALL → 按 ABI push 参数 + call rel32
+    //        - IR_ARG → mov rdi/rsi/rdx/rcx/r8/r9, src
+    //        - IR_RET → mov rax, src + epilogue + ret
+    //        - IR_LOAD/STORE → mov [rbp+disp], r64
+    //        - IR_PRINT → 串口输出子程序调用
+    //        - IR_STR_CONST → .rodata 段引用
+    //        - IR_ALLOC → kmalloc 调用
+    //        - IR_ARRAY_GET/SET → 指针偏移访问
+    //   3.2  使用 regalloc.hl 分配物理寄存器:
+    //        14 个 GP 寄存器 (rax-r15, 排除 rsp/rbp)
+    //        溢出到栈帧 [rbp-N]
+    //   3.3  使用 abi.hl 处理函数调用约定:
+    //        参数: rdi, rsi, rdx, rcx, r8, r9, 栈
+    //        返回: rax
+    //        caller-saved: rax, rcx, rdx, r8-r11
+    //        callee-saved: rbx, rbp, r12-r15
+    //   3.4  每个模块编译后输出:
+    //        [codegen] mem.hl: 1847 bytes native x86_64
+    //
+    // 验收标准:
+    //   单个模块的简单函数能编译并在 QEMU 中正确执行
+    "Phase 3: Full IR-to-Native CodeGen",
+
+    // ----------------------------------------------------------
+    // Phase 4: 跨模块链接器 (Cross-Module Linker)
+    // ----------------------------------------------------------
+    // 目标: 113 个模块的 native code 合并为一个可执行内核
+    // 工作量: 大
+    // 优先级: ★★★★☆
+    //
+    // 任务清单:
+    //   4.1  新建 bare-kernel/hl/linker.hl:
+    //        - 符号表 (symbol table):
+    //          每个模块导出的函数: [name, module_idx, offset]
+    //        - 重定位表 (relocation table):
+    //          每次 IR_CALL 到外部符号: [call_site, target_name]
+    //   4.2  两遍链接:
+    //        Pass 1: 收集所有模块的导出符号
+    //                计算每个模块在最终二进制中的偏移
+    //        Pass 2: 遍历所有重定位条目
+    //                将 call rel32 的偏移填入正确地址
+    //   4.3  内存布局:
+    //        0x100000 - 0x1FFFFF  .text (所有模块的 native code)
+    //        0x200000 - 0x200FFF  IDT (256 entries)
+    //        0x210000 - 0x21FFFF  ISR stubs
+    //        0x300000 - 0x3FFFFF  .data + .bss + heap
+    //        0x400000 - 0x4FFFFF  .rodata (字符串常量池)
+    //   4.4  入口点:
+    //        链接器确保 kernel_init.kernel_main 是第一个
+    //        被调用的函数
+    //   4.5  每次链接输出:
+    //        [link] 113 modules, 847 symbols, 2341 relocations
+    //        [link] .text: 89,472 bytes
+    //        [link] .rodata: 12,304 bytes
+    //        [link] Total kernel: 101,776 bytes
+    //
+    // 验收标准:
+    //   链接后的二进制中所有 call 指令指向正确的函数地址
+    "Phase 4: Cross-Module Linker",
+
+    // ----------------------------------------------------------
+    // Phase 5: 完整 113 模块集成 + 镜像生成
+    // ----------------------------------------------------------
+    // 目标: build() 自动编译链接全部 113 模块并输出 .img
+    // 工作量: 中等
+    // 优先级: ★★★☆☆
+    //
+    // 任务清单:
+    //   5.1  更新 cmd_build() 模块列表:
+    //        从当前 55 个 → 全部 113 个
+    //        按 build.hl 中的依赖顺序排列
+    //   5.2  更新 build_kernel():
+    //        替换硬编码内核为:
+    //          a) 串口初始化 (保留现有 native code)
+    //          b) PIC/PIT/IDT 初始化 (保留)
+    //          c) 拼接所有模块的 compiled native code
+    //          d) 入口跳转到 kernel_main
+    //   5.3  更新 build_stage1() / build_stage2():
+    //        根据实际内核大小动态计算扇区数
+    //   5.4  更新 manifest.hl:
+    //        BOOT_IMAGE_BYTES 改为动态值
+    //   5.5  更新 rebuild-image.ps1:
+    //        调用新的编译管线而不是硬编码生成
+    //
+    // 验收标准:
+    //   hl-bootstrap build 输出:
+    //     Compiling 113 kernel modules...
+    //     [lex] ... 113 模块
+    //     [ir] ... 113 模块
+    //     [codegen] ... 113 模块
+    //     [link] 113 modules linked
+    //     Image size: XXX bytes (YYY sectors)
+    //     HicOS Build Complete
+    "Phase 5: Full 113-Module Integration",
+
+    // ----------------------------------------------------------
+    // Phase 6: 自验证与 QEMU 启动测试
+    // ----------------------------------------------------------
+    // 目标: 编译出的镜像能在 QEMU 中启动并输出 banner
+    // 工作量: 中等
+    // 优先级: ★★★☆☆
+    //
+    // 任务清单:
+    //   6.1  QEMU 启动测试:
+    //        qemu-system-x86_64 -drive format=raw,file=hicos-hl.img
+    //                           -serial stdio -display none
+    //        期望串口输出:
+    //          HL!
+    //          HicOS 5.0 -- Hilbert-Lang Kernel (113 modules)
+    //          Initializing subsystems...
+    //          [ok] ...
+    //          HicOS>
+    //   6.2  自验证:
+    //        - 编译后的内核能执行 fib(10) = 89
+    //        - 编译后的内核能执行 gcd(48, 18) = 6
+    //        - 编译后的内核能响应键盘输入
+    //   6.3  回归测试:
+    //        - hl-bootstrap test 全部通过
+    //        - full-gate.ps1 全部通过
+    //        - qemu-boot-test.ps1 通过
+    //
+    // 验收标准:
+    //   QEMU 串口输出包含 "HicOS 5.0" 和 "HicOS>"
+    "Phase 6: Self-Verification and QEMU Boot"
+];
+
+// ============================================================
+// 四、依赖关系图
+// ============================================================
+//
+//  Phase 1 ──→ Phase 2 ──→ Phase 3 ──→ Phase 5 ──→ Phase 6
+//                               │          ↑
+//                               └→ Phase 4─┘
+//
+//  Phase 1 (模块加载) 是所有后续的前提
+//  Phase 2 (AST→IR) 依赖 Phase 1
+//  Phase 3 (IR→x86) 依赖 Phase 2
+//  Phase 4 (链接器) 可与 Phase 3 并行开发
+//  Phase 5 (集成)   依赖 Phase 3 + Phase 4
+//  Phase 6 (验证)   依赖 Phase 5
+
+// ============================================================
+// 五、各阶段涉及的文件修改清单
+// ============================================================
+//
+// Phase 1:
+//   修改: hl-bootstrap.hl           (build_kernel 读取文件)
+//   修改: scripts/hl-bootstrap-shim.ps1 (注入文件到 VM)
+//   新建: (无)
+//
+// Phase 2:
+//   修改: bare-kernel/hl/ir.hl      (新增 ast_to_ir)
+//   修改: hl-bootstrap.hl           (build_kernel 调用 IR 转换)
+//   新建: (无)
+//
+// Phase 3:
+//   修改: bare-kernel/hl/codegen.hl (新增 compile_ir + 语句编译)
+//   修改: bare-kernel/hl/regalloc.hl (集成到 compile_ir)
+//   修改: bare-kernel/hl/abi.hl     (函数调用 ABI 包装)
+//   新建: (无)
+//
+// Phase 4:
+//   新建: bare-kernel/hl/linker.hl  (符号表 + 重定位 + 链接)
+//   修改: bare-kernel/hl/build.hl   (使用链接器)
+//   修改: hl-bootstrap.hl           (build_kernel 调用链接器)
+//
+// Phase 5:
+//   修改: hl-bootstrap.hl           (cmd_build 完整模块列表)
+//   修改: manifest.hl               (动态镜像大小)
+//   修改: scripts/rebuild-image.ps1 (调用新管线)
+//   修改: scripts/boot-readiness.ps1 (更新检查)
+//
+// Phase 6:
+//   修改: scripts/qemu-boot-test.ps1 (验证新输出)
+//   修改: scripts/full-gate.ps1     (新增编译管线测试)
+
+// ============================================================
+// 六、风险评估与缓解
+// ============================================================
+//
+// 风险 1: 某些 .hl 模块使用了 hl-bootstrap.hl 未支持的语法
+//   概率: 中
+//   缓解: Phase 1 tokenize 阶段会暴露所有词法问题
+//         Phase 2 parse 阶段会暴露所有语法问题
+//         逐模块推进，先编译核心 20 个模块
+//
+// 风险 2: 编译后的 native code 太大超出 1MB .text 段
+//   概率: 低
+//   缓解: 113 模块的 .hl 源码约 30,000 行
+//         估计 native code < 200KB (远小于 1MB 限制)
+//         如需要可扩展页表映射更多 2MB 页
+//
+// 风险 3: 跨模块调用的 rel32 偏移超出 ±2GB 范围
+//   概率: 极低
+//   缓解: 内核全部在低 4MB 地址空间，偏移 << 2GB
+//
+// 风险 4: 寄存器分配器在复杂函数上溢出
+//   概率: 中
+//   缓解: regalloc.hl 已支持溢出到栈帧
+//         14 个 GP 寄存器对大多数函数足够
+
+// ============================================================
+// 七、里程碑时间线
+// ============================================================
+//
+// M1: Phase 1 完成 → 113 模块全部 tokenize 成功
+// M2: Phase 2 完成 → 核心 20 模块产出 IR，优化 pass 可运行
+// M3: Phase 3 完成 → 单模块 native code 能在 QEMU 执行
+// M4: Phase 4 完成 → 多模块链接后 call 地址正确
+// M5: Phase 5 完成 → 完整 .img 包含 113 模块编译产物
+// M6: Phase 6 完成 → QEMU 启动显示 "HicOS 5.0" + shell 响应
+//
+// 每个里程碑通过 hl-bootstrap gate 验证
+
+// ============================================================
+// 八、立即可执行的第一步（Phase 1 详细实施）
+// ============================================================
+//
+// Phase 1 是打通管线的最小可行步骤。
+// 实施后，build_kernel() 将首次"看到"113 个模块的源码。
+//
+// 具体变更:
+//
+// 1) hl-bootstrap.hl 第 3545 行 build_kernel():
+//    在串口初始化之前添加:
+//    ```
+//    let mut compiled_modules = [];
+//    let mut mi = 0;
+//    while mi < len(module_paths) {
+//        let src = file_read(module_paths[mi]);
+//        if src != nil {
+//            let tokens = lexer.tokenize(src);
+//            let ast = parser.parse_program(tokens);
+//            print("[compiled] " + module_paths[mi] +
+//                  ": " + to_string(len(tokens)) + " tokens, " +
+//                  to_string(len(ast)) + " AST nodes");
+//            push(compiled_modules, [module_paths[mi], tokens, ast]);
+//        } else {
+//            print("[skip] " + module_paths[mi] + ": file not found");
+//        }
+//        mi = mi + 1;
+//    }
+//    ```
+//
+// 2) hl-bootstrap.hl cmd_build() 第 4110 行:
+//    将 module_paths 更新为完整的 113 模块列表
+//    (按 build.hl 中的依赖顺序)
+//
+// 3) scripts/hl-bootstrap-shim.ps1 build 命令:
+//    在调用 interpret 之前，将 bare-kernel/hl/*.hl
+//    文件内容写入到临时脚本变量中，
+//    通过 _vm_fs 机制传递给解释器
+//
+// 这一步不改变最终 .img 内容（仍是硬编码内核），
+// 但确认管线入口畅通，为 Phase 2 铺路。
+
+fn pipeline_status() {
+    print("=== HicOS 编译管线状态 ===");
+    print("");
+    print("Phase 0: 宿主增强 (新增)      - 待实施 (见 COMPILER_PIPELINE_STRATEGY.hl)");
+    print("  0.1 quadrant 扁平化          - 待实施 (~30 行 PS1)");
+    print("  0.2 嵌套数组+索引+push       - 待实施 (~100 行 PS1)");
+    print("  0.3 字符串索引               - 待实施 (~20 行 PS1)");
+    print("  0.4 端到端验证               - 待实施 (~50 行 PS1)");
+    print("Phase 1: Module Loader        - 完成 ✓ (114 modules tokenized)");
+    print("Phase 2: AST → IR Lowering    - 待实施 (阻塞于 Phase 0)");
+    print("Phase 3: Full IR → Native     - 待实施 (codegen.hl 需大量新增)");
+    print("Phase 4: Cross-Module Linker  - 待实施 (linker.hl skeleton ready)");
+    print("Phase 5: 114-Module Integ.    - 待实施");
+    print("Phase 6: Self-Verification    - 待实施");
+    print("");
+    print("当前阻塞: shim 无法执行 x86enc quadrant 函数");
+    print("下一步: Phase 0.1 — quadrant 扁平化");
+    return 0;
+}
+
+pipeline_status();

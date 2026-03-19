@@ -1,0 +1,180 @@
+// ipc.hl -- Inter-Process Communication (Pipes + Message Queues)
+//
+// Two IPC primitives:
+//   1. Pipes: unidirectional byte streams (like Unix pipes)
+//   2. Message queues: fixed-size message passing (Hilbert-addressed)
+//
+// Pipe buffer layout at 0x700000:
+//   Max 32 pipes, each 4KB buffer + 64 bytes metadata = ~132 KB
+//   Metadata: [read_pos(8), write_pos(8), size(8), reader_pid(8),
+//              writer_pid(8), flags(8), reserved(16)]
+
+let PIPE_TABLE = 7340032;      // 0x700000
+let PIPE_META_SIZE = 64;
+let PIPE_BUF_SIZE = 4096;
+let PIPE_ENTRY_SIZE = 4160;    // 64 + 4096
+let MAX_PIPES = 32;
+
+let PIPE_OPEN   = 1;
+let PIPE_CLOSED = 0;
+
+// Message queue at 0x730000:
+//   Max 16 queues, each 256 messages x 64 bytes = 16 KB + metadata
+let MQ_TABLE = 7536640;        // 0x730000
+let MQ_MSG_SIZE = 64;
+let MQ_CAPACITY = 256;
+let MQ_ENTRY_SIZE = 16448;     // 64 meta + 256*64 data
+let MAX_MQ = 16;
+
+// Create an IPC pipe with owner tracking, returns pipe index or -1
+fn ipc_pipe_create(reader_pid, writer_pid) {
+    let mut i = 0;
+    while i < MAX_PIPES {
+        let addr = PIPE_TABLE + i * PIPE_ENTRY_SIZE;
+        let flags = mem_read_u64(addr + 40);
+        if flags == PIPE_CLOSED {
+            mem_write_u64(addr + 0, 0);
+            mem_write_u64(addr + 8, 0);
+            mem_write_u64(addr + 16, PIPE_BUF_SIZE);
+            mem_write_u64(addr + 24, reader_pid);
+            mem_write_u64(addr + 32, writer_pid);
+            mem_write_u64(addr + 40, PIPE_OPEN);
+            return i;
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+// Write to IPC pipe (returns bytes written)
+fn ipc_pipe_write(pipe_idx, data, data_len) {
+    let addr = PIPE_TABLE + pipe_idx * PIPE_ENTRY_SIZE;
+    let buf_addr = addr + PIPE_META_SIZE;
+    let mut write_pos = mem_read_u64(addr + 8);
+    let read_pos = mem_read_u64(addr + 0);
+    let mut written = 0;
+    while written < data_len {
+        let next_pos = (write_pos + 1) % PIPE_BUF_SIZE;
+        if next_pos == read_pos { return written; } // buffer full
+        mem_write_u8(buf_addr + write_pos, data[written]);
+        write_pos = next_pos;
+        written = written + 1;
+    }
+    mem_write_u64(addr + 8, write_pos);
+    return written;
+}
+
+// Read from IPC pipe (returns bytes read)
+fn ipc_pipe_read(pipe_idx, buf, max_len) {
+    let addr = PIPE_TABLE + pipe_idx * PIPE_ENTRY_SIZE;
+    let buf_addr = addr + PIPE_META_SIZE;
+    let mut read_pos = mem_read_u64(addr + 0);
+    let write_pos = mem_read_u64(addr + 8);
+    let mut bytes_read = 0;
+    while bytes_read < max_len {
+        if read_pos == write_pos { mem_write_u64(addr + 0, read_pos); return bytes_read; }
+        buf[bytes_read] = mem_read_u8(buf_addr + read_pos);
+        read_pos = (read_pos + 1) % PIPE_BUF_SIZE;
+        bytes_read = bytes_read + 1;
+    }
+    mem_write_u64(addr + 0, read_pos);
+    return bytes_read;
+}
+
+// Close IPC pipe
+fn ipc_pipe_close(pipe_idx) {
+    let addr = PIPE_TABLE + pipe_idx * PIPE_ENTRY_SIZE;
+    mem_write_u64(addr + 40, PIPE_CLOSED);
+    return 0;
+}
+
+// === Message Queues ===
+
+// Create message queue, returns queue index
+fn mq_create() {
+    let mut i = 0;
+    while i < MAX_MQ {
+        let addr = MQ_TABLE + i * MQ_ENTRY_SIZE;
+        let flags = mem_read_u64(addr);
+        if flags == 0 {
+            mem_write_u64(addr, 1);
+            mem_write_u64(addr + 8, 0);
+            mem_write_u64(addr + 16, 0);
+            mem_write_u64(addr + 24, 0);
+            return i;
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+// Send message (64 bytes max)
+fn mq_send(queue_idx, msg_data) {
+    let addr = MQ_TABLE + queue_idx * MQ_ENTRY_SIZE;
+    let count = mem_read_u64(addr + 24);
+    if count >= MQ_CAPACITY { return 0; }
+    let tail = mem_read_u64(addr + 16);
+    let msg_addr = addr + 64 + tail * MQ_MSG_SIZE;
+    // Copy msg_data to msg_addr (up to 64 bytes)
+    let mut j = 0;
+    while j < MQ_MSG_SIZE {
+        if j < len(msg_data) {
+            mem_write_u8(msg_addr + j, msg_data[j]);
+        } else {
+            mem_write_u8(msg_addr + j, 0);
+        }
+        j = j + 1;
+    }
+    mem_write_u64(addr + 16, (tail + 1) % MQ_CAPACITY);
+    mem_write_u64(addr + 24, count + 1);
+    return 1;
+}
+
+// Receive message
+fn mq_recv(queue_idx) {
+    let addr = MQ_TABLE + queue_idx * MQ_ENTRY_SIZE;
+    let count = mem_read_u64(addr + 24);
+    if count == 0 { return nil; }
+    let head = mem_read_u64(addr + 8);
+    let msg_addr = addr + 64 + head * MQ_MSG_SIZE;
+    let mut msg = [];
+    let mut j = 0;
+    while j < MQ_MSG_SIZE {
+        push(msg, mem_read_u8(msg_addr + j));
+        j = j + 1;
+    }
+    mem_write_u64(addr + 8, (head + 1) % MQ_CAPACITY);
+    mem_write_u64(addr + 24, count - 1);
+    return msg;
+}
+
+// Hilbert-addressed IPC: use spatial locality for message routing
+fn hilbert_send(x, y, z, msg_data) {
+    let key = hilbert_encode(x, y, z);
+    let queue_idx = key % MAX_MQ;
+    return mq_send(queue_idx, msg_data);
+}
+
+fn hilbert_recv(x, y, z) {
+    let key = hilbert_encode(x, y, z);
+    let queue_idx = key % MAX_MQ;
+    return mq_recv(queue_idx);
+}
+
+// Syscall-level IPC aliases
+fn ipc_send(dest_pid, buf_addr, length) {
+    // Use message queue indexed by destination PID
+    let qi = dest_pid % MAX_MQ;
+    return mq_send(qi, buf_addr);
+}
+
+fn ipc_recv(src_pid, buf_addr, max_len) {
+    // Receive from message queue indexed by current task
+    let qi = src_pid % MAX_MQ;
+    return mq_recv(qi);
+}
+
+// Self-test
+print("ipc.hl loaded");
+print("Pipes: " + to_string(MAX_PIPES) + " x " + to_string(PIPE_BUF_SIZE) + " bytes");
+print("Message queues: " + to_string(MAX_MQ) + " x " + to_string(MQ_CAPACITY) + " msgs");

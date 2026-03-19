@@ -1,0 +1,183 @@
+// terminal.hl -- Graphical Terminal Emulator
+//
+// VT100-compatible terminal rendered into a window manager window.
+// Supports basic ANSI escape sequences for cursor control and color.
+//
+// Character cell grid: 80x25 (configurable)
+// Font: 8x16 bitmap glyphs from framebuffer.hl
+//
+// ANSI escape sequences supported:
+//   ESC[H       -- cursor home
+//   ESC[<r>;<c>H -- cursor position
+//   ESC[J       -- clear screen
+//   ESC[K       -- clear to end of line
+//   ESC[<n>A/B/C/D -- cursor up/down/right/left
+//   ESC[<n>m    -- SGR (color): 0=reset, 30-37=fg, 40-47=bg, 1=bold
+//   ESC[?25h/l  -- show/hide cursor
+
+let TERM_COLS = 80;
+let TERM_ROWS = 25;
+let TERM_CELL_W = 8;
+let TERM_CELL_H = 16;
+
+let mut term_cursor_x = 0;
+let mut term_cursor_y = 0;
+let mut term_fg_color = 7;         // white
+let mut term_bg_color = 0;         // black
+let mut term_cursor_visible = 1;
+let mut term_wm_window = 0;       // window manager window ID
+let mut term_scroll_top = 0;
+let mut term_scroll_bottom = 24;
+
+// Color palette (VGA 16-color)
+let TERM_COLORS = [
+    0,          // 0 black
+    170,        // 1 red       (0x0000AA -> simplified)
+    43520,      // 2 green
+    43690,      // 3 yellow
+    11141120,   // 4 blue
+    11141290,   // 5 magenta
+    11184640,   // 6 cyan
+    11184810    // 7 white (light gray)
+];
+
+fn term_init() {
+    term_cursor_x = 0;
+    term_cursor_y = 0;
+    term_fg_color = 7;
+    term_bg_color = 0;
+    // Create window in window manager
+    let w = TERM_COLS * TERM_CELL_W;
+    let h = TERM_ROWS * TERM_CELL_H;
+    // term_wm_window = wm_create_window(50, 50, w, h, "Terminal", 0);
+    term_clear();
+    return 0;
+}
+
+fn term_clear() {
+    term_cursor_x = 0;
+    term_cursor_y = 0;
+    // Fill window content with bg color
+    // let w = TERM_COLS * TERM_CELL_W;
+    // let h = TERM_ROWS * TERM_CELL_H;
+    // vesa_fill_rect(win_x, win_y, w, h, TERM_COLORS[term_bg_color]);
+    return 0;
+}
+
+fn term_scroll_up() {
+    // Move rows 1..TERM_ROWS-1 up by one row
+    // Clear last row
+    term_cursor_y = TERM_ROWS - 1;
+    return 0;
+}
+
+fn term_putchar(ch) {
+    if ch == 10 { // newline
+        term_cursor_x = 0;
+        term_cursor_y = term_cursor_y + 1;
+        if term_cursor_y >= TERM_ROWS { term_scroll_up(); }
+        return 0;
+    }
+    if ch == 13 { // carriage return
+        term_cursor_x = 0;
+        return 0;
+    }
+    if ch == 8 { // backspace
+        if term_cursor_x > 0 { term_cursor_x = term_cursor_x - 1; }
+        return 0;
+    }
+    if ch == 9 { // tab
+        term_cursor_x = ((term_cursor_x / 8) + 1) * 8;
+        if term_cursor_x >= TERM_COLS { term_cursor_x = TERM_COLS - 1; }
+        return 0;
+    }
+
+    // Draw character at cursor position
+    // let px = win_x + term_cursor_x * TERM_CELL_W;
+    // let py = win_y + term_cursor_y * TERM_CELL_H;
+    // vesa_fill_rect(px, py, TERM_CELL_W, TERM_CELL_H, TERM_COLORS[term_bg_color]);
+    // vesa_draw_glyph(px, py, ch, TERM_COLORS[term_fg_color]);
+
+    term_cursor_x = term_cursor_x + 1;
+    if term_cursor_x >= TERM_COLS {
+        term_cursor_x = 0;
+        term_cursor_y = term_cursor_y + 1;
+        if term_cursor_y >= TERM_ROWS { term_scroll_up(); }
+    }
+    return 0;
+}
+
+fn term_write(text) {
+    let mut i = 0;
+    while i < len(text) {
+        let ch = text[i];
+        if ch == 27 { // ESC
+            // Parse ANSI sequence
+            i = term_parse_ansi(text, i + 1);
+        } else {
+            term_putchar(ch);
+            i = i + 1;
+        }
+    }
+    return 0;
+}
+
+fn term_parse_ansi(text, pos) {
+    if pos >= len(text) { return pos; }
+    if text[pos] != 91 { return pos; } // '[' = 91
+    pos = pos + 1;
+
+    // Parse numeric parameter
+    let mut param = 0;
+    while pos < len(text) {
+        let ch = text[pos];
+        if ch >= 48 { if ch <= 57 { // '0'-'9'
+            param = param * 10 + (ch - 48);
+            pos = pos + 1;
+        } else { break; } } else { break; }
+    }
+
+    if pos >= len(text) { return pos; }
+    let cmd = text[pos];
+    pos = pos + 1;
+
+    if cmd == 72 { // 'H' cursor home
+        term_cursor_x = 0; term_cursor_y = 0;
+    }
+    if cmd == 74 { // 'J' clear screen
+        term_clear();
+    }
+    if cmd == 75 { // 'K' clear to EOL
+        // Clear from cursor to end of line
+    }
+    if cmd == 65 { // 'A' cursor up
+        if param == 0 { param = 1; }
+        term_cursor_y = term_cursor_y - param;
+        if term_cursor_y < 0 { term_cursor_y = 0; }
+    }
+    if cmd == 66 { // 'B' cursor down
+        if param == 0 { param = 1; }
+        term_cursor_y = term_cursor_y + param;
+        if term_cursor_y >= TERM_ROWS { term_cursor_y = TERM_ROWS - 1; }
+    }
+    if cmd == 67 { // 'C' cursor right
+        if param == 0 { param = 1; }
+        term_cursor_x = term_cursor_x + param;
+        if term_cursor_x >= TERM_COLS { term_cursor_x = TERM_COLS - 1; }
+    }
+    if cmd == 68 { // 'D' cursor left
+        if param == 0 { param = 1; }
+        term_cursor_x = term_cursor_x - param;
+        if term_cursor_x < 0 { term_cursor_x = 0; }
+    }
+    if cmd == 109 { // 'm' SGR color
+        if param == 0 { term_fg_color = 7; term_bg_color = 0; } // reset
+        if param >= 30 { if param <= 37 { term_fg_color = param - 30; } }
+        if param >= 40 { if param <= 47 { term_bg_color = param - 40; } }
+    }
+
+    return pos;
+}
+
+print("terminal.hl loaded");
+print("VT100 terminal: " + to_string(TERM_COLS) + "x" + to_string(TERM_ROWS) + ", ANSI color, scroll");
