@@ -134,6 +134,8 @@ $script:IR_CALL=25;  $script:IR_ARG=26;   $script:IR_RET=27; $script:IR_LOAD=28
 $script:IR_STORE=29; $script:IR_PHI=30;   $script:IR_NOP=31; $script:IR_STR_CONST=32
 $script:IR_PRINT=36
 $script:IR_PORT_OUT=38
+$script:IR_PORT_IN=39;   $script:IR_CLI=40;     $script:IR_STI=41;     $script:IR_HLT=42
+$script:IR_MEM_STORE8=43; $script:IR_MEM_LOAD64=44; $script:IR_MEM_STORE64=45; $script:IR_LIDT=46
 
 $script:ir_op = $null
 $script:ir_dead = $null; $script:ir_count = 0; $script:ir_next_tmp = 0
@@ -188,9 +190,43 @@ function IR-LowerExpr($node) {
             IR-Emit $IR_PORT_OUT $t $portReg $valReg | Out-Null
             return $t
         }
+        # Intrinsic: port_in_u8(port) -> IR_PORT_IN (returns value in RAX)
+        if ($fn -eq 'port_in_u8' -and $args.Count -ge 1) {
+            $portReg = IR-LowerExpr $args[0]
+            $t = IR-Tmp
+            IR-Emit $IR_PORT_IN $t $portReg 0 | Out-Null
+            return $t
+        }
+        # Intrinsic: cli() -> IR_CLI
+        if ($fn -eq 'cli') { $t = IR-Tmp; IR-Emit $IR_CLI $t 0 0 | Out-Null; return $t }
+        # Intrinsic: sti() -> IR_STI
+        if ($fn -eq 'sti') { $t = IR-Tmp; IR-Emit $IR_STI $t 0 0 | Out-Null; return $t }
+        # Intrinsic: hlt() -> IR_HLT
+        if ($fn -eq 'hlt') { $t = IR-Tmp; IR-Emit $IR_HLT $t 0 0 | Out-Null; return $t }
+        # Intrinsic: mem_write_u8(addr, val) -> IR_MEM_STORE8
+        if ($fn -eq 'mem_write_u8' -and $args.Count -ge 2) {
+            $addrReg = IR-LowerExpr $args[0]; $valReg = IR-LowerExpr $args[1]
+            $t = IR-Tmp; IR-Emit $IR_MEM_STORE8 $t $addrReg $valReg | Out-Null; return $t
+        }
+        # Intrinsic: mem_read_u64(addr) -> IR_MEM_LOAD64
+        if ($fn -eq 'mem_read_u64' -and $args.Count -ge 1) {
+            $addrReg = IR-LowerExpr $args[0]
+            $t = IR-Tmp; IR-Emit $IR_MEM_LOAD64 $t $addrReg 0 | Out-Null; return $t
+        }
+        # Intrinsic: mem_write_u64(addr, val) -> IR_MEM_STORE64
+        if ($fn -eq 'mem_write_u64' -and $args.Count -ge 2) {
+            $addrReg = IR-LowerExpr $args[0]; $valReg = IR-LowerExpr $args[1]
+            $t = IR-Tmp; IR-Emit $IR_MEM_STORE64 $t $addrReg $valReg | Out-Null; return $t
+        }
+        # Intrinsic: lidt(addr) -> IR_LIDT
+        if ($fn -eq 'lidt' -and $args.Count -ge 1) {
+            $addrReg = IR-LowerExpr $args[0]
+            $t = IR-Tmp; IR-Emit $IR_LIDT $t $addrReg 0 | Out-Null; return $t
+        }
         foreach ($a in $args) { $av = IR-LowerExpr $a; IR-Emit $IR_ARG $ai $av 0 | Out-Null; $ai++ }
         $t = IR-Tmp
-        $fl = if ($script:ir_fns.ContainsKey($fn)) { $script:ir_fns[$fn] } else { -1 }
+        # Store function label (local) or name string (external) for linker
+        $fl = if ($script:ir_fns.ContainsKey($fn)) { $script:ir_fns[$fn] } else { $fn }
         IR-Emit $IR_CALL $t $fl $ai | Out-Null; return $t
     }
     if ($nt -eq 'Index') { $base = IR-LowerExpr $node[1]; $idx = IR-LowerExpr $node[2]; $t = IR-Tmp; IR-Emit $IR_LOAD $t $base $idx | Out-Null; return $t }
@@ -256,7 +292,7 @@ function IR-OptConstFold {
 # Optimization: dead code elimination
 function IR-OptDCE {
     $changed = 0
-    $skip = @($IR_JMP,$IR_JZ,$IR_JNZ,$IR_LABEL,$IR_CALL,$IR_RET,$IR_STORE,$IR_ARG,$IR_NOP,$IR_PRINT,$IR_PORT_OUT)
+    $skip = @($IR_JMP,$IR_JZ,$IR_JNZ,$IR_LABEL,$IR_CALL,$IR_RET,$IR_STORE,$IR_ARG,$IR_NOP,$IR_PRINT,$IR_PORT_OUT,$IR_PORT_IN,$IR_CLI,$IR_STI,$IR_HLT,$IR_MEM_STORE8,$IR_MEM_LOAD64,$IR_MEM_STORE64,$IR_LIDT)
     for ($i = $script:ir_count - 1; $i -ge 0; $i--) {
         if ($script:ir_dead[$i] -ne 0) { continue }
         if ($script:ir_op[$i] -in $skip) { continue }
@@ -450,11 +486,57 @@ function X86-EmitIR([int]$idx) {
             # port_out_u8: mov edx, port_reg; mov eax, val_reg; out dx, al
             $rPort = RA-Alloc $s1; $rVal = RA-Alloc $s2
             if ($rPort -ge 0 -and $rVal -ge 0) {
-                # mov edx, rPort (if not already edx=2)
                 if ($rPort -ne 2) { X86-MovRR 2 $rPort }
-                # mov eax, rVal (if not already eax=0)
                 if ($rVal -ne 0) { X86-MovRR 0 $rVal }
                 X86-Byte 0xEE  # out dx, al
+            }
+        }
+        $IR_PORT_IN {
+            # port_in_u8: mov edx, port_reg; in al, dx; movzx rax, al
+            $rPort = RA-Alloc $s1
+            if ($rPort -ge 0) {
+                if ($rPort -ne 2) { X86-MovRR 2 $rPort }
+                X86-Byte 0xEC  # in al, dx
+                X86-Byte 0x48; X86-Byte 0x0F; X86-Byte 0xB6; X86-Byte 0xC0  # movzx rax, al
+                if ($rd -ge 0 -and $rd -ne 0) { X86-MovRR $rd 0 }
+            }
+        }
+        $IR_CLI { X86-Byte 0xFA }
+        $IR_STI { X86-Byte 0xFB }
+        $IR_HLT { X86-Byte 0xF4 }
+        $IR_MEM_STORE8 {
+            # mem_write_u8(addr, val): mov [rAddr], valByte
+            $rAddr = RA-Alloc $s1; $rVal = RA-Alloc $s2
+            if ($rAddr -ge 0 -and $rVal -ge 0) {
+                if ($rAddr -ne 7) { X86-MovRR 7 $rAddr }  # rdi = addr
+                if ($rVal -ne 0) { X86-MovRR 0 $rVal }    # rax = val
+                X86-Byte 0x88; X86-Byte 0x07  # mov [rdi], al
+            }
+        }
+        $IR_MEM_LOAD64 {
+            # mem_read_u64(addr): mov rax, [rAddr]
+            $rAddr = RA-Alloc $s1
+            if ($rAddr -ge 0) {
+                if ($rAddr -ne 7) { X86-MovRR 7 $rAddr }  # rdi = addr
+                X86-Byte 0x48; X86-Byte 0x8B; X86-Byte 0x07  # mov rax, [rdi]
+                if ($rd -ge 0 -and $rd -ne 0) { X86-MovRR $rd 0 }
+            }
+        }
+        $IR_MEM_STORE64 {
+            # mem_write_u64(addr, val): mov [rAddr], rVal
+            $rAddr = RA-Alloc $s1; $rVal = RA-Alloc $s2
+            if ($rAddr -ge 0 -and $rVal -ge 0) {
+                if ($rAddr -ne 7) { X86-MovRR 7 $rAddr }  # rdi = addr
+                if ($rVal -ne 0) { X86-MovRR 0 $rVal }    # rax = val
+                X86-Byte 0x48; X86-Byte 0x89; X86-Byte 0x07  # mov [rdi], rax
+            }
+        }
+        $IR_LIDT {
+            # lidt [rAddr]: load IDT register from 10-byte descriptor
+            $rAddr = RA-Alloc $s1
+            if ($rAddr -ge 0) {
+                if ($rAddr -ne 7) { X86-MovRR 7 $rAddr }  # rdi = addr
+                X86-Byte 0x0F; X86-Byte 0x01; X86-Byte 0x1F  # lidt [rdi]
             }
         }
         $IR_NOP    { X86-Byte 0x90 }
@@ -482,8 +564,14 @@ function X86-CompileModule {
                 $callSite = $script:x86_buf.Count + 1  # offset of imm32 in E8 xx xx xx xx
                 $fnLabel = $script:ir_src1[$i]
                 $fnName = ''
-                foreach ($kv in $script:ir_fns.GetEnumerator()) {
-                    if ($kv.Value -eq $fnLabel) { $fnName = $kv.Key }
+                if ($fnLabel -is [string] -and $fnLabel -ne '') {
+                    # External call: function name stored directly
+                    $fnName = $fnLabel
+                } else {
+                    # Local call: look up label in ir_fns
+                    foreach ($kv in $script:ir_fns.GetEnumerator()) {
+                        if ($kv.Value -eq $fnLabel) { $fnName = $kv.Key }
+                    }
                 }
                 if ($fnName -ne '') {
                     [void]$script:mod_relocs.Add(@($callSite, $fnName, 'rel32'))

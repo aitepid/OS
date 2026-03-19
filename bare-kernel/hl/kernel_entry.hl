@@ -40,18 +40,321 @@
 
 // === Native Entry Point (_start) ===
 // This is the FIRST function in kernel.bin (offset 0).
-// Called by the handwritten Stage2 kernel via JMP after hardware init.
+// Called by the handwritten Stage2 kernel via CALL after hardware init.
+//
+// Iteration 23: Full boot sequence
+//   1. Serial init (COM1 38400 8N1)
+//   2. PIC remap (IRQ0→32, IRQ8→40)
+//   3. PIT 100Hz timer
+//   4. IDT build (256 entries + ISR thunks + common handler)
+//   5. LIDT + STI
+//   6. Main loop: HLT → check timer tick → check keyboard → echo
 //
 // ABI contract:
-//   - CPU is in 64-bit long mode, interrupts disabled
-//   - COM1 serial NOT yet initialized by kernel.bin (Stage2 may have set it up)
+//   - CPU is in 64-bit long mode, interrupts disabled (by handwritten kernel)
 //   - Stack pointer is valid (set by Stage2)
-//   - kernel.bin is loaded at the address specified in kernel.entry
-//
-// _start initializes COM1 and prints "KB-OK\r\n" to prove compiled code runs.
+//   - kernel.bin is loaded at 0x120000
+//   - Tick counter at 0x300000, last scancode at 0x300008, key_ready at 0x300010
+
+// Helper: check if vector has CPU-pushed error code
+fn _ke_has_cpu_err(vec) {
+    if vec == 8 { return 1; }
+    if vec == 10 { return 1; }
+    if vec == 11 { return 1; }
+    if vec == 12 { return 1; }
+    if vec == 13 { return 1; }
+    if vec == 14 { return 1; }
+    if vec == 17 { return 1; }
+    if vec == 21 { return 1; }
+    if vec == 29 { return 1; }
+    if vec == 30 { return 1; }
+    return 0;
+}
+
+// Helper: serial putchar (blocking TX wait)
+fn _ke_putc(ch) {
+    let mut ready = 0;
+    while ready == 0 {
+        let status = port_in_u8(1021); // COM1+5: line status
+        ready = status / 32 % 2;       // bit 5 = TX empty
+    }
+    port_out_u8(1016, ch);             // COM1+0: data
+    return 0;
+}
+
+// Helper: print a short fixed string via serial (avoids arrays)
+fn _ke_puts_kb_ok() {
+    _ke_putc(75); _ke_putc(66); _ke_putc(45);       // "KB-"
+    _ke_putc(79); _ke_putc(75);                       // "OK"
+    _ke_putc(13); _ke_putc(10);                       // "\r\n"
+    return 0;
+}
+
+fn _ke_puts_pic_ok() {
+    _ke_putc(80); _ke_putc(73); _ke_putc(67);        // "PIC"
+    _ke_putc(32); _ke_putc(79); _ke_putc(75);        // " OK"
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
+fn _ke_puts_pit_ok() {
+    _ke_putc(80); _ke_putc(73); _ke_putc(84);        // "PIT"
+    _ke_putc(32); _ke_putc(79); _ke_putc(75);        // " OK"
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
+fn _ke_puts_idt_ok() {
+    _ke_putc(73); _ke_putc(68); _ke_putc(84);        // "IDT"
+    _ke_putc(32); _ke_putc(79); _ke_putc(75);        // " OK"
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
+fn _ke_puts_int_ok() {
+    _ke_putc(73); _ke_putc(78); _ke_putc(84);        // "INT"
+    _ke_putc(45); _ke_putc(79); _ke_putc(75);        // "-OK"
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
+// PIC remap: IRQ0-7 → vectors 32-39, IRQ8-15 → vectors 40-47
+fn _ke_pic_remap() {
+    // ICW1: init + ICW4 needed
+    port_out_u8(32, 17);    // 0x20: PIC1 command
+    port_out_u8(160, 17);   // 0xA0: PIC2 command
+    // ICW2: vector offset
+    port_out_u8(33, 32);    // 0x21: PIC1 data → IRQ0 = vector 32
+    port_out_u8(161, 40);   // 0xA1: PIC2 data → IRQ8 = vector 40
+    // ICW3: cascade
+    port_out_u8(33, 4);     // 0x21: PIC1 has slave on IRQ2
+    port_out_u8(161, 2);    // 0xA1: PIC2 cascade identity 2
+    // ICW4: 8086 mode
+    port_out_u8(33, 1);     // 0x21
+    port_out_u8(161, 1);    // 0xA1
+    // Mask all except IRQ0 (timer) and IRQ1 (keyboard)
+    port_out_u8(33, 252);   // 0x21: 0xFC
+    port_out_u8(161, 255);  // 0xA1: 0xFF
+    return 0;
+}
+
+// PIT channel 0, mode 3 (square wave), 100 Hz
+fn _ke_pit_init() {
+    port_out_u8(67, 54);    // 0x43: 0x36 = channel 0, mode 3, lo/hi
+    // Divisor = 11932 (1193182 / 100 Hz): lo=0x9C(156) hi=0x2E(46)
+    port_out_u8(64, 156);   // 0x40: lo byte
+    port_out_u8(64, 46);    // 0x40: hi byte
+    return 0;
+}
+
+// Write a 32-bit little-endian value via 4x mem_write_u8
+fn _ke_mem_w32(addr, val) {
+    mem_write_u8(addr, val % 256);
+    mem_write_u8(addr + 1, (val / 256) % 256);
+    mem_write_u8(addr + 2, (val / 65536) % 256);
+    mem_write_u8(addr + 3, (val / 16777216) % 256);
+    return 0;
+}
+
+// Build ISR thunks at isr_base, common handler, and IDT entries
+fn _ke_idt_build() {
+    let idt_base = 2097152;   // 0x200000
+    let isr_base = 2162688;   // 0x210000
+    let common_addr = isr_base + 4096;  // 256 * 16 = 4096
+
+    // === Write per-vector ISR thunks (256 x 16 bytes) ===
+    let mut vec = 0;
+    while vec < 256 {
+        let ta = isr_base + vec * 16;
+        let mut off = 0;
+
+        if _ke_has_cpu_err(vec) == 0 {
+            // push 0 (dummy error code): 6A 00
+            mem_write_u8(ta + off, 106); off = off + 1;
+            mem_write_u8(ta + off, 0);   off = off + 1;
+        }
+        // push vector#: 6A vec
+        mem_write_u8(ta + off, 106); off = off + 1;
+        mem_write_u8(ta + off, vec % 256); off = off + 1;
+
+        // jmp common: E9 rel32
+        let jmp_src = ta + off + 5;
+        let rel = common_addr - jmp_src;
+        mem_write_u8(ta + off, 233); off = off + 1;
+        _ke_mem_w32(ta + off, rel); off = off + 4;
+
+        // Pad to 16 bytes with NOP (0x90)
+        while off < 16 {
+            mem_write_u8(ta + off, 144);
+            off = off + 1;
+        }
+        vec = vec + 1;
+    }
+
+    // === Common ISR handler at common_addr ===
+    let ca = common_addr;
+    let mut p = 0;
+
+    // Save GP regs: push rax rcx rdx rbx rsi rdi
+    mem_write_u8(ca + p, 80); p = p + 1;   // push rax
+    mem_write_u8(ca + p, 81); p = p + 1;   // push rcx
+    mem_write_u8(ca + p, 82); p = p + 1;   // push rdx
+    mem_write_u8(ca + p, 83); p = p + 1;   // push rbx
+    mem_write_u8(ca + p, 86); p = p + 1;   // push rsi
+    mem_write_u8(ca + p, 87); p = p + 1;   // push rdi
+    // push r8-r15 (REX.B + push)
+    let mut ri = 8;
+    while ri <= 15 {
+        mem_write_u8(ca + p, 65); p = p + 1;
+        mem_write_u8(ca + p, 80 + ri - 8); p = p + 1;
+        ri = ri + 1;
+    }
+
+    // Load vector# from stack: mov rdi, [rsp+112] (14 regs * 8 = 112)
+    // 48 8B 7C 24 70
+    mem_write_u8(ca + p, 72); p = p + 1;
+    mem_write_u8(ca + p, 139); p = p + 1;
+    mem_write_u8(ca + p, 124); p = p + 1;
+    mem_write_u8(ca + p, 36); p = p + 1;
+    mem_write_u8(ca + p, 112); p = p + 1;
+
+    // --- Timer (vector 32): inc tick counter ---
+    // cmp rdi, 32: 48 83 FF 20
+    mem_write_u8(ca + p, 72); p = p + 1;
+    mem_write_u8(ca + p, 131); p = p + 1;
+    mem_write_u8(ca + p, 255); p = p + 1;
+    mem_write_u8(ca + p, 32); p = p + 1;
+    // jne +14: 75 0E
+    mem_write_u8(ca + p, 117); p = p + 1;
+    mem_write_u8(ca + p, 14); p = p + 1;
+    // inc qword [0x300000]: 48 FF 04 25 00 00 30 00
+    mem_write_u8(ca + p, 72); p = p + 1;
+    mem_write_u8(ca + p, 255); p = p + 1;
+    mem_write_u8(ca + p, 4); p = p + 1;
+    mem_write_u8(ca + p, 37); p = p + 1;
+    _ke_mem_w32(ca + p, 3145728); p = p + 4;  // 0x300000
+    // jmp send_eoi: EB 1A (26 bytes forward)
+    mem_write_u8(ca + p, 235); p = p + 1;
+    mem_write_u8(ca + p, 26); p = p + 1;
+
+    // --- Keyboard (vector 33): read scancode ---
+    // cmp rdi, 33: 48 83 FF 21
+    mem_write_u8(ca + p, 72); p = p + 1;
+    mem_write_u8(ca + p, 131); p = p + 1;
+    mem_write_u8(ca + p, 255); p = p + 1;
+    mem_write_u8(ca + p, 33); p = p + 1;
+    // jne +18: 75 12
+    mem_write_u8(ca + p, 117); p = p + 1;
+    mem_write_u8(ca + p, 18); p = p + 1;
+    // in al, 0x60: E4 60
+    mem_write_u8(ca + p, 228); p = p + 1;
+    mem_write_u8(ca + p, 96); p = p + 1;
+    // movzx rax, al: 48 0F B6 C0
+    mem_write_u8(ca + p, 72); p = p + 1;
+    mem_write_u8(ca + p, 15); p = p + 1;
+    mem_write_u8(ca + p, 182); p = p + 1;
+    mem_write_u8(ca + p, 192); p = p + 1;
+    // mov [0x300008], rax: 48 89 04 25 08 00 30 00
+    mem_write_u8(ca + p, 72); p = p + 1;
+    mem_write_u8(ca + p, 137); p = p + 1;
+    mem_write_u8(ca + p, 4); p = p + 1;
+    mem_write_u8(ca + p, 37); p = p + 1;
+    _ke_mem_w32(ca + p, 3145736); p = p + 4;  // 0x300008
+    // mov qword [0x300010], 1: 48 C7 04 25 10 00 30 00 01 00 00 00
+    mem_write_u8(ca + p, 72); p = p + 1;
+    mem_write_u8(ca + p, 199); p = p + 1;
+    mem_write_u8(ca + p, 4); p = p + 1;
+    mem_write_u8(ca + p, 37); p = p + 1;
+    _ke_mem_w32(ca + p, 3145744); p = p + 4;  // 0x300010
+    _ke_mem_w32(ca + p, 1); p = p + 4;        // value = 1
+
+    // --- send_eoi ---
+    // mov al, 0x20; out 0x20, al: B0 20 E6 20
+    mem_write_u8(ca + p, 176); p = p + 1;
+    mem_write_u8(ca + p, 32); p = p + 1;
+    mem_write_u8(ca + p, 230); p = p + 1;
+    mem_write_u8(ca + p, 32); p = p + 1;
+    // cmp rdi, 40; jb +4: 48 83 FF 28 72 04
+    mem_write_u8(ca + p, 72); p = p + 1;
+    mem_write_u8(ca + p, 131); p = p + 1;
+    mem_write_u8(ca + p, 255); p = p + 1;
+    mem_write_u8(ca + p, 40); p = p + 1;
+    mem_write_u8(ca + p, 114); p = p + 1;
+    mem_write_u8(ca + p, 4); p = p + 1;
+    // PIC2 EOI: mov al, 0x20; out 0xA0, al: B0 20 E6 A0
+    mem_write_u8(ca + p, 176); p = p + 1;
+    mem_write_u8(ca + p, 32); p = p + 1;
+    mem_write_u8(ca + p, 230); p = p + 1;
+    mem_write_u8(ca + p, 160); p = p + 1;
+
+    // --- Restore GP regs ---
+    ri = 15;
+    while ri >= 8 {
+        mem_write_u8(ca + p, 65); p = p + 1;
+        mem_write_u8(ca + p, 88 + ri - 8); p = p + 1;
+        ri = ri - 1;
+    }
+    mem_write_u8(ca + p, 95); p = p + 1;   // pop rdi
+    mem_write_u8(ca + p, 94); p = p + 1;   // pop rsi
+    mem_write_u8(ca + p, 91); p = p + 1;   // pop rbx
+    mem_write_u8(ca + p, 90); p = p + 1;   // pop rdx
+    mem_write_u8(ca + p, 89); p = p + 1;   // pop rcx
+    mem_write_u8(ca + p, 88); p = p + 1;   // pop rax
+    // add rsp, 16: 48 83 C4 10
+    mem_write_u8(ca + p, 72); p = p + 1;
+    mem_write_u8(ca + p, 131); p = p + 1;
+    mem_write_u8(ca + p, 196); p = p + 1;
+    mem_write_u8(ca + p, 16); p = p + 1;
+    // iretq: 48 CF
+    mem_write_u8(ca + p, 72); p = p + 1;
+    mem_write_u8(ca + p, 207); p = p + 1;
+
+    // === Build IDT entries (256 x 16 bytes at idt_base) ===
+    vec = 0;
+    while vec < 256 {
+        let isr_addr = isr_base + vec * 16;
+        let ent = idt_base + vec * 16;
+        // offset_low (bits 0-15)
+        mem_write_u8(ent, isr_addr % 256);
+        mem_write_u8(ent + 1, (isr_addr / 256) % 256);
+        // selector = 0x08 (kernel CS)
+        mem_write_u8(ent + 2, 8);
+        mem_write_u8(ent + 3, 0);
+        // IST = 0
+        mem_write_u8(ent + 4, 0);
+        // type_attr = 0x8E (present, DPL=0, 64-bit interrupt gate)
+        mem_write_u8(ent + 5, 142);
+        // offset_mid (bits 16-31)
+        mem_write_u8(ent + 6, (isr_addr / 65536) % 256);
+        mem_write_u8(ent + 7, (isr_addr / 16777216) % 256);
+        // offset_high (bits 32-63) = 0 (addresses < 4 GB)
+        _ke_mem_w32(ent + 8, 0);
+        // reserved
+        _ke_mem_w32(ent + 12, 0);
+        vec = vec + 1;
+    }
+
+    // === IDTR descriptor at 0x1FFFF6 (limit 2B + base 8B) ===
+    let idtr = 2097142;  // 0x1FFFF6
+    // limit = 256*16 - 1 = 4095 = 0x0FFF
+    mem_write_u8(idtr, 255);     // 0xFF
+    mem_write_u8(idtr + 1, 15);  // 0x0F
+    // base = 0x200000
+    mem_write_u8(idtr + 2, 0);
+    mem_write_u8(idtr + 3, 0);
+    mem_write_u8(idtr + 4, 32);  // 0x20
+    mem_write_u8(idtr + 5, 0);
+    mem_write_u8(idtr + 6, 0);
+    mem_write_u8(idtr + 7, 0);
+    mem_write_u8(idtr + 8, 0);
+    mem_write_u8(idtr + 9, 0);
+
+    lidt(idtr);
+    return 0;
+}
 
 fn _start() {
-    // Initialize COM1 serial port at 38400 baud, 8N1
+    // Phase 1: Serial init (COM1 38400 8N1)
     port_out_u8(1017, 0);    // COM1+1: disable interrupts
     port_out_u8(1019, 128);  // COM1+3: set DLAB
     port_out_u8(1016, 3);    // COM1+0: divisor lo = 3 (38400)
@@ -59,17 +362,49 @@ fn _start() {
     port_out_u8(1019, 3);    // COM1+3: 8N1
     port_out_u8(1018, 199);  // COM1+2: enable FIFO
     port_out_u8(1020, 11);   // COM1+4: IRQs + RTS/DSR
+    _ke_puts_kb_ok();
 
-    // Print "KB-OK\r\n" (proving compiled kernel.bin executes)
-    port_out_u8(1016, 75);   // 'K'
-    port_out_u8(1016, 66);   // 'B'
-    port_out_u8(1016, 45);   // '-'
-    port_out_u8(1016, 79);   // 'O'
-    port_out_u8(1016, 75);   // 'K'
-    port_out_u8(1016, 13);   // '\r'
-    port_out_u8(1016, 10);   // '\n'
+    // Phase 2: PIC remap
+    _ke_pic_remap();
+    _ke_puts_pic_ok();
 
-    // Halt loop -- compiled kernel has proven it can execute
+    // Phase 3: PIT 100Hz
+    _ke_pit_init();
+    _ke_puts_pit_ok();
+
+    // Phase 4: IDT build + load
+    _ke_idt_build();
+    _ke_puts_idt_ok();
+
+    // Phase 5: Enable interrupts
+    sti();
+    _ke_puts_int_ok();
+
+    // Phase 6: Main loop — HLT, check tick + keyboard
+    let mut last_tick = 0;
+    while 1 == 1 {
+        hlt();
+
+        // Check tick counter at 0x300000
+        let tick = mem_read_u64(3145728);
+        if tick != last_tick {
+            last_tick = tick;
+        }
+
+        // Check keyboard flag at 0x300010
+        let key_ready = mem_read_u64(3145744);
+        if key_ready != 0 {
+            // Clear flag
+            mem_write_u64(3145744, 0);
+            // Read scancode from 0x300008
+            let sc = mem_read_u64(3145736);
+            // Echo scancode as hex digit via serial (low nibble only)
+            if sc < 128 {
+                _ke_putc(46);  // '.' as key indicator
+            }
+        }
+    }
+
     return 0;
 }
 

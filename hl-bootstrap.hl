@@ -3672,12 +3672,12 @@ quadrant image_builder {
 
         // === Build IDT at 0x200000 (256 entries x 16 bytes) ===
         // ISR stubs for exceptions (0-31) and hardware IRQs (32-47)
-        // Store ISR stub code at 0x210000
+        // Store ISR thunk code at 0x210000
         let idt_base = 2097152;  // 0x200000
         let isr_base = 2162688;  // 0x210000
 
-        // Generate ISR stub code table at isr_base
-        // Each stub: push dummy error (if needed) -> push vector# -> jmp common
+        // Generate ISR thunk code table at isr_base
+        // Each thunk: push dummy error (if needed) -> push vector# -> jmp common
         let isr_buf = x86enc.new_buf(isr_base);
 
         // Common ISR handler:
@@ -3706,7 +3706,7 @@ quadrant image_builder {
             x86enc.buf_emit(isr_buf, 233);
             let jmp_off = common_off - (x86enc.buf_len(isr_buf) + 4);
             x86enc.buf_emit32(isr_buf, jmp_off);
-            // Pad stub to 16 bytes
+            // Pad thunk to 16 bytes
             while x86enc.buf_len(isr_buf) < (vec + 1) * 16 {
                 x86enc.buf_emit(isr_buf, 144); // NOP
             }
@@ -3820,7 +3820,7 @@ quadrant image_builder {
         x86enc.buf_emit(isr_buf, 72); x86enc.buf_emit(isr_buf, 207);
 
         // Now emit IDT setup code into main buf
-        // Write ISR stub bytes to isr_base via mov [addr], imm
+        // Write ISR thunk bytes to isr_base via mov [addr], imm
         let isr_bytes = isr_buf[0];
         let mut ibi = 0;
         while ibi < len(isr_bytes) {
