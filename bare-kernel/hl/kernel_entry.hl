@@ -453,6 +453,213 @@ fn _ke_pci_scan() {
     return count;
 }
 
+// === Iteration 25: Scancode → ASCII + Interactive Shell ===
+
+// PS/2 set 1 scancode to ASCII (lowercase, common keys only)
+fn _ke_sc2ascii(sc) {
+    if sc == 2 { return 49; }    // '1'
+    if sc == 3 { return 50; }    // '2'
+    if sc == 4 { return 51; }    // '3'
+    if sc == 5 { return 52; }    // '4'
+    if sc == 6 { return 53; }    // '5'
+    if sc == 7 { return 54; }    // '6'
+    if sc == 8 { return 55; }    // '7'
+    if sc == 9 { return 56; }    // '8'
+    if sc == 10 { return 57; }   // '9'
+    if sc == 11 { return 48; }   // '0'
+    if sc == 16 { return 113; }  // 'q'
+    if sc == 17 { return 119; }  // 'w'
+    if sc == 18 { return 101; }  // 'e'
+    if sc == 19 { return 114; }  // 'r'
+    if sc == 20 { return 116; }  // 't'
+    if sc == 21 { return 121; }  // 'y'
+    if sc == 22 { return 117; }  // 'u'
+    if sc == 23 { return 105; }  // 'i'
+    if sc == 24 { return 111; }  // 'o'
+    if sc == 25 { return 112; }  // 'p'
+    if sc == 30 { return 97; }   // 'a'
+    if sc == 31 { return 115; }  // 's'
+    if sc == 32 { return 100; }  // 'd'
+    if sc == 33 { return 102; }  // 'f'
+    if sc == 34 { return 103; }  // 'g'
+    if sc == 35 { return 104; }  // 'h'
+    if sc == 36 { return 106; }  // 'j'
+    if sc == 37 { return 107; }  // 'k'
+    if sc == 38 { return 108; }  // 'l'
+    if sc == 44 { return 122; }  // 'z'
+    if sc == 45 { return 120; }  // 'x'
+    if sc == 46 { return 99; }   // 'c'
+    if sc == 47 { return 118; }  // 'v'
+    if sc == 48 { return 98; }   // 'b'
+    if sc == 49 { return 110; }  // 'n'
+    if sc == 50 { return 109; }  // 'm'
+    if sc == 57 { return 32; }   // space
+    if sc == 28 { return 10; }   // Enter -> LF
+    if sc == 14 { return 8; }    // Backspace -> BS
+    if sc == 12 { return 45; }   // '-'
+    if sc == 13 { return 61; }   // '='
+    if sc == 39 { return 59; }   // ';'
+    if sc == 40 { return 39; }   // '''
+    if sc == 51 { return 44; }   // ','
+    if sc == 52 { return 46; }   // '.'
+    if sc == 53 { return 47; }   // '/'
+    return 0;
+}
+
+// Print "HicOS> " prompt
+fn _ke_prompt() {
+    _ke_putc(72); _ke_putc(105); _ke_putc(99);      // "Hic"
+    _ke_putc(79); _ke_putc(83); _ke_putc(62);        // "OS>"
+    _ke_putc(32);                                      // " "
+    return 0;
+}
+
+// Command: help
+fn _ke_cmd_help() {
+    // "Commands: help tick pci reboot\r\n"
+    _ke_putc(67); _ke_putc(109); _ke_putc(100); _ke_putc(115); _ke_putc(58); _ke_putc(32);
+    // "help "
+    _ke_putc(104); _ke_putc(101); _ke_putc(108); _ke_putc(112); _ke_putc(32);
+    // "tick "
+    _ke_putc(116); _ke_putc(105); _ke_putc(99); _ke_putc(107); _ke_putc(32);
+    // "pci "
+    _ke_putc(112); _ke_putc(99); _ke_putc(105); _ke_putc(32);
+    // "reboot\r\n"
+    _ke_putc(114); _ke_putc(101); _ke_putc(98); _ke_putc(111); _ke_putc(111); _ke_putc(116);
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
+// Command: tick — show timer tick count
+fn _ke_cmd_tick() {
+    let tick = mem_read_u64(3145728);  // 0x300000
+    // "Tick: " then decimal
+    _ke_putc(84); _ke_putc(105); _ke_putc(99); _ke_putc(107); _ke_putc(58); _ke_putc(32);
+    // Print decimal (up to 10 digits)
+    if tick == 0 { _ke_putc(48); }
+    else {
+        // Extract digits via repeated division
+        let mut d9 = tick / 1000000000;
+        let mut rem = tick % 1000000000;
+        let mut d8 = rem / 100000000; rem = rem % 100000000;
+        let mut d7 = rem / 10000000; rem = rem % 10000000;
+        let mut d6 = rem / 1000000; rem = rem % 1000000;
+        let mut d5 = rem / 100000; rem = rem % 100000;
+        let mut d4 = rem / 10000; rem = rem % 10000;
+        let mut d3 = rem / 1000; rem = rem % 1000;
+        let mut d2 = rem / 100; rem = rem % 100;
+        let mut d1 = rem / 10;
+        let mut d0 = rem % 10;
+        let mut started = 0;
+        if d9 > 0 { _ke_putc(48 + d9); started = 1; }
+        if d8 > 0 { _ke_putc(48 + d8); started = 1; } else if started != 0 { _ke_putc(48); }
+        if d7 > 0 { _ke_putc(48 + d7); started = 1; } else if started != 0 { _ke_putc(48); }
+        if d6 > 0 { _ke_putc(48 + d6); started = 1; } else if started != 0 { _ke_putc(48); }
+        if d5 > 0 { _ke_putc(48 + d5); started = 1; } else if started != 0 { _ke_putc(48); }
+        if d4 > 0 { _ke_putc(48 + d4); started = 1; } else if started != 0 { _ke_putc(48); }
+        if d3 > 0 { _ke_putc(48 + d3); started = 1; } else if started != 0 { _ke_putc(48); }
+        if d2 > 0 { _ke_putc(48 + d2); started = 1; } else if started != 0 { _ke_putc(48); }
+        if d1 > 0 { _ke_putc(48 + d1); started = 1; } else if started != 0 { _ke_putc(48); }
+        _ke_putc(48 + d0);
+    }
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
+// Command dispatch: compare 4-byte command buffer
+// Uses fixed memory at 0x310000-0x31003F as command buffer
+fn _ke_dispatch(buf_addr, buf_len) {
+    if buf_len == 0 { return 0; }
+
+    // "help" = 104 101 108 112
+    if buf_len == 4 {
+        let c0 = mem_read_u8(buf_addr);
+        let c1 = mem_read_u8(buf_addr + 1);
+        let c2 = mem_read_u8(buf_addr + 2);
+        let c3 = mem_read_u8(buf_addr + 3);
+        if c0 == 104 { if c1 == 101 { if c2 == 108 { if c3 == 112 {
+            _ke_cmd_help(); return 0;
+        } } } }
+        // "tick" = 116 105 99 107
+        if c0 == 116 { if c1 == 105 { if c2 == 99 { if c3 == 107 {
+            _ke_cmd_tick(); return 0;
+        } } } }
+    }
+
+    // "pci" = 112 99 105
+    if buf_len == 3 {
+        let c0 = mem_read_u8(buf_addr);
+        let c1 = mem_read_u8(buf_addr + 1);
+        let c2 = mem_read_u8(buf_addr + 2);
+        if c0 == 112 { if c1 == 99 { if c2 == 105 {
+            _ke_pci_scan(); return 0;
+        } } }
+    }
+
+    // "reboot" = 114 101 98 111 111 116
+    if buf_len == 6 {
+        let c0 = mem_read_u8(buf_addr);
+        let c1 = mem_read_u8(buf_addr + 1);
+        if c0 == 114 { if c1 == 101 {
+            // Triple-fault reboot: load invalid IDT and trigger int
+            mem_write_u64(3211264, 0);     // 0x310000: zero IDTR
+            mem_write_u64(3211272, 0);
+            lidt(3211264);
+            // int 3 → triple fault → reboot
+            return 0;
+        } }
+    }
+
+    // Unknown command: "?\r\n"
+    _ke_putc(63); _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
+// Interactive shell loop
+fn _ke_shell() {
+    let cmd_buf = 3211264;     // 0x310000: command buffer (64 bytes)
+    let mut buf_len = 0;
+
+    _ke_prompt();
+
+    while 1 == 1 {
+        hlt();
+
+        // Check keyboard flag at 0x300010
+        let key_ready = mem_read_u64(3145744);
+        if key_ready != 0 {
+            mem_write_u64(3145744, 0);       // clear flag
+            let sc = mem_read_u64(3145736);  // read scancode
+
+            // Ignore key-up events (bit 7 set)
+            if sc < 128 {
+                let ch = _ke_sc2ascii(sc);
+                if ch == 10 {
+                    // Enter: execute command
+                    _ke_putc(13); _ke_putc(10);
+                    _ke_dispatch(cmd_buf, buf_len);
+                    buf_len = 0;
+                    _ke_prompt();
+                } else if ch == 8 {
+                    // Backspace
+                    if buf_len > 0 {
+                        buf_len = buf_len - 1;
+                        _ke_putc(8); _ke_putc(32); _ke_putc(8);
+                    }
+                } else if ch > 0 {
+                    // Printable char: store and echo
+                    if buf_len < 60 {
+                        mem_write_u8(cmd_buf + buf_len, ch);
+                        buf_len = buf_len + 1;
+                        _ke_putc(ch);
+                    }
+                }
+            }
+        }
+    }
+    return 0;
+}
+
 fn _start() {
     // Phase 1: Serial init (COM1 38400 8N1)
     port_out_u8(1017, 0);    // COM1+1: disable interrupts
@@ -483,30 +690,8 @@ fn _start() {
     // Phase 6: PCI bus scan (iteration 24)
     _ke_pci_scan();
 
-    // Phase 7: Main loop — HLT, check tick + keyboard
-    let mut last_tick = 0;
-    while 1 == 1 {
-        hlt();
-
-        // Check tick counter at 0x300000
-        let tick = mem_read_u64(3145728);
-        if tick != last_tick {
-            last_tick = tick;
-        }
-
-        // Check keyboard flag at 0x300010
-        let key_ready = mem_read_u64(3145744);
-        if key_ready != 0 {
-            // Clear flag
-            mem_write_u64(3145744, 0);
-            // Read scancode from 0x300008
-            let sc = mem_read_u64(3145736);
-            // Echo scancode as hex digit via serial (low nibble only)
-            if sc < 128 {
-                _ke_putc(46);  // '.' as key indicator
-            }
-        }
-    }
+    // Phase 7: Interactive shell (iteration 25)
+    _ke_shell();
 
     return 0;
 }

@@ -137,6 +137,7 @@ $script:IR_PORT_OUT=38
 $script:IR_PORT_IN=39;   $script:IR_CLI=40;     $script:IR_STI=41;     $script:IR_HLT=42
 $script:IR_MEM_STORE8=43; $script:IR_MEM_LOAD64=44; $script:IR_MEM_STORE64=45; $script:IR_LIDT=46
 $script:IR_PORT_OUT32=47; $script:IR_PORT_IN32=48; $script:IR_MEM_STORE32=49; $script:IR_MEM_LOAD32=50; $script:IR_MEM_LOAD8=51
+$script:IR_PARAM=52  # function parameter receive (ABI reg -> vreg)
 
 $script:ir_op = $null
 $script:ir_dead = $null; $script:ir_count = 0; $script:ir_next_tmp = 0
@@ -268,7 +269,7 @@ function IR-LowerStmt($node) {
     $nt = $node[0]
     if ($nt -eq 'Let') { $vr = IR-Tmp; $script:ir_vars[$node[1]] = $vr; if ($null -ne $node[3]) { $val = IR-LowerExpr $node[3]; IR-Emit $IR_COPY $vr $val 0 | Out-Null } else { IR-Emit $IR_CONST $vr 0 0 | Out-Null }; return }
     if ($nt -eq 'Assign') { $val = IR-LowerExpr $node[2]; $vr = $script:ir_vars[$node[1]]; if ($null -ne $vr) { IR-Emit $IR_COPY $vr $val 0 | Out-Null }; return }
-    if ($nt -eq 'FnDef') { $lbl = IR-Lbl; $script:ir_fns[$node[1]] = $lbl; IR-Emit $IR_LABEL $lbl 0 0 | Out-Null; $pi=0; if ($node[2] -is [array]) { foreach ($p in $node[2]) { $pv=IR-Tmp; $script:ir_vars[$p]=$pv; IR-Emit $IR_ARG $pv $pi 0|Out-Null; $pi++ } }; if ($node[3] -is [array]) { foreach ($s in $node[3]) { IR-LowerStmt $s } }; $z=IR-Tmp; IR-Emit $IR_CONST $z 0 0|Out-Null; IR-Emit $IR_RET $z 0 0|Out-Null; return }
+    if ($nt -eq 'FnDef') { $lbl = IR-Lbl; $script:ir_fns[$node[1]] = $lbl; IR-Emit $IR_LABEL $lbl 0 0 | Out-Null; $pi=0; if ($node[2] -is [array]) { foreach ($p in $node[2]) { $pv=IR-Tmp; $script:ir_vars[$p]=$pv; IR-Emit $IR_PARAM $pv $pi 0|Out-Null; $pi++ } }; if ($node[3] -is [array]) { foreach ($s in $node[3]) { IR-LowerStmt $s } }; $z=IR-Tmp; IR-Emit $IR_CONST $z 0 0|Out-Null; IR-Emit $IR_RET $z 0 0|Out-Null; return }
     if ($nt -eq 'Return') { if ($null -ne $node[1]) { $val = IR-LowerExpr $node[1]; IR-Emit $IR_RET $val 0 0 | Out-Null } else { $z=IR-Tmp; IR-Emit $IR_CONST $z 0 0|Out-Null; IR-Emit $IR_RET $z 0 0|Out-Null }; return }
     if ($nt -eq 'If') { $c = IR-LowerExpr $node[1]; $el = IR-Lbl; $end = IR-Lbl; IR-Emit $IR_JZ $c $el 0|Out-Null; if ($node[2] -is [array]) { foreach ($s in $node[2]) { IR-LowerStmt $s } }; IR-Emit $IR_JMP $end 0 0|Out-Null; IR-Emit $IR_LABEL $el 0 0|Out-Null; if ($null -ne $node[3] -and $node[3] -is [array]) { foreach ($s in $node[3]) { IR-LowerStmt $s } }; IR-Emit $IR_LABEL $end 0 0|Out-Null; return }
     if ($nt -eq 'While') { $lp = IR-Lbl; $end = IR-Lbl; IR-Emit $IR_LABEL $lp 0 0|Out-Null; $c = IR-LowerExpr $node[1]; IR-Emit $IR_JZ $c $end 0|Out-Null; if ($node[2] -is [array]) { foreach ($s in $node[2]) { IR-LowerStmt $s } }; IR-Emit $IR_JMP $lp 0 0|Out-Null; IR-Emit $IR_LABEL $end 0 0|Out-Null; return }
@@ -318,7 +319,7 @@ function IR-OptConstFold {
 # Optimization: dead code elimination
 function IR-OptDCE {
     $changed = 0
-    $skip = @($IR_JMP,$IR_JZ,$IR_JNZ,$IR_LABEL,$IR_CALL,$IR_RET,$IR_STORE,$IR_ARG,$IR_NOP,$IR_PRINT,$IR_PORT_OUT,$IR_PORT_IN,$IR_CLI,$IR_STI,$IR_HLT,$IR_MEM_STORE8,$IR_MEM_LOAD64,$IR_MEM_STORE64,$IR_LIDT,$IR_PORT_OUT32,$IR_PORT_IN32,$IR_MEM_STORE32,$IR_MEM_LOAD32,$IR_MEM_LOAD8)
+    $skip = @($IR_JMP,$IR_JZ,$IR_JNZ,$IR_LABEL,$IR_CALL,$IR_RET,$IR_STORE,$IR_ARG,$IR_PARAM,$IR_NOP,$IR_PRINT,$IR_PORT_OUT,$IR_PORT_IN,$IR_CLI,$IR_STI,$IR_HLT,$IR_MEM_STORE8,$IR_MEM_LOAD64,$IR_MEM_STORE64,$IR_LIDT,$IR_PORT_OUT32,$IR_PORT_IN32,$IR_MEM_STORE32,$IR_MEM_LOAD32,$IR_MEM_LOAD8)
     for ($i = $script:ir_count - 1; $i -ge 0; $i--) {
         if ($script:ir_dead[$i] -ne 0) { continue }
         if ($script:ir_op[$i] -in $skip) { continue }
@@ -501,12 +502,36 @@ function X86-EmitIR([int]$idx) {
         $IR_CMP_LE { $r1 = RA-Alloc $s1; $r2 = RA-Alloc $s2; if ($r1 -ge 0 -and $r2 -ge 0) { X86-CmpSet $r1 $r2 0x9E }; if ($rd -ge 0 -and $rd -ne 0) { X86-MovRR $rd 0 } }
         $IR_CMP_GT { $r1 = RA-Alloc $s1; $r2 = RA-Alloc $s2; if ($r1 -ge 0 -and $r2 -ge 0) { X86-CmpSet $r1 $r2 0x9F }; if ($rd -ge 0 -and $rd -ne 0) { X86-MovRR $rd 0 } }
         $IR_CMP_GE { $r1 = RA-Alloc $s1; $r2 = RA-Alloc $s2; if ($r1 -ge 0 -and $r2 -ge 0) { X86-CmpSet $r1 $r2 0x9D }; if ($rd -ge 0 -and $rd -ne 0) { X86-MovRR $rd 0 } }
-        $IR_LABEL  { <# labels are address markers, emit nop alignment #> X86-Byte 0x90 }
+        $IR_LABEL  {
+            # Labels: emit nop alignment; if this is a function entry, emit prologue
+            $lbl = $dst; $isFn = $false
+            foreach ($kv in $script:ir_fns.GetEnumerator()) { if ($kv.Value -eq $lbl) { $isFn = $true } }
+            if ($isFn) { X86-Prologue } else { X86-Byte 0x90 }
+        }
         $IR_JMP    { X86-Byte 0xEB; X86-Byte 0x00 <# rel8 placeholder #> }
         $IR_JZ     { X86-Byte 0x74; X86-Byte 0x00 <# je rel8 placeholder #> }
         $IR_RET    { $r1 = RA-Alloc $s1; if ($null -ne $r1 -and $r1 -ge 0 -and $r1 -ne 0) { X86-MovRR 0 $r1 <# result¡úRAX #> }; X86-Epilogue; X86-Ret }
         $IR_CALL   { X86-Byte 0xE8; X86-Imm32 0 <# call rel32 placeholder #> }
-        $IR_ARG    { <# arg setup: platform ABI maps arg N to register #> }
+        $IR_ARG    {
+            # Call-site arg setup: move value vreg to ABI register
+            # dst = arg position (0-5), src1 = value vreg
+            $abiRegs = @(7,6,2,1,8,9)  # RDI RSI RDX RCX R8 R9
+            $argIdx = $dst; $valReg = RA-Alloc $s1
+            if ($argIdx -ge 0 -and $argIdx -lt 6 -and $valReg -ge 0) {
+                $targetReg = $abiRegs[$argIdx]
+                if ($valReg -ne $targetReg) { X86-MovRR $targetReg $valReg }
+            }
+        }
+        $IR_PARAM  {
+            # Function entry: receive parameter from ABI register to vreg
+            # dst = dest vreg, src1 = param index (0-5)
+            $abiRegs = @(7,6,2,1,8,9)  # RDI RSI RDX RCX R8 R9
+            $paramIdx = $s1
+            if ($paramIdx -ge 0 -and $paramIdx -lt 6 -and $rd -ge 0) {
+                $srcReg = $abiRegs[$paramIdx]
+                if ($rd -ne $srcReg) { X86-MovRR $rd $srcReg }
+            }
+        }
         $IR_PRINT  { <# serial output stub #> X86-Byte 0x90 }
         $IR_PORT_OUT {
             # port_out_u8: mov edx, port_reg; mov eax, val_reg; out dx, al
