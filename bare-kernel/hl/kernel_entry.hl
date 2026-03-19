@@ -38,6 +38,41 @@
 //   (2,2,0) -- filesystem
 //   (2,2,1) -- drivers
 
+// === Native Entry Point (_start) ===
+// This is the FIRST function in kernel.bin (offset 0).
+// Called by the handwritten Stage2 kernel via JMP after hardware init.
+//
+// ABI contract:
+//   - CPU is in 64-bit long mode, interrupts disabled
+//   - COM1 serial NOT yet initialized by kernel.bin (Stage2 may have set it up)
+//   - Stack pointer is valid (set by Stage2)
+//   - kernel.bin is loaded at the address specified in kernel.entry
+//
+// _start initializes COM1 and prints "KB-OK\r\n" to prove compiled code runs.
+
+fn _start() {
+    // Initialize COM1 serial port at 38400 baud, 8N1
+    port_out_u8(1017, 0);    // COM1+1: disable interrupts
+    port_out_u8(1019, 128);  // COM1+3: set DLAB
+    port_out_u8(1016, 3);    // COM1+0: divisor lo = 3 (38400)
+    port_out_u8(1017, 0);    // COM1+1: divisor hi = 0
+    port_out_u8(1019, 3);    // COM1+3: 8N1
+    port_out_u8(1018, 199);  // COM1+2: enable FIFO
+    port_out_u8(1020, 11);   // COM1+4: IRQs + RTS/DSR
+
+    // Print "KB-OK\r\n" (proving compiled kernel.bin executes)
+    port_out_u8(1016, 75);   // 'K'
+    port_out_u8(1016, 66);   // 'B'
+    port_out_u8(1016, 45);   // '-'
+    port_out_u8(1016, 79);   // 'O'
+    port_out_u8(1016, 75);   // 'K'
+    port_out_u8(1016, 13);   // '\r'
+    port_out_u8(1016, 10);   // '\n'
+
+    // Halt loop -- compiled kernel has proven it can execute
+    return 0;
+}
+
 // === Self-test (runs in H-L interpreter for verification) ===
 
 print("Bootstrapping H-L: Space-locality initiated.");

@@ -3664,28 +3664,94 @@ emit_mov_sp_imm16 0x7C00
 emit_sti
 
 # INT 13h Extended Read (AH=42h) using DAP at 0x600
+# Split into chunks of 64 sectors to avoid 64KB DMA boundary crossing
 # DAP: size(1)=16, reserved(1)=0, count(2), buf_off(2), buf_seg(2), lba(8)
-# Store DAP at 0x0600
+
+# Initialize persistent DAP fields at 0x600
 # mov byte [0x600], 16 (packet size)
 buf_emit 0xC6; buf_emit 0x06; buf_emit16 0x0600; buf_emit 16
 # mov byte [0x601], 0 (reserved)
 buf_emit 0xC6; buf_emit 0x06; buf_emit16 0x0601; buf_emit 0
-# mov word [0x602], sector_count
-buf_emit 0xC7; buf_emit 0x06; buf_emit16 0x0602; buf_emit16 ([uint16]$read_sectors)
-# mov word [0x604], 0x8000 (buffer offset)
-buf_emit 0xC7; buf_emit 0x06; buf_emit16 0x0604; buf_emit16 0x8000
-# mov word [0x606], 0x0000 (buffer segment)
-buf_emit 0xC7; buf_emit 0x06; buf_emit16 0x0606; buf_emit16 0
-# mov dword [0x608], 1 (LBA start = sector 1)
-buf_emit 0x66; buf_emit 0xC7; buf_emit 0x06; buf_emit16 0x0608; buf_emit32 1
-# mov dword [0x60C], 0 (LBA high)
+# mov dword [0x60C], 0 (LBA high - always 0)
 buf_emit 0x66; buf_emit 0xC7; buf_emit 0x06; buf_emit16 0x060C; buf_emit32 0
-# INT 13h AH=42h: SI=DAP address, DL=drive
+
+# Chunked read loop using registers:
+#   CX = remaining sectors, BX = current buffer offset, DI = current LBA
+$chunkSize = 64  # sectors per chunk
+# mov cx, total_sectors
+buf_emit 0xB9; buf_emit16 ([uint16]$read_sectors)
+# mov bx, 0x8000  (buffer start)
+buf_emit 0xBB; buf_emit16 0x8000
+# mov di, 1  (LBA start = sector 1)
+buf_emit 0xBF; buf_emit16 1
+
+# .read_loop:
+$read_loop_off = buf_len
+# cmp cx, 0
+buf_emit 0x83; buf_emit 0xF9; buf_emit 0  # cmp cx, 0
+# je .read_done (patched later)
+buf_emit 0x74  # je rel8
+$je_done_patch = buf_len
+buf_emit 0  # placeholder
+
+# mov ax, chunk_size (max per call)
+buf_emit 0xB8; buf_emit16 ([uint16]$chunkSize)
+# cmp cx, ax -- if remaining < chunk, use remaining
+buf_emit 0x39; buf_emit 0xC1  # cmp cx, ax
+# jae .use_chunk (remaining >= chunk)
+buf_emit 0x73; buf_emit 2  # jae +2
+# mov ax, cx (use remaining)
+buf_emit 0x89; buf_emit 0xC8  # mov ax, cx
+
+# .use_chunk: Store count, buf, LBA into DAP
+# mov word [0x602], ax  (sector count)
+buf_emit 0xA3; buf_emit16 0x0602
+# mov word [0x604], bx  (buffer offset)
+buf_emit 0x89; buf_emit 0x1E; buf_emit16 0x0604
+# mov word [0x606], 0x0000  (buffer segment)
+buf_emit 0xC7; buf_emit 0x06; buf_emit16 0x0606; buf_emit16 0
+# mov dword [0x608], edi  (LBA low -- DI in 16-bit, zero-extend)
+# Use: mov [0x608], di; mov word [0x60A], 0
+buf_emit 0x89; buf_emit 0x3E; buf_emit16 0x0608
+buf_emit 0xC7; buf_emit 0x06; buf_emit16 0x060A; buf_emit16 0
+
+# Save AX (chunk count this iteration)
+buf_emit 0x50  # push ax
+
+# INT 13h: AH=42h, SI=0x600, DL=0x80
 emit_mov_ah_imm8 0x42
-# mov si, 0x600
-buf_emit 0xBE; buf_emit16 0x0600
+buf_emit 0xBE; buf_emit16 0x0600  # mov si, 0x600
 emit_mov_dl_imm8 0x80
 emit_int 0x13
+
+# Restore AX (chunk count)
+buf_emit 0x58  # pop ax
+
+# Advance: CX -= AX, BX += AX*512, DI += AX
+# sub cx, ax
+buf_emit 0x29; buf_emit 0xC1  # sub cx, ax
+# Compute AX*512: shl ax, 9 (but 16-bit, so use: push cx; mov cl,9; shl ax,cl; pop cx)
+buf_emit 0x51  # push cx
+buf_emit 0xB1; buf_emit 9  # mov cl, 9
+buf_emit 0xD3; buf_emit 0xE0  # shl ax, cl
+buf_emit 0x59  # pop cx
+# add bx, ax  (advance buffer pointer)
+buf_emit 0x01; buf_emit 0xC3  # add bx, ax
+# Restore AX = chunk count (need to re-derive from AX*512: shr ax, 9)
+buf_emit 0x51  # push cx
+buf_emit 0xB1; buf_emit 9  # mov cl, 9
+buf_emit 0xD3; buf_emit 0xE8  # shr ax, cl
+buf_emit 0x59  # pop cx
+# add di, ax  (advance LBA)
+buf_emit 0x01; buf_emit 0xC7  # add di, ax
+
+# jmp .read_loop
+$jmp_back_rel = $read_loop_off - (buf_len + 2)
+buf_emit 0xEB; buf_emit ([byte]($jmp_back_rel -band 0xFF))  # jmp rel8
+
+# .read_done: patch the je target
+$read_done_off = buf_len
+buf_set $je_done_patch ([byte]($read_done_off - $je_done_patch - 1))
 
 # A20
 emit_in_al_imm8 0x92; emit_or_al_imm8 2; emit_out_imm8_al 0x92
