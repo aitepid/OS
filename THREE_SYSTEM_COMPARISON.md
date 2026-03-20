@@ -87,3 +87,8 @@
 | 自举编译 | tokenizer→parser→eval→codegen 全 H-L |
 | 33K LOC | Linux 的 1/850，极致可审计 |
 | 零依赖 | 无 libc/GCC/LLVM |
+
+## Update: Build System
+
+The build and toolchain of HicOS have transitioned entirely to Hilbert-Lang using hl-bootstrap-build-test.ps1. Phase 1 compilation pipeline (lexer) is complete. The system compiles its OS modules entirely with its own tools.
+

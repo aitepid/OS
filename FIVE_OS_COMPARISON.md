@@ -342,3 +342,8 @@ an idea. The architecture document exists; the implementation does not yet.
 
 > "A bootloader that prints 'Hello' is not an operating system.
 > An operating system is what happens after the bootloader finishes."
+
+## Update: Build System
+
+The build and toolchain of HicOS have transitioned entirely to Hilbert-Lang using hl-bootstrap-build-test.ps1. Phase 1 compilation pipeline (lexer) is complete. The system compiles its OS modules entirely with its own tools.
+

@@ -101,3 +101,7 @@ See `bare-kernel/hl/kernel_init.hl` for the full 113-module dependency map.
 ## Subsystems
 114 modules organized by dependency order in build.hl.
 See kernel_init.hl for full module dependency map.
+## Update: Build System
+
+The build and toolchain of HicOS have transitioned entirely to Hilbert-Lang using hl-bootstrap-build-test.ps1. Phase 1 compilation pipeline (lexer) is complete. The system compiles its OS modules entirely with its own tools.
+

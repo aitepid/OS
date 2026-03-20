@@ -1,4 +1,10 @@
-﻿# HicOS Changelog
+﻿## v4.2
+
+- **Build System**: Removed JS dependencies entirely. Now strictly using hl-bootstrap entrypoints.
+- **Testing**: Integrated hl-bootstrap-build-test.ps1 for end-to-end Phase 1 lexer verification and workspace readines.
+- **Project Purity**: Enforced strict Hilbert-Lang purity across all modules and build tests.
+
+# HicOS Changelog
 
 ## v5.0 (Current)
 
@@ -291,3 +297,4 @@ H-L self-hosting compiler. Hilbert-curve spatial addressing.
 
 ### v5.0
 - Native H-L GUI framework, package manager, hardware GPU shaders, Btrfs/ZFS
+
