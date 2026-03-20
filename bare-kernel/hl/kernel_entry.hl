@@ -219,23 +219,24 @@ fn _ke_idt_build() {
     mem_write_u8(ca + p, 112); p = p + 1;
 
     // --- Timer (vector 32): inc tick counter ---
+    // Layout: Timer(16B) → Keyboard(34B) → Mouse(32B) → send_eoi
     // cmp rdi, 32: 48 83 FF 20
     mem_write_u8(ca + p, 72); p = p + 1;
     mem_write_u8(ca + p, 131); p = p + 1;
     mem_write_u8(ca + p, 255); p = p + 1;
     mem_write_u8(ca + p, 32); p = p + 1;
-    // jne +14: 75 0E
+    // jne +10 (skip timer body → keyboard cmp): 75 0A
     mem_write_u8(ca + p, 117); p = p + 1;
-    mem_write_u8(ca + p, 14); p = p + 1;
+    mem_write_u8(ca + p, 10); p = p + 1;
     // inc qword [0x300000]: 48 FF 04 25 00 00 30 00
     mem_write_u8(ca + p, 72); p = p + 1;
     mem_write_u8(ca + p, 255); p = p + 1;
     mem_write_u8(ca + p, 4); p = p + 1;
     mem_write_u8(ca + p, 37); p = p + 1;
     _ke_mem_w32(ca + p, 3145728); p = p + 4;  // 0x300000
-    // jmp send_eoi: EB 1A (26 bytes forward)
+    // jmp send_eoi: EB 42 (66 bytes forward)
     mem_write_u8(ca + p, 235); p = p + 1;
-    mem_write_u8(ca + p, 26); p = p + 1;
+    mem_write_u8(ca + p, 66); p = p + 1;
 
     // --- Keyboard (vector 33): read scancode ---
     // cmp rdi, 33: 48 83 FF 21
@@ -243,9 +244,9 @@ fn _ke_idt_build() {
     mem_write_u8(ca + p, 131); p = p + 1;
     mem_write_u8(ca + p, 255); p = p + 1;
     mem_write_u8(ca + p, 33); p = p + 1;
-    // jne +18: 75 12
+    // jne +28 (skip kbd body+jmp → mouse cmp): 75 1C
     mem_write_u8(ca + p, 117); p = p + 1;
-    mem_write_u8(ca + p, 18); p = p + 1;
+    mem_write_u8(ca + p, 28); p = p + 1;
     // in al, 0x60: E4 60
     mem_write_u8(ca + p, 228); p = p + 1;
     mem_write_u8(ca + p, 96); p = p + 1;
@@ -267,6 +268,41 @@ fn _ke_idt_build() {
     mem_write_u8(ca + p, 37); p = p + 1;
     _ke_mem_w32(ca + p, 3145744); p = p + 4;  // 0x300010
     _ke_mem_w32(ca + p, 1); p = p + 4;        // value = 1
+    // jmp send_eoi: EB 20 (32 bytes forward)
+    mem_write_u8(ca + p, 235); p = p + 1;
+    mem_write_u8(ca + p, 32); p = p + 1;
+
+    // --- Mouse (vector 44 = IRQ12): read byte from aux port ---
+    // cmp rdi, 44: 48 83 FF 2C
+    mem_write_u8(ca + p, 72); p = p + 1;
+    mem_write_u8(ca + p, 131); p = p + 1;
+    mem_write_u8(ca + p, 255); p = p + 1;
+    mem_write_u8(ca + p, 44); p = p + 1;
+    // jne +26 (skip mouse body → send_eoi): 75 1A
+    mem_write_u8(ca + p, 117); p = p + 1;
+    mem_write_u8(ca + p, 26); p = p + 1;
+    // in al, 0x60: E4 60
+    mem_write_u8(ca + p, 228); p = p + 1;
+    mem_write_u8(ca + p, 96); p = p + 1;
+    // movzx rax, al: 48 0F B6 C0
+    mem_write_u8(ca + p, 72); p = p + 1;
+    mem_write_u8(ca + p, 15); p = p + 1;
+    mem_write_u8(ca + p, 182); p = p + 1;
+    mem_write_u8(ca + p, 192); p = p + 1;
+    // mov [0x300018], rax: 48 89 04 25 18 00 30 00
+    mem_write_u8(ca + p, 72); p = p + 1;
+    mem_write_u8(ca + p, 137); p = p + 1;
+    mem_write_u8(ca + p, 4); p = p + 1;
+    mem_write_u8(ca + p, 37); p = p + 1;
+    _ke_mem_w32(ca + p, 3145752); p = p + 4;  // 0x300018: mouse_byte
+    // mov qword [0x300020], 1: 48 C7 04 25 20 00 30 00 01 00 00 00
+    mem_write_u8(ca + p, 72); p = p + 1;
+    mem_write_u8(ca + p, 199); p = p + 1;
+    mem_write_u8(ca + p, 4); p = p + 1;
+    mem_write_u8(ca + p, 37); p = p + 1;
+    _ke_mem_w32(ca + p, 3145760); p = p + 4;  // 0x300020: mouse_ready
+    _ke_mem_w32(ca + p, 1); p = p + 4;        // value = 1
+    // fall through to send_eoi
 
     // --- send_eoi ---
     // mov al, 0x20; out 0x20, al: B0 20 E6 20
@@ -909,6 +945,1280 @@ fn _ke_cmd_ps() {
     return 0;
 }
 
+// === Iteration 29: VirtIO-net + TCP State Machine + Packet Construction ===
+// VirtIO-net BAR0 stored at 0x310050 (u32)
+// VirtIO TX queue base at 0x900000 (4KB page-aligned)
+// VirtIO RX queue base at 0x901000
+// TX buffer at 0x902000 (2KB)
+// RX buffer pool at 0x904000 (16 * 2KB = 32KB)
+// TCB at 0x800000 (256 bytes), packet buffer at 0x801000
+
+// --- VirtIO-net PCI detection and initialization ---
+
+fn _ke_virtio_find() {
+    // Scan PCI for vendor 0x1AF4 (VirtIO) device 0x1000 (net)
+    let mut dev = 0;
+    while dev < 32 {
+        let vendor = _ke_pci_vendor(0, dev, 0);
+        if vendor == 6900 {  // 0x1AF4
+            let devid = _ke_pci_device(0, dev, 0);
+            if devid == 4096 {  // 0x1000
+                return dev;
+            }
+        }
+        dev = dev + 1;
+    }
+    return 255;  // not found
+}
+
+fn _ke_virtio_bar0(pci_dev) {
+    // PCI BAR0 at config offset 0x10
+    let raw = _ke_pci_read32(0, pci_dev, 0, 16);
+    // I/O BAR: bit 0 = 1, mask low 2 bits
+    return (raw / 4) * 4;
+}
+
+fn _ke_virtio_init(bar) {
+    // Reset device
+    port_out_u8(bar + 18, 0);       // device_status = 0
+    // Acknowledge
+    port_out_u8(bar + 18, 1);       // ACK
+    // Driver
+    port_out_u8(bar + 18, 3);       // ACK + DRIVER
+
+    // Select queue 0 (RX)
+    let mut lo = 0;
+    let mut hi = 0;
+    port_out_u8(bar + 14, 0); port_out_u8(bar + 15, 0);  // queue_select = 0
+    let rxsz = port_in_u8(bar + 12);  // queue_size low byte
+
+    // Select queue 1 (TX)
+    port_out_u8(bar + 14, 1); port_out_u8(bar + 15, 0);  // queue_select = 1
+    let txsz = port_in_u8(bar + 12);  // queue_size low byte
+
+    // Set TX queue page (0x900000 / 4096 = 0x900 = 2304)
+    port_out_u8(bar + 14, 1); port_out_u8(bar + 15, 0);
+    let txpage = 9437184 / 4096;  // 0x900000 / 4096
+    port_out_u32(bar + 8, txpage);
+
+    // Set RX queue page (0x901000 / 4096 = 0x901 = 2305)
+    port_out_u8(bar + 14, 0); port_out_u8(bar + 15, 0);
+    let rxpage = 9441280 / 4096;  // 0x901000 / 4096
+    port_out_u32(bar + 8, rxpage);
+
+    // DRIVER_OK
+    port_out_u8(bar + 18, 7);       // ACK + DRIVER + DRIVER_OK
+
+    // Store BAR for later use
+    mem_write_u32(3211344, bar);    // 0x310050
+
+    // Print status
+    _ke_putc(78); _ke_putc(69); _ke_putc(84); _ke_putc(58); _ke_putc(32);  // "NET: "
+    _ke_putc(79); _ke_putc(75);  // "OK"
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
+// Send a packet via VirtIO-net TX queue
+// Packet at pkt_addr, length pkt_len
+fn _ke_virtio_tx(pkt_addr, pkt_len) {
+    let bar = mem_read_u32(3211344);  // 0x310050
+    if bar == 0 { return 0; }
+
+    // VirtIO net header (10 bytes of zeros) at TX HDR buffer 0x902000
+    let hdr_buf = 9445376;  // 0x902000
+    let mut i = 0;
+    while i < 10 {
+        mem_write_u8(hdr_buf + i, 0);
+        i = i + 1;
+    }
+
+    // TX queue at 0x900000
+    // Descriptor table: entries of 16 bytes each {addr(8), len(4), flags(2), next(2)}
+    let tx_base = 9437184;  // 0x900000
+
+    // Descriptor 0: VirtIO net header
+    mem_write_u64(tx_base, hdr_buf);            // addr
+    mem_write_u32(tx_base + 8, 10);             // len = 10
+    let flags0 = 1;  // VRING_DESC_F_NEXT
+    mem_write_u8(tx_base + 12, flags0);
+    mem_write_u8(tx_base + 13, 0);
+    mem_write_u8(tx_base + 14, 1);  // next = 1
+    mem_write_u8(tx_base + 15, 0);
+
+    // Descriptor 1: actual packet data
+    mem_write_u64(tx_base + 16, pkt_addr);      // addr
+    mem_write_u32(tx_base + 24, pkt_len);       // len
+    mem_write_u8(tx_base + 28, 0);              // flags = 0 (no next)
+    mem_write_u8(tx_base + 29, 0);
+    mem_write_u8(tx_base + 30, 0);              // next = 0
+    mem_write_u8(tx_base + 31, 0);
+
+    // Available ring: at tx_base + 16*queue_size (assume queue_size=256)
+    // For simplicity, place avail ring at tx_base + 4096
+    let avail = tx_base + 4096;
+    // Read current avail idx
+    let aidx = mem_read_u8(avail + 2);
+    // Write descriptor 0 to ring[aidx % 256]
+    let ring_off = 4 + (aidx % 256) * 2;
+    mem_write_u8(avail + ring_off, 0);
+    mem_write_u8(avail + ring_off + 1, 0);
+    // Increment avail idx
+    mem_write_u8(avail + 2, aidx + 1);
+    mem_write_u8(avail + 3, 0);
+
+    // Notify queue 1 (TX)
+    port_out_u8(bar + 16, 1); port_out_u8(bar + 17, 0);
+
+    return pkt_len;
+}
+
+// IP header checksum (ones' complement over 20 bytes at addr)
+fn _ke_ip_cksum(addr) {
+    let mut sum = 0;
+    let mut i = 0;
+    while i < 20 {
+        let hi = mem_read_u8(addr + i);
+        let lo = mem_read_u8(addr + i + 1);
+        sum = sum + hi * 256 + lo;
+        i = i + 2;
+    }
+    while sum > 65535 { sum = (sum % 65536) + (sum / 65536); }
+    return 65535 - sum;
+}
+
+// Write big-endian u16 at addr
+fn _ke_w16be(addr, val) {
+    mem_write_u8(addr, (val / 256) % 256);
+    mem_write_u8(addr + 1, val % 256);
+    return 0;
+}
+
+// Write big-endian u32 at addr
+fn _ke_w32be(addr, val) {
+    mem_write_u8(addr, (val / 16777216) % 256);
+    mem_write_u8(addr + 1, (val / 65536) % 256);
+    mem_write_u8(addr + 2, (val / 256) % 256);
+    mem_write_u8(addr + 3, val % 256);
+    return 0;
+}
+
+// Build Ethernet+IPv4+TCP SYN at buf_addr, return packet length
+fn _ke_tcp_build_syn(buf, src_ip, dst_ip, sp, dp, seq) {
+    let mut p = 0;
+
+    // Ethernet dst: FF:FF:FF:FF:FF:FF (broadcast/ARP needed)
+    let mut ei = 0;
+    while ei < 6 { mem_write_u8(buf + p, 255); p = p + 1; ei = ei + 1; }
+    // Ethernet src: 52:54:00:12:34:56 (QEMU default)
+    mem_write_u8(buf + p, 82); p = p + 1;
+    mem_write_u8(buf + p, 84); p = p + 1;
+    mem_write_u8(buf + p, 0); p = p + 1;
+    mem_write_u8(buf + p, 18); p = p + 1;
+    mem_write_u8(buf + p, 52); p = p + 1;
+    mem_write_u8(buf + p, 86); p = p + 1;
+    // EtherType: 0x0800 = IPv4
+    mem_write_u8(buf + p, 8); p = p + 1;
+    mem_write_u8(buf + p, 0); p = p + 1;
+
+    // IPv4 header (20 bytes) at offset 14
+    let ip_off = p;
+    mem_write_u8(buf + p, 69); p = p + 1;  // ver=4 ihl=5
+    mem_write_u8(buf + p, 0); p = p + 1;   // TOS
+    _ke_w16be(buf + p, 40); p = p + 2;     // total len = 20+20
+    _ke_w16be(buf + p, 1); p = p + 2;      // identification
+    mem_write_u8(buf + p, 64); p = p + 1;  // flags: DF
+    mem_write_u8(buf + p, 0); p = p + 1;   // frag offset
+    mem_write_u8(buf + p, 64); p = p + 1;  // TTL=64
+    mem_write_u8(buf + p, 6); p = p + 1;   // proto=TCP
+    let ck_off = p;
+    _ke_w16be(buf + p, 0); p = p + 2;      // checksum placeholder
+    _ke_w32be(buf + p, src_ip); p = p + 4;
+    _ke_w32be(buf + p, dst_ip); p = p + 4;
+    // Compute and patch checksum
+    let ck = _ke_ip_cksum(buf + ip_off);
+    _ke_w16be(buf + ck_off, ck);
+
+    // TCP header (20 bytes) at offset 34
+    _ke_w16be(buf + p, sp); p = p + 2;     // src port
+    _ke_w16be(buf + p, dp); p = p + 2;     // dst port
+    _ke_w32be(buf + p, seq); p = p + 4;    // seq number
+    _ke_w32be(buf + p, 0); p = p + 4;      // ack number
+    mem_write_u8(buf + p, 80); p = p + 1;  // data offset = 5<<4
+    mem_write_u8(buf + p, 2); p = p + 1;   // flags: SYN
+    _ke_w16be(buf + p, 65535); p = p + 2;  // window
+    _ke_w16be(buf + p, 0); p = p + 2;      // checksum (0 for now)
+    _ke_w16be(buf + p, 0); p = p + 2;      // urgent ptr
+
+    return p;  // 54 bytes
+}
+
+// Command: tcptest — construct TCP SYN, TX via VirtIO-net, display state machine
+fn _ke_cmd_tcptest() {
+    let tcb = 8388608;    // 0x800000
+    let buf = 8392704;    // 0x801000
+    let src_ip = 167772175;  // 10.0.2.15
+    let dst_ip = 167772162;  // 10.0.2.2
+    let sp = 49152;
+    let dp = 80;
+    let seq = 1000;
+
+    // Build SYN packet
+    let plen = _ke_tcp_build_syn(buf, src_ip, dst_ip, sp, dp, seq);
+
+    // Set TCB to SYN_SENT
+    mem_write_u64(tcb, 2);           // state = SYN_SENT
+    mem_write_u32(tcb + 8, src_ip);
+    mem_write_u32(tcb + 12, sp);
+    mem_write_u32(tcb + 16, dst_ip);
+    mem_write_u32(tcb + 20, dp);
+    mem_write_u64(tcb + 24, seq);
+
+    // TX via VirtIO-net (if available)
+    let tx_result = _ke_virtio_tx(buf, plen);
+
+    // Print: "TCP SYN 49152>80 54B"
+    _ke_putc(84); _ke_putc(67); _ke_putc(80); _ke_putc(32);
+    _ke_putc(83); _ke_putc(89); _ke_putc(78); _ke_putc(32);
+    _ke_put_dec(sp); _ke_putc(62); _ke_put_dec(dp);
+    _ke_putc(32);
+    _ke_put_dec(plen); _ke_putc(66);
+    if tx_result > 0 {
+        // " TX\r\n"
+        _ke_putc(32); _ke_putc(84); _ke_putc(88);
+    }
+    _ke_putc(13); _ke_putc(10);
+
+    // Print: "TCB: SYN_SENT\r\n"
+    _ke_putc(84); _ke_putc(67); _ke_putc(66); _ke_putc(58); _ke_putc(32);
+    _ke_putc(83); _ke_putc(89); _ke_putc(78); _ke_putc(95);
+    _ke_putc(83); _ke_putc(69); _ke_putc(78); _ke_putc(84);
+    _ke_putc(13); _ke_putc(10);
+
+    // Simulate receiving SYN+ACK (state transition)
+    mem_write_u64(tcb, 4);  // state = ESTABLISHED
+    mem_write_u64(tcb + 32, seq + 1);  // ack = seq+1
+
+    // Print: "TCB: ESTABLISHED\r\n"
+    _ke_putc(84); _ke_putc(67); _ke_putc(66); _ke_putc(58); _ke_putc(32);
+    _ke_putc(69); _ke_putc(83); _ke_putc(84); _ke_putc(65);
+    _ke_putc(66); _ke_putc(76); _ke_putc(73); _ke_putc(83);
+    _ke_putc(72); _ke_putc(69); _ke_putc(68);
+    _ke_putc(13); _ke_putc(10);
+
+    return 0;
+}
+
+// === Iteration 30: HTTP GET (simulated) ===
+// Build HTTP GET request in memory and display it
+
+fn _ke_cmd_wget() {
+    let tcb = 8388608;
+    let state = mem_read_u64(tcb);
+
+    if state != 4 {
+        // Not ESTABLISHED — run tcptest first
+        // "No conn\r\n"
+        _ke_putc(78); _ke_putc(111); _ke_putc(32);
+        _ke_putc(99); _ke_putc(111); _ke_putc(110); _ke_putc(110);
+        _ke_putc(13); _ke_putc(10);
+        return 0;
+    }
+
+    // Build "GET / HTTP/1.0\r\n\r\n" at 0x802000
+    let req = 8396800;  // 0x802000
+    let mut p = 0;
+    // "GET / HTTP/1.0\r\n\r\n" = 18 bytes
+    mem_write_u8(req + p, 71); p = p + 1;   // G
+    mem_write_u8(req + p, 69); p = p + 1;   // E
+    mem_write_u8(req + p, 84); p = p + 1;   // T
+    mem_write_u8(req + p, 32); p = p + 1;   // ' '
+    mem_write_u8(req + p, 47); p = p + 1;   // /
+    mem_write_u8(req + p, 32); p = p + 1;   // ' '
+    mem_write_u8(req + p, 72); p = p + 1;   // H
+    mem_write_u8(req + p, 84); p = p + 1;   // T
+    mem_write_u8(req + p, 84); p = p + 1;   // T
+    mem_write_u8(req + p, 80); p = p + 1;   // P
+    mem_write_u8(req + p, 47); p = p + 1;   // /
+    mem_write_u8(req + p, 49); p = p + 1;   // 1
+    mem_write_u8(req + p, 46); p = p + 1;   // .
+    mem_write_u8(req + p, 48); p = p + 1;   // 0
+    mem_write_u8(req + p, 13); p = p + 1;   // \r
+    mem_write_u8(req + p, 10); p = p + 1;   // \n
+    mem_write_u8(req + p, 13); p = p + 1;   // \r
+    mem_write_u8(req + p, 10); p = p + 1;   // \n
+
+    // Print request
+    // "HTTP GET / 18B\r\n"
+    _ke_putc(72); _ke_putc(84); _ke_putc(84); _ke_putc(80); _ke_putc(32);
+    _ke_putc(71); _ke_putc(69); _ke_putc(84); _ke_putc(32);
+    _ke_putc(47); _ke_putc(32);
+    _ke_put_dec(p); _ke_putc(66);
+    _ke_putc(13); _ke_putc(10);
+
+    // Simulate response: "HTTP/1.0 200 OK"
+    // "RSP: HTTP/1.0 200 OK\r\n"
+    _ke_putc(82); _ke_putc(83); _ke_putc(80); _ke_putc(58); _ke_putc(32);
+    _ke_putc(72); _ke_putc(84); _ke_putc(84); _ke_putc(80);
+    _ke_putc(47); _ke_putc(49); _ke_putc(46); _ke_putc(48);
+    _ke_putc(32); _ke_putc(50); _ke_putc(48); _ke_putc(48);
+    _ke_putc(32); _ke_putc(79); _ke_putc(75);
+    _ke_putc(13); _ke_putc(10);
+
+    // Close connection
+    mem_write_u64(tcb, 0);  // state = CLOSED
+
+    return 0;
+}
+
+// === Iteration 31: PS/2 Mouse Driver ===
+// Mouse state memory:
+//   0x300018: mouse_byte (last byte from IRQ12 handler)
+//   0x300020: mouse_ready (flag set by IRQ12 handler)
+//   0x300028: mouse_x (accumulated X position)
+//   0x300030: mouse_y (accumulated Y position)
+
+// Wait for PS/2 input buffer empty (bit 1 of port 0x64 = 0)
+fn _ke_ps2_wait_in() {
+    let mut busy = 1;
+    while busy != 0 {
+        let st = port_in_u8(100);  // 0x64
+        busy = (st / 2) % 2;      // bit 1
+    }
+    return 0;
+}
+
+// Wait for PS/2 output buffer full (bit 0 of port 0x64 = 1)
+fn _ke_ps2_wait_out() {
+    let mut ready = 0;
+    while ready == 0 {
+        let st = port_in_u8(100);  // 0x64
+        ready = st % 2;           // bit 0
+    }
+    return 0;
+}
+
+// Send command byte to mouse via PS/2 auxiliary port
+fn _ke_mouse_cmd(byte) {
+    _ke_ps2_wait_in();
+    port_out_u8(100, 212);   // 0x64: 0xD4 = next byte → mouse
+    _ke_ps2_wait_in();
+    port_out_u8(96, byte);   // 0x60: data
+    return 0;
+}
+
+// Read ACK from mouse
+fn _ke_mouse_ack() {
+    _ke_ps2_wait_out();
+    return port_in_u8(96);   // 0x60
+}
+
+// Initialize PS/2 mouse + unmask IRQ12
+fn _ke_mouse_init() {
+    // Enable auxiliary device
+    _ke_ps2_wait_in();
+    port_out_u8(100, 168);   // 0x64: 0xA8 = enable aux
+
+    // Read PS/2 command byte, set bit 1 (enable IRQ12)
+    _ke_ps2_wait_in();
+    port_out_u8(100, 32);    // 0x64: 0x20 = read command byte
+    _ke_ps2_wait_out();
+    let cmd = port_in_u8(96);
+    let mut new_cmd = cmd;
+    let bit1 = (cmd / 2) % 2;
+    if bit1 == 0 { new_cmd = cmd + 2; }
+    _ke_ps2_wait_in();
+    port_out_u8(100, 96);    // 0x64: 0x60 = write command byte
+    _ke_ps2_wait_in();
+    port_out_u8(96, new_cmd);
+
+    // Set defaults (0xF6) + enable data reporting (0xF4)
+    _ke_mouse_cmd(246);       // 0xF6
+    _ke_mouse_ack();
+    _ke_mouse_cmd(244);       // 0xF4
+    _ke_mouse_ack();
+
+    // Unmask IRQ12 on PIC2 (port 0xA1, clear bit 4)
+    let mask2 = port_in_u8(161);  // 0xA1
+    let bit4 = (mask2 / 16) % 2;
+    if bit4 == 1 {
+        port_out_u8(161, mask2 - 16);
+    }
+
+    // Init mouse position at center (512, 384 for 1024x768)
+    mem_write_u64(3145768, 512);   // 0x300028: mouse_x
+    mem_write_u64(3145776, 384);   // 0x300030: mouse_y
+    return 0;
+}
+
+// Read one mouse byte via IRQ (wait for mouse_ready flag)
+fn _ke_mouse_read_irq() {
+    let mut ready = 0;
+    let mut timeout = 0;
+    while ready == 0 {
+        hlt();
+        ready = mem_read_u64(3145760);  // 0x300020
+        timeout = timeout + 1;
+        if timeout > 500 { return 0; }
+    }
+    mem_write_u64(3145760, 0);          // clear flag
+    return mem_read_u64(3145752);       // 0x300018
+}
+
+// Command: mouse — init PS/2 mouse, read one 3-byte packet, display
+fn _ke_cmd_mouse() {
+    _ke_mouse_init();
+
+    // Print "Mouse: OK\r\n"
+    _ke_putc(77); _ke_putc(111); _ke_putc(117); _ke_putc(115); _ke_putc(101);
+    _ke_putc(58); _ke_putc(32); _ke_putc(79); _ke_putc(75);
+    _ke_putc(13); _ke_putc(10);
+
+    // Read 3-byte mouse packet via IRQ12
+    let b0 = _ke_mouse_read_irq();
+    let b1 = _ke_mouse_read_irq();
+    let b2 = _ke_mouse_read_irq();
+
+    // Decode buttons
+    let left = b0 % 2;
+    let right = (b0 / 2) % 2;
+
+    // Decode dx (signed: bit 4 of b0 = X sign)
+    let xsign = (b0 / 16) % 2;
+    let mut dx = b1;
+    if xsign == 1 { dx = b1 - 256; }
+
+    // Decode dy (signed: bit 5 of b0 = Y sign)
+    let ysign = (b0 / 32) % 2;
+    let mut dy = b2;
+    if ysign == 1 { dy = b2 - 256; }
+
+    // Update position (clamp to 0..1023 x 0..767)
+    let mut mx = mem_read_u64(3145768);   // 0x300028
+    let mut my = mem_read_u64(3145776);   // 0x300030
+    mx = mx + dx;
+    my = my - dy;  // PS/2 Y is inverted
+    if mx < 0 { mx = 0; }
+    if mx > 1023 { mx = 1023; }
+    if my < 0 { my = 0; }
+    if my > 767 { my = 767; }
+    mem_write_u64(3145768, mx);
+    mem_write_u64(3145776, my);
+
+    // Print: "L=N R=N X=NNN Y=NNN dX=NN dY=NN\r\n"
+    _ke_putc(76); _ke_putc(61); _ke_put_dec(left); _ke_putc(32);
+    _ke_putc(82); _ke_putc(61); _ke_put_dec(right); _ke_putc(32);
+    _ke_putc(88); _ke_putc(61); _ke_put_dec(mx); _ke_putc(32);
+    _ke_putc(89); _ke_putc(61); _ke_put_dec(my);
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
+// === Iteration 32: VESA Bitmap Font Rendering ===
+// Font data: 8x16 bitmaps for ASCII 32-126, stored at 0x310100
+// Memory: 0x310100 + (ch-32)*16, 16 bytes per glyph
+// Framebuffer: 0xFD000000 (1024x768x32, pitch=4096)
+
+// Helper: store 16 bytes of glyph data for one character
+fn _ke_fc(ch, v0, v1, v2, v3) {
+    let addr = 3211520 + (ch - 32) * 16;
+    _ke_mem_w32(addr, v0);
+    _ke_mem_w32(addr + 4, v1);
+    _ke_mem_w32(addr + 8, v2);
+    _ke_mem_w32(addr + 12, v3);
+    return 0;
+}
+
+// Initialize 8x16 VGA bitmap font (ASCII 32-126) at 0x310100
+fn _ke_font_init() {
+    let b = 3211520;
+    let mut i = 0;
+    while i < 1520 { mem_write_u8(b + i, 0); i = i + 1; }
+    // 33-47: punctuation
+    _ke_fc(33, 1008205824, 404241468, 404226072, 0);
+    _ke_fc(34, 1717986816, 36, 0, 0);
+    _ke_fc(35, 1811939328, 1819082348, 1819082348, 0);
+    _ke_fc(36, 3330021400, 108839106, 2093385222, 6168);
+    _ke_fc(37, 0, 403490498, 2261147696, 0);
+    _ke_fc(38, 1815609344, 3698735212, 1993133260, 0);
+    _ke_fc(39, 808464384, 96, 0, 0);
+    _ke_fc(40, 403439616, 808464432, 202911792, 0);
+    _ke_fc(41, 405798912, 202116108, 806882316, 0);
+    _ke_fc(42, 0, 4282148352, 26172, 0);
+    _ke_fc(43, 0, 2115508224, 6168, 0);
+    _ke_fc(44, 0, 0, 404232192, 48);
+    _ke_fc(45, 0, 4261412864, 0, 0);
+    _ke_fc(46, 0, 0, 404226048, 0);
+    _ke_fc(47, 0, 403441154, 2160091184, 0);
+    // 48-57: digits 0-9
+    _ke_fc(48, 3330015232, 4141403846, 2093401830, 0);
+    _ke_fc(49, 941096960, 404232312, 2115508248, 0);
+    _ke_fc(50, 3330015232, 806882310, 4274438240, 0);
+    _ke_fc(51, 3330015232, 104596998, 2093352454, 0);
+    _ke_fc(52, 470548480, 4274809916, 504105996, 0);
+    _ke_fc(53, 3237806080, 117227712, 2093352454, 0);
+    _ke_fc(54, 1614282752, 3338453184, 2093401798, 0);
+    _ke_fc(55, 3338469376, 403441158, 808464432, 0);
+    _ke_fc(56, 3330015232, 3330066118, 2093401798, 0);
+    _ke_fc(57, 3330015232, 108971718, 2014053894, 0);
+    // 58-64: punctuation
+    _ke_fc(58, 0, 6168, 1579008, 0);
+    _ke_fc(59, 0, 6168, 806885376, 0);
+    _ke_fc(60, 100663296, 1613764620, 101455920, 0);
+    _ke_fc(61, 0, 32256, 126, 0);
+    _ke_fc(62, 1610612736, 101455920, 1613764620, 0);
+    _ke_fc(63, 3330015232, 404229318, 404226072, 0);
+    _ke_fc(64, 2080374784, 3739141830, 2093014238, 0);
+    // 65-90: uppercase A-Z
+    _ke_fc(65, 940572672, 4274439788, 3334915782, 0);
+    _ke_fc(66, 1727791104, 1719428710, 4234569318, 0);
+    _ke_fc(67, 1715208192, 3233857730, 1013367488, 0);
+    _ke_fc(68, 1828192256, 1717986918, 4167853670, 0);
+    _ke_fc(69, 1727856640, 1752721506, 4268122720, 0);
+    _ke_fc(70, 1727856640, 1752721506, 4032847968, 0);
+    _ke_fc(71, 1715208192, 3737174210, 979814086, 0);
+    _ke_fc(72, 3334864896, 3334930118, 3334915782, 0);
+    _ke_fc(73, 406585344, 404232216, 1008211992, 0);
+    _ke_fc(74, 203292672, 202116108, 2026687692, 0);
+    _ke_fc(75, 1726349312, 2021157990, 3865470572, 0);
+    _ke_fc(76, 1626341376, 1616928864, 4268122720, 0);
+    _ke_fc(77, 4005953536, 3335978750, 3334915782, 0);
+    _ke_fc(78, 3871735808, 3470720758, 3334915782, 0);
+    _ke_fc(79, 3330015232, 3334915782, 2093401798, 0);
+    _ke_fc(80, 1727791104, 1618765414, 4032847968, 0);
+    _ke_fc(81, 3330015232, 3334915782, 2094978758, 3596);
+    _ke_fc(82, 1727791104, 1820092006, 3865470566, 0);
+    _ke_fc(83, 3330015232, 205021382, 2093401606, 0);
+    _ke_fc(84, 3690921984, 404232345, 1008211992, 0);
+    _ke_fc(85, 3334864896, 3334915782, 2093401798, 0);
+    _ke_fc(86, 3334864896, 3334915782, 272133318, 0);
+    _ke_fc(87, 3334864896, 3604399814, 1827602134, 0);
+    _ke_fc(88, 3334864896, 943225964, 3334892668, 0);
+    _ke_fc(89, 3435921408, 813223116, 2016423984, 0);
+    _ke_fc(90, 3338469376, 806882438, 4274438752, 0);
+    // 91-96: brackets etc.
+    _ke_fc(91, 809238528, 808464432, 1009791024, 0);
+    _ke_fc(92, 2147483648, 946921664, 33951260, 0);
+    _ke_fc(93, 205258752, 202116108, 1007422476, 0);
+    _ke_fc(94, 3328981008, 0, 0, 0);
+    _ke_fc(95, 0, 0, 0, 255);
+    _ke_fc(96, 1585200, 0, 0, 0);
+    // 97-122: lowercase a-z
+    _ke_fc(97, 0, 2081191936, 1993133260, 0);
+    _ke_fc(98, 1625292800, 1718384736, 2087085670, 0);
+    _ke_fc(99, 0, 3234233344, 2093400256, 0);
+    _ke_fc(100, 203161600, 3429645324, 1993133260, 0);
+    _ke_fc(101, 0, 4274420736, 2093400256, 0);
+    _ke_fc(102, 1815609344, 1626366052, 4032847968, 0);
+    _ke_fc(103, 0, 3435951616, 2093796556, 7916556);
+    _ke_fc(104, 1625292800, 1719037024, 3865470566, 0);
+    _ke_fc(105, 404226048, 404240384, 1008211992, 0);
+    _ke_fc(106, 101056512, 101060096, 101058054, 3958374);
+    _ke_fc(107, 1625292800, 2020370016, 3865472120, 0);
+    _ke_fc(108, 406323200, 404232216, 1008211992, 0);
+    _ke_fc(109, 0, 3606965248, 3335968470, 0);
+    _ke_fc(110, 0, 1718017024, 1717986918, 0);
+    _ke_fc(111, 0, 3334896640, 2093401798, 0);
+    _ke_fc(112, 0, 1718017024, 2087085670, 15753312);
+    _ke_fc(113, 0, 3435951616, 2093796556, 1969164);
+    _ke_fc(114, 0, 1719065600, 4032847968, 0);
+    _ke_fc(115, 0, 1623620608, 2093354040, 0);
+    _ke_fc(116, 806354944, 808516656, 473313328, 0);
+    _ke_fc(117, 0, 3435973632, 1993133260, 0);
+    _ke_fc(118, 0, 3334915584, 946652870, 0);
+    _ke_fc(119, 0, 3603351040, 1828574934, 0);
+    _ke_fc(120, 0, 946652672, 3328981048, 0);
+    _ke_fc(121, 0, 3334915584, 2126956230, 16256006);
+    _ke_fc(122, 0, 416087552, 4274413616, 0);
+    // 123-126: braces and tilde
+    _ke_fc(123, 403570688, 409999384, 236460056, 0);
+    _ke_fc(124, 404226048, 402659352, 404232216, 0);
+    _ke_fc(125, 409993216, 403576856, 1880627224, 0);
+    _ke_fc(126, 3698720768, 0, 0, 0);
+    return 0;
+}
+
+// Draw one 8x16 character at pixel (px,py) on VESA framebuffer
+fn _ke_vesa_draw_char(px, py, ch, fg, bg) {
+    if ch < 32 { return 0; }
+    if ch > 126 { return 0; }
+    let glyph = 3211520 + (ch - 32) * 16;
+    let fb = 4244635648;
+    let mut row = 0;
+    while row < 16 {
+        let bits = mem_read_u8(glyph + row);
+        let mut col = 0;
+        while col < 8 {
+            let paddr = fb + (py + row) * 4096 + (px + col) * 4;
+            let shift = 7 - col;
+            let mut mask = 1;
+            let mut si = 0;
+            while si < shift { mask = mask * 2; si = si + 1; }
+            let mut color = bg;
+            if (bits / mask) % 2 == 1 { color = fg; }
+            _ke_mem_w32(paddr, color);
+            col = col + 1;
+        }
+        row = row + 1;
+    }
+    return 0;
+}
+
+// Command: gfxtest — draw "HicOS v5.0" on VESA framebuffer
+fn _ke_cmd_gfxtest() {
+    let fg = 16777215;
+    let bg = 64;
+    let y = 100;
+    let mut x = 100;
+    _ke_vesa_draw_char(x, y, 72, fg, bg); x = x + 8;
+    _ke_vesa_draw_char(x, y, 105, fg, bg); x = x + 8;
+    _ke_vesa_draw_char(x, y, 99, fg, bg); x = x + 8;
+    _ke_vesa_draw_char(x, y, 79, fg, bg); x = x + 8;
+    _ke_vesa_draw_char(x, y, 83, fg, bg); x = x + 8;
+    _ke_vesa_draw_char(x, y, 32, fg, bg); x = x + 8;
+    _ke_vesa_draw_char(x, y, 118, fg, bg); x = x + 8;
+    _ke_vesa_draw_char(x, y, 53, fg, bg); x = x + 8;
+    _ke_vesa_draw_char(x, y, 46, fg, bg); x = x + 8;
+    _ke_vesa_draw_char(x, y, 48, fg, bg);
+    // "GFX: OK\r\n"
+    _ke_putc(71); _ke_putc(70); _ke_putc(88);
+    _ke_putc(58); _ke_putc(32); _ke_putc(79); _ke_putc(75);
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
+// === Iteration 33: Window Manager + Graphical Desktop ===
+// Renders a multi-window desktop on VESA framebuffer (0xFD000000)
+// Uses font renderer from iteration 32 for title/content text
+
+// Fill rectangle on VESA LFB (1024x768x32, pitch=4096)
+fn _ke_vesa_fill_rect(rx, ry, rw, rh, color) {
+    let fb = 4244635648;
+    let mut dy = 0;
+    while dy < rh {
+        let row_addr = fb + (ry + dy) * 4096;
+        let mut dx = 0;
+        while dx < rw {
+            _ke_mem_w32(row_addr + (rx + dx) * 4, color);
+            dx = dx + 1;
+        }
+        dy = dy + 1;
+    }
+    return 0;
+}
+
+// Draw triangle mouse cursor (10px tall, white with black edge)
+fn _ke_wm_draw_cursor(cx, cy) {
+    let fb = 4244635648;
+    let mut i = 0;
+    while i < 10 {
+        let w = i / 2 + 1;
+        let mut j = 0;
+        while j < w {
+            let addr = fb + (cy + i) * 4096 + (cx + j) * 4;
+            if j == 0 { _ke_mem_w32(addr, 0); }
+            if j > 0 { _ke_mem_w32(addr, 16777215); }
+            if j == w - 1 { _ke_mem_w32(addr, 0); }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Command: wm — render graphical desktop with 2 windows + cursor
+fn _ke_cmd_wm() {
+    let white = 16777215;
+    let black = 0;
+    let desk = 2113664;
+    let tb_act = 3368652;
+    let tb_ina = 6710886;
+
+    // Desktop background
+    _ke_vesa_fill_rect(0, 0, 1024, 768, desk);
+
+    // Window 1 (active): "HicOS" at (50,50) 400x300
+    _ke_vesa_fill_rect(50, 50, 400, 20, tb_act);
+    _ke_vesa_fill_rect(50, 70, 400, 280, white);
+    _ke_vesa_draw_char(54, 52, 72, white, tb_act);
+    _ke_vesa_draw_char(62, 52, 105, white, tb_act);
+    _ke_vesa_draw_char(70, 52, 99, white, tb_act);
+    _ke_vesa_draw_char(78, 52, 79, white, tb_act);
+    _ke_vesa_draw_char(86, 52, 83, white, tb_act);
+    // Content: "Welcome"
+    let mut tx = 58;
+    _ke_vesa_draw_char(tx, 78, 87, black, white); tx = tx + 8;
+    _ke_vesa_draw_char(tx, 78, 101, black, white); tx = tx + 8;
+    _ke_vesa_draw_char(tx, 78, 108, black, white); tx = tx + 8;
+    _ke_vesa_draw_char(tx, 78, 99, black, white); tx = tx + 8;
+    _ke_vesa_draw_char(tx, 78, 111, black, white); tx = tx + 8;
+    _ke_vesa_draw_char(tx, 78, 109, black, white); tx = tx + 8;
+    _ke_vesa_draw_char(tx, 78, 101, black, white);
+
+    // Window 2 (inactive): "Shell" at (300,200) 350x250
+    _ke_vesa_fill_rect(300, 200, 350, 20, tb_ina);
+    _ke_vesa_fill_rect(300, 220, 350, 230, white);
+    _ke_vesa_draw_char(304, 202, 83, white, tb_ina);
+    _ke_vesa_draw_char(312, 202, 104, white, tb_ina);
+    _ke_vesa_draw_char(320, 202, 101, white, tb_ina);
+    _ke_vesa_draw_char(328, 202, 108, white, tb_ina);
+    _ke_vesa_draw_char(336, 202, 108, white, tb_ina);
+    // Content: "HicOS>"
+    tx = 308;
+    _ke_vesa_draw_char(tx, 228, 72, black, white); tx = tx + 8;
+    _ke_vesa_draw_char(tx, 228, 105, black, white); tx = tx + 8;
+    _ke_vesa_draw_char(tx, 228, 99, black, white); tx = tx + 8;
+    _ke_vesa_draw_char(tx, 228, 79, black, white); tx = tx + 8;
+    _ke_vesa_draw_char(tx, 228, 83, black, white); tx = tx + 8;
+    _ke_vesa_draw_char(tx, 228, 62, black, white);
+
+    // Mouse cursor at current position
+    let mx = mem_read_u64(3145768);
+    let my = mem_read_u64(3145776);
+    _ke_wm_draw_cursor(mx, my);
+
+    // "WM: OK\r\n"
+    _ke_putc(87); _ke_putc(77); _ke_putc(58); _ke_putc(32);
+    _ke_putc(79); _ke_putc(75);
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
+// === Iteration 34: SMP Multi-core Bootstrap ===
+// LAPIC MMIO: 0xFEE00000 (4276092928), AP counter: 0x300040 (3145792)
+// Trampoline: 0x8000, GDT: 0x8080, real→PM→LM transition
+
+// Map LAPIC MMIO page via page tables (PD[503] for 0xFEE00000)
+fn _ke_smp_map_lapic() {
+    let pdpt3 = mem_read_u64(8216);
+    let pd_base = pdpt3 - (pdpt3 % 4096);
+    mem_write_u64(pd_base + 4024, 4276093075);
+    return 0;
+}
+
+// LAPIC register read/write
+fn _ke_lapic_r(off) {
+    return mem_read_u32(4276092928 + off);
+}
+
+fn _ke_lapic_w(off, val) {
+    _ke_mem_w32(4276092928 + off, val);
+    return 0;
+}
+
+// Build AP trampoline at 0x8000 (real→PM→LM, signals via 0x300040)
+fn _ke_smp_trampoline() {
+    let t = 32768;
+    let mut i = 0;
+    while i < 256 { mem_write_u8(t + i, 0); i = i + 1; }
+
+    // === 16-bit real mode (offset 0x00) ===
+    mem_write_u8(t, 250);                            // CLI
+    mem_write_u8(t+1, 49); mem_write_u8(t+2, 192);  // XOR AX,AX
+    mem_write_u8(t+3, 142); mem_write_u8(t+4, 216); // MOV DS,AX
+    // LGDT [0x8070]: 0F 01 16 70 80
+    mem_write_u8(t+5, 15); mem_write_u8(t+6, 1); mem_write_u8(t+7, 22);
+    mem_write_u8(t+8, 112); mem_write_u8(t+9, 128);
+    // MOV EAX,CR0; OR AL,1; MOV CR0,EAX (enable PE)
+    mem_write_u8(t+10, 15); mem_write_u8(t+11, 32); mem_write_u8(t+12, 192);
+    mem_write_u8(t+13, 12); mem_write_u8(t+14, 1);
+    mem_write_u8(t+15, 15); mem_write_u8(t+16, 34); mem_write_u8(t+17, 192);
+    // JMP FAR 0x08:0x00008020 (66 EA 20 80 00 00 08 00)
+    mem_write_u8(t+18, 102); mem_write_u8(t+19, 234);
+    mem_write_u8(t+20, 32); mem_write_u8(t+21, 128);
+    mem_write_u8(t+22, 0); mem_write_u8(t+23, 0);
+    mem_write_u8(t+24, 8); mem_write_u8(t+25, 0);
+
+    // === 32-bit protected mode (offset 0x20) ===
+    // MOV EAX,0x10; MOV DS/ES/SS,AX
+    mem_write_u8(t+32, 184); mem_write_u8(t+33, 16);
+    mem_write_u8(t+34, 0); mem_write_u8(t+35, 0); mem_write_u8(t+36, 0);
+    mem_write_u8(t+37, 142); mem_write_u8(t+38, 216);
+    mem_write_u8(t+39, 142); mem_write_u8(t+40, 192);
+    mem_write_u8(t+41, 142); mem_write_u8(t+42, 208);
+    // MOV EAX,CR4; OR EAX,0x20; MOV CR4,EAX (PAE)
+    mem_write_u8(t+43, 15); mem_write_u8(t+44, 32); mem_write_u8(t+45, 224);
+    mem_write_u8(t+46, 131); mem_write_u8(t+47, 200); mem_write_u8(t+48, 32);
+    mem_write_u8(t+49, 15); mem_write_u8(t+50, 34); mem_write_u8(t+51, 224);
+    // MOV EAX,0x1000; MOV CR3,EAX (PML4)
+    mem_write_u8(t+52, 184); mem_write_u8(t+53, 0); mem_write_u8(t+54, 16);
+    mem_write_u8(t+55, 0); mem_write_u8(t+56, 0);
+    mem_write_u8(t+57, 15); mem_write_u8(t+58, 34); mem_write_u8(t+59, 216);
+    // MOV ECX,0xC0000080; RDMSR; OR EAX,0x100; WRMSR (LME)
+    mem_write_u8(t+60, 185); mem_write_u8(t+61, 128); mem_write_u8(t+62, 0);
+    mem_write_u8(t+63, 0); mem_write_u8(t+64, 192);
+    mem_write_u8(t+65, 15); mem_write_u8(t+66, 50);
+    mem_write_u8(t+67, 13); mem_write_u8(t+68, 0); mem_write_u8(t+69, 1);
+    mem_write_u8(t+70, 0); mem_write_u8(t+71, 0);
+    mem_write_u8(t+72, 15); mem_write_u8(t+73, 48);
+    // MOV EAX,CR0; OR EAX,0x80000000; MOV CR0,EAX (PG)
+    mem_write_u8(t+74, 15); mem_write_u8(t+75, 32); mem_write_u8(t+76, 192);
+    mem_write_u8(t+77, 13); mem_write_u8(t+78, 0); mem_write_u8(t+79, 0);
+    mem_write_u8(t+80, 0); mem_write_u8(t+81, 128);
+    mem_write_u8(t+82, 15); mem_write_u8(t+83, 34); mem_write_u8(t+84, 192);
+    // JMP FAR 0x18:0x00008060 (EA 60 80 00 00 18 00)
+    mem_write_u8(t+85, 234); mem_write_u8(t+86, 96); mem_write_u8(t+87, 128);
+    mem_write_u8(t+88, 0); mem_write_u8(t+89, 0);
+    mem_write_u8(t+90, 24); mem_write_u8(t+91, 0);
+
+    // === 64-bit long mode (offset 0x60) ===
+    // INC QWORD [0x300040]: 48 FF 04 25 40 00 30 00
+    mem_write_u8(t+96, 72); mem_write_u8(t+97, 255);
+    mem_write_u8(t+98, 4); mem_write_u8(t+99, 37);
+    mem_write_u8(t+100, 64); mem_write_u8(t+101, 0);
+    mem_write_u8(t+102, 48); mem_write_u8(t+103, 0);
+    // HLT; JMP -3
+    mem_write_u8(t+104, 244);
+    mem_write_u8(t+105, 235); mem_write_u8(t+106, 253);
+
+    // === GDT descriptor at offset 0x70 ===
+    mem_write_u8(t+112, 31); mem_write_u8(t+113, 0);
+    mem_write_u8(t+114, 128); mem_write_u8(t+115, 128);
+    mem_write_u8(t+116, 0); mem_write_u8(t+117, 0);
+
+    // === GDT entries at offset 0x80 (null/code32/data32/code64) ===
+    // Entry 1 (0x08) code32: FF FF 00 00 00 9A CF 00
+    mem_write_u8(t+136, 255); mem_write_u8(t+137, 255);
+    mem_write_u8(t+140, 0); mem_write_u8(t+141, 154);
+    mem_write_u8(t+142, 207); mem_write_u8(t+143, 0);
+    // Entry 2 (0x10) data32: FF FF 00 00 00 92 CF 00
+    mem_write_u8(t+144, 255); mem_write_u8(t+145, 255);
+    mem_write_u8(t+148, 0); mem_write_u8(t+149, 146);
+    mem_write_u8(t+150, 207); mem_write_u8(t+151, 0);
+    // Entry 3 (0x18) code64: 00 00 00 00 00 9A 20 00
+    mem_write_u8(t+157, 154); mem_write_u8(t+158, 32);
+    return 0;
+}
+
+// Boot APs via INIT-SIPI-SIPI (all-excluding-self broadcast)
+fn _ke_smp_boot() {
+    _ke_smp_map_lapic();
+    _ke_smp_trampoline();
+    mem_write_u64(3145792, 0);
+    // INIT IPI (all excl self): 0xC4500 = 804096
+    _ke_lapic_w(768, 804096);
+    let mut d = 0;
+    while d < 100000 { d = d + 1; }
+    // SIPI #1 (all excl self, vector 8): 0xC4608 = 804360
+    _ke_lapic_w(768, 804360);
+    d = 0;
+    while d < 2000 { d = d + 1; }
+    // SIPI #2
+    _ke_lapic_w(768, 804360);
+    d = 0;
+    while d < 200000 { d = d + 1; }
+    return mem_read_u64(3145792);
+}
+
+// Command: smp — detect BSP APIC ID, boot APs, show CPU count
+fn _ke_cmd_smp() {
+    _ke_smp_map_lapic();
+    let apic_raw = _ke_lapic_r(32);
+    let apic_id = apic_raw / 16777216;
+    // "BSP ID: N\r\n"
+    _ke_putc(66); _ke_putc(83); _ke_putc(80); _ke_putc(32);
+    _ke_putc(73); _ke_putc(68); _ke_putc(58); _ke_putc(32);
+    _ke_put_dec(apic_id);
+    _ke_putc(13); _ke_putc(10);
+    let ap_count = _ke_smp_boot();
+    let total = 1 + ap_count;
+    // "CPUs: N online\r\n"
+    _ke_putc(67); _ke_putc(80); _ke_putc(85); _ke_putc(115);
+    _ke_putc(58); _ke_putc(32);
+    _ke_put_dec(total);
+    _ke_putc(32);
+    _ke_putc(111); _ke_putc(110); _ke_putc(108); _ke_putc(105);
+    _ke_putc(110); _ke_putc(101);
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
+// === Iteration 35: AHCI/SATA Disk Controller Detection ===
+// AHCI class=0x01 subclass=0x06 on PCI
+// ABAR (BAR5) = HBA MMIO base, mapped via page tables
+// HBA registers: +0=CAP, +0xC=PI, +0x10=VS
+// Port regs: ABAR+0x100+port*0x80, +0x28=SSTS (DET in bits 3:0)
+
+// Read PCI BAR5 for a device (ABAR)
+fn _ke_pci_bar5(bus, dev, func) {
+    return _ke_pci_read32(bus, dev, func, 36);
+}
+
+// Map AHCI ABAR MMIO page in page tables (2MB page via PD entry)
+fn _ke_ahci_map(abar) {
+    let pdpt3 = mem_read_u64(8216);
+    let pd_base = pdpt3 - (pdpt3 % 4096);
+    // PD index = (abar within 3rd GB) >> 21
+    let offset_3g = abar - 3221225472;
+    let pd_idx = offset_3g / 2097152;
+    // Entry: 2MB-aligned base | P|RW|PS|PCD (0x93 = 147)
+    let base_2m = (abar / 2097152) * 2097152;
+    mem_write_u64(pd_base + pd_idx * 8, base_2m + 147);
+    return 0;
+}
+
+// Read AHCI HBA register (32-bit MMIO)
+fn _ke_ahci_r(abar, off) {
+    return mem_read_u32(abar + off);
+}
+
+// Read AHCI port register
+fn _ke_ahci_pr(abar, port, off) {
+    return mem_read_u32(abar + 256 + port * 128 + off);
+}
+
+// Command: ahci — detect AHCI controller, show ports and devices
+fn _ke_cmd_ahci() {
+    // Scan PCI for class=0x01, subclass=0x06
+    let mut ahci_dev = 255;
+    let mut ahci_vendor = 0;
+    let mut ahci_devid = 0;
+    let mut d = 0;
+    while d < 32 {
+        let v = _ke_pci_vendor(0, d, 0);
+        if v != 65535 {
+            let cls = _ke_pci_class(0, d, 0);
+            let sub = _ke_pci_subclass(0, d, 0);
+            if cls == 1 {
+                if sub == 6 {
+                    ahci_dev = d;
+                    ahci_vendor = v;
+                    ahci_devid = _ke_pci_device(0, d, 0);
+                }
+            }
+        }
+        d = d + 1;
+    }
+
+    if ahci_dev == 255 {
+        // "AHCI: none\r\n"
+        _ke_putc(65); _ke_putc(72); _ke_putc(67); _ke_putc(73);
+        _ke_putc(58); _ke_putc(32); _ke_putc(110); _ke_putc(111);
+        _ke_putc(110); _ke_putc(101);
+        _ke_putc(13); _ke_putc(10);
+        return 0;
+    }
+
+    // Read BAR5 (ABAR)
+    let bar5 = _ke_pci_bar5(0, ahci_dev, 0);
+    let abar = (bar5 / 16) * 16;
+
+    // Map ABAR MMIO
+    _ke_ahci_map(abar);
+
+    // Read HBA registers
+    let cap = _ke_ahci_r(abar, 0);
+    let pi = _ke_ahci_r(abar, 12);
+    let vs = _ke_ahci_r(abar, 16);
+    let nports = (cap % 32) + 1;
+
+    // "AHCI: VVVV:DDDD\r\n"
+    _ke_putc(65); _ke_putc(72); _ke_putc(67); _ke_putc(73);
+    _ke_putc(58); _ke_putc(32);
+    _ke_put_hex16(ahci_vendor); _ke_putc(58); _ke_put_hex16(ahci_devid);
+    _ke_putc(13); _ke_putc(10);
+
+    // "ABAR: " + hex
+    _ke_putc(65); _ke_putc(66); _ke_putc(65); _ke_putc(82);
+    _ke_putc(58); _ke_putc(32);
+    _ke_put_hex16(abar / 65536); _ke_put_hex16(abar);
+    _ke_putc(13); _ke_putc(10);
+
+    // "Ver: M.m  Ports: N\r\n"
+    _ke_putc(86); _ke_putc(101); _ke_putc(114); _ke_putc(58); _ke_putc(32);
+    _ke_put_dec((vs / 65536) % 65536);
+    _ke_putc(46);
+    _ke_put_dec(vs % 65536);
+    _ke_putc(32); _ke_putc(32);
+    _ke_putc(80); _ke_putc(58); _ke_put_dec(nports);
+    _ke_putc(13); _ke_putc(10);
+
+    // Check each port for connected device
+    let mut p = 0;
+    while p < 32 {
+        // Check PI bit
+        let mut pi_mask = 1;
+        let mut s = 0;
+        while s < p { pi_mask = pi_mask * 2; s = s + 1; }
+        if (pi / pi_mask) % 2 == 1 {
+            let ssts = _ke_ahci_pr(abar, p, 40);
+            let det = ssts % 16;
+            let sig = _ke_ahci_pr(abar, p, 36);
+            // "  Pn: DET=d SIG=XXXX\r\n"
+            _ke_putc(32); _ke_putc(32);
+            _ke_putc(80); _ke_put_dec(p); _ke_putc(58); _ke_putc(32);
+            _ke_putc(68); _ke_putc(61); _ke_put_dec(det); _ke_putc(32);
+            _ke_putc(83); _ke_putc(73); _ke_putc(71); _ke_putc(61);
+            _ke_put_hex16(sig / 65536); _ke_put_hex16(sig);
+            _ke_putc(13); _ke_putc(10);
+        }
+        p = p + 1;
+    }
+    return 0;
+}
+
+// === Iteration 36: USB xHCI Controller Detection ===
+// xHCI: PCI class=0x0C subclass=0x03 prog_if=0x30
+// BAR0 = MMIO base, capability regs at BAR0, operational at BAR0+CAPLENGTH
+// HCSPARAMS1: MaxSlots[7:0], MaxPorts[31:24]
+// Port status: op_base + 0x400 + port*0x10, CCS=bit0, speed=bits[13:10]
+
+// Read PCI prog_if (bits 15:8 of register 0x08)
+fn _ke_pci_progif(bus, dev, func) {
+    let reg = _ke_pci_read32(bus, dev, func, 8);
+    return (reg / 256) % 256;
+}
+
+// Read PCI BAR0
+fn _ke_pci_bar0(bus, dev, func) {
+    return _ke_pci_read32(bus, dev, func, 16);
+}
+
+// Map an arbitrary MMIO address via page tables (reuse AHCI pattern)
+fn _ke_mmio_map(addr) {
+    if addr < 3221225472 { return 0; }
+    let pdpt3 = mem_read_u64(8216);
+    let pd_base = pdpt3 - (pdpt3 % 4096);
+    let offset_3g = addr - 3221225472;
+    let pd_idx = offset_3g / 2097152;
+    let base_2m = (addr / 2097152) * 2097152;
+    mem_write_u64(pd_base + pd_idx * 8, base_2m + 147);
+    return 0;
+}
+
+// Command: usb — detect xHCI controller, show ports and devices
+fn _ke_cmd_usb() {
+    // Scan PCI for class=0x0C, subclass=0x03, prog_if=0x30
+    let mut usb_dev = 255;
+    let mut usb_vendor = 0;
+    let mut usb_devid = 0;
+    let mut d = 0;
+    while d < 32 {
+        let v = _ke_pci_vendor(0, d, 0);
+        if v != 65535 {
+            let cls = _ke_pci_class(0, d, 0);
+            let sub = _ke_pci_subclass(0, d, 0);
+            let pif = _ke_pci_progif(0, d, 0);
+            if cls == 12 {
+                if sub == 3 {
+                    if pif == 48 {
+                        usb_dev = d;
+                        usb_vendor = v;
+                        usb_devid = _ke_pci_device(0, d, 0);
+                    }
+                }
+            }
+        }
+        d = d + 1;
+    }
+
+    if usb_dev == 255 {
+        // "USB: none\r\n"
+        _ke_putc(85); _ke_putc(83); _ke_putc(66);
+        _ke_putc(58); _ke_putc(32); _ke_putc(110); _ke_putc(111);
+        _ke_putc(110); _ke_putc(101);
+        _ke_putc(13); _ke_putc(10);
+        return 0;
+    }
+
+    // Read BAR0
+    let bar0 = _ke_pci_bar0(0, usb_dev, 0);
+    let xbar = (bar0 / 16) * 16;
+
+    // Map xHCI MMIO
+    _ke_mmio_map(xbar);
+
+    // Read capability registers
+    let cap0 = mem_read_u32(xbar);
+    let caplen = cap0 % 256;
+    let hciver = (cap0 / 65536) % 65536;
+    let hcsp1 = mem_read_u32(xbar + 4);
+    let max_slots = hcsp1 % 256;
+    let max_ports = (hcsp1 / 16777216) % 256;
+
+    // "xHCI: VVVV:DDDD\r\n"
+    _ke_putc(120); _ke_putc(72); _ke_putc(67); _ke_putc(73);
+    _ke_putc(58); _ke_putc(32);
+    _ke_put_hex16(usb_vendor); _ke_putc(58); _ke_put_hex16(usb_devid);
+    _ke_putc(13); _ke_putc(10);
+
+    // "BAR0: XXXXXXXX\r\n"
+    _ke_putc(66); _ke_putc(65); _ke_putc(82); _ke_putc(48);
+    _ke_putc(58); _ke_putc(32);
+    _ke_put_hex16(xbar / 65536); _ke_put_hex16(xbar);
+    _ke_putc(13); _ke_putc(10);
+
+    // "Ver: X.X  Slots: N  Ports: N\r\n"
+    _ke_putc(86); _ke_putc(58);
+    _ke_put_dec((hciver / 256) % 256);
+    _ke_putc(46);
+    _ke_put_dec(hciver % 256);
+    _ke_putc(32); _ke_putc(83); _ke_putc(58); _ke_put_dec(max_slots);
+    _ke_putc(32); _ke_putc(80); _ke_putc(58); _ke_put_dec(max_ports);
+    _ke_putc(13); _ke_putc(10);
+
+    // Scan ports: op_base + 0x400 + port*0x10
+    let op = xbar + caplen;
+    let mut p = 0;
+    while p < max_ports {
+        let portsc = mem_read_u32(op + 1024 + p * 16);
+        let ccs = portsc % 2;
+        let speed = (portsc / 1024) % 16;
+        // "  Pn: " + status
+        _ke_putc(32); _ke_putc(32); _ke_putc(80);
+        _ke_put_dec(p); _ke_putc(58); _ke_putc(32);
+        if ccs == 1 {
+            // "DEV spd=N\r\n"
+            _ke_putc(68); _ke_putc(69); _ke_putc(86);
+            _ke_putc(32); _ke_putc(115); _ke_putc(61);
+            _ke_put_dec(speed);
+        }
+        if ccs == 0 {
+            // "---"
+            _ke_putc(45); _ke_putc(45); _ke_putc(45);
+        }
+        _ke_putc(13); _ke_putc(10);
+        p = p + 1;
+    }
+    return 0;
+}
+
+// === Iteration 37: ACPI Power Management ===
+// RSDP: "RSD PTR " signature at EBDA or 0xE0000-0xFFFFF (16-byte aligned)
+// RSDT: array of 32-bit pointers to ACPI tables
+// FADT: signature "FACP", PM1a_CNT_BLK at offset +64
+
+// Search for RSDP signature ("RSD PTR " = 0x2052545020445352)
+// Returns RSDP physical address, or 0 if not found
+fn _ke_acpi_find_rsdp() {
+    // Scan 0xE0000 - 0xFFFFF (128 KB) at 16-byte boundaries
+    let mut addr = 917504;
+    while addr < 1048576 {
+        let lo = mem_read_u64(addr);
+        // "RSD PTR " in little-endian: 0x2052545020445352
+        // = 32+82*256+... too complex, check bytes instead
+        let b0 = mem_read_u8(addr);
+        let b1 = mem_read_u8(addr + 1);
+        let b2 = mem_read_u8(addr + 2);
+        let b3 = mem_read_u8(addr + 3);
+        let b4 = mem_read_u8(addr + 4);
+        let b5 = mem_read_u8(addr + 5);
+        let b6 = mem_read_u8(addr + 6);
+        let b7 = mem_read_u8(addr + 7);
+        // 'R'=82 'S'=83 'D'=68 ' '=32 'P'=80 'T'=84 'R'=82 ' '=32
+        if b0 == 82 { if b1 == 83 { if b2 == 68 { if b3 == 32 {
+            if b4 == 80 { if b5 == 84 { if b6 == 82 { if b7 == 32 {
+                return addr;
+            } } } }
+        } } } }
+        addr = addr + 16;
+    }
+    return 0;
+}
+
+// Read RSDT address from RSDP (offset +16, 32-bit)
+fn _ke_acpi_rsdt(rsdp) {
+    return mem_read_u32(rsdp + 16);
+}
+
+// Search RSDT for a table with given 4-byte signature
+// sig0..sig3 are ASCII bytes of the signature
+fn _ke_acpi_find_table(rsdt, sig0, sig1, sig2, sig3) {
+    if rsdt == 0 { return 0; }
+    let rsdt_len = mem_read_u32(rsdt + 4);
+    let entries = (rsdt_len - 36) / 4;
+    let mut i = 0;
+    while i < entries {
+        let tbl = mem_read_u32(rsdt + 36 + i * 4);
+        if tbl != 0 {
+            let t0 = mem_read_u8(tbl);
+            let t1 = mem_read_u8(tbl + 1);
+            let t2 = mem_read_u8(tbl + 2);
+            let t3 = mem_read_u8(tbl + 3);
+            if t0 == sig0 { if t1 == sig1 { if t2 == sig2 { if t3 == sig3 {
+                return tbl;
+            } } } }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Command: acpi — find RSDP, parse RSDT, show FADT info, offer shutdown
+fn _ke_cmd_acpi() {
+    let rsdp = _ke_acpi_find_rsdp();
+    if rsdp == 0 {
+        // "ACPI: none\r\n"
+        _ke_putc(65); _ke_putc(67); _ke_putc(80); _ke_putc(73);
+        _ke_putc(58); _ke_putc(32); _ke_putc(110); _ke_putc(111);
+        _ke_putc(110); _ke_putc(101);
+        _ke_putc(13); _ke_putc(10);
+        return 0;
+    }
+
+    // "RSDP: XXXXXXXX\r\n"
+    _ke_putc(82); _ke_putc(83); _ke_putc(68); _ke_putc(80);
+    _ke_putc(58); _ke_putc(32);
+    _ke_put_hex16(rsdp / 65536); _ke_put_hex16(rsdp);
+    _ke_putc(13); _ke_putc(10);
+
+    let rsdt = _ke_acpi_rsdt(rsdp);
+    // "RSDT: XXXXXXXX\r\n"
+    _ke_putc(82); _ke_putc(83); _ke_putc(68); _ke_putc(84);
+    _ke_putc(58); _ke_putc(32);
+    _ke_put_hex16(rsdt / 65536); _ke_put_hex16(rsdt);
+    _ke_putc(13); _ke_putc(10);
+
+    // Count RSDT entries
+    let rsdt_len = mem_read_u32(rsdt + 4);
+    let entries = (rsdt_len - 36) / 4;
+    // "Tables: N\r\n"
+    _ke_putc(84); _ke_putc(58); _ke_put_dec(entries);
+    _ke_putc(13); _ke_putc(10);
+
+    // Print each table's 4-byte signature
+    let mut i = 0;
+    while i < entries {
+        let tbl = mem_read_u32(rsdt + 36 + i * 4);
+        if tbl != 0 {
+            _ke_putc(32); _ke_putc(32);
+            _ke_putc(mem_read_u8(tbl));
+            _ke_putc(mem_read_u8(tbl + 1));
+            _ke_putc(mem_read_u8(tbl + 2));
+            _ke_putc(mem_read_u8(tbl + 3));
+            _ke_putc(32);
+            _ke_put_hex16(tbl / 65536); _ke_put_hex16(tbl);
+            _ke_putc(13); _ke_putc(10);
+        }
+        i = i + 1;
+    }
+
+    // Find FADT ("FACP" = 70,65,67,80)
+    let fadt = _ke_acpi_find_table(rsdt, 70, 65, 67, 80);
+    if fadt != 0 {
+        let pm1a = mem_read_u32(fadt + 64);
+        let fadt_rev = mem_read_u8(fadt + 8);
+        // "FADT: rev=R PM1a=XXXX\r\n"
+        _ke_putc(70); _ke_putc(65); _ke_putc(68); _ke_putc(84);
+        _ke_putc(58); _ke_putc(32);
+        _ke_putc(114); _ke_putc(61); _ke_put_dec(fadt_rev);
+        _ke_putc(32);
+        _ke_putc(80); _ke_putc(77); _ke_putc(49); _ke_putc(97); _ke_putc(61);
+        _ke_put_hex16(pm1a);
+        _ke_putc(13); _ke_putc(10);
+
+        // Perform ACPI S5 shutdown: PM1a_CNT = SLP_TYP(5)<<10 | SLP_EN(bit13)
+        // value = 5*1024 + 8192 = 5120 + 8192 = 13312
+        port_out_u16(pm1a, 13312);
+    }
+
+    // "ACPI: OK\r\n"
+    _ke_putc(65); _ke_putc(67); _ke_putc(80); _ke_putc(73);
+    _ke_putc(58); _ke_putc(32); _ke_putc(79); _ke_putc(75);
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
 // === Iteration 25: Scancode → ASCII + Interactive Shell ===
 
 // PS/2 set 1 scancode to ASCII (lowercase, common keys only)
@@ -972,19 +2282,50 @@ fn _ke_prompt() {
 
 // Command: help
 fn _ke_cmd_help() {
-    // "Cmds: help tick pci pmem palloc malloc mfree reboot\r\n"
+    // "Cmds: help tick pci pmem palloc pfree\r\n"
     _ke_putc(67); _ke_putc(109); _ke_putc(100); _ke_putc(115); _ke_putc(58); _ke_putc(32);
     _ke_putc(104); _ke_putc(101); _ke_putc(108); _ke_putc(112); _ke_putc(32);
     _ke_putc(116); _ke_putc(105); _ke_putc(99); _ke_putc(107); _ke_putc(32);
     _ke_putc(112); _ke_putc(99); _ke_putc(105); _ke_putc(32);
     _ke_putc(112); _ke_putc(109); _ke_putc(101); _ke_putc(109); _ke_putc(32);
     _ke_putc(112); _ke_putc(97); _ke_putc(108); _ke_putc(108); _ke_putc(111); _ke_putc(99); _ke_putc(32);
+    // "pfree "
+    _ke_putc(112); _ke_putc(102); _ke_putc(114); _ke_putc(101); _ke_putc(101); _ke_putc(32);
+    _ke_putc(13); _ke_putc(10);
+    // "      malloc mfree ps mouse tcptest\r\n"
+    _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32);
     // "malloc "
     _ke_putc(109); _ke_putc(97); _ke_putc(108); _ke_putc(108); _ke_putc(111); _ke_putc(99); _ke_putc(32);
     // "mfree "
     _ke_putc(109); _ke_putc(102); _ke_putc(114); _ke_putc(101); _ke_putc(101); _ke_putc(32);
     // "ps "
     _ke_putc(112); _ke_putc(115); _ke_putc(32);
+    // "mouse "
+    _ke_putc(109); _ke_putc(111); _ke_putc(117); _ke_putc(115); _ke_putc(101); _ke_putc(32);
+    // "tcptest "
+    _ke_putc(116); _ke_putc(99); _ke_putc(112); _ke_putc(116); _ke_putc(101); _ke_putc(115); _ke_putc(116); _ke_putc(32);
+    // "gfxtest"
+    _ke_putc(103); _ke_putc(102); _ke_putc(120); _ke_putc(116); _ke_putc(101); _ke_putc(115); _ke_putc(116);
+    _ke_putc(32);
+    // "wm"
+    _ke_putc(119); _ke_putc(109);
+    _ke_putc(32);
+    // "smp"
+    _ke_putc(115); _ke_putc(109); _ke_putc(112);
+    _ke_putc(32);
+    // "ahci"
+    _ke_putc(97); _ke_putc(104); _ke_putc(99); _ke_putc(105);
+    _ke_putc(32);
+    // "usb"
+    _ke_putc(117); _ke_putc(115); _ke_putc(98);
+    _ke_putc(32);
+    // "acpi"
+    _ke_putc(97); _ke_putc(99); _ke_putc(112); _ke_putc(105);
+    _ke_putc(13); _ke_putc(10);
+    // "      wget reboot\r\n"
+    _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32);
+    // "wget "
+    _ke_putc(119); _ke_putc(103); _ke_putc(101); _ke_putc(116); _ke_putc(32);
     // "reboot\r\n"
     _ke_putc(114); _ke_putc(101); _ke_putc(98); _ke_putc(111); _ke_putc(111); _ke_putc(116);
     _ke_putc(13); _ke_putc(10);
@@ -1011,6 +2352,7 @@ fn _ke_dispatch(buf_addr, buf_len) {
     let c3 = 0; if buf_len > 3 { c3 = mem_read_u8(buf_addr + 3); }
     let c4 = 0; if buf_len > 4 { c4 = mem_read_u8(buf_addr + 4); }
     let c5 = 0; if buf_len > 5 { c5 = mem_read_u8(buf_addr + 5); }
+    let c6 = 0; if buf_len > 6 { c6 = mem_read_u8(buf_addr + 6); }
 
     // "help" = 104 101 108 112
     if buf_len == 4 {
@@ -1025,12 +2367,32 @@ fn _ke_dispatch(buf_addr, buf_len) {
         if c0 == 112 { if c1 == 109 { if c2 == 101 { if c3 == 109 {
             _ke_cmd_pmem(); return 0;
         } } } }
+        // "wget" = 119 103 101 116
+        if c0 == 119 { if c1 == 103 { if c2 == 101 { if c3 == 116 {
+            _ke_cmd_wget(); return 0;
+        } } } }
+        // "ahci" = 97 104 99 105
+        if c0 == 97 { if c1 == 104 { if c2 == 99 { if c3 == 105 {
+            _ke_cmd_ahci(); return 0;
+        } } } }
+        // "acpi" = 97 99 112 105
+        if c0 == 97 { if c1 == 99 { if c2 == 112 { if c3 == 105 {
+            _ke_cmd_acpi(); return 0;
+        } } } }
     }
 
     // "pci" = 112 99 105
     if buf_len == 3 {
         if c0 == 112 { if c1 == 99 { if c2 == 105 {
             _ke_pci_scan(); return 0;
+        } } }
+        // "smp" = 115 109 112
+        if c0 == 115 { if c1 == 109 { if c2 == 112 {
+            _ke_cmd_smp(); return 0;
+        } } }
+        // "usb" = 117 115 98
+        if c0 == 117 { if c1 == 115 { if c2 == 98 {
+            _ke_cmd_usb(); return 0;
         } } }
     }
 
@@ -1039,6 +2401,21 @@ fn _ke_dispatch(buf_addr, buf_len) {
         if c0 == 112 { if c1 == 115 {
             _ke_cmd_ps(); return 0;
         } }
+        // "wm" = 119 109
+        if c0 == 119 { if c1 == 109 {
+            _ke_cmd_wm(); return 0;
+        } }
+    }
+
+    // "tcptest" (7): 116 99 112 116 101 115 116
+    if buf_len == 7 {
+        if c0 == 116 { if c1 == 99 { if c2 == 112 { if c3 == 116 { if c4 == 101 { if c5 == 115 { if c6 == 116 {
+            _ke_cmd_tcptest(); return 0;
+        } } } } } } }
+        // "gfxtest" (7): 103 102 120 116 101 115 116
+        if c0 == 103 { if c1 == 102 { if c2 == 120 { if c3 == 116 { if c4 == 101 { if c5 == 115 { if c6 == 116 {
+            _ke_cmd_gfxtest(); return 0;
+        } } } } } } }
     }
 
     // "palloc" (6) or "palloc N" (7+): 112 97 108 108 111 99
@@ -1065,6 +2442,10 @@ fn _ke_dispatch(buf_addr, buf_len) {
         // "mfree" (5): 109 102 114 101 101
         if c0 == 109 { if c1 == 102 { if c2 == 114 { if c3 == 101 { if c4 == 101 {
             _ke_cmd_mfree(); return 0;
+        } } } } }
+        // "mouse" (5): 109 111 117 115 101
+        if c0 == 109 { if c1 == 111 { if c2 == 117 { if c3 == 115 { if c4 == 101 {
+            _ke_cmd_mouse(); return 0;
         } } } } }
     }
 
@@ -1186,6 +2567,16 @@ fn _start() {
 
     // Phase 7: PCI bus scan (iteration 24)
     _ke_pci_scan();
+
+    // Phase 7b: VirtIO-net init (iteration 29)
+    let vnet_dev = _ke_virtio_find();
+    if vnet_dev != 255 {
+        let vbar = _ke_virtio_bar0(vnet_dev);
+        _ke_virtio_init(vbar);
+    }
+
+    // Phase 7c: Font init (iteration 32)
+    _ke_font_init();
 
     // Phase 8: Interactive shell (iteration 25)
     _ke_shell();

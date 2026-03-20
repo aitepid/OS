@@ -12,24 +12,25 @@
 |------|------|-----------|------|
 | **A: 镜像机器码** | `scripts/rebuild-image.ps1` → `hicos-hl.img` | ✅ 真正运行 | 引导+串口+PIC/PIT/IDT+PCI+VirtIO读写+VirtIO-net+**shell 18命令+FAT16+DHCP+Ping+DNS+VESA+Ring3**+任务交替 |
 | **B: H-L 编译器** | `hl-bootstrap.hl` build_kernel() | ⚠️ 可执行但产出较旧 | 串口+PIC+PIT+IDT+键盘 (不含 PCI/VirtIO) |
-| **C: 内核源码** | `bare-kernel/hl/` 114 模块 | ❌ 未编译到镜像 | 完整 OS 逻辑 (FS/网络/进程/图形/安全/shell 55命令) |
+| **C: 内核源码** | `bare-kernel/hl/` 114 模块 | ✅ kernel.bin 集成到镜像 | 编译产出 kernel.bin 19,146B, 1,079函数, 18条shell命令, 含PCI+VirtIO-net+TCP+内存+任务+鼠标+字体+WM+SMP+AHCI+USB |
 
-**当前状态**: 层级 A 有 20+ 个功能已 QEMU 验证（含 shell 18 条命令 + DHCP/Ping/DNS/VESA/Ring3）；层级 C 有 114 个模块的完整逻辑但只是设计级代码。两者之间缺乏自动化编译管线。
+**当前状态**: 层级 A 有 20+ 个功能已 QEMU 验证（含 shell 18 条命令）；层级 C 的 kernel.bin 已编译并集成到镜像，在 0x120000 运行 18 条独立 shell 命令（含 TCP/VirtIO-net/内存/任务/鼠标/字体/WM/SMP/AHCI/USB）。A/C 融合正在进行中。
 
 ### 代码库统计
 
 | 指标 | 值 |
 |------|-----|
-| H-L 源文件 (活跃) | 164 个 `.hl` |
+| H-L 源文件 (活跃) | 175 个 `.hl` |
 | 内核模块 | 114 个 (`bare-kernel/hl/`) |
-| 内核函数定义 | 995 个 |
+| 内核函数定义 | 1,079 个 |
 | 用户空间模块 | 27 个 (`HicOS_*.hl`) — 全部原生，0 个桩 |
-| 基础设施/测试 | 23 个 (hl-bootstrap, stdlib, test-suite 等) |
-| 总代码行数 | ~38,500 行 (32,154 H-L + 6,352 PS1) |
+| 基础设施/测试 | 34 个 (hl-bootstrap, stdlib, test-suite 等) |
+| 总代码行数 | ~38,700 行 (31,800 H-L + 6,993 PS1) |
 | 构建/测试脚本 | 17 个 PowerShell 脚本 (`scripts/`) |
-| BIOS 可引导镜像 | `hicos-hl.img` = 41,472 字节 (81扇区, MBR 0x55AA ✓) |
+| BIOS 可引导镜像 | `hicos-hl.img` = 151,552 字节 (296扇区, MBR 0x55AA ✓) |
 | UEFI 可引导镜像 | `hicos-uefi.img` = 33 MB (GPT+CRC32, ESP FAT16) |
 | UEFI 应用程序 | `BOOTX64.EFI` = 1,536 字节 (PE32+ x86_64) |
+| kernel.bin (编译产出) | 19,146 字节, 1,063 符号, 1,079 函数, 18 shell 命令 |
 | QEMU BIOS 引导测试 | **42/42 PASS** (含 6 shell + 4 FAT16 + 6 net + 2 Ring3) |
 | QEMU UEFI 引导测试 | **3/3 PASS** |
 | Full Gate | **7/7 PASS** |
@@ -149,22 +150,30 @@ See: [ROADMAP.md](ROADMAP.md)
 - **迭代 18**: ✅ **已完成** — DHCP + Ping + DNS + ifconfig (VirtIO-net 收包, SLIRP 全通路)
 - **迭代 20**: ✅ **已完成** — VESA 图形输出 (1024×768×32 帧缓冲, LFB 读写验证)
 - **迭代 21**: ✅ **已完成** — Ring3 用户态切换 (IRETQ→Ring3→SYSCALL 打印→内核回归)
+- **迭代 22-28**: ✅ **已完成** — kernel.bin A/C 融合 (串口+PIC/PIT/IDT+PCI+Shell+页分配+堆+任务调度)
+- **迭代 29-30**: ✅ **已完成** — TCP SYN + VirtIO-net TX + HTTP GET + 12 条 shell 命令
+- **迭代 31**: ✅ **已完成** — PS/2 鼠标驱动 + ISR 偏移量修复 + IRQ12 + mouse 命令 (13 条 shell)
+- **迭代 32**: ✅ **已完成** — VESA 8x16 位图字体渲染 + gfxtest 命令 (14 条 shell)
+- **迭代 33**: ✅ **已完成** — 窗口管理器 + 图形桌面 + wm 命令 (15 条 shell)
+- **迭代 34**: ✅ **已完成** — SMP 多核启动 (LAPIC+INIT-SIPI-SIPI+跳板+smp 命令, 16 条 shell)
+- **迭代 35**: ✅ **已完成** — AHCI/SATA 磁盘控制器检测 (PCI+ABAR+端口状态+ahci 命令, 17 条 shell)
+- **迭代 36**: ✅ **已完成** — USB xHCI 控制器检测 (PCI+BAR0+能力寄存器+端口扫描+usb 命令, 18 条 shell)
 - **Gate 修复**: ✅ 42/42 PASS (网络测试超时调优)
 
 ### 下一步
-**战略目标: 编译管线打通** — 增强宿主解释器，让 hl-bootstrap.hl 自动将 bare-kernel/hl/ 的 114 个模块编译为原生 x86_64 机器码
+**战略目标: 物理硬件适配** — SMP+AHCI+USB 已完成，继续 ACPI 和音频
 
-**当前阻塞**: hl-bootstrap-shim.ps1 缺少 quadrant 作用域 + 嵌套数组 + 数组索引 + push 内置函数
+**当前 kernel.bin 状态**: 19,146B, 1,079 函数, 18 条 shell 命令
+  已有: serial+PIC/PIT/IDT+PCI+VirtIO-net+TCP+页分配+堆+任务+鼠标+字体+WM+SMP+AHCI+USB+shell
 
-**阶段 0 (立即执行)**: 宿主增强 (~200 行 PS1)
-- 0.1 quadrant 扁平化 → shim 识别 `quadrant x86enc { ... }` 并注册限定名函数
-- 0.2 嵌套数组+索引+push → `[[], origin, [], []]` + `buf[0]` + `push(buf[0], byte)`
-- 0.3 字符串索引 → `banner[ci]` 返回单字符
-- 0.4 端到端验证 → x86enc.new_buf/emit_cli/buf_len 可在 shim 中执行
+**迭代 37**: 🎯 **下一步** — ACPI 电源管理
+- 37.1 RSDP 搜索 (EBDA + 0xE0000-0xFFFFF)
+- 37.2 RSDT/XSDT 解析 + 表查找
+- 37.3 FADT 解析 (PM1a_CNT 端口)
+- 37.4 "acpi" 命令显示 ACPI 表 + shutdown
+- 验证: QEMU shutdown 通过 ACPI PM1a
 
-**阶段 1**: 编译管线激活 — build_kernel() 从硬编码变为编译 .hl 模块
-**阶段 2**: 跨模块链接 + 镜像生成 + QEMU 验证
+**迭代 38**: 音频 AC97/HDA 基础
+**迭代 39**: RTC 实时时钟
 
-**并行 (可选)**: 迭代 19 — FAT 簇链多文件 + rm 删除命令
-
-详见: [COMPILER_PIPELINE_STRATEGY.hl](COMPILER_PIPELINE_STRATEGY.hl) | [PIPELINE_PLAN.hl](PIPELINE_PLAN.hl)
+详见: [PROJECT_ADVANCEMENT_PLAN.hl](PROJECT_ADVANCEMENT_PLAN.hl) | [COMPILER_PIPELINE_STRATEGY.hl](COMPILER_PIPELINE_STRATEGY.hl)

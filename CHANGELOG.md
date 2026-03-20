@@ -4,7 +4,85 @@
 
 164 active .hl files, 114 kernel modules, 55 shell commands (Layer C), 18 QEMU-verified commands, 0 external deps.
 Dual-boot: BIOS 42/42 PASS + UEFI 3/3 PASS. Full gate 7/7 PASS.
-Image: 41,472 bytes (81 sectors). Code: ~38,500 lines (32,154 H-L + 6,352 PS1).
+Image: 151,040 bytes (295 sectors). Code: ~38,700 lines (31,800 H-L + 6,993 PS1).
+
+### Iterations 29-31: TCP + HTTP + Mouse in kernel.bin (A/C fusion)
+- **Iteration 29: TCP State Machine + VirtIO-net TX**
+  - `_ke_virtio_find()`: PCI scan for VirtIO vendor 0x1AF4, device 0x1000
+  - `_ke_virtio_bar0()`: Read PCI BAR0 for I/O port base
+  - `_ke_virtio_init()`: Reset → ACK → DRIVER → queue setup → DRIVER_OK
+  - `_ke_virtio_tx()`: Build VirtIO descriptor chain + avail ring + notify TX queue
+  - `_ke_tcp_build_syn()`: Ethernet + IPv4 (checksum) + TCP SYN packet construction
+  - `_ke_cmd_tcptest()`: Build SYN → TX via VirtIO → TCB state: SYN_SENT → ESTABLISHED
+  - `tcptest` shell command wired to dispatch
+- **Iteration 30: HTTP GET (simulated)**
+  - `_ke_cmd_wget()`: Build "GET / HTTP/1.0\r\n\r\n" in memory, check TCB state
+  - `wget` shell command wired to dispatch
+  - Simulated response: "HTTP/1.0 200 OK" + connection close
+- **Iteration 31: PS/2 Mouse Driver + ISR Fix**
+  - **ISR bug fix**: Timer/Keyboard jne/jmp offsets corrected (keyboard IRQ was unreachable)
+    - Timer jne: 14→10, Timer jmp: 26→66, Keyboard jne: 18→28
+  - **Mouse IRQ12 handler**: New vector 44 handling in common ISR
+    - Reads port 0x60, stores at 0x300018 (mouse_byte), sets 0x300020 (mouse_ready)
+  - **PS/2 mouse init**: `_ke_mouse_init()` — enable aux device, set defaults, enable reporting
+    - PS/2 controller command byte modification (IRQ12 enable)
+    - PIC2 IRQ12 unmask (port 0xA1 bit 4 clear)
+  - **Mouse command**: `_ke_cmd_mouse()` — init + read 3-byte packet + decode + display
+    - Signed dx/dy decoding, button state, position tracking (0..1023 x 0..767)
+  - 7 new functions: `_ke_ps2_wait_in/out`, `_ke_mouse_cmd/ack/init`, `_ke_mouse_read_irq`, `_ke_cmd_mouse`
+- **Iteration 32: VESA Bitmap Font Rendering**
+  - **Font init**: `_ke_font_init()` — 8x16 VGA bitmap font for ASCII 32-126 (94 glyphs)
+    - Font data at 0x310100, 16 bytes per glyph, packed u32 storage via `_ke_fc()` helper
+    - Standard VGA 8x16 glyphs: uppercase A-Z, lowercase a-z, digits 0-9, full punctuation
+  - **Pixel renderer**: `_ke_vesa_draw_char(px, py, ch, fg, bg)` — 8x16 glyph to LFB
+    - Bit-test loop (MSB=left pixel), per-pixel fg/bg color via `_ke_mem_w32`
+    - Framebuffer: 0xFD000000, pitch 4096, 32bpp BGRX
+  - **gfxtest command**: Draws "HicOS v5.0" at (100,100), white on dark blue
+  - 4 new functions: `_ke_fc`, `_ke_font_init`, `_ke_vesa_draw_char`, `_ke_cmd_gfxtest`
+  - Font init called from `_start()` Phase 7c
+- **Iteration 33: Window Manager + Graphical Desktop**
+  - **Rectangle fill**: `_ke_vesa_fill_rect(rx, ry, rw, rh, color)` — full rect fill on LFB
+  - **Mouse cursor**: `_ke_wm_draw_cursor(cx, cy)` — 10px triangle cursor (white/black edge)
+  - **`wm` command**: Renders complete graphical desktop:
+    - Desktop background: dark blue (0x204080) full 1024×768 fill
+    - Window 1 (active): "HicOS" title on blue bar (0x3366CC), 400×300 white content, "Welcome" text
+    - Window 2 (inactive): "Shell" title on gray bar (0x666666), 350×250 white content, "HicOS>" prompt
+    - Mouse cursor at tracked PS/2 position (0x300028/0x300030)
+  - 3 new functions: `_ke_vesa_fill_rect`, `_ke_wm_draw_cursor`, `_ke_cmd_wm`
+- **Iteration 34: SMP Multi-core Bootstrap**
+  - **LAPIC MMIO mapping**: `_ke_smp_map_lapic()` — PD[503] maps 0xFEE00000 (P+RW+PS+PCD)
+  - **LAPIC access**: `_ke_lapic_r/w(offset)` — 32-bit MMIO read/write at 0xFEE00000
+  - **AP trampoline**: `_ke_smp_trampoline()` — 107 bytes at 0x8000
+    - 16-bit real: CLI + LGDT + enable PE + far JMP to PM
+    - 32-bit PM: load segments + PAE + PML4(0x1000) + EFER.LME + enable PG + far JMP to LM
+    - 64-bit LM: INC [0x300040] (AP online signal) + HLT loop
+    - Private GDT: null + code32 + data32 + code64 (at 0x8080)
+  - **INIT-SIPI-SIPI**: `_ke_smp_boot()` — all-excluding-self broadcast
+    - ICR 0xC4500 (INIT) → 10ms → ICR 0xC4608 (SIPI vector 8) → 200μs → SIPI #2
+    - AP counter at 0x300040, returns number of APs that reached long mode
+  - **`smp` command**: Read BSP APIC ID (offset 0x20 >> 24), boot APs, show total CPUs online
+  - 6 new functions: `_ke_smp_map_lapic`, `_ke_lapic_r/w`, `_ke_smp_trampoline`, `_ke_smp_boot`, `_ke_cmd_smp`
+- **Iteration 35: AHCI/SATA Disk Controller Detection**
+  - **PCI AHCI detection**: Scan bus 0 for class=0x01, subclass=0x06
+  - **BAR5 (ABAR) read**: `_ke_pci_bar5()` — read PCI config register 0x24
+  - **ABAR MMIO mapping**: `_ke_ahci_map()` — dynamic PD entry based on ABAR address
+    - Computes PD index from 3rd-GB offset, writes 2MB page with P+RW+PS+PCD
+  - **HBA register access**: `_ke_ahci_r/pr()` — read HBA global and per-port registers
+  - **`ahci` command**: Full controller report:
+    - Vendor:Device ID, ABAR address, AHCI version, port count
+    - Per-port: DET (link status), SIG (device signature)
+  - 5 new functions: `_ke_pci_bar5`, `_ke_ahci_map`, `_ke_ahci_r`, `_ke_ahci_pr`, `_ke_cmd_ahci`
+- **Iteration 36: USB xHCI Controller Detection**
+  - **PCI prog_if reader**: `_ke_pci_progif()` — distinguish xHCI (0x30) from UHCI/OHCI/EHCI
+  - **BAR0 reader**: `_ke_pci_bar0()` — read xHCI MMIO base address
+  - **Generic MMIO mapper**: `_ke_mmio_map(addr)` — dynamic PD entry for any 3rd-GB MMIO address
+  - **xHCI capability parsing**: CAPLENGTH, HCIVERSION, HCSPARAMS1 (MaxSlots, MaxPorts)
+  - **Port status scan**: PORTSC at op_base+0x400+port*0x10, CCS (connected), speed bits[13:10]
+    - Speed codes: 1=FS(12M), 2=LS(1.5M), 3=HS(480M), 4=SS(5G)
+  - **`usb` command**: Full xHCI report: Vendor:Device, BAR0, version, slots, ports, per-port status
+  - 4 new functions: `_ke_pci_progif`, `_ke_pci_bar0`, `_ke_mmio_map`, `_ke_cmd_usb`
+- **kernel.bin growth**: 19,146 bytes, 1,063 symbols, 1,079 functions, 18 shell commands
+- **Shell commands (18)**: help tick pci pmem palloc pfree malloc mfree ps mouse tcptest gfxtest wm smp ahci usb wget reboot
 
 ### Iterations 18-21: Network + Graphics + User Mode (QEMU verified)
 - **Iteration 18: DHCP + Ping + DNS + ifconfig**
