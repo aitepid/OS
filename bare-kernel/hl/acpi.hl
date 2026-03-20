@@ -114,5 +114,34 @@ fn acpi_parse_madt(madt_addr) {
     return [lapic_addr, ioapic_addr, num_cpus];
 }
 
+// Dump ACPI info to serial/console
+fn acpi_dump() {
+    let rsdp = acpi_find_rsdp();
+    if rsdp == 0 {
+        print("ACPI: RSDP not found.");
+        return 0;
+    }
+    print("ACPI: RSDP found at " + format_hex(rsdp, 8));
+    let rsdp_info = acpi_parse_rsdp(rsdp);
+    let rsdt_addr = rsdp_info[1];
+    print("ACPI: RSDT at " + format_hex(rsdt_addr, 8));
+
+    let tables = acpi_parse_rsdt(rsdt_addr);
+    let mut i = 0;
+    while i < len(tables) {
+        let s = acpi_table_sig(tables[i]);
+        let c1 = s[0]; let c2 = s[1]; let c3 = s[2]; let c4 = s[3];
+        print("  Table " + to_string(i) + " at " + format_hex(tables[i], 8) + " [" + format_hex(c1, 2) + format_hex(c2, 2) + format_hex(c3, 2) + format_hex(c4, 2) + "]");
+        i = i + 1;
+    }
+
+    let fadt = acpi_find_table(rsdt_addr, [70, 65, 67, 80]); // "FACP"
+    if fadt != 0 {
+        let pm1a = mem_read_u32(fadt + 64);
+        print("ACPI: PM1a_CNT_BLK port = " + format_hex(pm1a, 4));
+    }
+    return 1;
+}
+
 print("acpi.hl loaded");
 print("RSDP search: 0xE0000 - 0xFFFFF");
