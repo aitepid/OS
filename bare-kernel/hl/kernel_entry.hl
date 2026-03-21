@@ -2219,6 +2219,1589 @@ fn _ke_cmd_acpi() {
     return 0;
 }
 
+// === Iteration 38: AC97 Audio (beep command) ===
+
+// Write 32 bits to PCI config space
+fn _ke_pci_write32(bus, dev, func, offset, val) {
+    let addr = 2147483648 + bus * 65536 + dev * 2048 + func * 256 + (offset / 4) * 4;
+    port_out_u32(3320, addr);
+    port_out_u32(3324, val);
+    return 0;
+}
+
+// Read 16-bit from PCI config
+fn _ke_pci_read16(bus, dev, func, offset) {
+    let dword = _ke_pci_read32(bus, dev, func, offset);
+    if offset % 4 == 0 { return dword % 65536; }
+    return (dword / 65536) % 65536;
+}
+
+// Write 16-bit to PCI config
+fn _ke_pci_write16(bus, dev, func, offset, val) {
+    let old = _ke_pci_read32(bus, dev, func, offset);
+    let mut new_val = 0;
+    if offset % 4 == 0 {
+        new_val = (old / 65536) * 65536 + (val % 65536);
+    } else {
+        new_val = (val % 65536) * 65536 + (old % 65536);
+    }
+    _ke_pci_write32(bus, dev, func, offset, new_val);
+    return 0;
+}
+
+// Write 16-bit little-endian value
+fn _ke_mem_w16(addr, val) {
+    mem_write_u8(addr, val % 256);
+    mem_write_u8(addr + 1, (val / 256) % 256);
+    return 0;
+}
+
+// Scan PCI bus 0 for AC97: vendor=0x8086(32902) device=0x2415(9237)
+fn _ke_ac97_find() {
+    let mut dev = 0;
+    while dev < 32 {
+        let vendor = _ke_pci_vendor(0, dev, 0);
+        if vendor == 32902 {
+            let devid = _ke_pci_device(0, dev, 0);
+            if devid == 9237 { return dev; }
+        }
+        dev = dev + 1;
+    }
+    return 255;
+}
+
+// Command: beep — AC97 440Hz tone playback
+fn _ke_cmd_beep() {
+    let ac97_dev = _ke_ac97_find();
+    if ac97_dev == 255 {
+        // "AC97: none\r\n"
+        _ke_putc(65); _ke_putc(67); _ke_putc(57); _ke_putc(55);
+        _ke_putc(58); _ke_putc(32); _ke_putc(110); _ke_putc(111);
+        _ke_putc(110); _ke_putc(101);
+        _ke_putc(13); _ke_putc(10);
+        return 0;
+    }
+
+    // Read BAR0 (mixer I/O) and BAR1 (NABM I/O)
+    let bar0_raw = _ke_pci_read32(0, ac97_dev, 0, 16);
+    let bar1_raw = _ke_pci_read32(0, ac97_dev, 0, 20);
+    let mixer = (bar0_raw / 4) * 4;
+    let nabm = (bar1_raw / 4) * 4;
+
+    // Enable PCI bus mastering + I/O space (bits 0+2 of command register)
+    let cmd = _ke_pci_read16(0, ac97_dev, 0, 4);
+    _ke_pci_write16(0, ac97_dev, 0, 4, cmd + 5);
+
+    // Reset mixer
+    port_out_u16(mixer, 1);
+
+    // Global control: cold reset
+    port_out_u32(nabm + 44, 2);
+
+    // Wait for codec reset
+    let mut wait = 0;
+    while wait < 100000 { wait = wait + 1; }
+
+    // Master volume = 0 (max), PCM volume = 0x0808
+    port_out_u16(mixer + 2, 0);
+    port_out_u16(mixer + 24, 2056);
+
+    // Generate 440Hz square wave: 48000 Hz sample rate, 0.5 sec
+    // samples = 24000, half_period = 48000/(2*440) = 54
+    let buf = 8978688;    // 0x890100: PCM buffer
+    let bdl = 8978432;    // 0x890000: BDL
+    let samples = 24000;
+    let half = 54;
+    let mut i = 0;
+    let mut high = 1;
+    let mut cnt = 0;
+    while i < samples {
+        if cnt >= half { high = 1 - high; cnt = 0; }
+        if high == 1 {
+            _ke_mem_w16(buf + i * 4, 16384);
+            _ke_mem_w16(buf + i * 4 + 2, 16384);
+        } else {
+            _ke_mem_w16(buf + i * 4, 49152);
+            _ke_mem_w16(buf + i * 4 + 2, 49152);
+        }
+        cnt = cnt + 1;
+        i = i + 1;
+    }
+
+    // BDL entry 0: [buffer_addr(4), sample_count(2), flags(2)]
+    _ke_mem_w32(bdl, buf);
+    _ke_mem_w16(bdl + 4, samples);
+    _ke_mem_w16(bdl + 6, 49152);    // 0xC000: last + IOC
+
+    // Set BDL base address
+    port_out_u32(nabm + 16, bdl);
+    // Set last valid index
+    port_out_u8(nabm + 21, 0);
+    // Start playback
+    port_out_u8(nabm + 27, 1);
+
+    // "Beep 440Hz\r\n"
+    _ke_putc(66); _ke_putc(101); _ke_putc(101); _ke_putc(112);
+    _ke_putc(32); _ke_putc(52); _ke_putc(52); _ke_putc(48);
+    _ke_putc(72); _ke_putc(122);
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
+// === Iteration 39: RTC Time (time command) ===
+
+// Read CMOS register (port 0x70 addr, 0x71 data)
+fn _ke_rtc_read(reg) {
+    port_out_u8(112, reg);
+    return port_in_u8(113);
+}
+
+// BCD to binary
+fn _ke_bcd2bin(bcd) {
+    return (bcd / 16) * 10 + bcd % 16;
+}
+
+// Print 2-digit decimal with leading zero
+fn _ke_put_dec2(val) {
+    if val < 10 { _ke_putc(48); }
+    _ke_put_dec(val);
+    return 0;
+}
+
+// Command: time — read and display CMOS RTC date/time
+fn _ke_cmd_time() {
+    // Wait for update-in-progress to clear (Status Register A bit 7)
+    let mut timeout = 10000;
+    while timeout > 0 {
+        let a = _ke_rtc_read(10);
+        if (a / 128) % 2 == 0 { timeout = 0; }
+        else { timeout = timeout - 1; }
+    }
+
+    let raw_sec = _ke_rtc_read(0);
+    let raw_min = _ke_rtc_read(2);
+    let raw_hour = _ke_rtc_read(4);
+    let raw_day = _ke_rtc_read(7);
+    let raw_month = _ke_rtc_read(8);
+    let raw_year = _ke_rtc_read(9);
+
+    let sec = _ke_bcd2bin(raw_sec);
+    let min = _ke_bcd2bin(raw_min);
+    let hour = _ke_bcd2bin(raw_hour);
+    let day = _ke_bcd2bin(raw_day);
+    let month = _ke_bcd2bin(raw_month);
+    let year = _ke_bcd2bin(raw_year) + 2000;
+
+    // Print "YYYY-MM-DD HH:MM:SS\r\n"
+    _ke_put_dec(year);
+    _ke_putc(45);
+    _ke_put_dec2(month);
+    _ke_putc(45);
+    _ke_put_dec2(day);
+    _ke_putc(32);
+    _ke_put_dec2(hour);
+    _ke_putc(58);
+    _ke_put_dec2(min);
+    _ke_putc(58);
+    _ke_put_dec2(sec);
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
+// === Iteration 41: VirtIO-blk + System Commands ===
+//
+// VirtIO-blk PCI: vendor=0x1AF4(6900) device=0x1001(4097)
+// Memory layout:
+//   0x920000: virtqueue descriptors (128 × 16 = 2048 bytes)
+//   0x920800: avail ring
+//   0x921000: used ring (page-aligned)
+//   0x922000: request header (16 bytes)
+//   0x922010: request status (1 byte)
+//   0x922100: data buffer (512 bytes)
+//   0x310060: blk_bar (stored)
+
+// Read 16-bit little-endian from memory
+fn _ke_mem_r16(addr) {
+    let lo = mem_read_u8(addr);
+    let hi = mem_read_u8(addr + 1);
+    return hi * 256 + lo;
+}
+
+// Scan PCI for VirtIO-blk device
+fn _ke_virtio_blk_find() {
+    let mut dev = 0;
+    while dev < 32 {
+        let vendor = _ke_pci_vendor(0, dev, 0);
+        if vendor == 6900 {
+            let devid = _ke_pci_device(0, dev, 0);
+            if devid == 4097 { return dev; }
+        }
+        dev = dev + 1;
+    }
+    return 255;
+}
+
+// Initialize VirtIO-blk device
+fn _ke_virtio_blk_init(bar) {
+    // Reset → ACK → DRIVER
+    port_out_u8(bar + 18, 0);
+    port_out_u8(bar + 18, 1);
+    port_out_u8(bar + 18, 3);
+
+    // Negotiate features (none needed)
+    port_out_u32(bar + 4, 0);
+    // FEATURES_OK
+    port_out_u8(bar + 18, 11);
+
+    // Select queue 0
+    port_out_u16(bar + 14, 0);
+
+    // Queue memory
+    let qbase = 9568256;     // 0x920000: descriptors
+    let avail = 9570304;     // 0x920800: avail ring
+    let used_base = 9572352; // 0x921000: used ring
+
+    // Zero descriptor area (2048 bytes)
+    let mut i = 0;
+    while i < 2048 {
+        mem_write_u8(qbase + i, 0);
+        i = i + 1;
+    }
+    // Zero avail ring (260 bytes)
+    i = 0;
+    while i < 260 {
+        mem_write_u8(avail + i, 0);
+        i = i + 1;
+    }
+    // Zero used ring (1028 bytes)
+    i = 0;
+    while i < 1028 {
+        mem_write_u8(used_base + i, 0);
+        i = i + 1;
+    }
+
+    // Tell device queue address (PFN)
+    port_out_u32(bar + 8, qbase / 4096);
+
+    // DRIVER_OK
+    port_out_u8(bar + 18, 15);
+
+    // Store BAR
+    mem_write_u32(3211360, bar);  // 0x310060
+
+    // "BLK: OK\r\n"
+    _ke_putc(66); _ke_putc(76); _ke_putc(75); _ke_putc(58); _ke_putc(32);
+    _ke_putc(79); _ke_putc(75);
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
+// Read one sector from VirtIO-blk
+// Returns 0 on success, nonzero on failure
+fn _ke_virtio_blk_read(sector) {
+    let bar = mem_read_u32(3211360);  // blk_bar
+    if bar == 0 { return 1; }
+
+    let qbase = 9568256;     // 0x920000
+    let avail = 9570304;     // 0x920800
+    let used_base = 9572352; // 0x921000
+    let hdr = 9576448;       // 0x922000
+    let status = 9576464;    // 0x922010
+    let data = 9576704;      // 0x922100
+
+    // Request header: type=0 (read), sector
+    _ke_mem_w32(hdr, 0);
+    _ke_mem_w32(hdr + 4, 0);
+    _ke_mem_w32(hdr + 8, sector);
+    _ke_mem_w32(hdr + 12, 0);
+
+    // Clear status
+    mem_write_u8(status, 255);
+
+    // Descriptor 0: header (16 bytes, device-readable, NEXT→1)
+    mem_write_u64(qbase, hdr);
+    _ke_mem_w32(qbase + 8, 16);
+    _ke_mem_w16(qbase + 12, 1);     // flags = NEXT
+    _ke_mem_w16(qbase + 14, 1);     // next = 1
+
+    // Descriptor 1: data (512 bytes, device-writable, NEXT→2)
+    mem_write_u64(qbase + 16, data);
+    _ke_mem_w32(qbase + 24, 512);
+    _ke_mem_w16(qbase + 28, 3);     // flags = WRITE|NEXT
+    _ke_mem_w16(qbase + 30, 2);     // next = 2
+
+    // Descriptor 2: status (1 byte, device-writable)
+    mem_write_u64(qbase + 32, status);
+    _ke_mem_w32(qbase + 40, 1);
+    _ke_mem_w16(qbase + 44, 2);     // flags = WRITE
+    _ke_mem_w16(qbase + 46, 0);     // next = 0
+
+    // Add to avail ring
+    let aidx = _ke_mem_r16(avail + 2);
+    let ring_off = 4 + (aidx % 128) * 2;
+    _ke_mem_w16(avail + ring_off, 0);
+    _ke_mem_w16(avail + 2, aidx + 1);
+
+    // Notify queue 0
+    port_out_u16(bar + 16, 0);
+
+    // Poll used ring
+    let old_used = _ke_mem_r16(used_base + 2);
+    let mut timeout = 10000000;
+    while timeout > 0 {
+        let cur = _ke_mem_r16(used_base + 2);
+        if cur != old_used { return mem_read_u8(status); }
+        timeout = timeout - 1;
+    }
+    return 1;  // timeout
+}
+
+// Command: disk — VirtIO-blk info + sector 0 read
+fn _ke_cmd_disk() {
+    let bar = mem_read_u32(3211360);
+    if bar == 0 {
+        // "BLK: none\r\n"
+        _ke_putc(66); _ke_putc(76); _ke_putc(75);
+        _ke_putc(58); _ke_putc(32); _ke_putc(110); _ke_putc(111);
+        _ke_putc(110); _ke_putc(101);
+        _ke_putc(13); _ke_putc(10);
+        return 0;
+    }
+
+    // Read capacity from device config (BAR+0x14, 8 bytes)
+    let cap = port_in_u32(bar + 20);
+    // "Disk: NNNN sectors (M MB)\r\n"
+    _ke_putc(68); _ke_putc(105); _ke_putc(115); _ke_putc(107);
+    _ke_putc(58); _ke_putc(32);
+    _ke_put_dec(cap);
+    // " sect "
+    _ke_putc(32); _ke_putc(115); _ke_putc(101); _ke_putc(99); _ke_putc(116);
+    _ke_putc(32);
+    // "("
+    _ke_putc(40);
+    _ke_put_dec(cap / 2048);
+    // " MB)\r\n"
+    _ke_putc(32); _ke_putc(77); _ke_putc(66); _ke_putc(41);
+    _ke_putc(13); _ke_putc(10);
+
+    // Read sector 0
+    let result = _ke_virtio_blk_read(0);
+    if result == 0 {
+        // "Sect0: " + first 16 bytes hex
+        _ke_putc(83); _ke_putc(48); _ke_putc(58); _ke_putc(32);
+        let data = 9576704;  // 0x922100
+        let mut i = 0;
+        while i < 16 {
+            let b = mem_read_u8(data + i);
+            _ke_put_hex4(b / 16); _ke_put_hex4(b);
+            _ke_putc(32);
+            i = i + 1;
+        }
+        _ke_putc(13); _ke_putc(10);
+        // Check MBR signature (0x55AA at offset 510-511)
+        let s510 = mem_read_u8(data + 510);
+        let s511 = mem_read_u8(data + 511);
+        if s510 == 85 {
+            if s511 == 170 {
+                // "MBR: 55AA\r\n"
+                _ke_putc(77); _ke_putc(66); _ke_putc(82); _ke_putc(58); _ke_putc(32);
+                _ke_putc(53); _ke_putc(53); _ke_putc(65); _ke_putc(65);
+                _ke_putc(13); _ke_putc(10);
+            }
+        }
+    } else {
+        // "Read: FAIL\r\n"
+        _ke_putc(82); _ke_putc(100); _ke_putc(58); _ke_putc(32);
+        _ke_putc(70); _ke_putc(65); _ke_putc(73); _ke_putc(76);
+        _ke_putc(13); _ke_putc(10);
+    }
+    return 0;
+}
+
+// Command: uptime — show system uptime from tick counter
+fn _ke_cmd_uptime() {
+    let ticks = mem_read_u64(3145728);  // 0x300000
+    let secs = ticks / 100;
+    let mins = secs / 60;
+    let hours = mins / 60;
+    let rem_m = mins % 60;
+    let rem_s = secs % 60;
+    // "Up: Xh Xm Xs\r\n"
+    _ke_putc(85); _ke_putc(112); _ke_putc(58); _ke_putc(32);
+    _ke_put_dec(hours);
+    _ke_putc(104); _ke_putc(32);  // "h "
+    _ke_put_dec(rem_m);
+    _ke_putc(109); _ke_putc(32);  // "m "
+    _ke_put_dec(rem_s);
+    _ke_putc(115);                 // "s"
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
+// Command: shutdown — ACPI S5 power off
+fn _ke_cmd_shutdown() {
+    // "Shutdown...\r\n"
+    _ke_putc(83); _ke_putc(104); _ke_putc(117); _ke_putc(116);
+    _ke_putc(100); _ke_putc(111); _ke_putc(119); _ke_putc(110);
+    _ke_putc(46); _ke_putc(46); _ke_putc(46);
+    _ke_putc(13); _ke_putc(10);
+
+    let rsdp = _ke_acpi_find_rsdp();
+    if rsdp != 0 {
+        let rsdt = _ke_acpi_rsdt(rsdp);
+        let fadt = _ke_acpi_find_table(rsdt, 70, 65, 67, 80);
+        if fadt != 0 {
+            let pm1a = mem_read_u32(fadt + 64);
+            // PM1a_CNT: SLP_TYP(5)<<10 | SLP_EN(bit13) = 13312
+            port_out_u16(pm1a, 13312);
+        }
+    }
+    // Fallback: halt
+    hlt();
+    return 0;
+}
+
+// === Iteration 42: FAT16 Format + ls in kernel.bin ===
+//
+// FAT16 layout on VirtIO-blk data disk (hicos-disk.img):
+//   Sector   0: BPB (BIOS Parameter Block)
+//   Sectors  1-3: reserved
+//   Sectors  4-67: FAT1 (64 sectors)
+//   Sectors 68-131: FAT2 (64 sectors)
+//   Sectors 132-163: root directory (512 entries)
+//   Sectors 164+: data area (4 sectors/cluster = 2KB)
+//
+// Constants
+//   FAT16_RESERVED = 4
+//   FAT16_FAT_SECTORS = 64
+//   FAT16_ROOT_START = 132
+//   FAT16_ROOT_SECTORS = 32
+//   FAT16_DATA_START = 164
+//   FAT16_CLUSTER_SECTORS = 4
+
+// Write one sector from data buffer (0x922100) to VirtIO-blk disk
+fn _ke_virtio_blk_write(sector) {
+    let bar = mem_read_u32(3211360);
+    if bar == 0 { return 1; }
+
+    let qbase = 9568256;     // 0x920000
+    let avail = 9570304;     // 0x920800
+    let used_base = 9572352; // 0x921000
+    let hdr = 9576448;       // 0x922000
+    let status = 9576464;    // 0x922010
+    let data = 9576704;      // 0x922100
+
+    // Request header: type=1 (WRITE)
+    _ke_mem_w32(hdr, 1);
+    _ke_mem_w32(hdr + 4, 0);
+    _ke_mem_w32(hdr + 8, sector);
+    _ke_mem_w32(hdr + 12, 0);
+
+    mem_write_u8(status, 255);
+
+    // Desc 0: header (readable, NEXT→1)
+    mem_write_u64(qbase, hdr);
+    _ke_mem_w32(qbase + 8, 16);
+    _ke_mem_w16(qbase + 12, 1);
+    _ke_mem_w16(qbase + 14, 1);
+
+    // Desc 1: data buffer (readable by device, NEXT→2)
+    mem_write_u64(qbase + 16, data);
+    _ke_mem_w32(qbase + 24, 512);
+    _ke_mem_w16(qbase + 28, 1);     // flags = NEXT only (device reads)
+    _ke_mem_w16(qbase + 30, 2);
+
+    // Desc 2: status (writable)
+    mem_write_u64(qbase + 32, status);
+    _ke_mem_w32(qbase + 40, 1);
+    _ke_mem_w16(qbase + 44, 2);     // flags = WRITE
+    _ke_mem_w16(qbase + 46, 0);
+
+    let aidx = _ke_mem_r16(avail + 2);
+    let ring_off = 4 + (aidx % 128) * 2;
+    _ke_mem_w16(avail + ring_off, 0);
+    _ke_mem_w16(avail + 2, aidx + 1);
+
+    port_out_u16(bar + 16, 0);
+
+    let old_used = _ke_mem_r16(used_base + 2);
+    let mut timeout = 10000000;
+    while timeout > 0 {
+        let cur = _ke_mem_r16(used_base + 2);
+        if cur != old_used { return mem_read_u8(status); }
+        timeout = timeout - 1;
+    }
+    return 1;
+}
+
+// Zero the 512-byte data buffer at 0x922100
+fn _ke_blk_zero_buf() {
+    let data = 9576704;
+    let mut i = 0;
+    while i < 512 { mem_write_u8(data + i, 0); i = i + 1; }
+    return 0;
+}
+
+// Command: format — create FAT16 filesystem on VirtIO-blk disk
+fn _ke_cmd_format() {
+    let bar = mem_read_u32(3211360);
+    if bar == 0 {
+        _ke_putc(66); _ke_putc(76); _ke_putc(75); _ke_putc(58); _ke_putc(32);
+        _ke_putc(110); _ke_putc(111); _ke_putc(110); _ke_putc(101);
+        _ke_putc(13); _ke_putc(10);
+        return 0;
+    }
+
+    let data = 9576704;
+    // --- Sector 0: BPB ---
+    _ke_blk_zero_buf();
+    // JMP short + NOP
+    mem_write_u8(data, 235); mem_write_u8(data + 1, 60); mem_write_u8(data + 2, 144);
+    // OEM "HicOS   "
+    mem_write_u8(data + 3, 72); mem_write_u8(data + 4, 105); mem_write_u8(data + 5, 99);
+    mem_write_u8(data + 6, 79); mem_write_u8(data + 7, 83);
+    mem_write_u8(data + 8, 32); mem_write_u8(data + 9, 32); mem_write_u8(data + 10, 32);
+    _ke_mem_w16(data + 11, 512);    // bytes/sector
+    mem_write_u8(data + 13, 4);     // sectors/cluster
+    _ke_mem_w16(data + 14, 4);      // reserved sectors
+    mem_write_u8(data + 16, 2);     // FAT count
+    _ke_mem_w16(data + 17, 512);    // root entries
+    _ke_mem_w16(data + 19, 0);      // total sectors 16 = 0 (use 32)
+    mem_write_u8(data + 21, 248);   // media = 0xF8
+    _ke_mem_w16(data + 22, 64);     // sectors/FAT
+    _ke_mem_w16(data + 24, 32);     // sectors/track
+    _ke_mem_w16(data + 26, 8);      // heads
+    _ke_mem_w32(data + 28, 0);      // hidden sectors
+    _ke_mem_w32(data + 32, 65536);  // total sectors 32 (32 MB)
+    mem_write_u8(data + 36, 128);   // drive = 0x80
+    mem_write_u8(data + 38, 41);    // boot sig = 0x29
+    _ke_mem_w32(data + 39, 1215259475); // serial "HicS"
+    // label "HicOS      "
+    mem_write_u8(data + 43, 72); mem_write_u8(data + 44, 105); mem_write_u8(data + 45, 99);
+    mem_write_u8(data + 46, 79); mem_write_u8(data + 47, 83);
+    let mut li = 48;
+    while li < 54 { mem_write_u8(data + li, 32); li = li + 1; }
+    // "FAT16   "
+    mem_write_u8(data + 54, 70); mem_write_u8(data + 55, 65); mem_write_u8(data + 56, 84);
+    mem_write_u8(data + 57, 49); mem_write_u8(data + 58, 54);
+    mem_write_u8(data + 59, 32); mem_write_u8(data + 60, 32); mem_write_u8(data + 61, 32);
+    // MBR signature
+    mem_write_u8(data + 510, 85); mem_write_u8(data + 511, 170);
+    _ke_virtio_blk_write(0);
+
+    // --- Reserved sectors 1-3: zeros ---
+    _ke_blk_zero_buf();
+    _ke_virtio_blk_write(1);
+    _ke_virtio_blk_write(2);
+    _ke_virtio_blk_write(3);
+
+    // --- FAT1 (sectors 4-67) ---
+    // First FAT sector: F8 FF FF FF + zeros
+    _ke_blk_zero_buf();
+    mem_write_u8(data, 248); mem_write_u8(data + 1, 255);
+    mem_write_u8(data + 2, 255); mem_write_u8(data + 3, 255);
+    _ke_virtio_blk_write(4);
+    // Rest of FAT1
+    _ke_blk_zero_buf();
+    let mut s = 5;
+    while s < 68 { _ke_virtio_blk_write(s); s = s + 1; }
+
+    // --- FAT2 (sectors 68-131) ---
+    _ke_blk_zero_buf();
+    mem_write_u8(data, 248); mem_write_u8(data + 1, 255);
+    mem_write_u8(data + 2, 255); mem_write_u8(data + 3, 255);
+    _ke_virtio_blk_write(68);
+    _ke_blk_zero_buf();
+    s = 69;
+    while s < 132 { _ke_virtio_blk_write(s); s = s + 1; }
+
+    // --- Root directory (sectors 132-163) ---
+    _ke_blk_zero_buf();
+    s = 132;
+    while s < 164 { _ke_virtio_blk_write(s); s = s + 1; }
+
+    // "FAT16 OK (164 sect)\r\n"
+    _ke_putc(70); _ke_putc(65); _ke_putc(84); _ke_putc(49); _ke_putc(54);
+    _ke_putc(32); _ke_putc(79); _ke_putc(75);
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
+// Command: ls — list FAT16 root directory entries
+fn _ke_cmd_ls() {
+    let bar = mem_read_u32(3211360);
+    if bar == 0 {
+        _ke_putc(66); _ke_putc(76); _ke_putc(75); _ke_putc(58); _ke_putc(32);
+        _ke_putc(110); _ke_putc(111); _ke_putc(110); _ke_putc(101);
+        _ke_putc(13); _ke_putc(10);
+        return 0;
+    }
+
+    let data = 9576704;
+    let mut total_files = 0;
+    let mut sect = 132;  // root dir start
+
+    while sect < 164 {
+        let result = _ke_virtio_blk_read(sect);
+        if result != 0 { sect = 164; } else {
+            // Parse 16 entries per sector
+            let mut e = 0;
+            while e < 16 {
+                let off = data + e * 32;
+                let b0 = mem_read_u8(off);
+                // End of directory
+                if b0 == 0 { e = 16; sect = 163; }
+                // Skip deleted (0xE5)
+                else if b0 != 229 {
+                    let attr = mem_read_u8(off + 11);
+                    // Skip LFN (0x0F) and volume label (0x08)
+                    if attr != 15 {
+                        if (attr / 8) % 2 == 0 {
+                            // Print filename (8 bytes, trim trailing spaces)
+                            let mut fi = 0;
+                            while fi < 8 {
+                                let ch = mem_read_u8(off + fi);
+                                if ch != 32 { _ke_putc(ch); }
+                                fi = fi + 1;
+                            }
+                            // Extension
+                            let ext0 = mem_read_u8(off + 8);
+                            if ext0 != 32 {
+                                _ke_putc(46); // '.'
+                                fi = 8;
+                                while fi < 11 {
+                                    let ch = mem_read_u8(off + fi);
+                                    if ch != 32 { _ke_putc(ch); }
+                                    fi = fi + 1;
+                                }
+                            }
+                            // Padding + size
+                            _ke_putc(32); _ke_putc(32);
+                            let size = mem_read_u32(off + 28);
+                            _ke_put_dec(size);
+                            _ke_putc(66); // 'B'
+                            _ke_putc(13); _ke_putc(10);
+                            total_files = total_files + 1;
+                        }
+                    }
+                }
+                e = e + 1;
+            }
+        }
+        sect = sect + 1;
+    }
+    // "N files\r\n"
+    _ke_put_dec(total_files);
+    _ke_putc(32); _ke_putc(102); _ke_putc(105); _ke_putc(108);
+    _ke_putc(101); _ke_putc(115);
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
+// === Iteration 43: FAT16 mkfile + cat in kernel.bin ===
+//
+// mkfile FILENAME.EXT content text here
+// cat FILENAME.EXT
+//
+// 8.3 name buffer at 0x310080 (11 bytes), safe from data buffer overwrite
+// FAT16 constants:
+//   FAT1_START = 4, FAT2_START = 68, ROOT_START = 132
+//   DATA_START = 164, CLUSTER_SECTORS = 4 (2KB/cluster)
+
+// Convert filename at (addr, length) to 8.3 format at 0x310080
+fn _ke_parse_83name(addr, length) {
+    let name83 = 3211392;  // 0x310080
+    let mut i = 0;
+    while i < 11 { mem_write_u8(name83 + i, 32); i = i + 1; }
+
+    // Find dot position
+    let mut dot_pos = length;
+    i = 0;
+    while i < length {
+        if mem_read_u8(addr + i) == 46 { dot_pos = i; i = length; }
+        i = i + 1;
+    }
+
+    // Name part (before dot, max 8, uppercase)
+    i = 0;
+    while i < 8 {
+        if i < dot_pos {
+            let mut ch = mem_read_u8(addr + i);
+            if ch >= 97 { if ch <= 122 { ch = ch - 32; } }
+            mem_write_u8(name83 + i, ch);
+        }
+        i = i + 1;
+    }
+
+    // Extension (after dot, max 3, uppercase)
+    if dot_pos < length {
+        i = 0;
+        while i < 3 {
+            let pos = dot_pos + 1 + i;
+            if pos < length {
+                let mut ch = mem_read_u8(addr + pos);
+                if ch >= 97 { if ch <= 122 { ch = ch - 32; } }
+                mem_write_u8(name83 + 8 + i, ch);
+            }
+            i = i + 1;
+        }
+    }
+    return name83;
+}
+
+// Command: mkfile — create a file on FAT16 disk
+// Usage: "mkfile test.txt Hello World"
+fn _ke_cmd_mkfile(buf_addr, buf_len) {
+    let bar = mem_read_u32(3211360);
+    if bar == 0 {
+        _ke_putc(66); _ke_putc(76); _ke_putc(75); _ke_putc(58); _ke_putc(32);
+        _ke_putc(110); _ke_putc(111); _ke_putc(110); _ke_putc(101);
+        _ke_putc(13); _ke_putc(10);
+        return 0;
+    }
+
+    let data = 9576704;
+
+    // Parse: "mkfile " = 7 chars, then filename until space, then content
+    if buf_len < 8 {
+        _ke_putc(63); _ke_putc(13); _ke_putc(10); return 0;
+    }
+    let fname_start = buf_addr + 7;
+
+    // Find end of filename (first space after position 7)
+    let mut fname_end = fname_start;
+    while fname_end < buf_addr + buf_len {
+        if mem_read_u8(fname_end) != 32 { fname_end = fname_end + 1; }
+        else { fname_end = buf_addr + buf_len + 1; } // signal: space found
+    }
+    // If space was found, fname_end overflowed; recalculate
+    let mut actual_end = fname_start;
+    let mut scan = fname_start;
+    while scan < buf_addr + buf_len {
+        if mem_read_u8(scan) != 32 { actual_end = scan + 1; scan = scan + 1; }
+        else { scan = buf_addr + buf_len; }
+    }
+
+    let fname_len = actual_end - fname_start;
+    let content_start = actual_end + 1;
+    let mut content_len = 0;
+    if content_start < buf_addr + buf_len {
+        content_len = buf_addr + buf_len - content_start;
+    }
+
+    // Convert filename to 8.3
+    let name83 = _ke_parse_83name(fname_start, fname_len);
+
+    // Find free cluster in FAT1 (cluster 2+)
+    let mut free_cluster = 0;
+    let mut fs = 4;
+    while fs < 68 {
+        if free_cluster == 0 {
+            _ke_virtio_blk_read(fs);
+            let mut ei = 0;
+            while ei < 256 {
+                let cluster_idx = (fs - 4) * 256 + ei;
+                if cluster_idx >= 2 {
+                    if free_cluster == 0 {
+                        let fat_val = _ke_mem_r16(data + ei * 2);
+                        if fat_val == 0 { free_cluster = cluster_idx; }
+                    }
+                }
+                ei = ei + 1;
+            }
+        }
+        fs = fs + 1;
+    }
+
+    if free_cluster == 0 {
+        // "Full\r\n"
+        _ke_putc(70); _ke_putc(117); _ke_putc(108); _ke_putc(108);
+        _ke_putc(13); _ke_putc(10);
+        return 0;
+    }
+
+    // Write content to the cluster's first sector
+    let first_sector = 164 + (free_cluster - 2) * 4;
+    _ke_blk_zero_buf();
+    let mut i = 0;
+    while i < content_len {
+        if i < 512 {
+            mem_write_u8(data + i, mem_read_u8(content_start + i));
+        }
+        i = i + 1;
+    }
+    _ke_virtio_blk_write(first_sector);
+
+    // Update FAT: mark cluster as end-of-chain (0xFFFF)
+    let fat_sector = 4 + (free_cluster * 2) / 512;
+    let fat_offset = (free_cluster * 2) % 512;
+    _ke_virtio_blk_read(fat_sector);
+    _ke_mem_w16(data + fat_offset, 65535);
+    _ke_virtio_blk_write(fat_sector);          // write FAT1
+    _ke_virtio_blk_write(fat_sector + 64);     // write FAT2 (same data)
+
+    // Find free directory entry and create it
+    let mut dir_sect = 132;
+    let mut wrote_dir = 0;
+    while dir_sect < 164 {
+        if wrote_dir == 0 {
+            _ke_virtio_blk_read(dir_sect);
+            let mut de = 0;
+            while de < 16 {
+                if wrote_dir == 0 {
+                    let off = data + de * 32;
+                    let b0 = mem_read_u8(off);
+                    if b0 == 0 {
+                        // Write 8.3 name
+                        i = 0;
+                        while i < 11 {
+                            mem_write_u8(off + i, mem_read_u8(name83 + i));
+                            i = i + 1;
+                        }
+                        mem_write_u8(off + 11, 32); // attr = 0x20 (archive)
+                        i = 12;
+                        while i < 26 { mem_write_u8(off + i, 0); i = i + 1; }
+                        _ke_mem_w16(off + 26, free_cluster);
+                        _ke_mem_w32(off + 28, content_len);
+                        _ke_virtio_blk_write(dir_sect);
+                        wrote_dir = 1;
+                    }
+                    if b0 == 229 {
+                        i = 0;
+                        while i < 11 {
+                            mem_write_u8(off + i, mem_read_u8(name83 + i));
+                            i = i + 1;
+                        }
+                        mem_write_u8(off + 11, 32);
+                        i = 12;
+                        while i < 26 { mem_write_u8(off + i, 0); i = i + 1; }
+                        _ke_mem_w16(off + 26, free_cluster);
+                        _ke_mem_w32(off + 28, content_len);
+                        _ke_virtio_blk_write(dir_sect);
+                        wrote_dir = 1;
+                    }
+                }
+                de = de + 1;
+            }
+        }
+        dir_sect = dir_sect + 1;
+    }
+
+    // "OK: NB\r\n"
+    _ke_putc(79); _ke_putc(75); _ke_putc(58); _ke_putc(32);
+    _ke_put_dec(content_len);
+    _ke_putc(66);
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
+// Command: cat — read and display a file from FAT16
+// Usage: "cat test.txt"
+fn _ke_cmd_cat(buf_addr, buf_len) {
+    let bar = mem_read_u32(3211360);
+    if bar == 0 {
+        _ke_putc(66); _ke_putc(76); _ke_putc(75); _ke_putc(58); _ke_putc(32);
+        _ke_putc(110); _ke_putc(111); _ke_putc(110); _ke_putc(101);
+        _ke_putc(13); _ke_putc(10);
+        return 0;
+    }
+
+    let data = 9576704;
+
+    // Parse filename: "cat " = 4 chars
+    if buf_len < 5 {
+        _ke_putc(63); _ke_putc(13); _ke_putc(10); return 0;
+    }
+    let fname_start = buf_addr + 4;
+    let fname_len = buf_len - 4;
+
+    // Convert to 8.3
+    let name83 = _ke_parse_83name(fname_start, fname_len);
+
+    // Search root directory
+    let mut found_cluster = 0;
+    let mut found_size = 0;
+    let mut sect = 132;
+    while sect < 164 {
+        if found_cluster == 0 {
+            _ke_virtio_blk_read(sect);
+            let mut de = 0;
+            while de < 16 {
+                if found_cluster == 0 {
+                    let off = data + de * 32;
+                    let b0 = mem_read_u8(off);
+                    if b0 != 0 {
+                        if b0 != 229 {
+                            let attr = mem_read_u8(off + 11);
+                            if attr != 15 {
+                                if (attr / 8) % 2 == 0 {
+                                    // Compare 11 bytes
+                                    let mut match_ok = 1;
+                                    let mut ci = 0;
+                                    while ci < 11 {
+                                        if mem_read_u8(off + ci) != mem_read_u8(name83 + ci) {
+                                            match_ok = 0; ci = 11;
+                                        }
+                                        ci = ci + 1;
+                                    }
+                                    if match_ok == 1 {
+                                        found_cluster = _ke_mem_r16(off + 26);
+                                        found_size = mem_read_u32(off + 28);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                de = de + 1;
+            }
+        }
+        sect = sect + 1;
+    }
+
+    if found_cluster == 0 {
+        // "Not found\r\n"
+        _ke_putc(78); _ke_putc(111); _ke_putc(116); _ke_putc(32);
+        _ke_putc(102); _ke_putc(111); _ke_putc(117); _ke_putc(110); _ke_putc(100);
+        _ke_putc(13); _ke_putc(10);
+        return 0;
+    }
+
+    // Read and output file content following FAT chain
+    let mut remaining = found_size;
+    let mut cluster = found_cluster;
+    while remaining > 0 {
+        if cluster < 2 { remaining = 0; }
+        else if cluster >= 65520 { remaining = 0; }
+        else {
+            let csect = 164 + (cluster - 2) * 4;
+            let mut s = 0;
+            while s < 4 {
+                if remaining > 0 {
+                    _ke_virtio_blk_read(csect + s);
+                    let mut bi = 0;
+                    while bi < 512 {
+                        if remaining > 0 {
+                            _ke_putc(mem_read_u8(data + bi));
+                            remaining = remaining - 1;
+                        }
+                        bi = bi + 1;
+                    }
+                }
+                s = s + 1;
+            }
+            // Follow FAT chain
+            let fat_s = 4 + (cluster * 2) / 512;
+            let fat_o = (cluster * 2) % 512;
+            _ke_virtio_blk_read(fat_s);
+            cluster = _ke_mem_r16(data + fat_o);
+        }
+    }
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
+// === Iteration 44: run command — micro H-L interpreter ===
+//
+// "run hello.hl" → read .hl file from FAT16 → interpret → serial output
+//
+// Supported syntax:
+//   print("string literal");
+//   print(integer);
+//   let x = expr;   (x stored in variable table)
+//   print(x);       (variable lookup)
+//   Expressions: number, +, -, *, /
+//
+// File buffer: 0x930000 (4KB max)
+// Variable table: 0x931000 (32 entries × 24 bytes = name_hash(8) + value(8) + type(8))
+
+// Find a file in FAT16, load into buffer at 0x930000, return file size (0=fail)
+fn _ke_load_file(fname_addr, fname_len) {
+    let data = 9576704;
+    let fbuf = 9633792;    // 0x930000
+    let name83 = _ke_parse_83name(fname_addr, fname_len);
+
+    // Search root directory
+    let mut found_cluster = 0;
+    let mut found_size = 0;
+    let mut sect = 132;
+    while sect < 164 {
+        if found_cluster == 0 {
+            _ke_virtio_blk_read(sect);
+            let mut de = 0;
+            while de < 16 {
+                if found_cluster == 0 {
+                    let off = data + de * 32;
+                    let b0 = mem_read_u8(off);
+                    if b0 != 0 { if b0 != 229 {
+                        let attr = mem_read_u8(off + 11);
+                        if attr != 15 { if (attr / 8) % 2 == 0 {
+                            let mut match_ok = 1;
+                            let mut ci = 0;
+                            while ci < 11 {
+                                if mem_read_u8(off + ci) != mem_read_u8(name83 + ci) {
+                                    match_ok = 0; ci = 11;
+                                }
+                                ci = ci + 1;
+                            }
+                            if match_ok == 1 {
+                                found_cluster = _ke_mem_r16(off + 26);
+                                found_size = mem_read_u32(off + 28);
+                            }
+                        } }
+                    } }
+                }
+                de = de + 1;
+            }
+        }
+        sect = sect + 1;
+    }
+
+    if found_cluster == 0 { return 0; }
+    if found_size > 4096 { found_size = 4096; }
+
+    // Load file content sector by sector
+    let csect = 164 + (found_cluster - 2) * 4;
+    let mut loaded = 0;
+    let mut s = 0;
+    while s < 4 {
+        if loaded < found_size {
+            _ke_virtio_blk_read(csect + s);
+            let mut bi = 0;
+            while bi < 512 {
+                if loaded < found_size {
+                    mem_write_u8(fbuf + loaded, mem_read_u8(data + bi));
+                    loaded = loaded + 1;
+                }
+                bi = bi + 1;
+            }
+        }
+        s = s + 1;
+    }
+    return found_size;
+}
+
+// Simple hash for variable name (up to 8 bytes)
+fn _ke_var_hash(fbuf, start, length) {
+    let mut h = 0;
+    let mut i = 0;
+    while i < length {
+        if i < 8 {
+            let ch = mem_read_u8(fbuf + start + i);
+            h = h * 31 + ch;
+        }
+        i = i + 1;
+    }
+    return h;
+}
+
+// Store variable: table at 0x931000, 32 entries × 16 bytes [hash(8), value(8)]
+fn _ke_var_set(hash, value) {
+    let tbl = 9637888;  // 0x931000
+    let mut i = 0;
+    // Find existing or first empty slot
+    while i < 32 {
+        let eh = mem_read_u64(tbl + i * 16);
+        if eh == hash {
+            mem_write_u64(tbl + i * 16 + 8, value);
+            return 0;
+        }
+        if eh == 0 {
+            mem_write_u64(tbl + i * 16, hash);
+            mem_write_u64(tbl + i * 16 + 8, value);
+            return 0;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Lookup variable, return value (0 if not found)
+fn _ke_var_get(hash) {
+    let tbl = 9637888;
+    let mut i = 0;
+    while i < 32 {
+        if mem_read_u64(tbl + i * 16) == hash {
+            return mem_read_u64(tbl + i * 16 + 8);
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Skip whitespace, return new position
+fn _ke_skip_ws(fbuf, pos, limit) {
+    while pos < limit {
+        let ch = mem_read_u8(fbuf + pos);
+        if ch == 32 { pos = pos + 1; }
+        else if ch == 9 { pos = pos + 1; }
+        else if ch == 13 { pos = pos + 1; }
+        else if ch == 10 { pos = pos + 1; }
+        else { return pos; }
+    }
+    return pos;
+}
+
+// Parse a number at position, return [value, new_pos]
+// Result stored in memory at 0x931200
+fn _ke_parse_num(fbuf, pos, limit) {
+    let mut val = 0;
+    let mut found = 0;
+    while pos < limit {
+        let ch = mem_read_u8(fbuf + pos);
+        if ch >= 48 { if ch <= 57 {
+            val = val * 10 + ch - 48;
+            found = 1;
+            pos = pos + 1;
+        } else { pos = limit + 1; } }
+        else { pos = limit + 1; }
+    }
+    // Store result at 0x931200
+    mem_write_u64(9638400, val);
+    mem_write_u64(9638408, pos);
+    return found;
+}
+
+// Parse simple expression: number, variable, or number OP number
+// Returns value, stores consumed position at 0x931210
+fn _ke_eval_expr(fbuf, pos, limit) {
+    pos = _ke_skip_ws(fbuf, pos, limit);
+    let ch = mem_read_u8(fbuf + pos);
+    let mut val = 0;
+
+    // Number literal
+    if ch >= 48 { if ch <= 57 {
+        while pos < limit {
+            let d = mem_read_u8(fbuf + pos);
+            if d >= 48 { if d <= 57 { val = val * 10 + d - 48; pos = pos + 1; }
+            else { pos = limit + 1; } }
+            else { pos = limit + 1; }
+        }
+        if pos > limit { pos = pos - limit - 1 + limit; }
+    } }
+    // Variable name (identifier)
+    else if ch >= 97 { if ch <= 122 {
+        let var_start = pos;
+        while pos < limit {
+            let d = mem_read_u8(fbuf + pos);
+            if d >= 97 { if d <= 122 { pos = pos + 1; } else { pos = limit + 1; } }
+            else if d >= 48 { if d <= 57 { pos = pos + 1; } else { pos = limit + 1; } }
+            else if d == 95 { pos = pos + 1; }
+            else { pos = limit + 1; }
+        }
+        if pos > limit { pos = pos - limit - 1 + limit; }
+        let vh = _ke_var_hash(fbuf, var_start, pos - var_start);
+        val = _ke_var_get(vh);
+    } }
+
+    // Check for binary operator
+    pos = _ke_skip_ws(fbuf, pos, limit);
+    if pos < limit {
+        let op = mem_read_u8(fbuf + pos);
+        if op == 43 { // '+'
+            pos = pos + 1;
+            let rhs = _ke_eval_expr(fbuf, pos, limit);
+            let rpos = mem_read_u64(9638416);
+            mem_write_u64(9638416, rpos);
+            val = val + rhs;
+            pos = rpos;
+        }
+        if op == 45 { // '-'
+            pos = pos + 1;
+            let rhs = _ke_eval_expr(fbuf, pos, limit);
+            let rpos = mem_read_u64(9638416);
+            val = val - rhs;
+            pos = rpos;
+        }
+        if op == 42 { // '*'
+            pos = pos + 1;
+            let rhs = _ke_eval_expr(fbuf, pos, limit);
+            let rpos = mem_read_u64(9638416);
+            val = val * rhs;
+            pos = rpos;
+        }
+    }
+
+    mem_write_u64(9638416, pos);  // 0x931210: consumed position
+    return val;
+}
+
+// Command: run — execute a .hl file from FAT16
+fn _ke_cmd_run(buf_addr, buf_len) {
+    let bar = mem_read_u32(3211360);
+    if bar == 0 {
+        _ke_putc(66); _ke_putc(76); _ke_putc(75); _ke_putc(58); _ke_putc(32);
+        _ke_putc(110); _ke_putc(111); _ke_putc(110); _ke_putc(101);
+        _ke_putc(13); _ke_putc(10);
+        return 0;
+    }
+
+    if buf_len < 5 {
+        _ke_putc(63); _ke_putc(13); _ke_putc(10); return 0;
+    }
+
+    let fbuf = 9633792;  // 0x930000
+    let fsize = _ke_load_file(buf_addr + 4, buf_len - 4);
+    if fsize == 0 {
+        // "Not found\r\n"
+        _ke_putc(78); _ke_putc(111); _ke_putc(116); _ke_putc(32);
+        _ke_putc(102); _ke_putc(111); _ke_putc(117); _ke_putc(110); _ke_putc(100);
+        _ke_putc(13); _ke_putc(10);
+        return 0;
+    }
+
+    // Clear variable table
+    let tbl = 9637888;
+    let mut vi = 0;
+    while vi < 512 { mem_write_u8(tbl + vi, 0); vi = vi + 1; }
+
+    // Interpret statements
+    let mut pos = 0;
+    while pos < fsize {
+        pos = _ke_skip_ws(fbuf, pos, fsize);
+        if pos >= fsize { pos = fsize; }
+        else {
+            let b0 = mem_read_u8(fbuf + pos);
+
+            // "print(" = 112 114 105 110 116 40
+            if b0 == 112 {
+                if pos + 6 < fsize {
+                    let mut is_print = 1;
+                    if mem_read_u8(fbuf + pos + 1) != 114 { is_print = 0; }
+                    if mem_read_u8(fbuf + pos + 2) != 105 { is_print = 0; }
+                    if mem_read_u8(fbuf + pos + 3) != 110 { is_print = 0; }
+                    if mem_read_u8(fbuf + pos + 4) != 116 { is_print = 0; }
+                    if mem_read_u8(fbuf + pos + 5) != 40  { is_print = 0; }
+
+                    if is_print == 1 {
+                        pos = pos + 6;
+                        let next = mem_read_u8(fbuf + pos);
+                        // print("string")
+                        if next == 34 {
+                            pos = pos + 1;
+                            let mut done = 0;
+                            while pos < fsize {
+                                if done == 0 {
+                                    let ch = mem_read_u8(fbuf + pos);
+                                    if ch == 34 { done = 1; }
+                                    else { _ke_putc(ch); }
+                                }
+                                pos = pos + 1;
+                            }
+                            _ke_putc(13); _ke_putc(10);
+                        } else {
+                            // print(expr) — number or variable
+                            // Find closing ')'
+                            let mut end = pos;
+                            while end < fsize {
+                                if mem_read_u8(fbuf + end) == 41 { end = fsize + 1; }
+                                else { end = end + 1; }
+                            }
+                            if end > fsize { end = end - fsize - 1 + fsize; }
+                            let val = _ke_eval_expr(fbuf, pos, end);
+                            _ke_put_dec(val);
+                            _ke_putc(13); _ke_putc(10);
+                            pos = end + 1;
+                        }
+                        // Skip to next ';' or newline
+                        while pos < fsize {
+                            let sk = mem_read_u8(fbuf + pos);
+                            if sk == 59 { pos = pos + 1; pos = fsize + 1; }
+                            else if sk == 10 { pos = fsize + 1; }
+                            else { pos = pos + 1; }
+                        }
+                        if pos > fsize { pos = pos - fsize - 1 + fsize; }
+                    } else { pos = pos + 1; }
+                } else { pos = pos + 1; }
+            }
+            // "let " = 108 101 116 32
+            else if b0 == 108 {
+                if pos + 4 < fsize {
+                    let mut is_let = 1;
+                    if mem_read_u8(fbuf + pos + 1) != 101 { is_let = 0; }
+                    if mem_read_u8(fbuf + pos + 2) != 116 { is_let = 0; }
+                    if mem_read_u8(fbuf + pos + 3) != 32  { is_let = 0; }
+
+                    if is_let == 1 {
+                        pos = pos + 4;
+                        // Skip optional "mut "
+                        if pos + 4 < fsize {
+                            if mem_read_u8(fbuf + pos) == 109 {
+                                if mem_read_u8(fbuf + pos + 1) == 117 {
+                                    if mem_read_u8(fbuf + pos + 2) == 116 {
+                                        if mem_read_u8(fbuf + pos + 3) == 32 {
+                                            pos = pos + 4;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // Parse variable name
+                        let vname_start = pos;
+                        while pos < fsize {
+                            let d = mem_read_u8(fbuf + pos);
+                            if d >= 97 { if d <= 122 { pos = pos + 1; } else { pos = fsize + 1; } }
+                            else if d >= 48 { if d <= 57 { pos = pos + 1; } else { pos = fsize + 1; } }
+                            else if d == 95 { pos = pos + 1; }
+                            else { pos = fsize + 1; }
+                        }
+                        if pos > fsize { pos = pos - fsize - 1 + fsize; }
+                        let vname_len = pos - vname_start;
+                        let vh = _ke_var_hash(fbuf, vname_start, vname_len);
+
+                        // Skip " = "
+                        pos = _ke_skip_ws(fbuf, pos, fsize);
+                        if pos < fsize {
+                            if mem_read_u8(fbuf + pos) == 61 { pos = pos + 1; }
+                        }
+
+                        // Find ';' to delimit expression
+                        let mut expr_end = pos;
+                        while expr_end < fsize {
+                            if mem_read_u8(fbuf + expr_end) == 59 { expr_end = fsize + 1; }
+                            else if mem_read_u8(fbuf + expr_end) == 10 { expr_end = fsize + 1; }
+                            else { expr_end = expr_end + 1; }
+                        }
+                        if expr_end > fsize { expr_end = expr_end - fsize - 1 + fsize; }
+
+                        let val = _ke_eval_expr(fbuf, pos, expr_end);
+                        _ke_var_set(vh, val);
+                        pos = expr_end + 1;
+                    } else { pos = pos + 1; }
+                } else { pos = pos + 1; }
+            }
+            // "//" comment — skip to end of line
+            else if b0 == 47 {
+                if pos + 1 < fsize {
+                    if mem_read_u8(fbuf + pos + 1) == 47 {
+                        while pos < fsize {
+                            if mem_read_u8(fbuf + pos) == 10 { pos = fsize + 1; }
+                            else { pos = pos + 1; }
+                        }
+                        if pos > fsize { pos = pos - fsize - 1 + fsize; }
+                    } else { pos = pos + 1; }
+                } else { pos = pos + 1; }
+            }
+            else { pos = pos + 1; }
+        }
+    }
+
+    // "Run OK\r\n"
+    _ke_putc(82); _ke_putc(117); _ke_putc(110);
+    _ke_putc(32); _ke_putc(79); _ke_putc(75);
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
+// === Iteration 45: HicOS Installer ===
+//
+// "install" — 7-step disk installer:
+//   [1] Detect disk    [2] Create MBR partition table
+//   [3] Format FAT16   [4] Write HICOS.SYS marker
+//   [5] Write BOOT.CFG [6] Verify MBR   [7] Done
+
+// Print "[N/7] " step prefix
+fn _ke_install_step(n) {
+    _ke_putc(91);  // '['
+    _ke_putc(48 + n); // digit
+    _ke_putc(47);  // '/'
+    _ke_putc(55);  // '7'
+    _ke_putc(93);  // ']'
+    _ke_putc(32);  // ' '
+    return 0;
+}
+
+// Command: install — install HicOS to VirtIO-blk disk
+fn _ke_cmd_install() {
+    let bar = mem_read_u32(3211360);
+    if bar == 0 {
+        _ke_putc(66); _ke_putc(76); _ke_putc(75); _ke_putc(58); _ke_putc(32);
+        _ke_putc(110); _ke_putc(111); _ke_putc(110); _ke_putc(101);
+        _ke_putc(13); _ke_putc(10);
+        return 0;
+    }
+
+    let data = 9576704;
+
+    // Banner "=== HicOS Installer v5.0 ===\r\n"
+    _ke_putc(61); _ke_putc(61); _ke_putc(61); _ke_putc(32);
+    // "HicOS Installer v5.0"
+    _ke_putc(72); _ke_putc(105); _ke_putc(99); _ke_putc(79); _ke_putc(83);
+    _ke_putc(32);
+    _ke_putc(73); _ke_putc(110); _ke_putc(115); _ke_putc(116);
+    _ke_putc(97); _ke_putc(108); _ke_putc(108); _ke_putc(101); _ke_putc(114);
+    _ke_putc(32); _ke_putc(118); _ke_putc(53); _ke_putc(46); _ke_putc(48);
+    _ke_putc(32); _ke_putc(61); _ke_putc(61); _ke_putc(61);
+    _ke_putc(13); _ke_putc(10);
+
+    // [1/7] Detect disk
+    _ke_install_step(1);
+    // "Disk: "
+    _ke_putc(68); _ke_putc(105); _ke_putc(115); _ke_putc(107);
+    _ke_putc(58); _ke_putc(32);
+    let cap = port_in_u32(bar + 20);
+    _ke_put_dec(cap);
+    // " sect ("
+    _ke_putc(32); _ke_putc(115); _ke_putc(101); _ke_putc(99); _ke_putc(116);
+    _ke_putc(32); _ke_putc(40);
+    _ke_put_dec(cap / 2048);
+    // " MB)\r\n"
+    _ke_putc(32); _ke_putc(77); _ke_putc(66); _ke_putc(41);
+    _ke_putc(13); _ke_putc(10);
+
+    // [2/7] Create MBR partition table
+    _ke_install_step(2);
+    // "MBR partition\r\n"
+    _ke_putc(77); _ke_putc(66); _ke_putc(82); _ke_putc(32);
+    _ke_putc(112); _ke_putc(97); _ke_putc(114); _ke_putc(116);
+    _ke_putc(105); _ke_putc(116); _ke_putc(105); _ke_putc(111); _ke_putc(110);
+    _ke_putc(13); _ke_putc(10);
+    // Read current sector 0 (will be overwritten by format, but write partition first)
+    _ke_blk_zero_buf();
+    // Partition entry 1 at offset 446 (16 bytes)
+    mem_write_u8(data + 446, 128);   // 0x80 = bootable
+    mem_write_u8(data + 446 + 1, 0); // CHS start head
+    mem_write_u8(data + 446 + 2, 2); // CHS start sector
+    mem_write_u8(data + 446 + 3, 0); // CHS start cylinder
+    mem_write_u8(data + 446 + 4, 6); // Type: 0x06 FAT16 LBA
+    mem_write_u8(data + 446 + 5, 254); // CHS end
+    mem_write_u8(data + 446 + 6, 255);
+    mem_write_u8(data + 446 + 7, 255);
+    _ke_mem_w32(data + 446 + 8, 1);        // LBA start = 1
+    _ke_mem_w32(data + 446 + 12, cap - 1); // LBA sectors
+    mem_write_u8(data + 510, 85);   // 0x55
+    mem_write_u8(data + 511, 170);  // 0xAA
+    _ke_virtio_blk_write(0);
+
+    // [3/7] Format FAT16
+    _ke_install_step(3);
+    // "FAT16 format\r\n"
+    _ke_putc(70); _ke_putc(65); _ke_putc(84); _ke_putc(49); _ke_putc(54);
+    _ke_putc(32); _ke_putc(102); _ke_putc(111); _ke_putc(114); _ke_putc(109);
+    _ke_putc(97); _ke_putc(116);
+    _ke_putc(13); _ke_putc(10);
+    _ke_cmd_format();
+
+    // [4/7] Write HICOS.SYS — after format, cluster 2 is free
+    _ke_install_step(4);
+    // "HICOS.SYS\r\n"
+    _ke_putc(72); _ke_putc(73); _ke_putc(67); _ke_putc(79); _ke_putc(83);
+    _ke_putc(46); _ke_putc(83); _ke_putc(89); _ke_putc(83);
+    _ke_putc(13); _ke_putc(10);
+    // Content: "HicOS v5.0 kernel\n" (18 bytes)
+    _ke_blk_zero_buf();
+    mem_write_u8(data, 72); mem_write_u8(data+1, 105);
+    mem_write_u8(data+2, 99); mem_write_u8(data+3, 79);
+    mem_write_u8(data+4, 83); mem_write_u8(data+5, 32);
+    mem_write_u8(data+6, 118); mem_write_u8(data+7, 53);
+    mem_write_u8(data+8, 46); mem_write_u8(data+9, 48);
+    mem_write_u8(data+10, 32);
+    mem_write_u8(data+11, 107); mem_write_u8(data+12, 101);
+    mem_write_u8(data+13, 114); mem_write_u8(data+14, 110);
+    mem_write_u8(data+15, 101); mem_write_u8(data+16, 108);
+    mem_write_u8(data+17, 10);
+    _ke_virtio_blk_write(164);  // cluster 2 → sector 164
+
+    // Update FAT: cluster 2 = 0xFFFF (end of chain)
+    _ke_virtio_blk_read(4);
+    _ke_mem_w16(data + 4, 65535);   // FAT entry 2 at byte offset 4
+    _ke_virtio_blk_write(4);        // FAT1
+    _ke_virtio_blk_write(68);       // FAT2
+
+    // Create directory entry at root dir sector 132
+    _ke_virtio_blk_read(132);
+    let off = data;
+    // "HICOS   SYS" (8.3 format)
+    mem_write_u8(off, 72); mem_write_u8(off+1, 73);
+    mem_write_u8(off+2, 67); mem_write_u8(off+3, 79);
+    mem_write_u8(off+4, 83); mem_write_u8(off+5, 32);
+    mem_write_u8(off+6, 32); mem_write_u8(off+7, 32);
+    mem_write_u8(off+8, 83); mem_write_u8(off+9, 89);
+    mem_write_u8(off+10, 83);
+    mem_write_u8(off+11, 32);  // attr = 0x20 archive
+    let mut i = 12;
+    while i < 26 { mem_write_u8(off + i, 0); i = i + 1; }
+    _ke_mem_w16(off + 26, 2);   // first cluster = 2
+    _ke_mem_w32(off + 28, 18);  // file size = 18 bytes
+    _ke_virtio_blk_write(132);
+
+    // [5/7] Write BOOT.CFG — cluster 3, dir entry 1
+    _ke_install_step(5);
+    // "BOOT.CFG\r\n"
+    _ke_putc(66); _ke_putc(79); _ke_putc(79); _ke_putc(84);
+    _ke_putc(46); _ke_putc(67); _ke_putc(70); _ke_putc(71);
+    _ke_putc(13); _ke_putc(10);
+    // Content: "boot=hicos\nmode=text\n" (21 bytes)
+    _ke_blk_zero_buf();
+    // "boot=hicos\n"
+    mem_write_u8(data, 98); mem_write_u8(data+1, 111);
+    mem_write_u8(data+2, 111); mem_write_u8(data+3, 116);
+    mem_write_u8(data+4, 61);  // '='
+    mem_write_u8(data+5, 104); mem_write_u8(data+6, 105);
+    mem_write_u8(data+7, 99); mem_write_u8(data+8, 111);
+    mem_write_u8(data+9, 115); mem_write_u8(data+10, 10);
+    // "mode=text\n"
+    mem_write_u8(data+11, 109); mem_write_u8(data+12, 111);
+    mem_write_u8(data+13, 100); mem_write_u8(data+14, 101);
+    mem_write_u8(data+15, 61);
+    mem_write_u8(data+16, 116); mem_write_u8(data+17, 101);
+    mem_write_u8(data+18, 120); mem_write_u8(data+19, 116);
+    mem_write_u8(data+20, 10);
+    _ke_virtio_blk_write(168);  // cluster 3 → sector 168
+
+    // FAT: cluster 3 = 0xFFFF
+    _ke_virtio_blk_read(4);
+    _ke_mem_w16(data + 6, 65535);   // FAT entry 3 at byte offset 6
+    _ke_virtio_blk_write(4);
+    _ke_virtio_blk_write(68);
+
+    // Dir entry 1 for BOOT.CFG
+    _ke_virtio_blk_read(132);
+    let off2 = data + 32;  // second entry
+    // "BOOT    CFG"
+    mem_write_u8(off2, 66); mem_write_u8(off2+1, 79);
+    mem_write_u8(off2+2, 79); mem_write_u8(off2+3, 84);
+    mem_write_u8(off2+4, 32); mem_write_u8(off2+5, 32);
+    mem_write_u8(off2+6, 32); mem_write_u8(off2+7, 32);
+    mem_write_u8(off2+8, 67); mem_write_u8(off2+9, 70);
+    mem_write_u8(off2+10, 71);
+    mem_write_u8(off2+11, 32); // attr = 0x20
+    i = 12;
+    while i < 26 { mem_write_u8(off2 + i, 0); i = i + 1; }
+    _ke_mem_w16(off2 + 26, 3);   // cluster 3
+    _ke_mem_w32(off2 + 28, 21);  // size 21
+    _ke_virtio_blk_write(132);
+
+    // [6/7] Verify MBR
+    _ke_install_step(6);
+    _ke_virtio_blk_read(0);
+    let s510 = mem_read_u8(data + 510);
+    let s511 = mem_read_u8(data + 511);
+    if s510 == 85 {
+        if s511 == 170 {
+            // "MBR 55AA OK\r\n"
+            _ke_putc(77); _ke_putc(66); _ke_putc(82); _ke_putc(32);
+            _ke_putc(53); _ke_putc(53); _ke_putc(65); _ke_putc(65);
+            _ke_putc(32); _ke_putc(79); _ke_putc(75);
+            _ke_putc(13); _ke_putc(10);
+        }
+    }
+
+    // [7/7] Done
+    _ke_install_step(7);
+    // "Done!\r\n"
+    _ke_putc(68); _ke_putc(111); _ke_putc(110); _ke_putc(101); _ke_putc(33);
+    _ke_putc(13); _ke_putc(10);
+    // "=== Installation Complete! ===\r\n"
+    _ke_putc(61); _ke_putc(61); _ke_putc(61); _ke_putc(32);
+    _ke_putc(73); _ke_putc(110); _ke_putc(115); _ke_putc(116);
+    _ke_putc(97); _ke_putc(108); _ke_putc(108); _ke_putc(32);
+    _ke_putc(79); _ke_putc(75); _ke_putc(33);
+    _ke_putc(32); _ke_putc(61); _ke_putc(61); _ke_putc(61);
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
 // === Iteration 25: Scancode → ASCII + Interactive Shell ===
 
 // PS/2 set 1 scancode to ASCII (lowercase, common keys only)
@@ -2321,11 +3904,43 @@ fn _ke_cmd_help() {
     _ke_putc(32);
     // "acpi"
     _ke_putc(97); _ke_putc(99); _ke_putc(112); _ke_putc(105);
+    _ke_putc(32);
+    // "beep"
+    _ke_putc(98); _ke_putc(101); _ke_putc(101); _ke_putc(112);
+    _ke_putc(32);
+    // "time"
+    _ke_putc(116); _ke_putc(105); _ke_putc(109); _ke_putc(101);
+    _ke_putc(32);
+    // "disk"
+    _ke_putc(100); _ke_putc(105); _ke_putc(115); _ke_putc(107);
     _ke_putc(13); _ke_putc(10);
-    // "      wget reboot\r\n"
+    // "format ls wget uptime shutdown reboot\r\n"
     _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32);
+    // "format "
+    _ke_putc(102); _ke_putc(111); _ke_putc(114); _ke_putc(109);
+    _ke_putc(97); _ke_putc(116); _ke_putc(32);
+    // "ls "
+    _ke_putc(108); _ke_putc(115); _ke_putc(32);
+    // "mkfile "
+    _ke_putc(109); _ke_putc(107); _ke_putc(102); _ke_putc(105);
+    _ke_putc(108); _ke_putc(101); _ke_putc(32);
+    // "cat "
+    _ke_putc(99); _ke_putc(97); _ke_putc(116); _ke_putc(32);
+    // "run "
+    _ke_putc(114); _ke_putc(117); _ke_putc(110); _ke_putc(32);
     // "wget "
     _ke_putc(119); _ke_putc(103); _ke_putc(101); _ke_putc(116); _ke_putc(32);
+    _ke_putc(13); _ke_putc(10);
+    _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32);
+    // "uptime "
+    _ke_putc(117); _ke_putc(112); _ke_putc(116); _ke_putc(105);
+    _ke_putc(109); _ke_putc(101); _ke_putc(32);
+    // "shutdown "
+    _ke_putc(115); _ke_putc(104); _ke_putc(117); _ke_putc(116);
+    _ke_putc(100); _ke_putc(111); _ke_putc(119); _ke_putc(110); _ke_putc(32);
+    // "install "
+    _ke_putc(105); _ke_putc(110); _ke_putc(115); _ke_putc(116);
+    _ke_putc(97); _ke_putc(108); _ke_putc(108); _ke_putc(32);
     // "reboot\r\n"
     _ke_putc(114); _ke_putc(101); _ke_putc(98); _ke_putc(111); _ke_putc(111); _ke_putc(116);
     _ke_putc(13); _ke_putc(10);
@@ -2353,6 +3968,48 @@ fn _ke_dispatch(buf_addr, buf_len) {
     let c4 = 0; if buf_len > 4 { c4 = mem_read_u8(buf_addr + 4); }
     let c5 = 0; if buf_len > 5 { c5 = mem_read_u8(buf_addr + 5); }
     let c6 = 0; if buf_len > 6 { c6 = mem_read_u8(buf_addr + 6); }
+    let c7 = 0; if buf_len > 7 { c7 = mem_read_u8(buf_addr + 7); }
+
+    // "shutdown" (8): 115 104 117 116 100 111 119 110
+    if buf_len == 8 {
+        if c0 == 115 { if c1 == 104 { if c2 == 117 { if c3 == 116 {
+            if c4 == 100 { if c5 == 111 { if c6 == 119 { if c7 == 110 {
+                _ke_cmd_shutdown(); return 0;
+            } } } }
+        } } } }
+    }
+
+    // "install" (7): 105 110 115 116 97 108 108
+    if buf_len == 7 {
+        if c0 == 105 { if c1 == 110 { if c2 == 115 { if c3 == 116 {
+            if c4 == 97 { if c5 == 108 { if c6 == 108 {
+                _ke_cmd_install(); return 0;
+            } } }
+        } } } }
+    }
+
+    // "mkfile " prefix (7+): 109 107 102 105 108 101 32
+    if buf_len >= 8 {
+        if c0 == 109 { if c1 == 107 { if c2 == 102 { if c3 == 105 { if c4 == 108 { if c5 == 101 {
+            if c6 == 32 {
+                _ke_cmd_mkfile(buf_addr, buf_len); return 0;
+            }
+        } } } } } }
+    }
+
+    // "cat " prefix (4+): 99 97 116 32
+    if buf_len >= 5 {
+        if c0 == 99 { if c1 == 97 { if c2 == 116 { if c3 == 32 {
+            _ke_cmd_cat(buf_addr, buf_len); return 0;
+        } } } }
+    }
+
+    // "run " prefix (4+): 114 117 110 32
+    if buf_len >= 5 {
+        if c0 == 114 { if c1 == 117 { if c2 == 110 { if c3 == 32 {
+            _ke_cmd_run(buf_addr, buf_len); return 0;
+        } } } }
+    }
 
     // "help" = 104 101 108 112
     if buf_len == 4 {
@@ -2379,6 +4036,18 @@ fn _ke_dispatch(buf_addr, buf_len) {
         if c0 == 97 { if c1 == 99 { if c2 == 112 { if c3 == 105 {
             _ke_cmd_acpi(); return 0;
         } } } }
+        // "beep" = 98 101 101 112
+        if c0 == 98 { if c1 == 101 { if c2 == 101 { if c3 == 112 {
+            _ke_cmd_beep(); return 0;
+        } } } }
+        // "time" = 116 105 109 101
+        if c0 == 116 { if c1 == 105 { if c2 == 109 { if c3 == 101 {
+            _ke_cmd_time(); return 0;
+        } } } }
+        // "disk" = 100 105 115 107
+        if c0 == 100 { if c1 == 105 { if c2 == 115 { if c3 == 107 {
+            _ke_cmd_disk(); return 0;
+        } } } }
     }
 
     // "pci" = 112 99 105
@@ -2404,6 +4073,10 @@ fn _ke_dispatch(buf_addr, buf_len) {
         // "wm" = 119 109
         if c0 == 119 { if c1 == 109 {
             _ke_cmd_wm(); return 0;
+        } }
+        // "ls" = 108 115
+        if c0 == 108 { if c1 == 115 {
+            _ke_cmd_ls(); return 0;
         } }
     }
 
@@ -2465,6 +4138,14 @@ fn _ke_dispatch(buf_addr, buf_len) {
                 if sz == 0 { sz = 64; }
             }
             _ke_cmd_malloc(sz); return 0;
+        } } } } } }
+        // "uptime" (6): 117 112 116 105 109 101
+        if c0 == 117 { if c1 == 112 { if c2 == 116 { if c3 == 105 { if c4 == 109 { if c5 == 101 {
+            _ke_cmd_uptime(); return 0;
+        } } } } } }
+        // "format" (6): 102 111 114 109 97 116
+        if c0 == 102 { if c1 == 111 { if c2 == 114 { if c3 == 109 { if c4 == 97 { if c5 == 116 {
+            _ke_cmd_format(); return 0;
         } } } } } }
     }
 
@@ -2575,7 +4256,15 @@ fn _start() {
         _ke_virtio_init(vbar);
     }
 
-    // Phase 7c: Font init (iteration 32)
+    // Phase 7c: VirtIO-blk init (iteration 41)
+    let vblk_dev = _ke_virtio_blk_find();
+    if vblk_dev != 255 {
+        let bbar = _ke_pci_bar0(0, vblk_dev, 0);
+        let bbar_io = (bbar / 4) * 4;
+        _ke_virtio_blk_init(bbar_io);
+    }
+
+    // Phase 7d: Font init (iteration 32)
     _ke_font_init();
 
     // Phase 8: Interactive shell (iteration 25)

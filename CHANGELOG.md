@@ -8,9 +8,90 @@
 
 ## v5.0 (Current)
 
-164 active .hl files, 114 kernel modules, 55 shell commands (Layer C), 18 QEMU-verified commands, 0 external deps.
+164 active .hl files, 114 kernel modules, 55 shell commands (Layer C), 30 kernel.bin commands, 0 external deps.
 Dual-boot: BIOS 42/42 PASS + UEFI 3/3 PASS. Full gate 7/7 PASS.
-Image: 151,040 bytes (295 sectors). Code: ~38,700 lines (31,800 H-L + 6,993 PS1).
+Image: 152,064 bytes (297 sectors). Code: ~40,400 lines (33,500 H-L + 6,993 PS1).
+
+### Iteration 45: HicOS Installer in kernel.bin
+- **7-step installer**: `_ke_cmd_install()` — interactive disk installation workflow
+  - [1/7] Detect disk: read VirtIO-blk capacity from BAR+0x14
+  - [2/7] MBR partition table: type=0x06 FAT16 LBA, bootable flag, 0x55AA signature
+  - [3/7] FAT16 format: reuse `_ke_cmd_format()` (BPB + dual FAT + root dir)
+  - [4/7] HICOS.SYS: system marker file at cluster 2 ("HicOS v5.0 kernel")
+  - [5/7] BOOT.CFG: boot config at cluster 3 ("boot=hicos\nmode=text")
+  - [6/7] Verify: read sector 0, check MBR 0x55AA
+  - [7/7] Completion banner
+- **Helper**: `_ke_install_step(n)` — print "[N/7] " prefix
+- `install` shell command (7 chars exact match dispatch)
+- 🏆 **安装器端到端**: install → MBR+FAT16+文件 → 验证 → 完成
+
+### Iteration 44: Micro H-L Interpreter + run command
+- **File loader**: `_ke_load_file(addr, len)` — FAT16 search + cluster read into 0x930000 buffer (4KB max)
+- **Variable system**: hash-based table at 0x931000 (32 entries), `_ke_var_set/get/hash()`
+- **Expression evaluator**: `_ke_eval_expr()` — integers + variables + operators (+, -, *)
+- **Statement interpreter**: `_ke_cmd_run()` — parse and execute:
+  - `print("string literal");` → serial output
+  - `print(expr);` → evaluate and print number
+  - `let [mut] x = expr;` → store variable
+  - `// comment` → skip to EOL
+- **Helpers**: `_ke_skip_ws()`, `_ke_parse_num()`
+- 8 new functions, `run` shell command with prefix dispatch
+- 🏆 **端到端流程**: `mkfile hello.hl print("Hello")` → `run hello.hl` → 输出 "Hello"
+
+### Iteration 43: FAT16 mkfile + cat in kernel.bin
+- **8.3 name parser**: `_ke_parse_83name(addr, len)` — filename to 8.3 uppercase + space-pad (shared helper)
+- **File create**: `_ke_cmd_mkfile(buf_addr, buf_len)` — parse "mkfile name.ext content"
+  - FAT cluster allocation (scan FAT1 for first 0x0000 entry)
+  - Content write to data cluster (164 + (cluster-2)*4)
+  - Dual FAT update (FAT1 + FAT2 = 0xFFFF end-of-chain)
+  - Root directory entry creation (8.3 name + attr 0x20 + cluster + size)
+- **File read**: `_ke_cmd_cat(buf_addr, buf_len)` — parse "cat name.ext"
+  - Root directory search (11-byte 8.3 name comparison)
+  - FAT chain traversal (cluster → sector → read → next cluster)
+  - Content output via serial (byte-by-byte up to file size)
+- `mkfile` + `cat` shell commands wired to prefix dispatch
+- 🏆 **FAT16 端到端闭环**: format → mkfile → ls → cat 全流程在 kernel.bin 实现
+
+### Iteration 42: FAT16 Format + ls in kernel.bin
+- **VirtIO-blk write**: `_ke_virtio_blk_write(sector)` — 3-descriptor chain (header→data→status), device-readable data
+- **FAT16 format**: `_ke_cmd_format()` — Write BPB + dual FAT + root directory (164 sectors total)
+  - BPB: 512B/sector, 4 sectors/cluster, 4 reserved, 2×64 FAT, 512 root entries
+  - Volume label "HicOS", FS type "FAT16   ", media 0xF8
+- **Directory list**: `_ke_cmd_ls()` — Read root directory sectors 132-163, parse 32-byte entries
+  - Skip deleted (0xE5), LFN (0x0F), volume label (attr bit 3)
+  - Print filename.ext + decimal size + file count
+- **Helpers**: `_ke_blk_zero_buf()`, `_ke_mem_r16()` (16-bit LE memory read)
+- 4 new functions, `format` + `ls` shell commands wired to dispatch
+
+### Iteration 41: VirtIO-blk Disk I/O + System Commands
+- **VirtIO-blk driver**: PCI detect (vendor 0x1AF4, device 0x1001) + queue init + sector read
+  - `_ke_virtio_blk_find/init/read()`: Full VirtIO legacy I/O driver
+  - Queue at 0x920000, avail 0x920800, used 0x921000, data buffer 0x922100
+  - 3-descriptor chain: header(16B) → data(512B) → status(1B)
+- **`disk` command**: Show capacity + read sector 0 + hex dump + MBR 55AA check
+- **`uptime` command**: Read tick counter → hours/minutes/seconds
+- **`shutdown` command**: ACPI RSDP→RSDT→FADT→PM1a S5 shutdown
+- Init added to `_start()` Phase 7c
+
+### Iteration 40: AC97 Beep + RTC Time in kernel.bin
+- **AC97 Audio (beep command)**:
+  - `_ke_ac97_find()`: PCI scan for Intel AC97 (vendor 0x8086, device 0x2415)
+  - `_ke_pci_write32/16()`: PCI config space write for bus mastering enable
+  - `_ke_mem_w16()`: 16-bit little-endian memory write helper
+  - `_ke_cmd_beep()`: Full AC97 init → 440Hz square wave generation → BDL → DMA playback
+    - Mixer reset + volume set (master 0, PCM 0x0808)
+    - 24000 samples at 48kHz, stereo, 16-bit signed
+  - `beep` shell command wired to dispatch
+- **RTC Time (time command)**:
+  - `_ke_rtc_read(reg)`: CMOS register read via ports 0x70/0x71
+  - `_ke_bcd2bin(bcd)`: BCD to binary conversion
+  - `_ke_put_dec2(val)`: 2-digit decimal with leading zero
+  - `_ke_cmd_time()`: Read CMOS RTC → BCD decode → "YYYY-MM-DD HH:MM:SS" output
+    - Wait for update-in-progress clear (Status Register A bit 7)
+  - `time` shell command wired to dispatch
+- **pci.hl self-test**: Fixed multi-line print for interpreter compatibility
+- 18 new functions, kernel.bin: 19,384 bytes (+238B), 1,097 functions, 20 shell commands
+- **Shell commands (20)**: help tick pci pmem palloc pfree malloc mfree ps mouse tcptest gfxtest wm smp ahci usb acpi beep time wget reboot
 
 ### Iterations 29-31: TCP + HTTP + Mouse in kernel.bin (A/C fusion)
 - **Iteration 29: TCP State Machine + VirtIO-net TX**

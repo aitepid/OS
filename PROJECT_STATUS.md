@@ -12,9 +12,9 @@
 |------|------|-----------|------|
 | **A: 镜像机器码** | `scripts/rebuild-image.ps1` → `hicos-hl.img` | ✅ 真正运行 | 引导+串口+PIC/PIT/IDT+PCI+VirtIO读写+VirtIO-net+**shell 18命令+FAT16+DHCP+Ping+DNS+VESA+Ring3**+任务交替 |
 | **B: H-L 编译器** | `hl-bootstrap.hl` build_kernel() | ⚠️ 可执行但产出较旧 | 串口+PIC+PIT+IDT+键盘 (不含 PCI/VirtIO) |
-| **C: 内核源码** | `bare-kernel/hl/` 114 模块 | ✅ kernel.bin 集成到镜像 | 编译产出 kernel.bin 19,146B, 1,079函数, 18条shell命令, 含PCI+VirtIO-net+TCP+内存+任务+鼠标+字体+WM+SMP+AHCI+USB |
+| **C: 内核源码** | `bare-kernel/hl/` 114 模块 | ✅ kernel.bin 集成到镜像 | 编译产出 kernel.bin 19,672B, 1,121函数, 30条shell命令, 含PCI+VirtIO-blk/net+TCP+FAT16+安装器+内存+任务+鼠标+字体+WM+SMP+AHCI+USB+ACPI+AC97+RTC+微型解释器 |
 
-**当前状态**: 层级 A 有 20+ 个功能已 QEMU 验证（含 shell 18 条命令）；层级 C 的 kernel.bin 已编译并集成到镜像，在 0x120000 运行 18 条独立 shell 命令（含 TCP/VirtIO-net/内存/任务/鼠标/字体/WM/SMP/AHCI/USB）。A/C 融合正在进行中。
+**当前状态**: 层级 A 有 20+ 个功能已 QEMU 验证（含 shell 18 条命令）；层级 C 的 kernel.bin 已编译并集成到镜像，在 0x120000 运行 25 条独立 shell 命令（含 VirtIO-blk磁盘读写+FAT16格式化与目录列表+TCP/VirtIO-net/内存/任务/鼠标/字体/WM/SMP/AHCI/USB/AC97音频/RTC时间）。A/C 融合正在进行中。
 
 ### 代码库统计
 
@@ -22,7 +22,7 @@
 |------|-----|
 | H-L 源文件 (活跃) | 175 个 `.hl` |
 | 内核模块 | 114 个 (`bare-kernel/hl/`) |
-| 内核函数定义 | 1,079 个 |
+| 内核函数定义 | 1,121 个 |
 | 用户空间模块 | 27 个 (`HicOS_*.hl`) — 全部原生，0 个桩 |
 | 基础设施/测试 | 34 个 (hl-bootstrap, stdlib, test-suite 等) |
 | 总代码行数 | ~38,700 行 (31,800 H-L + 6,993 PS1) |
@@ -30,7 +30,7 @@
 | BIOS 可引导镜像 | `hicos-hl.img` = 151,552 字节 (296扇区, MBR 0x55AA ✓) |
 | UEFI 可引导镜像 | `hicos-uefi.img` = 33 MB (GPT+CRC32, ESP FAT16) |
 | UEFI 应用程序 | `BOOTX64.EFI` = 1,536 字节 (PE32+ x86_64) |
-| kernel.bin (编译产出) | 19,146 字节, 1,063 符号, 1,079 函数, 18 shell 命令 |
+| kernel.bin (编译产出) | 19,672 字节, 1,105 符号, 1,121 函数, 30 shell 命令 |
 | QEMU BIOS 引导测试 | **42/42 PASS** (含 6 shell + 4 FAT16 + 6 net + 2 Ring3) |
 | QEMU UEFI 引导测试 | **3/3 PASS** |
 | Full Gate | **7/7 PASS** |
@@ -163,19 +163,22 @@ See: [ROADMAP.md](ROADMAP.md)
 ### 下一步
 **战略目标: 物理硬件适配** — SMP+AHCI+USB 已完成，继续 ACPI 和音频
 
-**当前 kernel.bin 状态**: 19,146B, 1,079 函数, 18 条 shell 命令
-  已有: serial+PIC/PIT/IDT+PCI+VirtIO-net+TCP+页分配+堆+任务+鼠标+字体+WM+SMP+AHCI+USB+shell
+**当前 kernel.bin 状态**: 19,672B, 1,121 函数, 30 条 shell 命令
+  已有: serial+PIC/PIT/IDT+PCI+VirtIO-blk+VirtIO-net+TCP+FAT16+安装器+页分配+堆+任务+鼠标+字体+WM+SMP+AHCI+USB+ACPI+AC97+RTC+微型解释器+shell
 
 **迭代 37**: ✅ **已完成** — ACPI 电源管理
-- 37.1 RSDP 搜索 (EBDA + 0xE0000-0xFFFFF)
-- 37.2 RSDT/XSDT 解析 + 表查找
-- 37.3 FADT 解析 (PM1a_CNT 端口)
-- 37.4 "acpi" 命令显示 ACPI 表 + shutdown
-- 验证: QEMU shutdown 通过 ACPI PM1a
-
-**迭代 38**: ✅ **已完成** — 音频 AC97/HDA 基础 (Implemented ac97 detection, init via PCI, mixer setup, and play logic)
-**迭代 39**: ✅ **已完成** — RTC 实时时钟 (Implemented CMOS RTC readout with Status Register check and BCD/Binary fallback decoding, added to date command and startup log)
-**迭代 40**: 🎯 **下一步** — VFS 抽象层增强
+**迭代 38**: ✅ **已完成** — AC97 音频
+**迭代 39**: ✅ **已完成** — RTC 实时时钟
+**迭代 40**: ✅ **已完成** — beep/time 命令接入 kernel.bin (20→22 命令)
+**迭代 41**: ✅ **已完成** — VirtIO-blk 驱动 + disk/uptime/shutdown (22→25 命令)
+**迭代 42**: ✅ **已完成** — FAT16 format + ls + VirtIO-blk write (25→27 命令)
+**迭代 43**: ✅ **已完成** — FAT16 mkfile + cat 文件创建与读取 (27→28 命令)
+  🏆 FAT16 端到端闭环: format → mkfile → ls → cat
+**迭代 44**: ✅ **已完成** — 微型 H-L 解释器 + run 命令 (28→29 命令)
+  🏆 程序执行闭环: mkfile hello.hl → run hello.hl → 串口输出
+**迭代 45**: ✅ **已完成** — HicOS 安装器 7步安装 (29→30 命令)
+  🏆 安装器端到端: install → MBR+FAT16+HICOS.SYS+BOOT.CFG → 验证
+**迭代 46**: 🎯 **下一步** — v6.0 发布整合 (测试扩展 + 文档更新 + README)
 
 详见: [PROJECT_ADVANCEMENT_PLAN.hl](PROJECT_ADVANCEMENT_PLAN.hl) | [COMPILER_PIPELINE_STRATEGY.hl](COMPILER_PIPELINE_STRATEGY.hl)
 

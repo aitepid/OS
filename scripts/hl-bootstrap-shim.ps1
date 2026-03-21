@@ -326,8 +326,8 @@ if ($target -eq 'interpret') {
                             '+' { if ($left -is [string] -or $right -is [string]) { return "$left$right" } else { return [long]$left + [long]$right } }
                             '-' { return [long]$left - [long]$right }
                             '*' { return [long]$left * [long]$right }
-                            '/' { if ([long]$right -eq 0) { return 0 } else { return [math]::Floor([long]$left / [long]$right) } }
-                            '%' { return [long]$left % [long]$right }
+                            '/' { if ([long]$right -eq 0) { throw "DIVZERO $left / $right in $e" } else { return [math]::Floor([long]$left / [long]$right) } }
+                            '%' { if ([long]$right -eq 0) { throw "MODZERO $left % $right in $e" } else { return [long]$left % [long]$right } }
                             '==' { if ($left -eq $right) { return 1 } else { return 0 } }
                             '!=' { if ($left -ne $right) { return 1 } else { return 0 } }
                             '>=' { if ([long]$left -ge [long]$right) { return 1 } else { return 0 } }
@@ -380,6 +380,7 @@ if ($target -eq 'interpret') {
                 $pParts = Split-Args $fargs
                 $arrRef = Eval-Expr ([string]$pParts[0]).Trim() $localVars
                 $pVal = Eval-Expr ([string]$pParts[1]).Trim() $localVars
+                if ($pVal -is [array] -and $pVal.Length -eq 1 -and $pVal[0] -is [System.Collections.IList]) { $pVal = $pVal[0] }
                 if ($arrRef -is [System.Collections.ArrayList]) { [void]$arrRef.Add($pVal) }
                 return $null
             }

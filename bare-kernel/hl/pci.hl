@@ -17,12 +17,12 @@
 //   0x10-0x24: BAR0-BAR5 (Base Address Registers)
 //   0x3C: interrupt_line (8) | interrupt_pin (8)
 
-let PCI_CONFIG_ADDR = 3320;  // 0xCF8
-let PCI_CONFIG_DATA = 3324;  // 0xCFC
+let PCI_CONFIG_ADDR = 3320;
+let PCI_CONFIG_DATA = 3324;
 
 // Read 32 bits from PCI config space
 fn pci_config_read32(bus, device, func, offset) {
-    let addr = 2147483648  // bit 31 = enable (0x80000000)
+    let addr = 2147483648
              + bus * 65536
              + device * 2048
              + func * 256
@@ -76,19 +76,19 @@ fn pci_device_id(bus, dev, func) {
 // Get class code
 fn pci_class(bus, dev, func) {
     let reg = pci_config_read32(bus, dev, func, 8);
-    return (reg / 16777216) % 256;  // byte 3 (bits 31:24)
+    return (reg / 16777216) % 256;
 }
 
 // Get subclass
 fn pci_subclass(bus, dev, func) {
     let reg = pci_config_read32(bus, dev, func, 8);
-    return (reg / 65536) % 256;  // byte 2 (bits 23:16)
+    return (reg / 65536) % 256;
 }
 
 // Get header type
 fn pci_header_type(bus, dev, func) {
     let reg = pci_config_read32(bus, dev, func, 12);
-    return (reg / 65536) % 256;  // byte 2
+    return (reg / 65536) % 256;
 }
 
 // Get BAR value
@@ -146,7 +146,7 @@ fn pci_scan() {
     let mut dev = 0;
     while dev < 32 {
         let vendor = pci_vendor_id(0, dev, 0);
-        if vendor != 65535 {  // 0xFFFF = no device
+        if vendor != 65535 {
             let did = pci_device_id(0, dev, 0);
             let cls = pci_class(0, dev, 0);
             let sub = pci_subclass(0, dev, 0);
@@ -177,3 +177,25 @@ fn pci_scan() {
 print("pci.hl loaded");
 print("PCI config ports: 0xCF8 / 0xCFC");
 print("Scanning bus 0, 32 device slots");
+
+let devs = pci_scan();
+let mut i = 0;
+let n = len(devs);
+print("Found " + to_string(n) + " devices on bus 0.");
+
+while i < n {
+    let d = devs[i];
+    let bus = d[0];
+    let dev = d[1];
+    let func = d[2];
+    let vid = d[3];
+    let did = d[4];
+    let cls = d[5];
+    let sub = d[6];
+
+    let name = pci_class_name(cls, sub);
+    let line = "PCI " + to_string(bus) + ":" + to_string(dev) + "." + to_string(func);
+    let detail = " - " + name + " (Vid: " + to_string(vid) + ", Did: " + to_string(did) + ")";
+    print(line + detail);
+    i = i + 1;
+}
