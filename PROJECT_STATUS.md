@@ -174,7 +174,9 @@ See: [ROADMAP.md](ROADMAP.md)
 - 验证: QEMU shutdown 通过 ACPI PM1a
 
 **迭代 38**: ✅ **已完成** — 音频 AC97/HDA 基础 (Implemented ac97 detection, init via PCI, mixer setup, and play logic)
-**迭代 39**: 🎯 **下一步** — RTC 实时时钟
+**迭代 39**: ✅ **已完成** — RTC 实时时钟 (Implemented CMOS RTC readout with Status Register check and BCD/Binary fallback decoding, added to date command and startup log)
+**迭代 40**: 🎯 **下一步** — VFS 抽象层增强
 
 详见: [PROJECT_ADVANCEMENT_PLAN.hl](PROJECT_ADVANCEMENT_PLAN.hl) | [COMPILER_PIPELINE_STRATEGY.hl](COMPILER_PIPELINE_STRATEGY.hl)
+
 
