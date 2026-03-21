@@ -2,10 +2,10 @@
 
 ## 1. 架构对比
 
-| 维度 | Linux 6.x | Windows NT | macOS (XNU) | HicOS 4.3 |
+| 维度 | Linux 6.x | Windows NT | macOS (XNU) | HicOS 6.0 |
 |------|-----------|------------|-------------|-----------|
 | 语言 | C + asm | C + C++ + asm | C + C++ + asm | **H-L (Hilbert-Lang)** |
-| 代码量 | ~28M LOC | ~50M LOC | ~8M LOC | **33K LOC** |
+| 代码量 | ~28M LOC | ~50M LOC | ~8M LOC | **40K LOC** |
 | 内核模型 | 单一 + 模块 | 混合微核 | 混合 Mach+BSD | 单一 (解释器+native) |
 | 调度器 | CFS 红黑树 O(log n) | 多级反馈队列 O(1) | Mach decay O(1) | CFS 线性扫描 O(n) |
 | 内存 | buddy + slab | 段页式 + pool | Mach zones | buddy page_alloc + kmalloc |
@@ -85,10 +85,12 @@
 | 单语言全栈 | bootloader→kernel→userspace 全 H-L |
 | Hilbert 寻址 | 3D 曲线内存布局，天然局部性 |
 | 自举编译 | tokenizer→parser→eval→codegen 全 H-L |
-| 33K LOC | Linux 的 1/850，极致可审计 |
+| 40K LOC | Linux 的 1/850，极致可审计 |
 | 零依赖 | 无 libc/GCC/LLVM |
 
 ## Update: Build System
 
 The build and toolchain of HicOS have transitioned entirely to Hilbert-Lang using hl-bootstrap-build-test.ps1. Phase 1 compilation pipeline (lexer) is complete. The system compiles its OS modules entirely with its own tools.
+
+
 

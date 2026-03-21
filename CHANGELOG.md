@@ -6,9 +6,9 @@
 
 # HicOS Changelog
 
-## v5.0 (Current)
+## v6.0 (Current)
 
-164 active .hl files, 114 kernel modules, 55 shell commands (Layer C), 30 kernel.bin commands, 0 external deps.
+176 active .hl files, 114 kernel modules, 55 shell commands (Layer C), 30 kernel.bin commands, 0 external deps.
 Dual-boot: BIOS 42/42 PASS + UEFI 3/3 PASS. Full gate 7/7 PASS.
 Image: 152,064 bytes (297 sectors). Code: ~40,400 lines (33,500 H-L + 6,993 PS1).
 
@@ -17,7 +17,7 @@ Image: 152,064 bytes (297 sectors). Code: ~40,400 lines (33,500 H-L + 6,993 PS1)
   - [1/7] Detect disk: read VirtIO-blk capacity from BAR+0x14
   - [2/7] MBR partition table: type=0x06 FAT16 LBA, bootable flag, 0x55AA signature
   - [3/7] FAT16 format: reuse `_ke_cmd_format()` (BPB + dual FAT + root dir)
-  - [4/7] HICOS.SYS: system marker file at cluster 2 ("HicOS v5.0 kernel")
+  - [4/7] HICOS.SYS: system marker file at cluster 2 ("HicOS v6.0 kernel")
   - [5/7] BOOT.CFG: boot config at cluster 3 ("boot=hicos\nmode=text")
   - [6/7] Verify: read sector 0, check MBR 0x55AA
   - [7/7] Completion banner
@@ -378,4 +378,5 @@ H-L self-hosting compiler. Hilbert-curve spatial addressing.
 
 ### v5.0
 - Native H-L GUI framework, package manager, hardware GPU shaders, Btrfs/ZFS
+
 
