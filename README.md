@@ -1,12 +1,12 @@
-﻿# HicOS 5.0 鈥?100% Pure Hilbert-Lang Operating System
+﻿# HicOS 6.0 鈥?100% Pure Hilbert-Lang Operating System
 
 ## Overview
 
 HicOS is a bare-metal x86_64 operating system written entirely in **Hilbert-Lang (H-L)**.
 **Zero JavaScript. Zero Rust. Zero C. Zero external dependencies.**
 
-All 164 active source files are `.hl` (legacy JS-origin files purged).
-Dual-boot support: BIOS/MBR (`hicos-hl.img`, 41 KB) and UEFI/GPT (`hicos-uefi.img`, 33 MB).
+All 175 active source files are `.hl` (legacy JS-origin files purged).
+Dual-boot support: BIOS/MBR (`hicos-hl.img`, 148 KB) and UEFI/GPT (`hicos-uefi.img`, 33 MB).
 Both boot paths verified end-to-end in QEMU (42/42 BIOS checks + 3/3 UEFI checks).
 
 ## Quick Start
@@ -125,7 +125,7 @@ HicOS/
 鈹溾攢鈹€ HicOS_*.hl               # Native userspace modules (27 files)
 鈹溾攢鈹€ hl-bootstrap.hl          # Self-hosting bootstrap compiler (H-L, 4,630 lines)
 鈹溾攢鈹€ stdlib.hl                # Standard library (1,528 lines)
-鈹溾攢鈹€ hicos-hl.img             # BIOS bootable x86_64 image (41 KB, 81 sectors)
+鈹溾攢鈹€ hicos-hl.img             # BIOS bootable x86_64 image (148 KB, 81 sectors)
 鈹溾攢鈹€ hicos-uefi.img           # UEFI bootable GPT+ESP image (33 MB)
 鈹溾攢鈹€ BOOTX64.EFI              # PE32+ UEFI application (1.5 KB)
 鈹溾攢鈹€ scripts/                 # 17 build/test/gate scripts
@@ -288,3 +288,4 @@ Local `hl-bootstrap` testing and build wrapper is available in repo root via `hl
 ```powershell
 .\hl-bootstrap.cmd bare-kernel\hl\build.hl
 .\hl-bootstrap.cmd bare-kernel\hl\test-runner.hl
+

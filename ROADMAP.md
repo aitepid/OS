@@ -8,10 +8,10 @@ As of v4.2, we prioritize hl-bootstrap-build-test.ps1 for the entry of build and
 
 | 鎸囨爣 | 鍊?|
 |------|-----|
-| H-L 婧愭枃浠?| 164 涓?`.hl` (114 鍐呮牳 + 27 鐢ㄦ埛绌洪棿 + 23 鍩虹璁炬柦) |
+| H-L 婧愭枃浠?| 175 涓??`.hl` (114 鍐呮牳 + 27 鐢ㄦ埛绌洪棿 + 23 鍩虹璁炬柦) |
 | 鍐呮牳妯″潡 | 114 涓?(`bare-kernel/hl/`) |
-| 鍐呮牳鍑芥暟 | 995 涓?|
-| BIOS 寮曞闀滃儚 | `hicos-hl.img` = 41,472 瀛楄妭 (81 鎵囧尯) |
+| 鍐呮牳鍑芥暟 | 1121 涓??|
+| BIOS 寮曞闀滃儚 | `hicos-hl.img` = 152,064 瀛楄妭 (297 鎵囧尯) |
 | UEFI 寮曞闀滃儚 | `hicos-uefi.img` = 33 MB (GPT + ESP FAT16) |
 | UEFI 搴旂敤 | `BOOTX64.EFI` = 1,536 瀛楄妭 (PE32+ x86_64) |
 | MBR 绛惧悕 | 0x55AA 鉁?|
@@ -515,4 +515,5 @@ Phase 9 鈼勨攢鈹€鈹€ Phase 6
 | M5: 瑁告満鍙畨瑁?| 鐗╃悊 PC 纭洏瀹夎 + 鍚姩 | Phase 6 + Phase 5 |
 | M6: 缃戠粶鍙敤 | ping / http get 鎴愬姛 | Phase 7 |
 | M7: 澶氫换鍔″彲鐢?| fork/exec 杩愯鐢ㄦ埛绋嬪簭 | Phase 4 |
+
 

@@ -1,6 +1,6 @@
 ﻿# HicOS Project Status
 
-## Version: 5.0
+## Version: 6.0
 
 ## 真实状态审计
 
@@ -178,8 +178,9 @@ See: [ROADMAP.md](ROADMAP.md)
   🏆 程序执行闭环: mkfile hello.hl → run hello.hl → 串口输出
 **迭代 45**: ✅ **已完成** — HicOS 安装器 7步安装 (29→30 命令)
   🏆 安装器端到端: install → MBR+FAT16+HICOS.SYS+BOOT.CFG → 验证
-**迭代 46**: 🎯 **下一步** — v6.0 发布整合 (测试扩展 + 文档更新 + README)
+**迭代 46**: 🎯 **下一步** — v6.0 (Current) 发布整合 (测试扩展 + 文档更新 + README)
 
 详见: [PROJECT_ADVANCEMENT_PLAN.hl](PROJECT_ADVANCEMENT_PLAN.hl) | [COMPILER_PIPELINE_STRATEGY.hl](COMPILER_PIPELINE_STRATEGY.hl)
+
 
 
