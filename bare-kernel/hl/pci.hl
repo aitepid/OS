@@ -38,6 +38,31 @@ fn pci_config_read16(bus, device, func, offset) {
     return (dword / 65536) % 65536;
 }
 
+// Write 32 bits to PCI config space
+fn pci_config_write32(bus, device, func, offset, val) {
+    let addr = 2147483648
+             + bus * 65536
+             + device * 2048
+             + func * 256
+             + (offset / 4) * 4;
+    port_out_u32(PCI_CONFIG_ADDR, addr);
+    port_out_u32(PCI_CONFIG_DATA, val);
+    return 1;
+}
+
+// Write 16 bits to PCI config space
+fn pci_config_write16(bus, device, func, offset, val) {
+    let old = pci_config_read32(bus, device, func, offset);
+    let mut new_val = 0;
+    if offset % 4 == 0 {
+        new_val = (old / 65536) * 65536 + (val % 65536);
+    } else {
+        new_val = (val % 65536) * 65536 + (old % 65536);
+    }
+    pci_config_write32(bus, device, func, offset, new_val);
+    return 1;
+}
+
 // Get vendor ID
 fn pci_vendor_id(bus, dev, func) {
     return pci_config_read16(bus, dev, func, 0);

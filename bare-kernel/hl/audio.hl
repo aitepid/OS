@@ -38,52 +38,83 @@ let BDL_ADDR = 8978432;       // 0x890000 -- BDL (32 * 8 = 256 bytes)
 let PCM_BUF_ADDR = 8978688;   // 0x890100 -- PCM data buffer (64 KB)
 let PCM_BUF_SIZE = 65536;
 
-fn ac97_init(pci_bus, pci_dev, pci_func) {
-    // ac97_mixer_bar = pci_bar(pci_bus, pci_dev, pci_func, 0) & 0xFFFC;
-    // ac97_nabm_bar = pci_bar(pci_bus, pci_dev, pci_func, 1) & 0xFFFC;
+fn ac97_detect() {
+    let devices = pci_scan();
+    let mut i = 0;
+    while i < len(devices) {
+        let vid = devices[i][3];
+        let did = devices[i][4];
+        if vid == AC97_VENDOR {
+            if did == AC97_DEVICE {
+                return [devices[i][0], devices[i][1], devices[i][2]];
+            }
+        }
+        i = i + 1;
+    }
+    return [];
+}
 
-    // Enable PCI bus mastering
-    // let cmd = pci_config_read16(bus, dev, func, 0x04);
-    // pci_config_write16(bus, dev, func, 0x04, cmd | 0x05);
+fn ac97_init() {
+    let pci_info = ac97_detect();
+    if len(pci_info) == 0 {
+        print("AC97 codec not found.");
+        return 0;
+    }
+    let pci_bus = pci_info[0];
+    let pci_dev = pci_info[1];
+    let pci_func = pci_info[2];
+
+    ac97_mixer_bar = pci_bar(pci_bus, pci_dev, pci_func, 0);
+    ac97_mixer_bar = (ac97_mixer_bar / 4) * 4; // mask low 2 bits for I/O
+    ac97_nabm_bar = pci_bar(pci_bus, pci_dev, pci_func, 1);
+    ac97_nabm_bar = (ac97_nabm_bar / 4) * 4;
+
+    // Enable PCI bus mastering + I/O space
+    let cmd = pci_config_read16(pci_bus, pci_dev, pci_func, 4);
+    pci_config_write16(pci_bus, pci_dev, pci_func, 4, cmd + 5); // 0x05 (Memory/IO + Bus Master)
 
     // Reset codec
-    // out16(ac97_mixer_bar + MIXER_RESET, 0x0001);
+    port_out_u16(ac97_mixer_bar + MIXER_RESET, 1);
 
     // Set sample rate to 44100 Hz
-    // out16(ac97_mixer_bar + MIXER_SAMPLE_RATE, 44100);
+    port_out_u16(ac97_mixer_bar + MIXER_SAMPLE_RATE, 44100);
 
     // Set master volume (0 = max, 0x8000 = mute)
-    // out16(ac97_mixer_bar + MIXER_MASTER_VOL, 0x0000);
-    // out16(ac97_mixer_bar + MIXER_PCM_VOL, 0x0808);
+    port_out_u16(ac97_mixer_bar + MIXER_MASTER_VOL, 0);
+    port_out_u16(ac97_mixer_bar + MIXER_PCM_VOL, 2056); // 0x0808
 
     // Enable cold reset in global control
-    // out32(ac97_nabm_bar + NABM_GLOB_CNT, 0x02);
+    port_out_u32(ac97_nabm_bar + NABM_GLOB_CNT, 2);
 
-    return 0;
+    print("AC97 initialized: mixer=0x" + format_hex(ac97_mixer_bar, 4) + " nabm=0x" + format_hex(ac97_nabm_bar, 4));
+    return 1;
 }
 
 // Play a buffer of PCM samples (16-bit signed, stereo, 44100 Hz)
 fn ac97_play(samples_addr, sample_count) {
+    if ac97_nabm_bar == 0 { return 0; }
     // Setup BDL entry 0
     mem_write_u32(BDL_ADDR + 0, samples_addr);
     mem_write_u16(BDL_ADDR + 4, sample_count);
-    mem_write_u16(BDL_ADDR + 6, 0xC000); // last + IOC
+    mem_write_u16(BDL_ADDR + 6, 49152); // 0xC000 last + IOC
 
     // Set BDL base address
-    // out32(ac97_nabm_bar + NABM_PCMOUT_BDBAR, BDL_ADDR);
+    port_out_u32(ac97_nabm_bar + NABM_PCMOUT_BDBAR, BDL_ADDR);
 
     // Set last valid index to 0
-    // out8(ac97_nabm_bar + NABM_PCMOUT_LVI, 0);
+    port_out_u8(ac97_nabm_bar + NABM_PCMOUT_LVI, 0);
 
     // Start playback: set RPBM bit in control register
-    // out8(ac97_nabm_bar + NABM_PCMOUT_CR, 0x01);
+    port_out_u8(ac97_nabm_bar + NABM_PCMOUT_CR, 1);
 
     return 0;
 }
 
 // Stop playback
 fn ac97_stop() {
-    // out8(ac97_nabm_bar + NABM_PCMOUT_CR, 0x00);
+    if ac97_nabm_bar != 0 {
+        port_out_u8(ac97_nabm_bar + NABM_PCMOUT_CR, 0);
+    }
     return 0;
 }
 
@@ -113,10 +144,13 @@ fn ac97_beep(freq_hz, duration_ms) {
 
 // Set master volume (0-100)
 fn ac97_set_volume(percent) {
+    if percent > 100 { percent = 100; }
     // AC97 volume: 0=max, 63=min, bit 15=mute
-    let vol = 63 - percent * 63 / 100;
-    // out16(ac97_mixer_bar + MIXER_MASTER_VOL, vol * 256 + vol);
-    return 0;
+    let vol = 63 - (percent * 63 / 100);
+    if ac97_mixer_bar != 0 {
+        port_out_u16(ac97_mixer_bar + MIXER_MASTER_VOL, vol * 256 + vol);
+    }
+    return vol;
 }
 
 print("audio.hl loaded");
