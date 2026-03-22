@@ -59,11 +59,11 @@ if ($manifestHlFiles -ne $actualHlFiles) {
 }
 
 $readme = Get-Content 'README.md' -Raw
-if ($readme -notmatch '# HicOS 5\.0') {
-    $errors += 'README version header is not 5.0'
+if ($readme -notmatch '# HicOS 6\.0') {
+    $errors += 'README version header is not 6.0'
 }
-if ($manifestVersion -ne '5.0') {
-    $errors += "manifest version is not 5.0 (actual: $manifestVersion)"
+if ($manifestVersion -ne '6.0') {
+    $errors += "manifest version is not 6.0 (actual: $manifestVersion)"
 }
 
 $hlBootstrap = Get-Command 'hl-bootstrap' -ErrorAction SilentlyContinue

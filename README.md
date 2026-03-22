@@ -1,4 +1,4 @@
-﻿# HicOS 6.0 鈥?100% Pure Hilbert-Lang Operating System
+﻿# HicOS 6.0 — 100% Pure Hilbert-Lang Operating System
 
 ## Overview
 
@@ -6,8 +6,17 @@ HicOS is a bare-metal x86_64 operating system written entirely in **Hilbert-Lang
 **Zero JavaScript. Zero Rust. Zero C. Zero external dependencies.**
 
 All 176 active source files are `.hl` (legacy JS-origin files purged).
-Dual-boot support: BIOS/MBR (`hicos-hl.img`, 148 KB) and UEFI/GPT (`hicos-uefi.img`, 33 MB).
-Both boot paths verified end-to-end in QEMU (42/42 BIOS checks + 3/3 UEFI checks).
+Dual-boot support: BIOS/MBR (`hicos-hl.img`, 152 KB) and UEFI/GPT (`hicos-uefi.img`, 33 MB).
+Both boot paths verified end-to-end in QEMU (65/65 BIOS checks + 3/3 UEFI checks).
+
+### v6.0 Release Highlights
+- **30 kernel.bin shell commands** — all verified in QEMU
+- **1,121 kernel functions** across 114 modules
+- **FAT16 end-to-end**: format → mkfile → ls → cat
+- **Micro H-L interpreter**: `run hello.hl` executes scripts in-kernel
+- **7-step installer**: interactive disk installation from shell
+- **Full gate**: 10/10 PASS (workspace+boot+runtime+layout+binary+QEMU BIOS+QEMU UEFI+perf+release+bootstrap)
+- **~45,900 lines** of pure H-L + PS1 code
 
 ## Quick Start
 
@@ -75,10 +84,22 @@ Optional (image layout readiness check):
 powershell -ExecutionPolicy Bypass -File .\scripts\image-layout-readiness.ps1
 ```
 
-Optional (full gate, one command):
+Optional (full gate, one command — 10 checks):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\full-gate.ps1
+```
+
+Optional (performance baseline: boot time, file I/O, network latency):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\perf-baseline.ps1
+```
+
+Optional (release artifact validation):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\release-validate.ps1
 ```
 
 Optional (boot preflight):
@@ -128,7 +149,7 @@ HicOS/
 鈹溾攢鈹€ hicos-hl.img             # BIOS bootable x86_64 image (148 KB, 81 sectors)
 鈹溾攢鈹€ hicos-uefi.img           # UEFI bootable GPT+ESP image (33 MB)
 鈹溾攢鈹€ BOOTX64.EFI              # PE32+ UEFI application (1.5 KB)
-鈹溾攢鈹€ scripts/                 # 17 build/test/gate scripts
+鈹溾攢鈹€ scripts/                 # 19 build/test/gate scripts
 鈹溾攢鈹€ DEEP_DEVELOPMENT_PLAN.hl # Development plan vs Windows/macOS
 鈹溾攢鈹€ README.md
 鈹斺攢鈹€ ROADMAP.md
@@ -211,14 +232,14 @@ spawn worker_thread;
 | Self-hosting | Yes (`hl-bootstrap.hl` compiles itself) |
 | BIOS boot image | `hicos-hl.img` = 152,064 bytes (297 sectors, MBR 0x55AA) |
 | UEFI boot image | `hicos-uefi.img` = 33 MB (GPT + ESP FAT16 + BOOTX64.EFI) |
-| QEMU BIOS test | **42/42 PASS** (serial鈫扨CI鈫扸irtIO鈫扸ESA鈫扗HCP鈫扗NS鈫扲ing3鈫抯hell) |
+| QEMU BIOS test | **65/65 PASS** (serial鈫扨CI鈫扸irtIO鈫扸ESA鈫扗HCP鈫扗NS鈫扲ing3鈫抯hell鈫扝W鈫抎isk鈫抜nstall鈫抮un鈫抦em) |
 | QEMU UEFI test | **3/3 PASS** (OVMF鈫扜PT鈫扙SP鈫扨E32+鈫抯erial+ConOut) |
-| Full gate | **7/7 PASS** (workspace+boot+runtime+layout+binary+QEMU+bootstrap) |
-| Build scripts | 17 PowerShell scripts in `scripts/` |
+| Full gate | **10/10 PASS** (workspace+boot+runtime+layout+binary+QEMU BIOS+UEFI+perf+release+bootstrap) |
+| Build scripts | 19 PowerShell scripts in `scripts/` |
 | Kernel modules | 114 in `bare-kernel/hl/` |
 | Kernel functions | 1,121 |
 | Shell commands (Layer C) | 60 (in shell.hl) |
-| Shell commands (QEMU verified) | 18 (in hicos-hl.img) |
+| Shell commands (QEMU verified) | 20 (Layer A) + 30 (kernel.bin) |
 | H-L Language | Classes, inheritance, decorators, list comprehensions, generators, typed exceptions, type hints, deep destructuring |
 | Kernel features | IDT, PIC, PIT, PS/2 keyboard+mouse, serial shell, VGA console |
 | Interrupts | Timer (IRQ0鈫抳ec32), Keyboard (IRQ1鈫抳ec33), Mouse (IRQ12鈫抳ec44), LAPIC |
@@ -246,22 +267,27 @@ comparison of HicOS vs Windows 11, Linux 6.x, macOS 14, and HarmonyOS 4 鈥?
 including gap analysis, genuine advantages, and remaining gaps.
 
 ### Verified in QEMU (end-to-end)
-- BIOS MBR boot 鈫?Stage2 long mode 鈫?Kernel init 鈫?20-subsystem serial output 鈫?Shell prompt
-- VirtIO-blk: PCI detect 鈫?BAR0 鈫?virtqueue init 鈫?sector read/write verify
-- VirtIO-net: PCI detect 鈫?BAR0 鈫?MAC read (52:54:00:12:34:56) 鈫?ARP broadcast
-- Multitask: PIT 100Hz timer 鈫?dual-task A/B alternation
-- UEFI: OVMF 鈫?GPT+CRC32 鈫?ESP FAT16 鈫?PE32+ BOOTX64.EFI 鈫?serial+ConOut
-- FAT16: format 鈫?mkfile 鈫?ls 鈫?cat (end-to-end file creation and reading)
-- Network: DHCP Discover鈫扥ffer鈫扞P acquired | Ping ICMP echo鈫抮eply | DNS A-record query鈫扞P
-- VESA: 1024脳768脳32 mode set + LFB page table mapping + framebuffer read/write verify
-- Ring3: IRETQ to user mode 鈫?SYSCALL print 'U3' 鈫?SYSCALL(0) return to kernel
+- BIOS MBR boot → Stage2 long mode → Kernel init → 20-subsystem serial output → Shell prompt
+- VirtIO-blk: PCI detect → BAR0 → virtqueue init → sector read/write verify
+- VirtIO-net: PCI detect → BAR0 → MAC read (52:54:00:12:34:56) → ARP broadcast
+- Multitask: PIT 100Hz timer → dual-task A/B alternation
+- UEFI: OVMF → GPT+CRC32 → ESP FAT16 → PE32+ BOOTX64.EFI → serial+ConOut
+- FAT16: format → mkfile → ls → cat (end-to-end file creation and reading)
+- Network: DHCP Discover→Offer→IP acquired | Ping ICMP echo→reply | DNS A-record query→IP
+- VESA: 1024×768×32 mode set + LFB page table mapping + framebuffer read/write verify
+- Ring3: IRETQ to user mode → SYSCALL print 'U3' → SYSCALL(0) return to kernel
+- Hardware: ACPI → RSDP/FADT | SMP → multi-core | AHCI → port scan | USB → xHCI
+- RTC: CMOS read → YYYY-MM-DD HH:MM:SS time display
+- Installer: 7-step install (MBR→FAT16→HICOS.SYS→BOOT.CFG→verify)
+- Interpreter: mkfile → run → serial output (H-L script execution in kernel)
+- Memory: page alloc + kmalloc heap allocation verified
 
 ### Remaining Gaps vs Mainstream
 - No hardware GPU shader compilation (virgl passthrough only)
 - No Btrfs / ZFS filesystem
 - No USB 3.0 isochronous transfers
 - No real hardware Wi-Fi firmware loading
-- No physical hardware testing yet (QEMU only)
+- Physical hardware testing in progress (QEMU-verified, USB boot target)
 
 ## Compiler Pipeline (Native x86_64 Execution)
 

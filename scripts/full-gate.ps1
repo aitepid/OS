@@ -14,7 +14,10 @@ $checks = @(
     @{ Name = 'Runtime path readiness'; Cmd = 'powershell -ExecutionPolicy Bypass -File .\scripts\runtime-path-readiness.ps1' },
     @{ Name = 'Image layout readiness'; Cmd = 'powershell -ExecutionPolicy Bypass -File .\scripts\image-layout-readiness.ps1' },
     @{ Name = 'Boot binary analysis'; Cmd = 'powershell -ExecutionPolicy Bypass -File .\scripts\boot-binary-analysis.ps1' },
-    @{ Name = 'QEMU boot test'; Cmd = 'powershell -ExecutionPolicy Bypass -File .\scripts\qemu-boot-test.ps1 -TimeoutSec 12' }
+    @{ Name = 'QEMU boot test'; Cmd = 'powershell -ExecutionPolicy Bypass -File .\scripts\qemu-boot-test.ps1 -TimeoutSec 12' },
+    @{ Name = 'QEMU UEFI test'; Cmd = 'powershell -ExecutionPolicy Bypass -File .\scripts\qemu-uefi-test.ps1 -TimeoutSec 12' },
+    @{ Name = 'Performance baseline'; Cmd = 'powershell -ExecutionPolicy Bypass -File .\scripts\perf-baseline.ps1' },
+    @{ Name = 'Release validation'; Cmd = 'powershell -ExecutionPolicy Bypass -File .\scripts\release-validate.ps1' }
 )
 
 $hlCmdExists = $false
@@ -55,6 +58,9 @@ Write-Host '- runtime path readiness: OK'
 Write-Host '- image layout readiness: OK'
 Write-Host '- boot binary analysis: OK'
 Write-Host '- QEMU boot test: OK'
+Write-Host '- QEMU UEFI test: OK'
+Write-Host '- performance baseline: OK'
+Write-Host '- release validation: OK'
 if ($hlCmdExists) {
     Write-Host '- hl-bootstrap build/test: OK'
 }

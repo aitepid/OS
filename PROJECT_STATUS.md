@@ -10,11 +10,11 @@
 
 | 层级 | 载体 | QEMU 运行 | 内容 |
 |------|------|-----------|------|
-| **A: 镜像机器码** | `scripts/rebuild-image.ps1` → `hicos-hl.img` | ✅ 真正运行 | 引导+串口+PIC/PIT/IDT+PCI+VirtIO读写+VirtIO-net+**shell 18命令+FAT16+DHCP+Ping+DNS+VESA+Ring3**+任务交替 |
+| **A: 镜像机器码** | `scripts/rebuild-image.ps1` → `hicos-hl.img` | ✅ 真正运行 | 引导+串口+PIC/PIT/IDT+PCI+VirtIO读写+VirtIO-net+**shell 20命令+FAT16+DHCP+Ping+DNS+VESA+Ring3**+任务交替 |
 | **B: H-L 编译器** | `hl-bootstrap.hl` build_kernel() | ⚠️ 可执行但产出较旧 | 串口+PIC+PIT+IDT+键盘 (不含 PCI/VirtIO) |
 | **C: 内核源码** | `bare-kernel/hl/` 114 模块 | ✅ kernel.bin 集成到镜像 | 编译产出 kernel.bin 19,672B, 1,121函数, 30条shell命令, 含PCI+VirtIO-blk/net+TCP+FAT16+安装器+内存+任务+鼠标+字体+WM+SMP+AHCI+USB+ACPI+AC97+RTC+微型解释器 |
 
-**当前状态**: 层级 A 有 20+ 个功能已 QEMU 验证（含 shell 18 条命令）；层级 C 的 kernel.bin 已编译并集成到镜像，在 0x120000 运行 30 条独立 shell 命令（含 VirtIO-blk磁盘读写+FAT16格式化与目录列表+TCP/VirtIO-net/内存/任务/鼠标/字体/WM/SMP/AHCI/USB/AC97音频/RTC时间）。A/C 融合正在进行中。
+**当前状态**: 层级 A 有 20+ 个功能已 QEMU 验证（含 shell 20 条命令）；层级 C 的 kernel.bin 已编译并集成到镜像，在 0x120000 运行 30 条独立 shell 命令（含 VirtIO-blk磁盘读写+FAT16格式化与目录列表+TCP/VirtIO-net/内存/任务/鼠标/字体/WM/SMP/AHCI/USB/AC97音频/RTC时间）。A/C 融合正在进行中。
 
 ### 代码库统计
 
@@ -26,14 +26,14 @@
 | 用户空间模块 | 27 个 (`HicOS_*.hl`) — 全部原生，0 个桩 |
 | 基础设施/测试 | 34 个 (hl-bootstrap, stdlib, test-suite 等) |
 | 总代码行数 | ~45,900 行 (38,082 H-L + 7,773 PS1) |
-| 构建/测试脚本 | 17 个 PowerShell 脚本 (`scripts/`) |
+| 构建/测试脚本 | 19 个 PowerShell 脚本 (`scripts/`) |
 | BIOS 可引导镜像 | `hicos-hl.img` = 152,064 字节 (297扇区, MBR 0x55AA ✓) |
 | UEFI 可引导镜像 | `hicos-uefi.img` = 33 MB (GPT+CRC32, ESP FAT16) |
 | UEFI 应用程序 | `BOOTX64.EFI` = 1,536 字节 (PE32+ x86_64) |
 | kernel.bin (编译产出) | 19,672 字节, 1,105 符号, 1,121 函数, 30 shell 命令 |
-| QEMU BIOS 引导测试 | **42/42 PASS** (含 6 shell + 4 FAT16 + 6 net + 2 Ring3) |
+| QEMU BIOS 引导测试 | **65/65 PASS** (含 8 shell + 4 FAT16 + 6 net + 2 Ring3 + 6 HW + 6 disk + 4 install + 4 run + 3 mem) |
 | QEMU UEFI 引导测试 | **3/3 PASS** |
-| Full Gate | **7/7 PASS** |
+| Full Gate | **10/10 PASS** |
 | 二进制分析 | 13/13 检查通过 (MBR+Stage1+Stage2+Kernel) |
 | 符号链 | 0 个未解析符号 |
 
@@ -178,7 +178,10 @@ See: [ROADMAP.md](ROADMAP.md)
   🏆 程序执行闭环: mkfile hello.hl → run hello.hl → 串口输出
 **迭代 45**: ✅ **已完成** — HicOS 安装器 7步安装 (29→30 命令)
   🏆 安装器端到端: install → MBR+FAT16+HICOS.SYS+BOOT.CFG → 验证
-**迭代 46**: 🎯 **下一步** — v6.0 (Current) 发布整合 (测试扩展 + 文档更新 + README)
+**迭代 46**: ✅ **已完成** — v6.0 发布整合 (测试 42→62, Full Gate 7→10, 新增 perf-baseline + release-validate)
+  🏆 v6.0 发布里程碑: 10 阶段全部完成, 双启动验证, 30 条 shell 命令
+**迭代 47**: ✅ **已完成** — clear + hexdump 命令 + v7.0 详细计划 (Layer A 18→20 命令, serial_hex_byte/space 子程序, 版本升 6.0)
+**迭代 48**: 🎯 **下一步** — SHA-256 哈希 in kernel.bin (TLS 1.3 密码学基础)
 
 详见: [PROJECT_ADVANCEMENT_PLAN.hl](PROJECT_ADVANCEMENT_PLAN.hl) | [COMPILER_PIPELINE_STRATEGY.hl](COMPILER_PIPELINE_STRATEGY.hl)
 

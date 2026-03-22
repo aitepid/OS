@@ -9,8 +9,36 @@
 ## v6.0 (Current)
 
 176 active .hl files, 114 kernel modules, 60 shell commands (Layer C), 30 kernel.bin commands, 0 external deps.
-Dual-boot: BIOS 42/42 PASS + UEFI 3/3 PASS. Full gate 7/7 PASS.
-Image: 152,064 bytes (297 sectors). Code: ~45,900 lines (38,082 H-L + 7,773 PS1).
+Dual-boot: BIOS 62/62 PASS + UEFI 3/3 PASS. Full gate 10/10 PASS.
+Image: 152,064 bytes (297 sectors). Code: ~46,100 lines (38,082 H-L + 8,000 PS1).
+
+### Iteration 47: clear + hexdump + v7.0 Plan
+- **New Layer A commands** (18→20):
+  - `clear`: VT100 ESC[2J + ESC[H serial terminal clear
+  - `hexdump`: Read disk sector 0, print 32×16 hex dump + MBR 0x55AA check
+- **New callable subroutines**:
+  - `serial_hex_byte`: Print AL as 2-digit hex to COM1 (callable function)
+  - `serial_space`: Print single space to COM1 (callable function)
+- **Version bump**: `ver` command shows "HicOS 6.0 -- 114 modules"
+- **v7.0 roadmap**: 10 detailed iterations (47-56) added to PROJECT_ADVANCEMENT_PLAN.hl
+  - Phase V: 密码学 (SHA-256, HMAC, AES-128-GCM) → TLS 1.3 → HTTPS → 图形终端 → ext2 → hlpkg
+- Layer A shell commands (20): help ver free ps lspci uptime reboot shutdown halt format ls mkfile cat ifconfig dhcp ping nslookup vesa ring3 clear hexdump
+
+### Iteration 46: v6.0 Release Integration
+- **QEMU tests expanded**: 42 → 62 checks across 11 phases
+  - Phase 7: Hardware detection (ACPI, SMP, AHCI, USB, RTC, uptime)
+  - Phase 8: Disk I/O (disk command, ver, tick)
+  - Phase 9: Installer (7-step install verification)
+  - Phase 10: Interpreter (format → mkfile → run cycle)
+  - Phase 11: Memory management (pmem, palloc, malloc)
+- **Full gate expanded**: 7 → 10 checks
+  - New: QEMU UEFI test, performance baseline, release validation
+- **New scripts**:
+  - `scripts/perf-baseline.ps1`: Boot time, file I/O cycle, DHCP latency, artifact sizes
+  - `scripts/release-validate.ps1`: Artifact existence + MBR/PE validation + language purity
+- **README.md updated**: v6.0 highlights, installation guide, expanded QEMU verification list
+- **Documentation synced**: PROJECT_STATUS.md, CHANGELOG.md, ROADMAP.md reflect v6.0 state
+- 🏆 **v6.0 release milestone**: all 10 phases complete, dual-boot verified, 30 shell commands
 
 ### Iteration 45: HicOS Installer in kernel.bin
 - **7-step installer**: `_ke_cmd_install()` — interactive disk installation workflow

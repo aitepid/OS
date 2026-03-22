@@ -1563,6 +1563,60 @@ buf_emit 0xEB; buf_emit 0xE2
 # .done: ret
 emit_ret
 
+# === serial_hex_byte subroutine ===
+# Callable function: AL = byte to print as 2 hex chars to COM1
+# Clobbers: RAX, RBX, RDX. Preserves all others.
+$serial_hex_byte_off = buf_len
+# Save byte in BL
+buf_emit 0x88; buf_emit 0xC3  # mov bl, al
+# High nibble: shr al, 4
+buf_emit 0xC0; buf_emit 0xE8; buf_emit 4  # shr al, 4
+buf_emit 0x24; buf_emit 0x0F  # and al, 0xF
+buf_emit 0x3C; buf_emit 10    # cmp al, 10
+buf_emit 0x72; buf_emit 2     # jb .digit1
+buf_emit 0x04; buf_emit 7     # add al, 7
+# .digit1:
+buf_emit 0x04; buf_emit 0x30  # add al, '0'
+# Save in BH for now
+buf_emit 0x88; buf_emit 0xC7  # mov bh, al
+# Wait TX ready
+emit_mov_edx_imm32 ($COM1 + 5)
+emit_in_al_dx
+emit_test_al_imm8 0x20
+buf_emit 0x74; buf_emit 0xF6  # jz -10 (back to wait)
+# Send high nibble
+emit_mov_edx_imm32 $COM1
+buf_emit 0x88; buf_emit 0xF8  # mov al, bh
+emit_out_dx_al
+# Low nibble
+buf_emit 0x88; buf_emit 0xD8  # mov al, bl
+buf_emit 0x24; buf_emit 0x0F  # and al, 0xF
+buf_emit 0x3C; buf_emit 10
+buf_emit 0x72; buf_emit 2
+buf_emit 0x04; buf_emit 7
+buf_emit 0x04; buf_emit 0x30
+buf_emit 0x88; buf_emit 0xC7  # mov bh, al
+emit_mov_edx_imm32 ($COM1 + 5)
+emit_in_al_dx
+emit_test_al_imm8 0x20
+buf_emit 0x74; buf_emit 0xF6
+emit_mov_edx_imm32 $COM1
+buf_emit 0x88; buf_emit 0xF8  # mov al, bh
+emit_out_dx_al
+emit_ret
+
+# === serial_space subroutine ===
+# Print a single space to COM1
+$serial_space_off = buf_len
+emit_mov_edx_imm32 ($COM1 + 5)
+emit_in_al_dx
+emit_test_al_imm8 0x20
+buf_emit 0x74; buf_emit 0xF6
+emit_mov_edx_imm32 $COM1
+buf_emit 0xB0; buf_emit 0x20  # mov al, ' '
+emit_out_dx_al
+emit_ret
+
 # === disk_rw_sector subroutine ===
 # Reusable VirtIO-blk sector read/write.
 #   R8D = sector number
@@ -2034,13 +2088,13 @@ function emit_call_puts_str([string]$str) {
 
 # --- Command: help ---
 emit_cmd_check "help"
-emit_call_puts_str "=== HicOS Shell Commands ===`r`nSystem:  help ver reboot shutdown halt`r`nInfo:    free ps lspci uptime`r`nDisk:    format ls cat mkfile`r`nNet:     dhcp ping ifconfig nslookup`r`nGraphics: vesa`r`nKernel:  ring3`r`n"
+emit_call_puts_str "=== HicOS Shell Commands ===`r`nSystem:  help ver reboot shutdown halt clear`r`nInfo:    free ps lspci uptime`r`nDisk:    format ls cat mkfile hexdump`r`nNet:     dhcp ping ifconfig nslookup`r`nGraphics: vesa`r`nKernel:  ring3`r`n"
 buf_emit 0xE9; buf_emit32_signed ($cmd_return - (buf_len) - 4)  # jmp cmd_return
 patch_cmd_skip
 
 # --- Command: ver ---
 emit_cmd_check "ver"
-emit_call_puts_str "HicOS 5.0 -- Hilbert-Lang Kernel (113 modules, zero deps)`r`n"
+emit_call_puts_str "HicOS 6.0 -- Hilbert-Lang Kernel (114 modules, zero deps)`r`n"
 buf_emit 0xE9; buf_emit32_signed ($cmd_return - (buf_len) - 4)
 patch_cmd_skip
 
@@ -3423,6 +3477,96 @@ buf_set ($ring3_return + 3) $b_lr[0]; buf_set ($ring3_return + 4) $b_lr[1]
 buf_set ($ring3_return + 5) $b_lr[2]; buf_set ($ring3_return + 6) $b_lr[3]
 
 emit_call_puts_str "`r`nRing3: user mode test PASSED`r`n"
+buf_emit 0xE9; buf_emit32_signed ($cmd_return - (buf_len) - 4)
+patch_cmd_skip
+
+# --- Command: clear ---
+emit_cmd_check "clear"
+# Send VT100 escape sequence: ESC[2J (clear screen) + ESC[H (cursor home)
+$esc = [char]27
+emit_call_puts_str "${esc}[2J${esc}[H"
+buf_emit 0xE9; buf_emit32_signed ($cmd_return - (buf_len) - 4)
+patch_cmd_skip
+
+# --- Command: hexdump (hex dump of disk sector 0) ---
+emit_cmd_check "hexdump"
+emit_call_puts_str "Sector 0 hex dump:`r`n"
+
+# Read sector 0 into 0x510000
+buf_emit 0x45; buf_emit 0x31; buf_emit 0xC0     # xor r8d, r8d (sector=0)
+buf_emit 0x49; buf_emit 0xC7; buf_emit 0xC1; buf_emit32 0x510000  # mov r9, buf
+buf_emit 0x41; buf_emit 0xB2; buf_emit 0        # mov r10b, 0 (READ)
+buf_emit 0xE8; buf_emit32_signed ($disk_rw_off - (buf_len) - 4)
+
+# Loop: 32 rows × 16 bytes
+# R12 = byte index (0..511), RBX = buffer base
+buf_emit 0x45; buf_emit 0x31; buf_emit 0xE4     # xor r12d, r12d
+buf_emit 0xBB; buf_emit32 0x510000               # mov ebx, 0x510000
+
+$hexdump_row_loop = buf_len
+# Print offset as 4 hex digits: R12 value
+# High byte of offset
+buf_emit 0x44; buf_emit 0x89; buf_emit 0xE0     # mov eax, r12d
+buf_emit 0xC1; buf_emit 0xE8; buf_emit 8        # shr eax, 8
+buf_emit 0xE8; buf_emit32_signed ($serial_hex_byte_off - (buf_len) - 4)  # call serial_hex_byte
+# Low byte of offset
+buf_emit 0x44; buf_emit 0x89; buf_emit 0xE0     # mov eax, r12d
+buf_emit 0xE8; buf_emit32_signed ($serial_hex_byte_off - (buf_len) - 4)  # call serial_hex_byte
+emit_call_puts_str ": "
+
+# Print 16 hex bytes
+buf_emit 0x31; buf_emit 0xC9                     # xor ecx, ecx (byte counter 0..15)
+$hexdump_byte_loop = buf_len
+buf_emit 0x49; buf_emit 0x89; buf_emit 0xDD     # mov r13, rbx (save rbx)
+buf_emit 0x42; buf_emit 0x0F; buf_emit 0xB6; buf_emit 0x04; buf_emit 0x23  # movzx eax, byte [rbx+r12]
+buf_emit 0x51                                     # push rcx (save counter)
+buf_emit 0x41; buf_emit 0x54                      # push r12
+buf_emit 0xE8; buf_emit32_signed ($serial_hex_byte_off - (buf_len) - 4)
+buf_emit 0xE8; buf_emit32_signed ($serial_space_off - (buf_len) - 4)
+buf_emit 0x41; buf_emit 0x5C                      # pop r12
+buf_emit 0x59                                     # pop rcx
+buf_emit 0x4C; buf_emit 0x89; buf_emit 0xEB     # mov rbx, r13 (restore)
+buf_emit 0x49; buf_emit 0xFF; buf_emit 0xC4     # inc r12
+buf_emit 0xFF; buf_emit 0xC1                     # inc ecx
+# Extra space after 8 bytes
+buf_emit 0x83; buf_emit 0xF9; buf_emit 8        # cmp ecx, 8
+buf_emit 0x75; buf_emit 0                        # jne +N (skip extra space)
+$jne_no_extra = buf_len - 1
+buf_emit 0x51                                     # push rcx
+buf_emit 0x41; buf_emit 0x54                      # push r12
+buf_emit 0xE8; buf_emit32_signed ($serial_space_off - (buf_len) - 4)
+buf_emit 0x41; buf_emit 0x5C                      # pop r12
+buf_emit 0x59                                     # pop rcx
+$after_extra_space = buf_len
+buf_set $jne_no_extra ([byte](($after_extra_space - $jne_no_extra - 1) -band 0xFF))
+buf_emit 0x83; buf_emit 0xF9; buf_emit 16       # cmp ecx, 16
+buf_emit 0x0F; buf_emit 0x8C                     # jl hexdump_byte_loop
+buf_emit32_signed ($hexdump_byte_loop - (buf_len) - 4)
+
+# Print newline
+emit_call_puts_str "`r`n"
+
+# Check if we've done all 512 bytes
+buf_emit 0x49; buf_emit 0x81; buf_emit 0xFC; buf_emit32 512  # cmp r12, 512
+buf_emit 0x0F; buf_emit 0x8C                     # jl hexdump_row_loop
+buf_emit32_signed ($hexdump_row_loop - (buf_len) - 4)
+
+emit_call_puts_str "MBR signature: "
+# Check bytes at 0x5101FE/FF for 0x55AA
+buf_emit 0x0F; buf_emit 0xB6; buf_emit 0x04; buf_emit 0x25; buf_emit32 0x5101FE
+buf_emit 0x3C; buf_emit 0x55                     # cmp al, 0x55
+buf_emit 0x75; buf_emit 0                        # jne .no55aa
+$jne_no55aa = buf_len - 1
+buf_emit 0x0F; buf_emit 0xB6; buf_emit 0x04; buf_emit 0x25; buf_emit32 0x5101FF
+buf_emit 0x3C; buf_emit 0xAA
+buf_emit 0x75; buf_emit 0                        # jne .no55aa2
+$jne_no55aa2 = buf_len - 1
+emit_call_puts_str "0x55AA (valid)`r`n"
+buf_emit 0xE9; buf_emit32_signed ($cmd_return - (buf_len) - 4)
+$no55aa_off = buf_len
+buf_set $jne_no55aa ([byte](($no55aa_off - $jne_no55aa - 1) -band 0xFF))
+buf_set $jne_no55aa2 ([byte](($no55aa_off - $jne_no55aa2 - 1) -band 0xFF))
+emit_call_puts_str "not found`r`n"
 buf_emit 0xE9; buf_emit32_signed ($cmd_return - (buf_len) - 4)
 patch_cmd_skip
 

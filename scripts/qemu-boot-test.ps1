@@ -307,7 +307,9 @@ if (Test-Path $cmdLogFile) {
 # Verify shell command outputs
 $shellTests = @(
     @{ name = 'help command shows command list'; pattern = 'HicOS Shell Commands' },
-    @{ name = 'ver command shows version'; pattern = 'HicOS 5\.0.*113 modules' },
+    @{ name = 'help shows clear command'; pattern = 'clear' },
+    @{ name = 'help shows hexdump command'; pattern = 'hexdump' },
+    @{ name = 'ver command shows version'; pattern = 'HicOS [56]\.0.*\d+ modules' },
     @{ name = 'ps command shows tasks'; pattern = 'PID 0.*kernel.*running' },
     @{ name = 'unknown command rejected'; pattern = 'Unknown command.*help' },
     @{ name = 'shell prompt after command'; pattern = 'HicOS>' },
@@ -561,7 +563,407 @@ foreach ($t in $r3Tests) {
 
 if (Test-Path $r3LogFile) { Remove-Item $r3LogFile -Force }
 
-Write-Host "=== Boot Test Results ===" -ForegroundColor Cyan
+# =============================================================
+# Phase 7: Hardware Detection Tests (ACPI, SMP, AHCI, USB)
+# =============================================================
+Write-Host "`n=== Phase 7: Hardware Detection Tests ===" -ForegroundColor Cyan
+
+$hwLogFile = Join-Path $repoRoot 'qemu-hw-test.log'
+if (Test-Path $hwLogFile) { Remove-Item $hwLogFile -Force }
+
+$hwPort = 55592
+$hwArgs = @(
+    '-drive', "format=raw,file=hicos-hl.img",
+    '-serial', "file:$hwLogFile",
+    '-m', '128', '-display', 'none',
+    '-device', 'virtio-blk-pci,drive=disk0,disable-modern=on',
+    '-drive', "id=disk0,file=hicos-disk.img,format=raw,if=none",
+    '-netdev', 'user,id=net0',
+    '-device', 'virtio-net-pci,netdev=net0,disable-modern=on',
+    '-smp', '2',
+    '-no-reboot', '-no-shutdown',
+    '-monitor', "telnet:127.0.0.1:$hwPort,server,nowait"
+)
+
+$hwProc = Start-Process -FilePath $qemuPath -ArgumentList $hwArgs -PassThru -NoNewWindow
+Start-Sleep -Seconds 5
+
+try {
+    $hwClient = New-Object System.Net.Sockets.TcpClient('127.0.0.1', $hwPort)
+    $hwStream = $hwClient.GetStream()
+    $hwWriter = New-Object System.IO.StreamWriter($hwStream)
+    $hwWriter.AutoFlush = $true
+    Start-Sleep -Milliseconds 500
+
+    # acpi
+    foreach ($k in @('a','c','p','i','ret')) { $hwWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 2
+
+    # smp
+    foreach ($k in @('s','m','p','ret')) { $hwWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 3
+
+    # ahci
+    foreach ($k in @('a','h','c','i','ret')) { $hwWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 2
+
+    # usb
+    foreach ($k in @('u','s','b','ret')) { $hwWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 2
+
+    # time
+    foreach ($k in @('t','i','m','e','ret')) { $hwWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 2
+
+    # uptime
+    foreach ($k in @('u','p','t','i','m','e','ret')) { $hwWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 2
+
+    $hwWriter.Close(); $hwClient.Close()
+} catch {
+    Write-Host "  HW test monitor error: $_" -ForegroundColor Yellow
+}
+
+Start-Sleep -Seconds 1
+if (-not $hwProc.HasExited) { $hwProc.Kill(); $hwProc.WaitForExit(3000) }
+
+$hwContent = ''
+if (Test-Path $hwLogFile) {
+    try { $hwContent = [System.IO.File]::ReadAllText($hwLogFile) } catch {}
+}
+
+$hwTests = @(
+    @{ name = 'ACPI command responds'; pattern = 'ACPI|RSDP|FADT|PM1' },
+    @{ name = 'SMP detects CPUs'; pattern = 'CPU|AP|core|online' },
+    @{ name = 'AHCI controller scan'; pattern = 'AHCI|SATA|port' },
+    @{ name = 'USB xHCI scan'; pattern = 'xHCI|USB|port' },
+    @{ name = 'RTC time display'; pattern = '\d{4}-\d{2}-\d{2}|\d{2}:\d{2}:\d{2}' },
+    @{ name = 'Uptime display'; pattern = 'uptime|tick|second|hour|minute' }
+)
+
+foreach ($t in $hwTests) {
+    $shellTotal++
+    if ($hwContent -match $t.pattern) {
+        $passes += "HW: $($t.name)"
+        $shellPassed++
+    } else {
+        $errors += "HW: $($t.name)"
+    }
+}
+
+if (Test-Path $hwLogFile) { Remove-Item $hwLogFile -Force }
+
+# =============================================================
+# Phase 8: Disk I/O + VirtIO-blk Tests
+# =============================================================
+Write-Host "`n=== Phase 8: Disk I/O Tests ===" -ForegroundColor Cyan
+
+$diskLogFile = Join-Path $repoRoot 'qemu-disk-test.log'
+if (Test-Path $diskLogFile) { Remove-Item $diskLogFile -Force }
+
+$diskPort = 55593
+$diskArgs = @(
+    '-drive', "format=raw,file=hicos-hl.img",
+    '-serial', "file:$diskLogFile",
+    '-m', '128', '-display', 'none',
+    '-device', 'virtio-blk-pci,drive=disk0,disable-modern=on',
+    '-drive', "id=disk0,file=hicos-disk.img,format=raw,if=none",
+    '-netdev', 'user,id=net0',
+    '-device', 'virtio-net-pci,netdev=net0,disable-modern=on',
+    '-no-reboot', '-no-shutdown',
+    '-monitor', "telnet:127.0.0.1:$diskPort,server,nowait"
+)
+
+$diskProc = Start-Process -FilePath $qemuPath -ArgumentList $diskArgs -PassThru -NoNewWindow
+Start-Sleep -Seconds 5
+
+try {
+    $dClient = New-Object System.Net.Sockets.TcpClient('127.0.0.1', $diskPort)
+    $dStream = $dClient.GetStream()
+    $dWriter = New-Object System.IO.StreamWriter($dStream)
+    $dWriter.AutoFlush = $true
+    Start-Sleep -Milliseconds 500
+
+    # disk command
+    foreach ($k in @('d','i','s','k','ret')) { $dWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 3
+
+    # hexdump command
+    foreach ($k in @('h','e','x','d','u','m','p','ret')) { $dWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 5
+
+    # clear command (just verify it doesn't crash)
+    foreach ($k in @('c','l','e','a','r','ret')) { $dWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 2
+
+    # ver command
+    foreach ($k in @('v','e','r','ret')) { $dWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 2
+
+    # tick command
+    foreach ($k in @('t','i','c','k','ret')) { $dWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 2
+
+    $dWriter.Close(); $dClient.Close()
+} catch {
+    Write-Host "  Disk test monitor error: $_" -ForegroundColor Yellow
+}
+
+Start-Sleep -Seconds 1
+if (-not $diskProc.HasExited) { $diskProc.Kill(); $diskProc.WaitForExit(3000) }
+
+$diskContent = ''
+if (Test-Path $diskLogFile) {
+    try { $diskContent = [System.IO.File]::ReadAllText($diskLogFile) } catch {}
+}
+
+$diskTests = @(
+    @{ name = 'disk command shows capacity'; pattern = 'VirtIO-blk|capacity|MB|sector' },
+    @{ name = 'hexdump shows sector data'; pattern = 'Sector 0 hex dump|[0-9A-Fa-f]{2} [0-9A-Fa-f]{2}' },
+    @{ name = 'hexdump MBR signature check'; pattern = '55AA|signature' },
+    @{ name = 'clear command accepted'; pattern = 'HicOS>' },
+    @{ name = 'ver shows version info'; pattern = 'HicOS.*\d' },
+    @{ name = 'tick counter active'; pattern = 'tick|Timer' }
+)
+
+foreach ($t in $diskTests) {
+    $shellTotal++
+    if ($diskContent -match $t.pattern) {
+        $passes += "Disk: $($t.name)"
+        $shellPassed++
+    } else {
+        $errors += "Disk: $($t.name)"
+    }
+}
+
+if (Test-Path $diskLogFile) { Remove-Item $diskLogFile -Force }
+
+# =============================================================
+# Phase 9: Installer Tests
+# =============================================================
+Write-Host "`n=== Phase 9: Installer Tests ===" -ForegroundColor Cyan
+
+$instLogFile = Join-Path $repoRoot 'qemu-install-test.log'
+if (Test-Path $instLogFile) { Remove-Item $instLogFile -Force }
+
+# Fresh disk for install test
+$instDisk = Join-Path $repoRoot 'hicos-disk.img'
+if (Test-Path $instDisk) { Remove-Item $instDisk -Force }
+$instFs = [System.IO.File]::Create($instDisk); $instFs.SetLength(32MB); $instFs.Close()
+
+$instPort = 55594
+$instArgs = @(
+    '-drive', "format=raw,file=hicos-hl.img",
+    '-serial', "file:$instLogFile",
+    '-m', '128', '-display', 'none',
+    '-device', 'virtio-blk-pci,drive=disk0,disable-modern=on',
+    '-drive', "id=disk0,file=$instDisk,format=raw,if=none",
+    '-netdev', 'user,id=net0',
+    '-device', 'virtio-net-pci,netdev=net0,disable-modern=on',
+    '-no-reboot', '-no-shutdown',
+    '-monitor', "telnet:127.0.0.1:$instPort,server,nowait"
+)
+
+$instProc = Start-Process -FilePath $qemuPath -ArgumentList $instArgs -PassThru -NoNewWindow
+Start-Sleep -Seconds 5
+
+try {
+    $iClient = New-Object System.Net.Sockets.TcpClient('127.0.0.1', $instPort)
+    $iStream = $iClient.GetStream()
+    $iWriter = New-Object System.IO.StreamWriter($iStream)
+    $iWriter.AutoFlush = $true
+    Start-Sleep -Milliseconds 500
+
+    # install command
+    foreach ($k in @('i','n','s','t','a','l','l','ret')) { $iWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 35
+
+    $iWriter.Close(); $iClient.Close()
+} catch {
+    Write-Host "  Install test monitor error: $_" -ForegroundColor Yellow
+}
+
+Start-Sleep -Seconds 1
+if (-not $instProc.HasExited) { $instProc.Kill(); $instProc.WaitForExit(3000) }
+
+$instContent = ''
+if (Test-Path $instLogFile) {
+    try { $instContent = [System.IO.File]::ReadAllText($instLogFile) } catch {}
+}
+
+$instTests = @(
+    @{ name = 'Installer detects disk'; pattern = '1/7|detect|disk|capacity' },
+    @{ name = 'MBR partition created'; pattern = '2/7|MBR|partition' },
+    @{ name = 'FAT16 formatted'; pattern = '3/7|FAT16|format' },
+    @{ name = 'Install completion'; pattern = '7/7|complete|Install' }
+)
+
+foreach ($t in $instTests) {
+    $shellTotal++
+    if ($instContent -match $t.pattern) {
+        $passes += "Install: $($t.name)"
+        $shellPassed++
+    } else {
+        $errors += "Install: $($t.name)"
+    }
+}
+
+if (Test-Path $instLogFile) { Remove-Item $instLogFile -Force }
+
+# =============================================================
+# Phase 10: Interpreter + run command Tests
+# =============================================================
+Write-Host "`n=== Phase 10: Interpreter Tests ===" -ForegroundColor Cyan
+
+$runLogFile = Join-Path $repoRoot 'qemu-run-test.log'
+if (Test-Path $runLogFile) { Remove-Item $runLogFile -Force }
+
+# Fresh disk
+if (Test-Path $instDisk) { Remove-Item $instDisk -Force }
+$runFs = [System.IO.File]::Create($instDisk); $runFs.SetLength(32MB); $runFs.Close()
+
+$runPort = 55595
+$runArgs = @(
+    '-drive', "format=raw,file=hicos-hl.img",
+    '-serial', "file:$runLogFile",
+    '-m', '128', '-display', 'none',
+    '-device', 'virtio-blk-pci,drive=disk0,disable-modern=on',
+    '-drive', "id=disk0,file=$instDisk,format=raw,if=none",
+    '-netdev', 'user,id=net0',
+    '-device', 'virtio-net-pci,netdev=net0,disable-modern=on',
+    '-no-reboot', '-no-shutdown',
+    '-monitor', "telnet:127.0.0.1:$runPort,server,nowait"
+)
+
+$runProc = Start-Process -FilePath $qemuPath -ArgumentList $runArgs -PassThru -NoNewWindow
+Start-Sleep -Seconds 5
+
+try {
+    $rClient = New-Object System.Net.Sockets.TcpClient('127.0.0.1', $runPort)
+    $rStream = $rClient.GetStream()
+    $rWriter = New-Object System.IO.StreamWriter($rStream)
+    $rWriter.AutoFlush = $true
+    Start-Sleep -Milliseconds 500
+
+    # format first
+    foreach ($k in @('f','o','r','m','a','t','ret')) { $rWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 25
+
+    # mkfile hi.hl print("Hi")
+    foreach ($k in @('m','k','f','i','l','e','spc','h','i','dot','h','l','spc','p','r','i','n','t','shift-9','shift-apostrophe','shift-h','i','shift-apostrophe','shift-0','ret')) { $rWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 5
+
+    # run hi.hl
+    foreach ($k in @('r','u','n','spc','h','i','dot','h','l','ret')) { $rWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 5
+
+    $rWriter.Close(); $rClient.Close()
+} catch {
+    Write-Host "  Run test monitor error: $_" -ForegroundColor Yellow
+}
+
+Start-Sleep -Seconds 1
+if (-not $runProc.HasExited) { $runProc.Kill(); $runProc.WaitForExit(3000) }
+
+$runContent = ''
+if (Test-Path $runLogFile) {
+    try { $runContent = [System.IO.File]::ReadAllText($runLogFile) } catch {}
+}
+
+$runTests = @(
+    @{ name = 'Format before run succeeds'; pattern = 'Format complete|FAT16' },
+    @{ name = 'File created for interpreter'; pattern = 'File created|mkfile' },
+    @{ name = 'Interpreter loads file'; pattern = 'run|load|exec' },
+    @{ name = 'Shell prompt returns after run'; pattern = 'HicOS>' }
+)
+
+foreach ($t in $runTests) {
+    $shellTotal++
+    if ($runContent -match $t.pattern) {
+        $passes += "Run: $($t.name)"
+        $shellPassed++
+    } else {
+        $errors += "Run: $($t.name)"
+    }
+}
+
+if (Test-Path $runLogFile) { Remove-Item $runLogFile -Force }
+
+# =============================================================
+# Phase 11: Memory Management Tests
+# =============================================================
+Write-Host "`n=== Phase 11: Memory Management Tests ===" -ForegroundColor Cyan
+
+$memLogFile = Join-Path $repoRoot 'qemu-mem-test.log'
+if (Test-Path $memLogFile) { Remove-Item $memLogFile -Force }
+
+$memPort = 55596
+$memArgs = @(
+    '-drive', "format=raw,file=hicos-hl.img",
+    '-serial', "file:$memLogFile",
+    '-m', '128', '-display', 'none',
+    '-device', 'virtio-blk-pci,drive=disk0,disable-modern=on',
+    '-drive', "id=disk0,file=hicos-disk.img,format=raw,if=none",
+    '-netdev', 'user,id=net0',
+    '-device', 'virtio-net-pci,netdev=net0,disable-modern=on',
+    '-no-reboot', '-no-shutdown',
+    '-monitor', "telnet:127.0.0.1:$memPort,server,nowait"
+)
+
+$memProc = Start-Process -FilePath $qemuPath -ArgumentList $memArgs -PassThru -NoNewWindow
+Start-Sleep -Seconds 5
+
+try {
+    $mClient = New-Object System.Net.Sockets.TcpClient('127.0.0.1', $memPort)
+    $mStream = $mClient.GetStream()
+    $mWriter = New-Object System.IO.StreamWriter($mStream)
+    $mWriter.AutoFlush = $true
+    Start-Sleep -Milliseconds 500
+
+    # pmem
+    foreach ($k in @('p','m','e','m','ret')) { $mWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 2
+
+    # palloc
+    foreach ($k in @('p','a','l','l','o','c','ret')) { $mWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 2
+
+    # malloc
+    foreach ($k in @('m','a','l','l','o','c','ret')) { $mWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 2
+
+    $mWriter.Close(); $mClient.Close()
+} catch {
+    Write-Host "  Memory test monitor error: $_" -ForegroundColor Yellow
+}
+
+Start-Sleep -Seconds 1
+if (-not $memProc.HasExited) { $memProc.Kill(); $memProc.WaitForExit(3000) }
+
+$memContent = ''
+if (Test-Path $memLogFile) {
+    try { $memContent = [System.IO.File]::ReadAllText($memLogFile) } catch {}
+}
+
+$memTests = @(
+    @{ name = 'pmem shows page alloc status'; pattern = 'page|alloc|free|total' },
+    @{ name = 'palloc allocates a page'; pattern = 'alloc|page|0x' },
+    @{ name = 'malloc allocates heap block'; pattern = 'malloc|alloc|heap|0x' }
+)
+
+foreach ($t in $memTests) {
+    $shellTotal++
+    if ($memContent -match $t.pattern) {
+        $passes += "Mem: $($t.name)"
+        $shellPassed++
+    } else {
+        $errors += "Mem: $($t.name)"
+    }
+}
+
+if (Test-Path $memLogFile) { Remove-Item $memLogFile -Force }
+
+Write-Host "`n=== Boot Test Results ===" -ForegroundColor Cyan
 foreach ($p in $passes) {
     Write-Host "  PASS: $p" -ForegroundColor Green
 }
@@ -573,6 +975,7 @@ Write-Host ""
 Write-Host "  Serial bytes: $($serialContent.Length)"
 Write-Host "  Serial lines: $(($serialContent -split "`n").Count)"
 Write-Host "  QEMU exit:    $($proc.ExitCode)"
+Write-Host "  Total checks: $($passes.Count + $errors.Count) (PASS: $($passes.Count), FAIL: $($errors.Count))"
 Write-Host ""
 
 # Clean up

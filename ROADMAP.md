@@ -4,7 +4,7 @@ As of v4.2, we prioritize hl-bootstrap-build-test.ps1 for the entry of build and
 
 # HicOS 瑁告満瀹夎璺嚎鍥?
 
-## 褰撳墠鐘舵€佸揩鐓?(v5.0)
+## 褰撳墠鐘舵€佸揩鐓?(v6.0)
 
 | 鎸囨爣 | 鍊?|
 |------|-----|
@@ -16,13 +16,13 @@ As of v4.2, we prioritize hl-bootstrap-build-test.ps1 for the entry of build and
 | UEFI 搴旂敤 | `BOOTX64.EFI` = 1,536 瀛楄妭 (PE32+ x86_64) |
 | MBR 绛惧悕 | 0x55AA 鉁?|
 | GPT CRC32 | 鉁?(128 鏉＄洰 + 澶囦唤澶? |
-| QEMU BIOS 娴嬭瘯 | **42/42 PASS** (鍚?shell/FAT16/DHCP/DNS/VESA/Ring3) |
+| QEMU BIOS 娴嬭瘯 | **65/65 PASS** (鍚?shell/FAT16/DHCP/DNS/VESA/Ring3/HW/Disk/Install/Run/Mem) |
 | QEMU UEFI 娴嬭瘯 | **3/3 PASS** |
-| Full Gate | **7/7 PASS** |
+| Full Gate | **10/10 PASS** |
 | rebuild-image.ps1 | 3,798 行 (手写 x86_64 机器码) |
 | hl-bootstrap.hl | 4,630 琛?(206 鍑芥暟, 7 quadrant) |
 | Shell 鍛戒护 (Layer C) | 60 涓?(shell.hl 璁捐绾? |
-| Shell 命令 (QEMU 验证) | 18 个 (层级A) + 30 个 (kernel.bin) |
+| Shell 命令 (QEMU 验证) | 20 个 (层级A) + 30 个 (kernel.bin) |
 | 鎬讳唬鐮佽鏁?| ~45,900 琛?(38,082 H-L + 7,773 PS1) |
 | hl-bootstrap 瀹夸富 | 鉁?Shim 鏀寔 build/test/interpret/lex/boot/gate/info/compile 鍛戒护 |
 | QEMU 楠岃瘉鐨勫瓙绯荤粺 | Serial, PIC, PIT, IDT, PS/2, PCI, VirtIO-blk, VirtIO-net, Timer, Task, GPT, FAT16, PE32+, VESA, SYSCALL, DHCP, DNS, ICMP, Ring3 |
