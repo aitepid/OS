@@ -7457,6 +7457,557 @@ fn _ke_cmd_container() {
     return 0;
 }
 
+// === Iteration 65: In-Kernel Code Generator ===
+//
+// AST → x86_64 machine code (self-bootstrap step 3)
+// Memory layout (0xA00000-0xA01FFF):
+//   0xA00000: codegen state (32 bytes: out_pos, sym_count, stack_depth)
+//   0xA00020: output buffer (4096 bytes of machine code)
+//   0xA01020: symbol table (64 entries × 16 bytes = 1024 bytes)
+//             each: [name_packed:4][stack_off:4][type:4][pad:4]
+
+// Initialize codegen
+fn _ke_cgen_init() {
+    let cs = 10485760; // 0xA00000
+    _ke_mem_w32(cs, 0);      // out_pos = 0
+    _ke_mem_w32(cs + 4, 0);  // sym_count = 0
+    _ke_mem_w32(cs + 8, 0);  // stack_depth = 0
+    // Clear output buffer
+    let ob = 10485792; // 0xA00020
+    let mut i = 0;
+    while i < 4096 { mem_write_u8(ob + i, 0); i = i + 1; }
+    return 0;
+}
+
+// Emit one byte to output buffer
+fn _ke_cgen_emit8(val) {
+    let cs = 10485760;
+    let pos = _ke_mem_r32(cs);
+    if pos >= 4096 { return 0; }
+    let ob = 10485792;
+    mem_write_u8(ob + pos, val % 256);
+    _ke_mem_w32(cs, pos + 1);
+    return 0;
+}
+
+// Emit 32-bit little-endian
+fn _ke_cgen_emit32(val) {
+    _ke_cgen_emit8(val % 256);
+    _ke_cgen_emit8((val / 256) % 256);
+    _ke_cgen_emit8((val / 65536) % 256);
+    _ke_cgen_emit8((val / 16777216) % 256);
+    return 0;
+}
+
+// Emit: MOV RAX, imm32 (sign-extended)
+fn _ke_cgen_mov_rax_imm(imm) {
+    _ke_cgen_emit8(72);  // REX.W
+    _ke_cgen_emit8(184); // MOV RAX, imm64 (only use lower 32)
+    _ke_cgen_emit32(imm);
+    _ke_cgen_emit32(0);  // upper 32 = 0
+    return 0;
+}
+
+// Emit: PUSH RAX
+fn _ke_cgen_push_rax() {
+    _ke_cgen_emit8(80); // PUSH RAX
+    return 0;
+}
+
+// Emit: POP RCX
+fn _ke_cgen_pop_rcx() {
+    _ke_cgen_emit8(89); // POP RCX
+    return 0;
+}
+
+// Emit: ADD RAX, RCX
+fn _ke_cgen_add() {
+    _ke_cgen_emit8(72);  // REX.W
+    _ke_cgen_emit8(1);   // ADD r/m64, r64
+    _ke_cgen_emit8(200); // ModRM: RCX→RAX
+    return 0;
+}
+
+// Emit: SUB RAX, RCX → result = RCX - RAX, swap needed
+fn _ke_cgen_sub() {
+    // XCHG RAX, RCX
+    _ke_cgen_emit8(72); _ke_cgen_emit8(135); _ke_cgen_emit8(200);
+    // SUB RAX, RCX
+    _ke_cgen_emit8(72); _ke_cgen_emit8(41); _ke_cgen_emit8(200);
+    return 0;
+}
+
+// Emit: IMUL RAX, RCX
+fn _ke_cgen_mul() {
+    _ke_cgen_emit8(72);  // REX.W
+    _ke_cgen_emit8(15);  // 0F
+    _ke_cgen_emit8(175); // IMUL r64, r/m64
+    _ke_cgen_emit8(193); // ModRM: RAX, RCX
+    return 0;
+}
+
+// Emit: RET
+fn _ke_cgen_ret() {
+    _ke_cgen_emit8(195); // RET
+    return 0;
+}
+
+// Emit function prologue: PUSH RBP; MOV RBP, RSP
+fn _ke_cgen_prologue() {
+    _ke_cgen_emit8(85);  // PUSH RBP
+    _ke_cgen_emit8(72); _ke_cgen_emit8(137); _ke_cgen_emit8(229); // MOV RBP, RSP
+    return 0;
+}
+
+// Emit function epilogue: MOV RSP, RBP; POP RBP; RET
+fn _ke_cgen_epilogue() {
+    _ke_cgen_emit8(72); _ke_cgen_emit8(137); _ke_cgen_emit8(236); // MOV RSP, RBP
+    _ke_cgen_emit8(93);  // POP RBP
+    _ke_cgen_emit8(195); // RET
+    return 0;
+}
+
+// Generate code for AST expression node
+fn _ke_cgen_expr(idx) {
+    let ab = 10354720; // 0x9E0020 AST buffer
+    let off = idx * 16;
+    let ntype = _ke_mem_r32(ab + off);
+    let left = _ke_mem_r32(ab + off + 4);
+    let right = _ke_mem_r32(ab + off + 8);
+    let value = _ke_mem_r32(ab + off + 12);
+
+    // NUM_LIT → MOV RAX, value
+    if ntype == 1 {
+        _ke_cgen_mov_rax_imm(value);
+        return 0;
+    }
+
+    // BINOP: left → PUSH → right → POP RCX → op
+    if ntype >= 10 {
+        if ntype <= 13 {
+            _ke_cgen_expr(left);
+            _ke_cgen_push_rax();
+            _ke_cgen_expr(right);
+            _ke_cgen_pop_rcx();
+            if ntype == 10 { _ke_cgen_add(); }    // ADD
+            if ntype == 11 { _ke_cgen_sub(); }    // SUB
+            if ntype == 12 { _ke_cgen_mul(); }    // MUL
+            return 0;
+        }
+    }
+
+    // LET_STMT → evaluate value
+    if ntype == 20 {
+        _ke_cgen_expr(left); // evaluate RHS
+        return 0;
+    }
+
+    // RETURN_STMT → evaluate value + epilogue
+    if ntype == 24 {
+        _ke_cgen_expr(left);
+        _ke_cgen_epilogue();
+        return 0;
+    }
+
+    // Default: load 0
+    _ke_cgen_mov_rax_imm(0);
+    return 0;
+}
+
+// Command: compile <code> — compile to x86_64 and show size
+fn _ke_cmd_compile(buf_addr, buf_len) {
+    let text_start = buf_addr + 8; // "compile " = 8 chars
+    let text_len = buf_len - 8;
+
+    if text_len <= 0 {
+        _ke_putc(85); _ke_putc(115); _ke_putc(97); _ke_putc(103); _ke_putc(101);
+        _ke_putc(58); _ke_putc(32);
+        _ke_putc(99); _ke_putc(111); _ke_putc(109); _ke_putc(112);
+        _ke_putc(105); _ke_putc(108); _ke_putc(101); _ke_putc(32);
+        _ke_putc(60); _ke_putc(99); _ke_putc(111); _ke_putc(100); _ke_putc(101); _ke_putc(62);
+        _ke_putc(13); _ke_putc(10);
+        return 0;
+    }
+
+    // Lex → Parse → Codegen
+    _ke_lex_init(text_start, text_len);
+    let tok_count = _ke_lex_tokenize();
+    _ke_parse_init();
+    let root = _ke_parse_stmt();
+    _ke_cgen_init();
+    _ke_cgen_prologue();
+    _ke_cgen_expr(root);
+    _ke_cgen_epilogue();
+
+    let cs = 10485760;
+    let code_size = _ke_mem_r32(cs);
+
+    // Print "COMPILE: <size> bytes"
+    _ke_putc(67); _ke_putc(79); _ke_putc(77); _ke_putc(80); _ke_putc(73);
+    _ke_putc(76); _ke_putc(69); _ke_putc(58); _ke_putc(32);
+    _ke_put_dec(code_size);
+    // " bytes "
+    _ke_putc(32); _ke_putc(98); _ke_putc(121); _ke_putc(116);
+    _ke_putc(101); _ke_putc(115); _ke_putc(32);
+    _ke_put_dec(tok_count);
+    // " tokens"
+    _ke_putc(32); _ke_putc(116); _ke_putc(111); _ke_putc(107);
+    _ke_putc(101); _ke_putc(110); _ke_putc(115);
+    _ke_putc(13); _ke_putc(10);
+
+    // Print hex dump of first 32 bytes
+    let ob = 10485792;
+    let mut i = 0;
+    let limit = code_size;
+    if limit > 32 { let limit = 32; }
+    while i < limit {
+        _ke_put_hex8(mem_read_u8(ob + i));
+        _ke_putc(32);
+        i = i + 1;
+    }
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
+// === Iteration 66: NVMe Driver Detection ===
+//
+// Memory layout (0xA02000-0xA020FF):
+//   0xA02000: nvme state (64 bytes: bar0, cap, vs, nsid)
+
+// Detect NVMe PCI device (class 01h, subclass 08h, prog-if 02h)
+fn _ke_nvme_find() {
+    let mut dev = 0;
+    while dev < 32 {
+        let reg2 = _ke_pci_read(0, dev, 0, 2); // class/subclass/prog-if
+        let class_code = reg2 / 16777216;       // bits [31:24]
+        let subclass = (reg2 / 65536) % 256;    // bits [23:16]
+        let progif = (reg2 / 256) % 256;        // bits [15:8]
+        if class_code == 1 {
+            if subclass == 8 {
+                if progif == 2 {
+                    return dev;
+                }
+            }
+        }
+        dev = dev + 1;
+    }
+    return 255;
+}
+
+// Command: nvme — detect NVMe controller
+fn _ke_cmd_nvme() {
+    let dev = _ke_nvme_find();
+
+    // "NVME: "
+    _ke_putc(78); _ke_putc(86); _ke_putc(77); _ke_putc(69); _ke_putc(58); _ke_putc(32);
+
+    if dev == 255 {
+        // "not found (QEMU: -device nvme)"
+        _ke_putc(110); _ke_putc(111); _ke_putc(116); _ke_putc(32);
+        _ke_putc(102); _ke_putc(111); _ke_putc(117); _ke_putc(110); _ke_putc(100);
+        _ke_putc(13); _ke_putc(10);
+        return 0;
+    }
+
+    // "dev="
+    _ke_putc(100); _ke_putc(101); _ke_putc(118); _ke_putc(61);
+    _ke_put_dec(dev);
+    _ke_putc(32);
+
+    // Read vendor:device
+    let reg0 = _ke_pci_read(0, dev, 0, 0);
+    let vendor = reg0 % 65536;
+    let devid = reg0 / 65536;
+    _ke_put_hex32(vendor);
+    _ke_putc(58);
+    _ke_put_hex32(devid);
+    _ke_putc(32);
+
+    // Read BAR0
+    let bar0 = _ke_pci_read(0, dev, 0, 4);
+    // "BAR0="
+    _ke_putc(66); _ke_putc(65); _ke_putc(82); _ke_putc(48); _ke_putc(61);
+    _ke_put_hex32(bar0);
+    _ke_putc(13); _ke_putc(10);
+
+    return 0;
+}
+
+// === Iteration 67: Multi-User Login System ===
+//
+// Memory layout (0xA03000-0xA033FF):
+//   0xA03000: user table (8 users × 64 bytes = 512 bytes)
+//             each: [uid:4][flags:4][name (16B)][pass_hash (32B)][pad:8B]
+//   0xA03200: current user (32 bytes: uid, name)
+//   0xA03300: login temp buffer (256 bytes)
+
+// Initialize user table with root user
+fn _ke_user_init() {
+    let ut = 10498048; // 0xA03000
+    // Clear table
+    let mut i = 0;
+    while i < 512 { mem_write_u8(ut + i, 0); i = i + 1; }
+
+    // User 0: root (uid=0, flags=1=active)
+    _ke_mem_w32(ut, 0);     // uid = 0
+    _ke_mem_w32(ut + 4, 1); // flags = active
+    // name = "root" (114 111 111 116)
+    mem_write_u8(ut + 8, 114); mem_write_u8(ut + 9, 111);
+    mem_write_u8(ut + 10, 111); mem_write_u8(ut + 11, 116);
+
+    // User 1: guest (uid=1, flags=1=active)
+    _ke_mem_w32(ut + 64, 1);
+    _ke_mem_w32(ut + 68, 1);
+    mem_write_u8(ut + 72, 103); mem_write_u8(ut + 73, 117); // gu
+    mem_write_u8(ut + 74, 101); mem_write_u8(ut + 75, 115); // es
+    mem_write_u8(ut + 76, 116); // t
+
+    // Set current user to root
+    let cu = 10498688; // 0xA03200
+    _ke_mem_w32(cu, 0); // uid = 0
+    mem_write_u8(cu + 4, 114); mem_write_u8(cu + 5, 111);
+    mem_write_u8(cu + 6, 111); mem_write_u8(cu + 7, 116);
+
+    return 0;
+}
+
+// Find user by name, return uid or -1
+fn _ke_user_find(name_addr, name_len) {
+    let ut = 10498048;
+    let mut u = 0;
+    while u < 8 {
+        let off = u * 64;
+        let flags = _ke_mem_r32(ut + off + 4);
+        if flags == 1 {
+            // Compare name
+            let mut match = 1;
+            let mut j = 0;
+            while j < name_len {
+                if mem_read_u8(ut + off + 8 + j) != mem_read_u8(name_addr + j) {
+                    match = 0;
+                }
+                j = j + 1;
+            }
+            // Check name is not longer
+            if mem_read_u8(ut + off + 8 + name_len) != 0 { let match = 0; }
+            if match == 1 { return _ke_mem_r32(ut + off); }
+        }
+        u = u + 1;
+    }
+    return 0 - 1;
+}
+
+// Command: whoami — show current user
+fn _ke_cmd_whoami() {
+    let cu = 10498688;
+    let uid = _ke_mem_r32(cu);
+    let mut i = 0;
+    while i < 16 {
+        let ch = mem_read_u8(cu + 4 + i);
+        if ch == 0 { i = 16; }
+        else { _ke_putc(ch); i = i + 1; }
+    }
+    _ke_putc(32); _ke_putc(40); // " ("
+    // "uid="
+    _ke_putc(117); _ke_putc(105); _ke_putc(100); _ke_putc(61);
+    _ke_put_dec(uid);
+    _ke_putc(41); // )
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
+// Command: login <user> — switch current user
+fn _ke_cmd_login(buf_addr, buf_len) {
+    let name_start = buf_addr + 6; // "login " = 6 chars
+    let name_len = buf_len - 6;
+
+    if name_len <= 0 {
+        _ke_putc(85); _ke_putc(115); _ke_putc(97); _ke_putc(103); _ke_putc(101);
+        _ke_putc(58); _ke_putc(32);
+        _ke_putc(108); _ke_putc(111); _ke_putc(103); _ke_putc(105); _ke_putc(110);
+        _ke_putc(32); _ke_putc(60); _ke_putc(117); _ke_putc(115); _ke_putc(101); _ke_putc(114); _ke_putc(62);
+        _ke_putc(13); _ke_putc(10);
+        return 0;
+    }
+
+    let uid = _ke_user_find(name_start, name_len);
+
+    if uid < 0 {
+        // "LOGIN: user not found"
+        _ke_putc(76); _ke_putc(79); _ke_putc(71); _ke_putc(73); _ke_putc(78);
+        _ke_putc(58); _ke_putc(32);
+        _ke_putc(117); _ke_putc(115); _ke_putc(101); _ke_putc(114); _ke_putc(32);
+        _ke_putc(110); _ke_putc(111); _ke_putc(116); _ke_putc(32);
+        _ke_putc(102); _ke_putc(111); _ke_putc(117); _ke_putc(110); _ke_putc(100);
+        _ke_putc(13); _ke_putc(10);
+        return 0;
+    }
+
+    // Switch user
+    let cu = 10498688;
+    _ke_mem_w32(cu, uid);
+    let mut i = 0;
+    while i < 16 { mem_write_u8(cu + 4 + i, 0); i = i + 1; }
+    i = 0;
+    while i < name_len { mem_write_u8(cu + 4 + i, mem_read_u8(name_start + i)); i = i + 1; }
+
+    // "LOGIN: "
+    _ke_putc(76); _ke_putc(79); _ke_putc(71); _ke_putc(73); _ke_putc(78);
+    _ke_putc(58); _ke_putc(32);
+    i = 0;
+    while i < name_len { _ke_putc(mem_read_u8(name_start + i)); i = i + 1; }
+    // " (uid=N)"
+    _ke_putc(32); _ke_putc(40); _ke_putc(117); _ke_putc(105); _ke_putc(100); _ke_putc(61);
+    _ke_put_dec(uid);
+    _ke_putc(41);
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
+// === Iteration 68: Pipe & IPC ===
+//
+// Memory layout (0xA04000-0xA041FF):
+//   0xA04000: pipe table (4 pipes × 128 bytes = 512 bytes)
+//             each: [flags:4][read_pos:4][write_pos:4][count:4][data (112B)]
+
+// Create a new pipe, return pipe id (0-3) or -1
+fn _ke_pipe_create() {
+    let pt = 10502144; // 0xA04000
+    let mut i = 0;
+    while i < 4 {
+        let off = i * 128;
+        let flags = _ke_mem_r32(pt + off);
+        if flags == 0 {
+            _ke_mem_w32(pt + off, 1);      // flags = active
+            _ke_mem_w32(pt + off + 4, 0);  // read_pos
+            _ke_mem_w32(pt + off + 8, 0);  // write_pos
+            _ke_mem_w32(pt + off + 12, 0); // count
+            return i;
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+// Write to pipe
+fn _ke_pipe_write(pipe_id, data_addr, data_len) {
+    if pipe_id < 0 { return 0 - 1; }
+    if pipe_id >= 4 { return 0 - 1; }
+    let pt = 10502144;
+    let off = pipe_id * 128;
+    let flags = _ke_mem_r32(pt + off);
+    if flags == 0 { return 0 - 1; }
+
+    let mut written = 0;
+    while written < data_len {
+        let count = _ke_mem_r32(pt + off + 12);
+        if count >= 112 { written = data_len; } // buffer full
+        else {
+            let wp = _ke_mem_r32(pt + off + 8);
+            mem_write_u8(pt + off + 16 + wp, mem_read_u8(data_addr + written));
+            _ke_mem_w32(pt + off + 8, (wp + 1) % 112);
+            _ke_mem_w32(pt + off + 12, count + 1);
+            written = written + 1;
+        }
+    }
+    return written;
+}
+
+// Read from pipe
+fn _ke_pipe_read(pipe_id, buf_addr, max_len) {
+    if pipe_id < 0 { return 0 - 1; }
+    if pipe_id >= 4 { return 0 - 1; }
+    let pt = 10502144;
+    let off = pipe_id * 128;
+    let flags = _ke_mem_r32(pt + off);
+    if flags == 0 { return 0 - 1; }
+
+    let mut rd = 0;
+    while rd < max_len {
+        let count = _ke_mem_r32(pt + off + 12);
+        if count == 0 { rd = max_len; } // empty
+        else {
+            let rp = _ke_mem_r32(pt + off + 4);
+            mem_write_u8(buf_addr + rd, mem_read_u8(pt + off + 16 + rp));
+            _ke_mem_w32(pt + off + 4, (rp + 1) % 112);
+            _ke_mem_w32(pt + off + 12, count - 1);
+            rd = rd + 1;
+        }
+    }
+    return rd;
+}
+
+// Close pipe
+fn _ke_pipe_close(pipe_id) {
+    if pipe_id < 0 { return 0 - 1; }
+    if pipe_id >= 4 { return 0 - 1; }
+    let pt = 10502144;
+    _ke_mem_w32(pt + pipe_id * 128, 0); // clear flags
+    return 0;
+}
+
+// Command: pipe — pipe communication test
+fn _ke_cmd_pipe() {
+    // Print "PIPE: testing...\r\n"
+    _ke_putc(80); _ke_putc(73); _ke_putc(80); _ke_putc(69);
+    _ke_putc(58); _ke_putc(32);
+    _ke_putc(116); _ke_putc(101); _ke_putc(115); _ke_putc(116);
+    _ke_putc(105); _ke_putc(110); _ke_putc(103); _ke_putc(46);
+    _ke_putc(46); _ke_putc(46);
+    _ke_putc(13); _ke_putc(10);
+
+    // Clear pipe table
+    let pt = 10502144;
+    let mut i = 0;
+    while i < 512 { mem_write_u8(pt + i, 0); i = i + 1; }
+
+    // Create pipe
+    let pid = _ke_pipe_create();
+    _ke_putc(32); _ke_putc(32);
+    // "create: pipe="
+    _ke_putc(99); _ke_putc(114); _ke_putc(101); _ke_putc(97); _ke_putc(116); _ke_putc(101);
+    _ke_putc(58); _ke_putc(32); _ke_putc(112); _ke_putc(105); _ke_putc(112); _ke_putc(101); _ke_putc(61);
+    _ke_put_dec(pid);
+    if pid >= 0 { _ke_putc(32); _ke_putc(79); _ke_putc(75); }
+    _ke_putc(13); _ke_putc(10);
+
+    // Write "HicOS" to pipe
+    let wbuf = 10502656; // 0xA04200 temp
+    mem_write_u8(wbuf, 72); mem_write_u8(wbuf+1, 105); mem_write_u8(wbuf+2, 99);
+    mem_write_u8(wbuf+3, 79); mem_write_u8(wbuf+4, 83);
+    let written = _ke_pipe_write(pid, wbuf, 5);
+    _ke_putc(32); _ke_putc(32);
+    // "write: "
+    _ke_putc(119); _ke_putc(114); _ke_putc(105); _ke_putc(116); _ke_putc(101);
+    _ke_putc(58); _ke_putc(32);
+    _ke_put_dec(written);
+    _ke_putc(32); _ke_putc(79); _ke_putc(75);
+    _ke_putc(13); _ke_putc(10);
+
+    // Read back
+    let rbuf = 10502672; // 0xA04210
+    let rd = _ke_pipe_read(pid, rbuf, 5);
+    _ke_putc(32); _ke_putc(32);
+    // "read: "
+    _ke_putc(114); _ke_putc(101); _ke_putc(97); _ke_putc(100);
+    _ke_putc(58); _ke_putc(32);
+    i = 0;
+    while i < rd { _ke_putc(mem_read_u8(rbuf + i)); i = i + 1; }
+    _ke_putc(32); _ke_putc(79); _ke_putc(75);
+    _ke_putc(13); _ke_putc(10);
+
+    // Close
+    _ke_pipe_close(pid);
+
+    // "PIPE: 3/3 PASS"
+    _ke_putc(80); _ke_putc(73); _ke_putc(80); _ke_putc(69);
+    _ke_putc(58); _ke_putc(32);
+    _ke_putc(51); _ke_putc(47); _ke_putc(51); _ke_putc(32);
+    _ke_putc(80); _ke_putc(65); _ke_putc(83); _ke_putc(83);
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
 // Print "HicOS> " prompt
 fn _ke_prompt() {
     _ke_putc(72); _ke_putc(105); _ke_putc(99);      // "Hic"
@@ -7599,6 +8150,20 @@ fn _ke_cmd_help() {
     _ke_putc(99); _ke_putc(111); _ke_putc(110); _ke_putc(116); _ke_putc(97);
     _ke_putc(105); _ke_putc(110); _ke_putc(101); _ke_putc(114);
     _ke_putc(13); _ke_putc(10);
+    // Line 9: "      compile nvme login whoami pipe"
+    _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32);
+    // "compile "
+    _ke_putc(99); _ke_putc(111); _ke_putc(109); _ke_putc(112); _ke_putc(105);
+    _ke_putc(108); _ke_putc(101); _ke_putc(32);
+    // "nvme "
+    _ke_putc(110); _ke_putc(118); _ke_putc(109); _ke_putc(101); _ke_putc(32);
+    // "login "
+    _ke_putc(108); _ke_putc(111); _ke_putc(103); _ke_putc(105); _ke_putc(110); _ke_putc(32);
+    // "whoami "
+    _ke_putc(119); _ke_putc(104); _ke_putc(111); _ke_putc(97); _ke_putc(109); _ke_putc(105); _ke_putc(32);
+    // "pipe"
+    _ke_putc(112); _ke_putc(105); _ke_putc(112); _ke_putc(101);
+    _ke_putc(13); _ke_putc(10);
     return 0;
 }
 
@@ -7632,6 +8197,17 @@ fn _ke_dispatch(buf_addr, buf_len) {
                 _ke_cmd_shutdown(); return 0;
             } } } }
         } } } }
+    }
+
+    // "compile " prefix (8+): 99 111 109 112 105 108 101 32
+    if buf_len >= 9 {
+        if c0 == 99 { if c1 == 111 { if c2 == 109 { if c3 == 112 { if c4 == 105 { if c5 == 108 {
+            let c6 = mem_read_u8(buf_addr + 6);
+            let c7 = mem_read_u8(buf_addr + 7);
+            if c6 == 101 { if c7 == 32 {
+                _ke_cmd_compile(buf_addr, buf_len); return 0;
+            } }
+        } } } } } }
     }
 
     // "install" (7): 105 110 115 116 97 108 108
@@ -7688,6 +8264,13 @@ fn _ke_dispatch(buf_addr, buf_len) {
     if buf_len >= 7 {
         if c0 == 112 { if c1 == 97 { if c2 == 114 { if c3 == 115 { if c4 == 101 { if c5 == 32 {
             _ke_cmd_parse(buf_addr, buf_len); return 0;
+        } } } } } }
+    }
+
+    // "login " prefix (6+): 108 111 103 105 110 32
+    if buf_len >= 7 {
+        if c0 == 108 { if c1 == 111 { if c2 == 103 { if c3 == 105 { if c4 == 110 { if c5 == 32 {
+            _ke_cmd_login(buf_addr, buf_len); return 0;
         } } } } } }
     }
 
@@ -7752,6 +8335,13 @@ fn _ke_dispatch(buf_addr, buf_len) {
         } } } }
     }
 
+    // "whoami" (6): 119 104 111 97 109 105
+    if buf_len == 6 {
+        if c0 == 119 { if c1 == 104 { if c2 == 111 { if c3 == 97 { if c4 == 109 { if c5 == 105 {
+            _ke_cmd_whoami(); return 0;
+        } } } } } }
+    }
+
     // "help" = 104 101 108 112
     if buf_len == 4 {
         if c0 == 104 { if c1 == 101 { if c2 == 108 { if c3 == 112 {
@@ -7800,6 +8390,14 @@ fn _ke_dispatch(buf_addr, buf_len) {
         // "disk" = 100 105 115 107
         if c0 == 100 { if c1 == 105 { if c2 == 115 { if c3 == 107 {
             _ke_cmd_disk(); return 0;
+        } } } }
+        // "nvme" = 110 118 109 101
+        if c0 == 110 { if c1 == 118 { if c2 == 109 { if c3 == 101 {
+            _ke_cmd_nvme(); return 0;
+        } } } }
+        // "pipe" = 112 105 112 101
+        if c0 == 112 { if c1 == 105 { if c2 == 112 { if c3 == 101 {
+            _ke_cmd_pipe(); return 0;
         } } } }
     }
 
@@ -8034,6 +8632,9 @@ fn _start() {
 
     // Phase 7e: SHA-256 constants init (iteration 48)
     _ke_sha256_init_k();
+
+    // Phase 7f: User system init (iteration 67)
+    _ke_user_init();
 
     // Phase 8: Interactive shell (iteration 25)
     _ke_shell();

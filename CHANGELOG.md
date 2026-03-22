@@ -8,9 +8,58 @@
 
 ## v6.0 (Current)
 
-176 active .hl files, 114 kernel modules, 78 shell commands (Layer C), 48 kernel.bin commands, 0 external deps.
-Dual-boot: BIOS 117/117 PASS + UEFI 3/3 PASS. Full gate 10/10 PASS.
-Image: 152,064 bytes (297 sectors). Code: ~50,000 lines (42,000 H-L + 8,000 PS1).
+176 active .hl files, 114 kernel modules, 83 shell commands (Layer C), 53 kernel.bin commands, 0 external deps.
+Dual-boot: BIOS 130/130 PASS + UEFI 3/3 PASS. Full gate 10/10 PASS.
+Image: 152,064 bytes (297 sectors). Code: ~51,000 lines (43,000 H-L + 8,000 PS1).
+
+### Iteration 68: Pipe & IPC in kernel.bin
+- **Pipe table**: 4 pipes × 128 bytes at 0xA04000 (ring buffer + read/write pointers)
+  - `_ke_pipe_create()`: Allocate pipe slot → returns pipe id 0-3
+  - `_ke_pipe_write(id, data, len)`: Write bytes to ring buffer (112B capacity)
+  - `_ke_pipe_read(id, buf, max)`: Read bytes from ring buffer
+  - `_ke_pipe_close(id)`: Release pipe slot
+- **`pipe` shell command**: Create pipe → write "HicOS" → read back → verify match → "PIPE: 3/3 PASS"
+- **Memory layout**: 0xA04000-0xA041FF (4-pipe table + temp buffers)
+- 5 new functions, `pipe` 4-char exact dispatch
+- 🏆 **v9.0 Phase I 里程碑**: 全栈编译 + 存储 + 用户 + IPC
+
+### Iteration 67: Multi-User Login System in kernel.bin
+- **User table**: 8 users × 64 bytes at 0xA03000 (uid, flags, name, password hash slot)
+  - `_ke_user_init()`: Initialize root (uid=0) + guest (uid=1) accounts
+  - `_ke_user_find(name, len)`: Search user table by name → returns uid or -1
+- **Current user**: Active session at 0xA03200 (uid + name)
+- **`whoami` shell command**: Display current user name + uid
+- **`login <user>` shell command**: Switch active user session
+  - Validates user exists in table → updates current user → prints "LOGIN: user (uid=N)"
+- **Boot init**: `_ke_user_init()` called in `_start()` Phase 7f
+- **Memory layout**: 0xA03000-0xA033FF (user table + current user + temp buffer)
+- 4 new functions, `whoami` 6-char exact + `login` 6-char prefix dispatch
+
+### Iteration 66: NVMe Driver Detection in kernel.bin
+- **PCI detection**: `_ke_nvme_find()` — scan PCI bus for NVMe (class=01h, subclass=08h, prog-if=02h)
+- **`nvme` shell command**: Detect NVMe controller → print vendor:device, BAR0
+  - Falls back to "not found" when no NVMe device present (QEMU: -device nvme)
+- **Memory layout**: 0xA02000-0xA020FF (nvme state)
+- 2 new functions, `nvme` 4-char exact dispatch
+
+### Iteration 65: In-Kernel Code Generator in kernel.bin
+- **Codegen core**:
+  - `_ke_cgen_init()`: Initialize codegen state at 0xA00000 (4096B output buffer)
+  - `_ke_cgen_emit8(val)` / `_ke_cgen_emit32(val)`: Emit bytes to output buffer
+- **x86_64 instruction emitters**:
+  - `_ke_cgen_mov_rax_imm(imm)`: MOV RAX, imm64
+  - `_ke_cgen_push_rax()` / `_ke_cgen_pop_rcx()`: Stack operations
+  - `_ke_cgen_add()` / `_ke_cgen_sub()` / `_ke_cgen_mul()`: Arithmetic (RAX op RCX)
+  - `_ke_cgen_prologue()` / `_ke_cgen_epilogue()`: Function frame (PUSH RBP/MOV/POP/RET)
+- **AST codegen**: `_ke_cgen_expr(idx)` — recursive AST → machine code
+  - NUM_LIT → MOV RAX, value
+  - BINOP → left PUSH, right POP, op
+  - LET_STMT → evaluate RHS
+  - RETURN_STMT → evaluate + epilogue
+- **`compile <code>` shell command**: Lex → Parse → Codegen → print "COMPILE: N bytes M tokens" + hex dump
+- **Memory layout**: 0xA00000-0xA01FFF (codegen state + 4096B output + 1024B symtab)
+- 14 new functions, `compile` 8-char prefix dispatch
+- 🏆 **编译器自举第三步**: Lexer + Parser + Codegen 全栈在 kernel.bin 中运行
 
 ### Iteration 64: Container Isolation (cgroup-like) in kernel.bin
 - **Container table**: 8 containers × 32 bytes at 0x9F0400

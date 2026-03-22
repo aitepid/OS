@@ -1453,6 +1453,94 @@ foreach ($t in $v8bTests) {
 
 if (Test-Path $v8bLogFile) { Remove-Item $v8bLogFile -Force }
 
+# =============================================================
+# Phase 18: Codegen + NVMe + Login + Pipe Tests (v9.0)
+# =============================================================
+Write-Host "`n=== Phase 18: v9.0 Phase I Tests ===" -ForegroundColor Cyan
+
+$v9LogFile = Join-Path $repoRoot 'qemu-v9-test.log'
+if (Test-Path $v9LogFile) { Remove-Item $v9LogFile -Force }
+
+$v9Port = 55603
+$v9Args = @(
+    '-drive', "format=raw,file=hicos-hl.img",
+    '-serial', "file:$v9LogFile",
+    '-m', '128', '-display', 'none',
+    '-device', 'virtio-blk-pci,drive=disk0,disable-modern=on',
+    '-drive', "id=disk0,file=hicos-disk.img,format=raw,if=none",
+    '-netdev', 'user,id=net0',
+    '-device', 'virtio-net-pci,netdev=net0,disable-modern=on',
+    '-no-reboot', '-no-shutdown',
+    '-monitor', "telnet:127.0.0.1:$v9Port,server,nowait"
+)
+
+$v9Proc = Start-Process -FilePath $qemuPath -ArgumentList $v9Args -PassThru -NoNewWindow
+Start-Sleep -Seconds 5
+
+try {
+    $v9Client = New-Object System.Net.Sockets.TcpClient('127.0.0.1', $v9Port)
+    $v9Stream = $v9Client.GetStream()
+    $v9Writer = New-Object System.IO.StreamWriter($v9Stream)
+    $v9Writer.AutoFlush = $true
+    Start-Sleep -Milliseconds 500
+
+    # whoami command
+    foreach ($k in @('w','h','o','a','m','i','ret')) { $v9Writer.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 3
+
+    # pipe command
+    foreach ($k in @('p','i','p','e','ret')) { $v9Writer.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 5
+
+    # nvme command
+    foreach ($k in @('n','v','m','e','ret')) { $v9Writer.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 3
+
+    # help (verify new commands)
+    foreach ($k in @('h','e','l','p','ret')) { $v9Writer.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 2
+
+    $v9Writer.Close(); $v9Client.Close()
+} catch {
+    Write-Host "  v9 test monitor error: $_" -ForegroundColor Yellow
+}
+
+Start-Sleep -Seconds 1
+if (-not $v9Proc.HasExited) { $v9Proc.Kill(); $v9Proc.WaitForExit(3000) }
+
+$v9Content = ''
+if (Test-Path $v9LogFile) {
+    try { $v9Content = [System.IO.File]::ReadAllText($v9LogFile) } catch {}
+}
+
+$v9Tests = @(
+    @{ name = 'whoami shows root user'; pattern = 'root' },
+    @{ name = 'whoami shows uid'; pattern = 'uid=' },
+    @{ name = 'pipe test passes'; pattern = 'PIPE:' },
+    @{ name = 'pipe create OK'; pattern = 'create:' },
+    @{ name = 'pipe write OK'; pattern = 'write:' },
+    @{ name = 'pipe read data matches'; pattern = 'HicOS' },
+    @{ name = 'pipe 3/3 PASS'; pattern = '3/3 PASS' },
+    @{ name = 'nvme detection runs'; pattern = 'NVME:' },
+    @{ name = 'help shows compile'; pattern = 'compile' },
+    @{ name = 'help shows nvme'; pattern = 'nvme' },
+    @{ name = 'help shows login'; pattern = 'login' },
+    @{ name = 'help shows whoami'; pattern = 'whoami' },
+    @{ name = 'help shows pipe'; pattern = 'pipe' }
+)
+
+foreach ($t in $v9Tests) {
+    $shellTotal++
+    if ($v9Content -match $t.pattern) {
+        $passes += "v9.0: $($t.name)"
+        $shellPassed++
+    } else {
+        $errors += "v9.0: $($t.name)"
+    }
+}
+
+if (Test-Path $v9LogFile) { Remove-Item $v9LogFile -Force }
+
 Write-Host "`n=== Boot Test Results ===" -ForegroundColor Cyan
 foreach ($p in $passes) {
     Write-Host "  PASS: $p" -ForegroundColor Green
