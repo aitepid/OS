@@ -1541,6 +1541,87 @@ foreach ($t in $v9Tests) {
 
 if (Test-Path $v9LogFile) { Remove-Item $v9LogFile -Force }
 
+# =============================================================
+# Phase 19: adduser + service + wifi + msg Tests (v9.0 Phase II)
+# =============================================================
+Write-Host "`n=== Phase 19: v9.0 Phase II Tests ===" -ForegroundColor Cyan
+
+$v9bLogFile = Join-Path $repoRoot 'qemu-v9b-test.log'
+if (Test-Path $v9bLogFile) { Remove-Item $v9bLogFile -Force }
+
+$v9bPort = 55604
+$v9bArgs = @(
+    '-drive', "format=raw,file=hicos-hl.img",
+    '-serial', "file:$v9bLogFile",
+    '-m', '128', '-display', 'none',
+    '-device', 'virtio-blk-pci,drive=disk0,disable-modern=on',
+    '-drive', "id=disk0,file=hicos-disk.img,format=raw,if=none",
+    '-netdev', 'user,id=net0',
+    '-device', 'virtio-net-pci,netdev=net0,disable-modern=on',
+    '-no-reboot', '-no-shutdown',
+    '-monitor', "telnet:127.0.0.1:$v9bPort,server,nowait"
+)
+
+$v9bProc = Start-Process -FilePath $qemuPath -ArgumentList $v9bArgs -PassThru -NoNewWindow
+Start-Sleep -Seconds 5
+
+try {
+    $v9bClient = New-Object System.Net.Sockets.TcpClient('127.0.0.1', $v9bPort)
+    $v9bStream = $v9bClient.GetStream()
+    $v9bWriter = New-Object System.IO.StreamWriter($v9bStream)
+    $v9bWriter.AutoFlush = $true
+    Start-Sleep -Milliseconds 500
+
+    foreach ($k in @('a','d','d','u','s','e','r','space','a','d','m','i','n','ret')) { $v9bWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 3
+    foreach ($k in @('s','e','r','v','i','c','e','ret')) { $v9bWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 3
+    foreach ($k in @('w','i','f','i','ret')) { $v9bWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 3
+    foreach ($k in @('m','s','g','ret')) { $v9bWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 3
+    foreach ($k in @('h','e','l','p','ret')) { $v9bWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 2
+
+    $v9bWriter.Close(); $v9bClient.Close()
+} catch {
+    Write-Host "  v9b test monitor error: $_" -ForegroundColor Yellow
+}
+
+Start-Sleep -Seconds 1
+if (-not $v9bProc.HasExited) { $v9bProc.Kill(); $v9bProc.WaitForExit(3000) }
+
+$v9bContent = ''
+if (Test-Path $v9bLogFile) {
+    try { $v9bContent = [System.IO.File]::ReadAllText($v9bLogFile) } catch {}
+}
+
+$v9bTests = @(
+    @{ name = 'adduser creates admin'; pattern = 'ADDUSER:' },
+    @{ name = 'adduser reports uid'; pattern = 'uid=' },
+    @{ name = 'service lists services'; pattern = 'SERVICE:' },
+    @{ name = 'service shows shell'; pattern = 'shell' },
+    @{ name = 'wifi command runs'; pattern = 'WIFI:' },
+    @{ name = 'msg command runs'; pattern = 'MSG:' },
+    @{ name = 'msg returns PING'; pattern = 'PING' },
+    @{ name = 'help shows adduser'; pattern = 'adduser' },
+    @{ name = 'help shows service'; pattern = 'service' },
+    @{ name = 'help shows wifi'; pattern = 'wifi' },
+    @{ name = 'help shows msg'; pattern = 'msg' }
+)
+
+foreach ($t in $v9bTests) {
+    $shellTotal++
+    if ($v9bContent -match $t.pattern) {
+        $passes += "v9.0b: $($t.name)"
+        $shellPassed++
+    } else {
+        $errors += "v9.0b: $($t.name)"
+    }
+}
+
+if (Test-Path $v9bLogFile) { Remove-Item $v9bLogFile -Force }
+
 Write-Host "`n=== Boot Test Results ===" -ForegroundColor Cyan
 foreach ($p in $passes) {
     Write-Host "  PASS: $p" -ForegroundColor Green

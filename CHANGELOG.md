@@ -8,9 +8,34 @@
 
 ## v6.0 (Current)
 
-176 active .hl files, 114 kernel modules, 83 shell commands (Layer C), 53 kernel.bin commands, 0 external deps.
-Dual-boot: BIOS 130/130 PASS + UEFI 3/3 PASS. Full gate 10/10 PASS.
-Image: 152,064 bytes (297 sectors). Code: ~51,000 lines (43,000 H-L + 8,000 PS1).
+176 active .hl files, 114 kernel modules, 87 shell commands (Layer C), 57 kernel.bin commands, 0 external deps.
+Dual-boot: BIOS 141/141 PASS + UEFI 3/3 PASS. Full gate 10/10 PASS.
+Image: 152,064 bytes (297 sectors). Code: ~51,600 lines (43,600 H-L + 8,000 PS1).
+
+### Iteration 72: Message Queue IPC in kernel.bin
+- **Message queues**: 4 channels × 128 bytes at `0xA05000`
+  - `_ke_msg_send(chan, buf, len)`: 写入通道环形队列
+  - `_ke_msg_recv(chan, buf, max_len)`: 从通道读取消息
+- **`msg` shell command**: 发送 `PING` → 接收回环 → 输出 `MSG: PING`
+- 3 new functions, `msg` 3-char exact dispatch
+
+### Iteration 71: WiFi 802.11 Controller Detection in kernel.bin
+- **PCI scan**: `_ke_wifi_find()` — 扫描 `class=0x02, subclass=0x80` 无线控制器
+- **`wifi` shell command**: 输出设备槽位 + `BAR0`，无设备时输出 `not found`
+- 2 new functions, `wifi` 4-char exact dispatch
+
+### Iteration 70: Service Manager in kernel.bin
+- **Service table**: 8 entries at `0xA04400`
+  - `_ke_service_init()`: 初始化 `shell` / `dhcp` / `http` / `wm`
+  - `_ke_service_print_name(id)`: 输出服务名
+- **`service` shell command**: 列出 4 个服务及 `ON/OFF` 状态
+- 3 new functions, `service` 7-char exact dispatch
+
+### Iteration 69: User Management Completion in kernel.bin
+- **User creation**: `_ke_user_add(name, len)` — 分配用户槽位并写入用户名
+- **`adduser <name>` shell command**: 创建新用户并输出 `uid`
+- 补齐 iteration 67 中 `whoami/adduser` 任务闭环
+- 2 new functions, `adduser` 8-char prefix dispatch
 
 ### Iteration 68: Pipe & IPC in kernel.bin
 - **Pipe table**: 4 pipes × 128 bytes at 0xA04000 (ring buffer + read/write pointers)

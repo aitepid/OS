@@ -8008,6 +8008,216 @@ fn _ke_cmd_pipe() {
     return 0;
 }
 
+// === Iteration 69: User Management Completion ===
+//
+// Add missing adduser command for multi-user workflow.
+
+fn _ke_user_add(name_addr, name_len) {
+    let ut = 10498048; // 0xA03000
+    let mut slot = 0;
+    while slot < 8 {
+        let off = slot * 64;
+        if _ke_mem_r32(ut + off + 4) == 0 {
+            _ke_mem_w32(ut + off, slot);
+            _ke_mem_w32(ut + off + 4, 1);
+            let mut i = 0;
+            while i < 16 {
+                mem_write_u8(ut + off + 8 + i, 0);
+                i = i + 1;
+            }
+            i = 0;
+            while i < name_len {
+                if i >= 15 { i = name_len; }
+                else {
+                    mem_write_u8(ut + off + 8 + i, mem_read_u8(name_addr + i));
+                    i = i + 1;
+                }
+            }
+            return slot;
+        }
+        slot = slot + 1;
+    }
+    return 0 - 1;
+}
+
+fn _ke_cmd_adduser(buf_addr, buf_len) {
+    let name_addr = buf_addr + 8;
+    let name_len = buf_len - 8;
+    if name_len <= 0 {
+        _ke_putc(85); _ke_putc(115); _ke_putc(97); _ke_putc(103); _ke_putc(101);
+        _ke_putc(58); _ke_putc(32);
+        _ke_putc(97); _ke_putc(100); _ke_putc(100); _ke_putc(117); _ke_putc(115); _ke_putc(101); _ke_putc(114);
+        _ke_putc(32); _ke_putc(60); _ke_putc(117); _ke_putc(115); _ke_putc(101); _ke_putc(114); _ke_putc(62);
+        _ke_putc(13); _ke_putc(10);
+        return 0;
+    }
+    let uid = _ke_user_add(name_addr, name_len);
+    _ke_putc(65); _ke_putc(68); _ke_putc(68); _ke_putc(85); _ke_putc(83); _ke_putc(69); _ke_putc(82);
+    _ke_putc(58); _ke_putc(32);
+    if uid < 0 {
+        _ke_putc(102); _ke_putc(117); _ke_putc(108); _ke_putc(108);
+    } else {
+        let mut i = 0;
+        while i < name_len { _ke_putc(mem_read_u8(name_addr + i)); i = i + 1; }
+        _ke_putc(32); _ke_putc(40); _ke_putc(117); _ke_putc(105); _ke_putc(100); _ke_putc(61);
+        _ke_put_dec(uid);
+        _ke_putc(41);
+    }
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
+// === Iteration 70: Service Manager ===
+//
+// Service table at 0xA04400, 8 entries x 16 bytes.
+
+fn _ke_service_init() {
+    let st = 10503168;
+    let mut i = 0;
+    while i < 128 {
+        mem_write_u8(st + i, 0);
+        i = i + 1;
+    }
+    _ke_mem_w32(st + 0, 1); _ke_mem_w32(st + 4, 1);
+    _ke_mem_w32(st + 16, 2); _ke_mem_w32(st + 20, 1);
+    _ke_mem_w32(st + 32, 3); _ke_mem_w32(st + 36, 0);
+    _ke_mem_w32(st + 48, 4); _ke_mem_w32(st + 52, 0);
+    return 0;
+}
+
+fn _ke_service_print_name(id) {
+    if id == 1 { _ke_putc(115); _ke_putc(104); _ke_putc(101); _ke_putc(108); _ke_putc(108); return 0; }
+    if id == 2 { _ke_putc(100); _ke_putc(104); _ke_putc(99); _ke_putc(112); return 0; }
+    if id == 3 { _ke_putc(104); _ke_putc(116); _ke_putc(116); _ke_putc(112); return 0; }
+    if id == 4 { _ke_putc(119); _ke_putc(109); return 0; }
+    _ke_putc(63);
+    return 0;
+}
+
+fn _ke_cmd_service() {
+    _ke_service_init();
+    let st = 10503168;
+    _ke_putc(83); _ke_putc(69); _ke_putc(82); _ke_putc(86); _ke_putc(73); _ke_putc(67); _ke_putc(69);
+    _ke_putc(58); _ke_putc(32); _ke_putc(52); _ke_putc(32);
+    _ke_putc(115); _ke_putc(101); _ke_putc(114); _ke_putc(118); _ke_putc(105); _ke_putc(99); _ke_putc(101); _ke_putc(115);
+    _ke_putc(13); _ke_putc(10);
+    let mut i = 0;
+    while i < 4 {
+        let off = i * 16;
+        _ke_putc(32); _ke_putc(32);
+        _ke_service_print_name(_ke_mem_r32(st + off));
+        _ke_putc(32);
+        if _ke_mem_r32(st + off + 4) == 1 {
+            _ke_putc(79); _ke_putc(78);
+        } else {
+            _ke_putc(79); _ke_putc(70); _ke_putc(70);
+        }
+        _ke_putc(13); _ke_putc(10);
+        i = i + 1;
+    }
+    return 0;
+}
+
+// === Iteration 71: WiFi Detection ===
+//
+// Scan PCI for network controller / wireless class.
+
+fn _ke_wifi_find() {
+    let mut dev = 0;
+    while dev < 32 {
+        let reg2 = _ke_pci_read(0, dev, 0, 2);
+        let class_code = reg2 / 16777216;
+        let subclass = (reg2 / 65536) % 256;
+        if class_code == 2 {
+            if subclass == 128 { return dev; }
+        }
+        dev = dev + 1;
+    }
+    return 255;
+}
+
+fn _ke_cmd_wifi() {
+    let dev = _ke_wifi_find();
+    _ke_putc(87); _ke_putc(73); _ke_putc(70); _ke_putc(73); _ke_putc(58); _ke_putc(32);
+    if dev == 255 {
+        _ke_putc(110); _ke_putc(111); _ke_putc(116); _ke_putc(32); _ke_putc(102); _ke_putc(111); _ke_putc(117); _ke_putc(110); _ke_putc(100);
+        _ke_putc(13); _ke_putc(10);
+        return 0;
+    }
+    _ke_putc(100); _ke_putc(101); _ke_putc(118); _ke_putc(61);
+    _ke_put_dec(dev);
+    _ke_putc(32);
+    _ke_putc(66); _ke_putc(65); _ke_putc(82); _ke_putc(48); _ke_putc(61);
+    _ke_put_hex32(_ke_pci_read(0, dev, 0, 4));
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
+// === Iteration 72: Message Queue IPC ===
+//
+// Message queues at 0xA05000, 4 queues x 128 bytes.
+
+fn _ke_msg_send(chan, buf_addr, buf_len) {
+    if chan < 0 { return 0 - 1; }
+    if chan >= 4 { return 0 - 1; }
+    let mt = 10506240;
+    let off = chan * 128;
+    let mut count = _ke_mem_r32(mt + off + 12);
+    let mut wp = _ke_mem_r32(mt + off + 8);
+    let mut i = 0;
+    while i < buf_len {
+        if count >= 112 { i = buf_len; }
+        else {
+            mem_write_u8(mt + off + 16 + wp, mem_read_u8(buf_addr + i));
+            wp = (wp + 1) % 112;
+            count = count + 1;
+            i = i + 1;
+        }
+    }
+    _ke_mem_w32(mt + off + 8, wp);
+    _ke_mem_w32(mt + off + 12, count);
+    return i;
+}
+
+fn _ke_msg_recv(chan, buf_addr, max_len) {
+    if chan < 0 { return 0 - 1; }
+    if chan >= 4 { return 0 - 1; }
+    let mt = 10506240;
+    let off = chan * 128;
+    let mut count = _ke_mem_r32(mt + off + 12);
+    let mut rp = _ke_mem_r32(mt + off + 4);
+    let mut i = 0;
+    while i < max_len {
+        if count == 0 { i = max_len; }
+        else {
+            mem_write_u8(buf_addr + i, mem_read_u8(mt + off + 16 + rp));
+            rp = (rp + 1) % 112;
+            count = count - 1;
+            i = i + 1;
+        }
+    }
+    _ke_mem_w32(mt + off + 4, rp);
+    _ke_mem_w32(mt + off + 12, count);
+    return i;
+}
+
+fn _ke_cmd_msg() {
+    let mt = 10506240;
+    let mut i = 0;
+    while i < 512 { mem_write_u8(mt + i, 0); i = i + 1; }
+    let sb = 10506752;
+    mem_write_u8(sb + 0, 80); mem_write_u8(sb + 1, 73); mem_write_u8(sb + 2, 78); mem_write_u8(sb + 3, 71);
+    let n = _ke_msg_send(0, sb, 4);
+    let rb = 10506768;
+    let m = _ke_msg_recv(0, rb, 4);
+    _ke_putc(77); _ke_putc(83); _ke_putc(71); _ke_putc(58); _ke_putc(32);
+    let mut j = 0;
+    while j < m { _ke_putc(mem_read_u8(rb + j)); j = j + 1; }
+    _ke_putc(32); _ke_put_dec(n); _ke_putc(47); _ke_put_dec(m);
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
 // Print "HicOS> " prompt
 fn _ke_prompt() {
     _ke_putc(72); _ke_putc(105); _ke_putc(99);      // "Hic"
