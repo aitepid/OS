@@ -1,107 +1,79 @@
 # HicOS Architecture
 
-HicOS is a bare-metal x86_64 operating system written entirely in H-L (Hilbert-Lang).
-114 kernel modules, 27 userspace modules, 60 shell commands (Layer C), 18 QEMU-verified commands, zero external dependencies.
-Dual-boot: BIOS/MBR (148 KB) + UEFI/GPT (33 MB, PE32+ BOOTX64.EFI).
+## Overview
+
+HicOS is no longer a single-layer execution OS; it has evolved into a three-layer system:
+
+| Layer | Medium | Current Role |
+|---|---|---|
+| A | `scripts/rebuild-image.ps1` → `hicos-hl.img` | Generates and maintains the current bootable BIOS image path |
+| B | `hl-bootstrap.hl` | Bootstraps the compiler, interpreter, and the image/compiler toolchain source |
+| C | `bare-kernel/hl/*.hl` | Contains the kernel source, module logic, and `kernel.bin` compilation inputs |
+
+These layers have merged but not completely vanished as a single path:
+- Image construction still relies on `rebuild-image.ps1`
+- The compilation entry point now prioritizes `hl-bootstrap-build-test.ps1`
+- `kernel.bin` is integrated into the imaging process and its functionality is continually being expanded
 
 ## Boot Chain
 
-### BIOS Path (verified: 42/42 QEMU checks)
-```
-stage1.hl (MBR 512B) → stage2.hl (real→protected→long mode)
-  → kernel_entry.hl (IDT + PIC + PIT + keyboard + mouse)
-  → kernel_init.hl (9-subsystem initialization)
-  → shell.hl (interactive serial shell, 60 commands)
-```
+### BIOS Path
 
-### UEFI Path (verified: 3/3 QEMU checks)
-```
-OVMF firmware → GPT (CRC32 + 128 entries + backup)
-  → ESP FAT16 (\EFI\BOOT\BOOTX64.EFI)
-  → PE32+ entry (serial 0x3F8 + EFI ConOut)
-  → "HicOS UEFI OK" + "HicOS UEFI Boot OK"
+```text
+stage1 / MBR
+→ stage2
+→ long mode
+→ handwritten/bootstrap-assisted kernel path
+→ CALL kernel.bin _start
+→ kernel_entry.hl
+→ shell / subsystem commands
 ```
 
-## Memory Map
+### UEFI Path
 
-| Range | Size | Purpose |
-|---|---|---|
-| 0x000000–0x0FFFFF | 1 MB | Real mode, BIOS, boot stack |
-| 0x100000–0x1FFFFF | 1 MB | Kernel code (.text) |
-| 0x200000–0x2FFFFF | 1 MB | Page tables (PML4/PDPT/PD/PT) |
-| 0x300000–0x3FFFFF | 1 MB | Kernel heap (kmalloc, first-fit) |
-| 0x400000–0x7FFFFF | 4 MB | Page frame bitmap (128 MB physical) |
-| 0x800000–0x83FFFF | 256 KB | Task table (64 tasks × 4 KB) |
-| 0x840000–0x87FFFF | 256 KB | IPC message queues (16 × 16 KB) |
-| 0x880000–0x8BFFFF | 256 KB | VFS inode/dentry cache |
-| 0x8C0000–0x8FFFFF | 256 KB | FD tables (64 tasks × 16 FDs) |
-| 0x900000–0x91FFFF | 128 KB | Pipe buffers (32 × 4 KB) |
-| 0x920000–0x9FFFFF | 896 KB | Env vars, firmware staging |
-| 0xFD000000 | 3 MB | VESA linear framebuffer (1024×768×32) |
+```text
+OVMF
+→ GPT + ESP
+→ BOOTX64.EFI
+→ UEFI启动输出与镜像链路验证
+```
 
-## Subsystem Architecture (114 modules)
+## Current Key Source Locations
 
-### Layer 0: Boot (3 modules)
-stage1, stage2, kernel_entry
+- `bare-kernel/hl/kernel_entry.hl`
+  - `_start`
+  - Interrupt initialization
+  - Command dispatch for `kernel.bin`
+  - Recently integrated environment variable and signal handling commands
+- `bare-kernel/hl/kernel_init.hl`
+  - Layer C initialization sequence definitions
+- `bare-kernel/hl/shell.hl`
+  - Layer C serial Shell, currently with `56` commands as per comments
+- `scripts/hl-compile-pipeline.ps1`
+  - Current H-L compilation pipeline script entry
+- `scripts/rebuild-image.ps1`
+  - BIOS image rebuilder
+- `scripts/hl-bootstrap-build-test.ps1`
+  - Currently recommended unified build/verification entry point
 
-### Layer 1: Core Services (17 modules)
-mem, serial, kmalloc, page_alloc, virt_mem, hilbert_alloc, alloc, swap,
-timer, rtc, task, sched, sync, signal, exception, panic, env
+## Recently Confirmed Architectural Facts
 
-### Layer 2: Hardware Drivers (15 modules)
-scancode, mouse, framebuffer, vesa, pci, acpi, lapic, audio, mixer,
-usb, usb_storage, usb_hid, usb_hub, virtio_net, virtio_blk
+- The `kill` command in `shell.hl` has switched to signal semantics
+- `kernel_entry.hl` has incorporated iterations 73/74:
+  - Environment variables: `env` / `setenv` / `echo`
+  - Signal handling: `kill`, pending/blocked bitmask, enhanced `ps` signal list
+- Current codebase size:
+  - `176` active `.hl` files
+  - `114` kernel modules
+  - `19` `scripts/*.ps1` files
 
-### Layer 3: Filesystems (14 modules)
-ramfs, fat16, ext2, ext4, ntfs, tmpfs, block_cache, inotify, sysfs, vfs, devfs, procfs, elf, firmware
+## Verification Criteria
 
-### Layer 4: Networking (14 modules)
-net, arp, udp, tcp, icmp, dhcp, dns, ipv6, ntp, netfilter, http, tls, wifi, bluetooth
+This document synchronization only retains the conclusions that have been reviewed in this round:
+- `hl-bootstrap-build-test.ps1` passed
+- `boot-readiness.ps1` passed
+- `runtime-path-readiness.ps1` passed
+- `image-layout-readiness.ps1` passed
+- `release-validate.ps1` passed
 
-### Layer 5: Graphics & UI (4 modules)
-gpu, multimon, wm, terminal
-
-### Layer 6: Process & IPC (11 modules)
-posix, mmap, poll, pty, socket, shm, eventfd, pipe, ipc, syscall, usermode
-
-### Layer 7: Security & Users (5 modules)
-tls, random, cgroup, users, smp
-
-### Layer 8: Compiler & Codegen (4 modules)
-ir, regalloc, abi, codegen
-
-Pipeline: AST → H-IR → Optimize (const-fold, DCE, strength-reduce) → Linear-scan regalloc → x86_64
-x86 encoder: 126 instructions (16-bit real, 32-bit protected, 64-bit long mode)
-
-### Layer 9: System Services (6 modules)
-power, syslog, watchdog, trace, hrtimer, kernel_init
-
-### Layer 10: UEFI & Install (5 modules)
-uefi_boot, gpt, secure_boot, installer, build
-
-### Layer 11: Shell & Login (2 modules)
-login, shell (60 commands, depends on everything)
-
-### Meta (7 modules, not compiled into kernel)
-build, boot, test, test-runner, lint, posix_test, kinterp
-
-## Dependency Graph
-
-See `bare-kernel/hl/kernel_init.hl` for the full 113-module dependency map.
-
-## QEMU Verification Status
-
-| Test Suite | Result | Checks |
-|---|---|---|
-| BIOS boot | ✅ PASSED | 42/42 (serial→PCI→VirtIO→VESA→shell→FAT16→DHCP→DNS→Ring3) |
-| UEFI boot | ✅ PASSED | 3/3 (OVMF→GPT→ESP→PE32+) |
-| Binary analysis | ✅ PASSED | 13/13 (MBR+Stage1+Stage2+Kernel) |
-| Full gate | ✅ PASSED | 7/7 (all subsystems) |
-
-## Subsystems
-114 modules organized by dependency order in build.hl.
-See kernel_init.hl for full module dependency map.
-## Update: Build System
-
-The build and toolchain of HicOS have transitioned entirely to Hilbert-Lang using hl-bootstrap-build-test.ps1. Phase 1 compilation pipeline (lexer) is complete. The system compiles its OS modules entirely with its own tools.
-
+Historical data that has not been completely re-verified in this round will no longer be presented as "latest facts" in this document.

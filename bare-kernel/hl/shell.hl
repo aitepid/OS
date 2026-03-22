@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 55 commands:
+// 56 commands:
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -15,7 +15,8 @@ fn shell_handle(cmd) {
         serial_print("=== HicOS Shell Commands ===");
         serial_print("System:   help ver uptime date uname reboot shutdown kinfo");
         serial_print("Memory:   free heap meminfo");
-        serial_print("Tasks:    ps kill run");
+        serial_print("Tasks:    ps kill run (kill sends SIGTERM by default)");
+        serial_print("Signals:  SIGTERM=15 SIGKILL=9 SIGSTOP=19 SIGCONT=18");
         serial_print("Files:    ls cat echo mkdir rm");
         serial_print("Disk:     disk_info format install");
         serial_print("Network:  ifconfig ping dns arp");
@@ -212,8 +213,8 @@ fn shell_handle(cmd) {
     if str_starts_with(cmd, "kill ") {
         let pid_str = str_sub(cmd, 5, len(cmd));
         let pid = parse_int(pid_str);
-        task_kill(pid);
-        return "Killed PID " + to_string(pid);
+        signal_send(pid, SIGTERM);
+        return "Sent SIGTERM to PID " + to_string(pid);
     }
 
     return "Unknown command: " + cmd + ". Type 'help'.";
@@ -336,7 +337,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 55 commands");
+print("shell.hl loaded -- 56 commands");
 
 // Main shell loop (called from kernel_init)
 fn shell_main() {

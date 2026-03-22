@@ -1,96 +1,61 @@
-﻿# HicOS vs Windows/macOS/Linux — 深度技术对标分析
+﻿# HicOS vs Windows / macOS / Linux
 
-## 1. 架构对比
+## 文档口径
 
-| 维度 | Linux 6.x | Windows NT | macOS (XNU) | HicOS 6.0 |
-|------|-----------|------------|-------------|-----------|
-| 语言 | C + asm | C + C++ + asm | C + C++ + asm | **H-L (Hilbert-Lang)** |
-| 代码量 | ~28M LOC | ~50M LOC | ~8M LOC | **~46K LOC** |
-| 内核模型 | 单一 + 模块 | 混合微核 | 混合 Mach+BSD | 单一 (解释器+native) |
-| 调度器 | CFS 红黑树 O(log n) | 多级反馈队列 O(1) | Mach decay O(1) | CFS 线性扫描 O(n) |
-| 内存 | buddy + slab | 段页式 + pool | Mach zones | buddy page_alloc + kmalloc |
-| 文件系统 | VFS + ext4/btrfs | NTFS/ReFS | APFS | VFS + ramfs + fat16 + ext2 |
-| 网络 | 完整 TCP/IP | WinSock/WFP | BSD sockets | TCP/UDP/ICMP/ARP/DNS/DHCP |
-| 驱动 | /dev + sysfs | WDM/WDF | IOKit | devfs + PCI/VirtIO/USB |
+本文件不再使用夸张式“全面对标完成”的写法，而是只基于当前仓库可见源码、镜像构建链与本轮已复核结果做保守对比。
 
-## 2. 四维差距对比
+## 总体判断
 
-### 性能维度
+| 维度 | Windows / macOS / Linux | HicOS 当前状态 |
+|---|---|---|
+| 工程成熟度 | 生产级，长期真实硬件演进 | 实验性、自举导向、QEMU/镜像优先 |
+| 语言体系 | 多语言混合 | 纯 `Hilbert-Lang` + PowerShell 脚本入口 |
+| 构建链 | 成熟原生工具链 | `hl-bootstrap` 正在成为统一入口 |
+| 运行形态 | 全用户态生态完整 | 当前重点仍在内核/镜像/编译链闭环 |
+| 硬件覆盖 | 大规模真实硬件 | 以虚拟化/镜像验证为主 |
 
-| 子项 | Linux | Windows | macOS | HicOS | 差距 |
-|------|-------|---------|-------|-------|------|
-| I/O 多路复用 | epoll/io_uring | IOCP | kqueue | epoll RB-tree + ready-list | 🟢 |
-| 内存分配 | slab O(1) | pool O(1) | zone O(1) | kmalloc 线性 | 🟡 |
-| 调度 | O(log n) | O(1) | O(1) | O(log n) 最小堆 | 🟢 |
-| 上下文切换 | 1-3μs | 2-5μs | 1-3μs | 模拟 | 🔴 |
-| 零拷贝 | splice/sendfile | TransmitFile | sendfile | 无 | 🔴 |
-| SIMD | AVX-512 | AVX2 | NEON/AVX2 | SSE 桩 | 🟡 |
-| 中断 | LAPIC+NAPI | MSI-X | MSI | LAPIC+PIC 已激活 | 🟢 |
+## HicOS 的真实优势
 
-### 稳定性维度
+1. **单语言目标明确**
+   - 内核源码、编译器源码、规划文档都围绕 `Hilbert-Lang`
+   - 项目规则明确要求不引入 JS / Rust / JSON 新依赖
 
-| 子项 | Linux | Windows | macOS | HicOS | 差距 |
-|------|-------|---------|-------|-------|------|
-| 异常处理 | IDT + oops | SEH + BSOD | Mach exc | exception + panic | 🟢 |
-| 看门狗 | soft/hard lockup | DPC | watchdog | NMI watchdog | 🟢 |
-| 锁原语 | spin/mutex/RCU | ERESOURCE | lck_mtx | spin/mutex/rw/futex | 🟢 |
-| 栈保护 | guard + canary | /GS + guard | stack guard | 无 | 🔴 |
-| 死锁检测 | lockdep | verifier | 无 | 无 | 🟡 |
+2. **自举路径清晰**
+   - `hl-bootstrap.hl` 是明确存在的自举工具链源码
+   - `scripts/hl-bootstrap-build-test.ps1` 已成为主入口
 
-### 跨端一致性维度
+3. **源码可审计性强**
+   - 仓库规模远小于主流操作系统
+   - 顶层路径、镜像脚本、内核入口都集中可查
 
-| 子项 | Linux | Windows | macOS | HicOS | 差距 |
-|------|-------|---------|-------|-------|------|
-| POSIX | 完整 | WSL2 | 完整 | fork/exec/wait/pipe | 🟡 |
-| 硬件抽象 | DT+ACPI | HAL+ACPI | IOKit+DT | ACPI+PCI 已激活 | 🟡 |
-| 编译目标 | x86/ARM/RISC-V | x86/ARM | x86/ARM | x86-64 only | 🟡 |
-| ABI 稳定 | 永不破坏 | NT 稳定 | 偶尔变 | 无版本化 | 🔴 |
+## HicOS 当前不足
 
-### 开发者体验维度
+1. **验证口径长期混杂**
+   - 历史文档里混有“源码存在”“已接入镜像”“已完整验证”三种口径
+   - 本轮已开始清理，但仍需要后续持续同步
 
-| 子项 | Linux | Windows | macOS | HicOS | 差距 |
-|------|-------|---------|-------|-------|------|
-| 构建 | Kbuild | MSBuild | xcodebuild | build.hl 自举 | 🟢 |
-| 调试 | kgdb+ftrace | WinDbg | lldb+dtrace | trace+serial | 🟡 |
-| 热加载 | insmod | 签名驱动 | kext废弃 | 无 | 🔴 |
-| **语言一致性** | C+Rust | C/C++ | ObjC/C++ | **100% H-L** | ✅ 优势 |
-| **可读性** | 需C专家 | 需NT知识 | 需Mach知识 | **脚本级** | ✅ 优势 |
-| **自举** | 需GCC | 需MSVC | 需Clang | **H-L自举** | ✅ 优势 |
+2. **真实硬件与完整门禁结论不能随意泛化**
+   - 本轮未完整跑通 `full-gate.ps1`
+   - 因此不能把历史数字继续当作最新事实
 
-## 3. 原子级消除差距计划
+3. **生态能力与主流系统不可直接等量齐观**
+   - 当前更接近“实验性内核 + 自举工具链 + 镜像体系”
+   - 不应写成已达到 Windows/macOS/Linux 的运行成熟度
 
-### Phase 1: I/O (🔴→🟢)
-- 1.1 ✅ poll.hl → epoll 模型 (红黑树 fd 集 + 就绪链表) — **已完成 v4.5**
-- 1.2 vfs_sendfile 零拷贝
-- 1.3 新建 io_uring.hl 异步 I/O
+## 当前更合适的定位
 
-### Phase 2: 调度器 (🟡→🟢)
-- 2.1 ✅ task_pick_next → 最小堆 O(log n) — **已完成 v4.4**
-- 2.2 Per-CPU 运行队列 + 负载均衡
+HicOS 的核心价值不在于“已经接近主流桌面 OS 成熟度”，而在于：
+- 以纯 H-L 持续推进从编译器到内核的全栈闭环
+- 将 `kernel.bin` 逐步接入真实镜像启动链
+- 在保持项目纯度前提下扩展系统功能
 
-### Phase 3: 内存 (🟡→🟢)
-- 3.1 kmalloc → slab 分配器
-- 3.2 4级页表 PML4→PDPT→PD→PT
+## 建议对标方式
 
-### Phase 4: 安全 (🔴→🟢)
-- 4.1 栈守卫页
-- 4.2 SMEP/SMAP 启用
-- 4.3 syscall 指针校验
-- 4.4 ABI 版本号
+未来文档建议只保留三类结论：
+- **源码已存在**
+- **已接入镜像/命令路径**
+- **本轮已实际验证**
 
-## 4. HicOS 独特优势
-
-| 优势 | 详情 |
-|------|------|
-| 单语言全栈 | bootloader→kernel→userspace 全 H-L |
-| Hilbert 寻址 | 3D 曲线内存布局，天然局部性 |
-| 自举编译 | tokenizer→parser→eval→codegen 全 H-L |
-| 46K LOC | Linux 的 1/600，极致可审计 |
-| 零依赖 | 无 libc/GCC/LLVM |
-
-## Update: Build System
-
-The build and toolchain of HicOS have transitioned entirely to Hilbert-Lang using hl-bootstrap-build-test.ps1. Phase 1 compilation pipeline (lexer) is complete. The system compiles its OS modules entirely with its own tools.
-
+这样对比主流系统时才不会继续产生失真。
 
 
