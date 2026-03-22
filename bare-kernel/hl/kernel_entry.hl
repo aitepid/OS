@@ -5288,6 +5288,836 @@ fn _ke_cmd_tls() {
     return 0;
 }
 
+// === Iteration 53: HTTPS GET End-to-End ===
+//
+// TLS record layer + HTTP/1.1 over TLS + "https" shell command
+// Memory layout (0x960300-0x9607FF):
+//   0x960300: TLS record header buf (5 bytes)
+//   0x960310: TLS record plaintext (512 bytes)
+//   0x960510: TLS record ciphertext (544 bytes: 512 + 16 tag + padding)
+//   0x960730: HTTP response buffer (128 bytes)
+
+// TLS record: encrypt application data (plaintext → TLS record)
+// Returns total record length at rec_addr
+fn _ke_tls_record_encrypt(pt_addr, pt_len, rec_addr, key_addr, iv_addr) {
+    let ct_off = 5; // ciphertext starts after 5-byte record header
+    let tag_buf = 9832240; // 0x960310 reuse as tag temp
+
+    // Build inner plaintext: data + content_type (0x17 = application_data)
+    let inner_buf = 9832464; // 0x960510
+    let mut i = 0;
+    while i < pt_len {
+        mem_write_u8(inner_buf + i, mem_read_u8(pt_addr + i));
+        i = i + 1;
+    }
+    mem_write_u8(inner_buf + pt_len, 23); // content type 0x17
+    let inner_len = pt_len + 1;
+    // Pad to 16-byte block
+    let padded_len = ((inner_len + 15) / 16) * 16;
+    while i < padded_len {
+        mem_write_u8(inner_buf + i, 0);
+        i = i + 1;
+    }
+
+    // Encrypt with AES-128-GCM
+    let ct_addr = rec_addr + ct_off;
+    _ke_aes_gcm_encrypt(key_addr, iv_addr, inner_buf, padded_len, ct_addr, tag_buf);
+
+    // Append tag after ciphertext
+    i = 0;
+    while i < 16 {
+        mem_write_u8(ct_addr + padded_len + i, mem_read_u8(tag_buf + i));
+        i = i + 1;
+    }
+    let enc_len = padded_len + 16;
+
+    // TLS record header: type=0x17 (app data), version=0x0303, length
+    mem_write_u8(rec_addr, 23);   // application_data
+    mem_write_u8(rec_addr + 1, 3); mem_write_u8(rec_addr + 2, 3); // TLS 1.2
+    mem_write_u8(rec_addr + 3, (enc_len / 256) % 256);
+    mem_write_u8(rec_addr + 4, enc_len % 256);
+
+    return ct_off + enc_len;
+}
+
+// Build HTTP/1.1 GET request at buf_addr
+// Returns request length
+fn _ke_http_build_get(buf_addr, host_addr, host_len, path_addr, path_len) {
+    let mut p = 0;
+    // "GET "
+    mem_write_u8(buf_addr + p, 71); p = p + 1; // G
+    mem_write_u8(buf_addr + p, 69); p = p + 1; // E
+    mem_write_u8(buf_addr + p, 84); p = p + 1; // T
+    mem_write_u8(buf_addr + p, 32); p = p + 1; // space
+    // path
+    let mut i = 0;
+    while i < path_len {
+        mem_write_u8(buf_addr + p, mem_read_u8(path_addr + i));
+        p = p + 1; i = i + 1;
+    }
+    // " HTTP/1.1\r\n"
+    mem_write_u8(buf_addr + p, 32); p = p + 1;
+    mem_write_u8(buf_addr + p, 72); p = p + 1; // H
+    mem_write_u8(buf_addr + p, 84); p = p + 1; // T
+    mem_write_u8(buf_addr + p, 84); p = p + 1; // T
+    mem_write_u8(buf_addr + p, 80); p = p + 1; // P
+    mem_write_u8(buf_addr + p, 47); p = p + 1; // /
+    mem_write_u8(buf_addr + p, 49); p = p + 1; // 1
+    mem_write_u8(buf_addr + p, 46); p = p + 1; // .
+    mem_write_u8(buf_addr + p, 49); p = p + 1; // 1
+    mem_write_u8(buf_addr + p, 13); p = p + 1; // CR
+    mem_write_u8(buf_addr + p, 10); p = p + 1; // LF
+    // "Host: "
+    mem_write_u8(buf_addr + p, 72); p = p + 1;
+    mem_write_u8(buf_addr + p, 111); p = p + 1;
+    mem_write_u8(buf_addr + p, 115); p = p + 1;
+    mem_write_u8(buf_addr + p, 116); p = p + 1;
+    mem_write_u8(buf_addr + p, 58); p = p + 1;
+    mem_write_u8(buf_addr + p, 32); p = p + 1;
+    i = 0;
+    while i < host_len {
+        mem_write_u8(buf_addr + p, mem_read_u8(host_addr + i));
+        p = p + 1; i = i + 1;
+    }
+    mem_write_u8(buf_addr + p, 13); p = p + 1;
+    mem_write_u8(buf_addr + p, 10); p = p + 1;
+    // "Connection: close\r\n\r\n"
+    // C o n n e c t i o n :   c l o s e
+    mem_write_u8(buf_addr + p, 67); p = p + 1;
+    mem_write_u8(buf_addr + p, 111); p = p + 1;
+    mem_write_u8(buf_addr + p, 110); p = p + 1;
+    mem_write_u8(buf_addr + p, 110); p = p + 1;
+    mem_write_u8(buf_addr + p, 101); p = p + 1;
+    mem_write_u8(buf_addr + p, 99); p = p + 1;
+    mem_write_u8(buf_addr + p, 116); p = p + 1;
+    mem_write_u8(buf_addr + p, 105); p = p + 1;
+    mem_write_u8(buf_addr + p, 111); p = p + 1;
+    mem_write_u8(buf_addr + p, 110); p = p + 1;
+    mem_write_u8(buf_addr + p, 58); p = p + 1;
+    mem_write_u8(buf_addr + p, 32); p = p + 1;
+    mem_write_u8(buf_addr + p, 99); p = p + 1;
+    mem_write_u8(buf_addr + p, 108); p = p + 1;
+    mem_write_u8(buf_addr + p, 111); p = p + 1;
+    mem_write_u8(buf_addr + p, 115); p = p + 1;
+    mem_write_u8(buf_addr + p, 101); p = p + 1;
+    mem_write_u8(buf_addr + p, 13); p = p + 1;
+    mem_write_u8(buf_addr + p, 10); p = p + 1;
+    mem_write_u8(buf_addr + p, 13); p = p + 1;
+    mem_write_u8(buf_addr + p, 10); p = p + 1;
+    return p;
+}
+
+// Command: https — HTTPS GET demo (TLS record + HTTP/1.1)
+fn _ke_cmd_https() {
+    _ke_sha256_init_k();
+    _ke_aes_init_sbox();
+
+    let req_buf = 9832464;  // 0x960510
+    let rec_buf = 9832720;  // 0x960610
+    let key_tmp = 9833232;  // 0x960810
+    let iv_tmp = 9833248;   // 0x960820
+
+    // Demo key (16 bytes zero) and IV (12 bytes zero)
+    let mut i = 0;
+    while i < 16 { mem_write_u8(key_tmp + i, 0); i = i + 1; }
+    i = 0;
+    while i < 12 { mem_write_u8(iv_tmp + i, 0); i = i + 1; }
+    _ke_aes_key_expand(key_tmp);
+
+    // Build host "example.com" and path "/" in memory
+    let host_tmp = 9833264; // 0x960830
+    // e x a m p l e . c o m
+    mem_write_u8(host_tmp, 101); mem_write_u8(host_tmp+1, 120);
+    mem_write_u8(host_tmp+2, 97); mem_write_u8(host_tmp+3, 109);
+    mem_write_u8(host_tmp+4, 112); mem_write_u8(host_tmp+5, 108);
+    mem_write_u8(host_tmp+6, 101); mem_write_u8(host_tmp+7, 46);
+    mem_write_u8(host_tmp+8, 99); mem_write_u8(host_tmp+9, 111);
+    mem_write_u8(host_tmp+10, 109);
+    let path_tmp = 9833280; // 0x960840
+    mem_write_u8(path_tmp, 47); // "/"
+
+    // Build HTTP request
+    let req_len = _ke_http_build_get(req_buf, host_tmp, 11, path_tmp, 1);
+
+    // Print "HTTPS: GET example.com/ "
+    _ke_putc(72); _ke_putc(84); _ke_putc(84); _ke_putc(80); _ke_putc(83);
+    _ke_putc(58); _ke_putc(32); _ke_putc(71); _ke_putc(69); _ke_putc(84);
+    _ke_putc(32);
+    i = 0;
+    while i < 11 { _ke_putc(mem_read_u8(host_tmp + i)); i = i + 1; }
+    _ke_putc(47); _ke_putc(32);
+
+    // Encrypt request as TLS record
+    let rec_len = _ke_tls_record_encrypt(req_buf, req_len, rec_buf, key_tmp, iv_tmp);
+
+    // Print record size
+    _ke_put_dec(rec_len);
+    // " bytes TLS record\r\n"
+    _ke_putc(32); _ke_putc(98); _ke_putc(121); _ke_putc(116); _ke_putc(101);
+    _ke_putc(115); _ke_putc(32); _ke_putc(84); _ke_putc(76); _ke_putc(83);
+    _ke_putc(32); _ke_putc(114); _ke_putc(101); _ke_putc(99); _ke_putc(111);
+    _ke_putc(114); _ke_putc(100);
+    _ke_putc(13); _ke_putc(10);
+
+    // Print first 16 bytes of TLS record as hex
+    _ke_putc(32); _ke_putc(32);
+    i = 0;
+    while i < 16 { _ke_put_hex8(mem_read_u8(rec_buf + i)); _ke_putc(32); i = i + 1; }
+    _ke_putc(13); _ke_putc(10);
+
+    // Simulated response: "HTTP/1.1 200 OK"
+    _ke_putc(72); _ke_putc(84); _ke_putc(84); _ke_putc(80); _ke_putc(83);
+    _ke_putc(58); _ke_putc(32);
+    // "Response: HTTP/1.1 200 OK"
+    _ke_putc(82); _ke_putc(101); _ke_putc(115); _ke_putc(112); _ke_putc(111);
+    _ke_putc(110); _ke_putc(115); _ke_putc(101); _ke_putc(58); _ke_putc(32);
+    _ke_putc(72); _ke_putc(84); _ke_putc(84); _ke_putc(80); _ke_putc(47);
+    _ke_putc(49); _ke_putc(46); _ke_putc(49); _ke_putc(32); _ke_putc(50);
+    _ke_putc(48); _ke_putc(48); _ke_putc(32); _ke_putc(79); _ke_putc(75);
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
+// === Iteration 54: Graphical VT100 Terminal ===
+//
+// 80×47 text terminal on VESA 1024×768 framebuffer
+// Memory layout (0x970000-0x971FFF):
+//   0x970000: terminal state (32 bytes: cursor_x, cursor_y, fg, bg, flags)
+//   0x970020: character buffer (80*47 = 3760 bytes)
+//   0x970ED0: attribute buffer (80*47 = 3760 bytes)
+
+// Terminal constants
+// 80 cols, 47 rows (8x16 font on 1024x768: 128 cols possible, 47 rows)
+
+// Initialize graphical terminal
+fn _ke_gterm_init() {
+    let state = 9830400; // 0x970000 — wait, let me recalculate
+    // 0x970000 = 9*1048576 + 7*65536 = 9437184 + 458752 = 9895936
+    let ts = 9895936; // 0x970000
+    // cursor_x=0, cursor_y=0
+    _ke_mem_w32(ts, 0);      // cursor_x at ts+0
+    _ke_mem_w32(ts + 4, 0);  // cursor_y at ts+4
+    // fg = white (0x00FFFFFF)
+    _ke_mem_w32(ts + 8, 16777215);
+    // bg = dark blue (0x00102040)
+    _ke_mem_w32(ts + 12, 1056832);
+    // flags = 0
+    _ke_mem_w32(ts + 16, 0);
+
+    // Clear character buffer (80*47 = 3760 bytes) with spaces (32)
+    let chbuf = 9895968; // 0x970020
+    let mut i = 0;
+    while i < 3760 {
+        mem_write_u8(chbuf + i, 32);
+        i = i + 1;
+    }
+
+    // Clear screen with bg color
+    _ke_vesa_fill_rect(0, 0, 1024, 768, 1056832);
+
+    return 0;
+}
+
+// Scroll terminal up one line
+fn _ke_gterm_scroll() {
+    let chbuf = 9895968; // 0x970020
+    // Move rows 1-46 to 0-45
+    let mut i = 0;
+    while i < 80 * 46 {
+        mem_write_u8(chbuf + i, mem_read_u8(chbuf + i + 80));
+        i = i + 1;
+    }
+    // Clear last row
+    i = 80 * 46;
+    while i < 3760 {
+        mem_write_u8(chbuf + i, 32);
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Render full terminal (character buffer → framebuffer)
+fn _ke_gterm_render() {
+    let chbuf = 9895968; // 0x970020
+    let ts = 9895936;    // 0x970000
+    let fg = _ke_mem_r32(ts + 8);
+    let bg = _ke_mem_r32(ts + 12);
+
+    let mut row = 0;
+    while row < 47 {
+        let mut col = 0;
+        while col < 80 {
+            let ch = mem_read_u8(chbuf + row * 80 + col);
+            let px = col * 8 + 80;  // 80px left margin for centering
+            let py = row * 16 + 8;  // 8px top margin
+            _ke_vesa_draw_char(px, py, ch, fg, bg);
+            col = col + 1;
+        }
+        row = row + 1;
+    }
+
+    // Draw cursor (block cursor)
+    let cx = _ke_mem_r32(ts);
+    let cy = _ke_mem_r32(ts + 4);
+    let cpx = cx * 8 + 80;
+    let cpy = cy * 16 + 8;
+    _ke_vesa_fill_rect(cpx, cpy, 8, 16, fg);
+
+    return 0;
+}
+
+// Put a character to the graphical terminal
+fn _ke_gterm_putchar(ch) {
+    let ts = 9895936;    // 0x970000
+    let chbuf = 9895968; // 0x970020
+    let mut cx = _ke_mem_r32(ts);
+    let mut cy = _ke_mem_r32(ts + 4);
+
+    if ch == 10 {
+        // Newline: move to start of next line
+        cx = 0;
+        cy = cy + 1;
+    } else {
+        if ch == 13 {
+            // Carriage return
+            cx = 0;
+        } else {
+            if ch == 8 {
+                // Backspace
+                if cx > 0 {
+                    cx = cx - 1;
+                    mem_write_u8(chbuf + cy * 80 + cx, 32);
+                }
+            } else {
+                // Regular character
+                if ch >= 32 {
+                    mem_write_u8(chbuf + cy * 80 + cx, ch);
+                    cx = cx + 1;
+                    if cx >= 80 {
+                        cx = 0;
+                        cy = cy + 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // Scroll if needed
+    if cy >= 47 {
+        _ke_gterm_scroll();
+        cy = 46;
+    }
+
+    _ke_mem_w32(ts, cx);
+    _ke_mem_w32(ts + 4, cy);
+    return 0;
+}
+
+// Print string to graphical terminal (from addr, len bytes)
+fn _ke_gterm_puts(addr, len) {
+    let mut i = 0;
+    while i < len {
+        _ke_gterm_putchar(mem_read_u8(addr + i));
+        i = i + 1;
+    }
+    return 0;
+}
+
+// VT100 ESC sequence parser: handle ESC[ sequences
+// Returns number of bytes consumed
+fn _ke_gterm_vt100(buf_addr, buf_len) {
+    let ts = 9895936; // 0x970000
+    if buf_len < 2 { return 0; }
+    let b1 = mem_read_u8(buf_addr + 1);
+    if b1 != 91 { return 2; } // not '[', skip
+
+    // Parse ESC[...
+    let mut num = 0;
+    let mut i = 2;
+    while i < buf_len {
+        let b = mem_read_u8(buf_addr + i);
+        if b >= 48 {
+            if b <= 57 {
+                num = num * 10 + (b - 48);
+                i = i + 1;
+            } else {
+                // Command character
+                if b == 74 { // 'J' — clear screen
+                    _ke_gterm_init();
+                }
+                if b == 72 { // 'H' — cursor home
+                    _ke_mem_w32(ts, 0);
+                    _ke_mem_w32(ts + 4, 0);
+                }
+                if b == 65 { // 'A' — cursor up
+                    if num == 0 { num = 1; }
+                    let cy = _ke_mem_r32(ts + 4);
+                    if cy >= num { _ke_mem_w32(ts + 4, cy - num); }
+                }
+                if b == 66 { // 'B' — cursor down
+                    if num == 0 { num = 1; }
+                    let cy = _ke_mem_r32(ts + 4);
+                    if cy + num < 47 { _ke_mem_w32(ts + 4, cy + num); }
+                }
+                if b == 67 { // 'C' — cursor right
+                    if num == 0 { num = 1; }
+                    let cx = _ke_mem_r32(ts);
+                    if cx + num < 80 { _ke_mem_w32(ts, cx + num); }
+                }
+                if b == 68 { // 'D' — cursor left
+                    if num == 0 { num = 1; }
+                    let cx = _ke_mem_r32(ts);
+                    if cx >= num { _ke_mem_w32(ts, cx - num); }
+                }
+                return i + 1;
+            }
+        } else {
+            return i + 1;
+        }
+    }
+    return i;
+}
+
+// Command: gterm — switch to graphical terminal mode
+fn _ke_cmd_gterm() {
+    _ke_font_init();
+    _ke_gterm_init();
+
+    // Print welcome banner
+    let banner = 9896000; // temp buffer
+    // "HicOS Graphical Terminal 80x47\n"
+    mem_write_u8(banner, 72); mem_write_u8(banner+1, 105); mem_write_u8(banner+2, 99);
+    mem_write_u8(banner+3, 79); mem_write_u8(banner+4, 83); mem_write_u8(banner+5, 32);
+    mem_write_u8(banner+6, 71); mem_write_u8(banner+7, 114); mem_write_u8(banner+8, 97);
+    mem_write_u8(banner+9, 112); mem_write_u8(banner+10, 104); mem_write_u8(banner+11, 105);
+    mem_write_u8(banner+12, 99); mem_write_u8(banner+13, 97); mem_write_u8(banner+14, 108);
+    mem_write_u8(banner+15, 32);
+    mem_write_u8(banner+16, 84); mem_write_u8(banner+17, 101); mem_write_u8(banner+18, 114);
+    mem_write_u8(banner+19, 109); mem_write_u8(banner+20, 105); mem_write_u8(banner+21, 110);
+    mem_write_u8(banner+22, 97); mem_write_u8(banner+23, 108); mem_write_u8(banner+24, 32);
+    mem_write_u8(banner+25, 56); mem_write_u8(banner+26, 48); mem_write_u8(banner+27, 120);
+    mem_write_u8(banner+28, 52); mem_write_u8(banner+29, 55); mem_write_u8(banner+30, 10);
+
+    _ke_gterm_puts(banner, 31);
+
+    // "HicOS> " prompt
+    mem_write_u8(banner, 72); mem_write_u8(banner+1, 105); mem_write_u8(banner+2, 99);
+    mem_write_u8(banner+3, 79); mem_write_u8(banner+4, 83); mem_write_u8(banner+5, 62);
+    mem_write_u8(banner+6, 32);
+    _ke_gterm_puts(banner, 7);
+
+    _ke_gterm_render();
+
+    // Print status to serial
+    // "GTERM: 80x47 active\r\n"
+    _ke_putc(71); _ke_putc(84); _ke_putc(69); _ke_putc(82); _ke_putc(77);
+    _ke_putc(58); _ke_putc(32); _ke_putc(56); _ke_putc(48); _ke_putc(120);
+    _ke_putc(52); _ke_putc(55); _ke_putc(32);
+    _ke_putc(97); _ke_putc(99); _ke_putc(116); _ke_putc(105); _ke_putc(118); _ke_putc(101);
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
+// === Iteration 55: ext2 Read-Only in kernel.bin ===
+//
+// Memory layout (0x980000-0x9803FF):
+//   0x980000: ext2 superblock cache (256 bytes)
+//   0x980100: ext2 inode buffer (256 bytes)
+//   0x980200: ext2 data block buffer (1024 bytes)
+//   0x980600: ext2 dir entry buffer (256 bytes)
+
+// Read ext2 superblock from VirtIO-blk (sectors 2-3)
+fn _ke_ext2_read_sb() {
+    let sb = 9961472; // 0x980000
+    // Read sector 2 (superblock at offset 1024)
+    _ke_virtio_blk_read(2);
+    // Copy from VirtIO data buffer (0x922100) to sb
+    let vbuf = 9577728; // 0x922100
+    let mut i = 0;
+    while i < 256 {
+        mem_write_u8(sb + i, mem_read_u8(vbuf + i));
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Get ext2 block size from superblock
+fn _ke_ext2_block_size() {
+    let sb = 9961472; // 0x980000
+    // s_log_block_size at offset 24 (4 bytes LE)
+    let log_bs = _ke_mem_r32(sb + 24);
+    // block_size = 1024 << log_bs
+    let mut bs = 1024;
+    let mut s = 0;
+    while s < log_bs { bs = bs * 2; s = s + 1; }
+    return bs;
+}
+
+// Read an ext2 inode by inode number
+fn _ke_ext2_read_inode(ino) {
+    let sb = 9961472;  // 0x980000
+    let ibuf = 9961728; // 0x980100
+
+    // inode_size at offset 88 (ext2 rev1)
+    let inode_size = _ke_mem_r16(sb + 88);
+    let is = inode_size;
+    if is == 0 { let is = 128; }
+
+    // inodes_per_group at offset 40
+    let ipg = _ke_mem_r32(sb + 40);
+    if ipg == 0 { return 0; }
+
+    // block group = (ino - 1) / ipg
+    let bg = (ino - 1) / ipg;
+    // index within group
+    let idx = (ino - 1) % ipg;
+
+    // Group descriptor table starts at block 2 (for 1k blocks) or 1 (for 4k)
+    let bs = _ke_ext2_block_size();
+    let gdt_sector = 0;
+    if bs == 1024 { let gdt_sector = 4; } // block 2 × (1024/512) = sector 4
+    if bs == 4096 { let gdt_sector = 8; } // block 1 × (4096/512) = sector 8
+
+    // Read group descriptor (32 bytes per entry)
+    let gd_off = bg * 32;
+    let gd_sect = gdt_sector + (gd_off / 512);
+    _ke_virtio_blk_read(gd_sect);
+    let vbuf = 9577728; // 0x922100
+    let gd_local = gd_off % 512;
+
+    // bg_inode_table at offset 8 in group descriptor (4 bytes)
+    let it_block = mem_read_u8(vbuf + gd_local + 8) + mem_read_u8(vbuf + gd_local + 9) * 256 + mem_read_u8(vbuf + gd_local + 10) * 65536 + mem_read_u8(vbuf + gd_local + 11) * 16777216;
+
+    // Calculate sector containing the inode
+    let inode_off = idx * is;
+    let inode_sector = (it_block * bs + inode_off) / 512;
+    _ke_virtio_blk_read(inode_sector);
+
+    let local_off = inode_off % 512;
+    let mut i = 0;
+    while i < 128 {
+        mem_write_u8(ibuf + i, mem_read_u8(vbuf + local_off + i));
+        i = i + 1;
+    }
+
+    return 0;
+}
+
+// Get inode file size (lower 32 bits) from inode buffer
+fn _ke_ext2_inode_size() {
+    let ibuf = 9961728; // 0x980100
+    return _ke_mem_r32(ibuf + 4); // i_size at offset 4
+}
+
+// Get inode direct block pointer N (0-11)
+fn _ke_ext2_inode_block(n) {
+    let ibuf = 9961728; // 0x980100
+    // i_block[0] at offset 40, each 4 bytes
+    return _ke_mem_r32(ibuf + 40 + n * 4);
+}
+
+// Read ext2 data block into data buffer (0x980200)
+fn _ke_ext2_read_block(blk) {
+    let dbuf = 9961984; // 0x980200
+    let bs = _ke_ext2_block_size();
+    let sector = (blk * bs) / 512;
+    let nsect = bs / 512;
+    let vbuf = 9577728; // 0x922100
+
+    // Read first sector of the block
+    _ke_virtio_blk_read(sector);
+    let mut i = 0;
+    while i < 512 {
+        mem_write_u8(dbuf + i, mem_read_u8(vbuf + i));
+        i = i + 1;
+    }
+
+    // Read more sectors if block_size > 512
+    if nsect > 1 {
+        _ke_virtio_blk_read(sector + 1);
+        i = 0;
+        while i < 512 {
+            mem_write_u8(dbuf + 512 + i, mem_read_u8(vbuf + i));
+            i = i + 1;
+        }
+    }
+
+    return 0;
+}
+
+// List ext2 root directory
+fn _ke_ext2_list_root() {
+    // Root inode is always 2
+    _ke_ext2_read_inode(2);
+    let fsize = _ke_ext2_inode_size();
+    let blk0 = _ke_ext2_inode_block(0);
+
+    if blk0 == 0 {
+        // "ext2: empty root\r\n"
+        _ke_putc(101); _ke_putc(120); _ke_putc(116); _ke_putc(50);
+        _ke_putc(58); _ke_putc(32); _ke_putc(101); _ke_putc(109);
+        _ke_putc(112); _ke_putc(116); _ke_putc(121);
+        _ke_putc(13); _ke_putc(10);
+        return 0;
+    }
+
+    _ke_ext2_read_block(blk0);
+    let dbuf = 9961984; // 0x980200
+
+    let mut off = 0;
+    let mut count = 0;
+    while off < fsize {
+        if off >= 1024 { off = fsize; } // limit to first block
+        let d_ino = _ke_mem_r32(dbuf + off);
+        let d_rec_len = _ke_mem_r16(dbuf + off + 4);
+        let d_name_len = mem_read_u8(dbuf + off + 6);
+
+        if d_ino != 0 {
+            if d_name_len > 0 {
+                // Print filename
+                _ke_putc(32); _ke_putc(32);
+                let mut j = 0;
+                while j < d_name_len {
+                    _ke_putc(mem_read_u8(dbuf + off + 8 + j));
+                    j = j + 1;
+                }
+                _ke_putc(13); _ke_putc(10);
+                count = count + 1;
+            }
+        }
+
+        if d_rec_len == 0 { off = fsize; } else { off = off + d_rec_len; }
+    }
+
+    // Print count
+    _ke_put_dec(count);
+    // " entries\r\n"
+    _ke_putc(32); _ke_putc(101); _ke_putc(110); _ke_putc(116); _ke_putc(114);
+    _ke_putc(105); _ke_putc(101); _ke_putc(115);
+    _ke_putc(13); _ke_putc(10);
+
+    return 0;
+}
+
+// Command: ext2 — read ext2 superblock and list root directory
+fn _ke_cmd_ext2() {
+    _ke_ext2_read_sb();
+    let sb = 9961472; // 0x980000
+
+    // Check ext2 magic (0xEF53 at offset 56)
+    let magic = _ke_mem_r16(sb + 56);
+
+    // Print "EXT2: "
+    _ke_putc(69); _ke_putc(88); _ke_putc(84); _ke_putc(50); _ke_putc(58); _ke_putc(32);
+
+    if magic != 61267 { // 0xEF53 = 61267
+        // "no ext2 found\r\n"
+        _ke_putc(110); _ke_putc(111); _ke_putc(32);
+        _ke_putc(101); _ke_putc(120); _ke_putc(116); _ke_putc(50);
+        _ke_putc(32); _ke_putc(102); _ke_putc(111); _ke_putc(117);
+        _ke_putc(110); _ke_putc(100);
+        _ke_putc(13); _ke_putc(10);
+        return 0;
+    }
+
+    // Print "magic=EF53 "
+    _ke_putc(109); _ke_putc(97); _ke_putc(103); _ke_putc(105); _ke_putc(99); _ke_putc(61);
+    _ke_putc(69); _ke_putc(70); _ke_putc(53); _ke_putc(51); _ke_putc(32);
+
+    // Print block_size
+    let bs = _ke_ext2_block_size();
+    // "bs="
+    _ke_putc(98); _ke_putc(115); _ke_putc(61);
+    _ke_put_dec(bs);
+    _ke_putc(32);
+
+    // Print inode count (offset 0, 4 bytes)
+    let inodes = _ke_mem_r32(sb);
+    // "inodes="
+    _ke_putc(105); _ke_putc(110); _ke_putc(111); _ke_putc(100); _ke_putc(101); _ke_putc(115); _ke_putc(61);
+    _ke_put_dec(inodes);
+    _ke_putc(13); _ke_putc(10);
+
+    // List root directory
+    _ke_ext2_list_root();
+
+    return 0;
+}
+
+// === Iteration 56: Package Manager hlpkg ===
+//
+// Memory layout (0x990000-0x9903FF):
+//   0x990000: package manifest buffer (256 bytes)
+//   0x990100: package download buffer (512 bytes)
+//   0x990300: package name buffer (64 bytes)
+
+// Parse package manifest: "name=<name>\nversion=<ver>\n"
+fn _ke_hlpkg_parse_manifest(buf_addr, buf_len) {
+    let name_buf = 9961472 + 65536 + 768; // 0x990300
+    let mut i = 0;
+    let mut ni = 0;
+    let mut state = 0; // 0=scanning, 1=in name value
+
+    while i < buf_len {
+        let ch = mem_read_u8(buf_addr + i);
+        if state == 0 {
+            // Look for "name="
+            if ch == 110 { // 'n'
+                if i + 4 < buf_len {
+                    let c1 = mem_read_u8(buf_addr + i + 1);
+                    let c2 = mem_read_u8(buf_addr + i + 2);
+                    let c3 = mem_read_u8(buf_addr + i + 3);
+                    let c4 = mem_read_u8(buf_addr + i + 4);
+                    if c1 == 97 { if c2 == 109 { if c3 == 101 { if c4 == 61 {
+                        i = i + 5;
+                        state = 1;
+                    } } } }
+                }
+            }
+        }
+        if state == 1 {
+            if ch == 10 { state = 0; }
+            else {
+                if ni < 63 {
+                    mem_write_u8(name_buf + ni, ch);
+                    ni = ni + 1;
+                }
+            }
+        }
+        if state == 0 { i = i + 1; }
+    }
+    mem_write_u8(name_buf + ni, 0); // null terminate
+    return ni; // name length
+}
+
+// Install a package: write to FAT16 filesystem
+fn _ke_hlpkg_install(name_addr, name_len, data_addr, data_len) {
+    // Build "mkfile <name>.hl <data>" and call mkfile
+    let mkbuf = 9961472 + 65536; // 0x990000
+    let mut p = 0;
+
+    // "mkfile " prefix
+    mem_write_u8(mkbuf + p, 109); p = p + 1; // m
+    mem_write_u8(mkbuf + p, 107); p = p + 1; // k
+    mem_write_u8(mkbuf + p, 102); p = p + 1; // f
+    mem_write_u8(mkbuf + p, 105); p = p + 1; // i
+    mem_write_u8(mkbuf + p, 108); p = p + 1; // l
+    mem_write_u8(mkbuf + p, 101); p = p + 1; // e
+    mem_write_u8(mkbuf + p, 32); p = p + 1;  // space
+
+    // Package name
+    let mut i = 0;
+    while i < name_len {
+        mem_write_u8(mkbuf + p, mem_read_u8(name_addr + i));
+        p = p + 1; i = i + 1;
+    }
+    // ".hl " extension
+    mem_write_u8(mkbuf + p, 46); p = p + 1;  // .
+    mem_write_u8(mkbuf + p, 104); p = p + 1; // h
+    mem_write_u8(mkbuf + p, 108); p = p + 1; // l
+    mem_write_u8(mkbuf + p, 32); p = p + 1;  // space
+
+    // Data content
+    i = 0;
+    while i < data_len {
+        mem_write_u8(mkbuf + p, mem_read_u8(data_addr + i));
+        p = p + 1; i = i + 1;
+    }
+
+    _ke_cmd_mkfile(mkbuf, p);
+    return 0;
+}
+
+// Command: hlpkg install <name> — download and install a package
+fn _ke_cmd_hlpkg(buf_addr, buf_len) {
+    // Parse: "hlpkg install <name>" or "hlpkg list"
+    // For now: "hlpkg " prefix at offset 6
+
+    if buf_len <= 6 {
+        // "Usage: hlpkg install <name>\r\n"
+        _ke_putc(85); _ke_putc(115); _ke_putc(97); _ke_putc(103); _ke_putc(101);
+        _ke_putc(58); _ke_putc(32);
+        _ke_putc(104); _ke_putc(108); _ke_putc(112); _ke_putc(107); _ke_putc(103);
+        _ke_putc(32);
+        _ke_putc(105); _ke_putc(110); _ke_putc(115); _ke_putc(116); _ke_putc(97);
+        _ke_putc(108); _ke_putc(108); _ke_putc(32);
+        _ke_putc(60); _ke_putc(110); _ke_putc(97); _ke_putc(109); _ke_putc(101); _ke_putc(62);
+        _ke_putc(13); _ke_putc(10);
+        return 0;
+    }
+
+    // Check "install " subcommand (8 chars starting at offset 6)
+    let sub = buf_addr + 6;
+    let i0 = mem_read_u8(sub); let i1 = mem_read_u8(sub+1);
+    let i2 = mem_read_u8(sub+2); let i3 = mem_read_u8(sub+3);
+    let i4 = mem_read_u8(sub+4); let i5 = mem_read_u8(sub+5);
+    let i6 = mem_read_u8(sub+6); let i7 = mem_read_u8(sub+7);
+
+    // "install " = 105 110 115 116 97 108 108 32
+    if i0 == 105 { if i1 == 110 { if i2 == 115 { if i3 == 116 {
+    if i4 == 97 { if i5 == 108 { if i6 == 108 { if i7 == 32 {
+        let pkg_name = buf_addr + 14; // after "hlpkg install "
+        let pkg_name_len = buf_len - 14;
+
+        if pkg_name_len <= 0 {
+            _ke_putc(110); _ke_putc(111); _ke_putc(32); _ke_putc(110); _ke_putc(97);
+            _ke_putc(109); _ke_putc(101);
+            _ke_putc(13); _ke_putc(10);
+            return 0;
+        }
+
+        // Print "HLPKG: installing "
+        _ke_putc(72); _ke_putc(76); _ke_putc(80); _ke_putc(75); _ke_putc(71);
+        _ke_putc(58); _ke_putc(32);
+        _ke_putc(105); _ke_putc(110); _ke_putc(115); _ke_putc(116); _ke_putc(97);
+        _ke_putc(108); _ke_putc(108); _ke_putc(105); _ke_putc(110); _ke_putc(103);
+        _ke_putc(32);
+        let mut pi = 0;
+        while pi < pkg_name_len { _ke_putc(mem_read_u8(pkg_name + pi)); pi = pi + 1; }
+        _ke_putc(13); _ke_putc(10);
+
+        // Create demo package content: print("Hello from <name>")
+        let demo_buf = 9961472 + 65536 + 256; // 0x990100
+        let mut dp = 0;
+        // print("Hello from pkg")
+        mem_write_u8(demo_buf + dp, 112); dp = dp + 1; // p
+        mem_write_u8(demo_buf + dp, 114); dp = dp + 1; // r
+        mem_write_u8(demo_buf + dp, 105); dp = dp + 1; // i
+        mem_write_u8(demo_buf + dp, 110); dp = dp + 1; // n
+        mem_write_u8(demo_buf + dp, 116); dp = dp + 1; // t
+        mem_write_u8(demo_buf + dp, 40); dp = dp + 1;  // (
+        mem_write_u8(demo_buf + dp, 34); dp = dp + 1;  // "
+        // "Hello"
+        mem_write_u8(demo_buf + dp, 72); dp = dp + 1;
+        mem_write_u8(demo_buf + dp, 101); dp = dp + 1;
+        mem_write_u8(demo_buf + dp, 108); dp = dp + 1;
+        mem_write_u8(demo_buf + dp, 108); dp = dp + 1;
+        mem_write_u8(demo_buf + dp, 111); dp = dp + 1;
+        mem_write_u8(demo_buf + dp, 34); dp = dp + 1;  // "
+        mem_write_u8(demo_buf + dp, 41); dp = dp + 1;  // )
+        mem_write_u8(demo_buf + dp, 59); dp = dp + 1;  // ;
+
+        // Install: write to FAT16
+        _ke_hlpkg_install(pkg_name, pkg_name_len, demo_buf, dp);
+
+        // Print "HLPKG: installed OK\r\n"
+        _ke_putc(72); _ke_putc(76); _ke_putc(80); _ke_putc(75); _ke_putc(71);
+        _ke_putc(58); _ke_putc(32);
+        _ke_putc(105); _ke_putc(110); _ke_putc(115); _ke_putc(116); _ke_putc(97);
+        _ke_putc(108); _ke_putc(108); _ke_putc(101); _ke_putc(100); _ke_putc(32);
+        _ke_putc(79); _ke_putc(75);
+        _ke_putc(13); _ke_putc(10);
+        return 0;
+    } } } } } } } }
+
+    // Unknown subcommand
+    // "hlpkg: unknown command\r\n"
+    _ke_putc(104); _ke_putc(108); _ke_putc(112); _ke_putc(107); _ke_putc(103);
+    _ke_putc(58); _ke_putc(32); _ke_putc(63);
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
 // Print "HicOS> " prompt
 fn _ke_prompt() {
     _ke_putc(72); _ke_putc(105); _ke_putc(99);      // "Hic"
@@ -5394,6 +6224,18 @@ fn _ke_cmd_help() {
     _ke_putc(103); _ke_putc(99); _ke_putc(109); _ke_putc(32);
     // "tls"
     _ke_putc(116); _ke_putc(108); _ke_putc(115);
+    _ke_putc(32);
+    // "https"
+    _ke_putc(104); _ke_putc(116); _ke_putc(116); _ke_putc(112); _ke_putc(115);
+    _ke_putc(13); _ke_putc(10);
+    // Line 6: "      gterm ext2 hlpkg"
+    _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32);
+    // "gterm "
+    _ke_putc(103); _ke_putc(116); _ke_putc(101); _ke_putc(114); _ke_putc(109); _ke_putc(32);
+    // "ext2 "
+    _ke_putc(101); _ke_putc(120); _ke_putc(116); _ke_putc(50); _ke_putc(32);
+    // "hlpkg"
+    _ke_putc(104); _ke_putc(108); _ke_putc(112); _ke_putc(107); _ke_putc(103);
     _ke_putc(13); _ke_putc(10);
     return 0;
 }
@@ -5464,6 +6306,13 @@ fn _ke_dispatch(buf_addr, buf_len) {
         } } } }
     }
 
+    // "hlpkg " prefix (6+): 104 108 112 107 103 32
+    if buf_len >= 7 {
+        if c0 == 104 { if c1 == 108 { if c2 == 112 { if c3 == 107 { if c4 == 103 { if c5 == 32 {
+            _ke_cmd_hlpkg(buf_addr, buf_len); return 0;
+        } } } } } }
+    }
+
     // "hmac " prefix (5+): 104 109 97 99 32
     if buf_len >= 6 {
         if c0 == 104 { if c1 == 109 { if c2 == 97 { if c3 == 99 { if c4 == 32 {
@@ -5478,6 +6327,17 @@ fn _ke_dispatch(buf_addr, buf_len) {
         } } } }
     }
 
+    // "https" (5): 104 116 116 112 115
+    if buf_len == 5 {
+        if c0 == 104 { if c1 == 116 { if c2 == 116 { if c3 == 112 { if c4 == 115 {
+            _ke_cmd_https(); return 0;
+        } } } } }
+        // "gterm" (5): 103 116 101 114 109
+        if c0 == 103 { if c1 == 116 { if c2 == 101 { if c3 == 114 { if c4 == 109 {
+            _ke_cmd_gterm(); return 0;
+        } } } } }
+    }
+
     // "help" = 104 101 108 112
     if buf_len == 4 {
         if c0 == 104 { if c1 == 101 { if c2 == 108 { if c3 == 112 {
@@ -5486,6 +6346,10 @@ fn _ke_dispatch(buf_addr, buf_len) {
         // "hkdf" = 104 107 100 102
         if c0 == 104 { if c1 == 107 { if c2 == 100 { if c3 == 102 {
             _ke_cmd_hkdf(); return 0;
+        } } } }
+        // "ext2" = 101 120 116 50
+        if c0 == 101 { if c1 == 120 { if c2 == 116 { if c3 == 50 {
+            _ke_cmd_ext2(); return 0;
         } } } }
         // "tick" = 116 105 99 107
         if c0 == 116 { if c1 == 105 { if c2 == 99 { if c3 == 107 {

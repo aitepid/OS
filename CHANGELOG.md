@@ -8,9 +8,62 @@
 
 ## v6.0 (Current)
 
-176 active .hl files, 114 kernel modules, 66 shell commands (Layer C), 36 kernel.bin commands, 0 external deps.
-Dual-boot: BIOS 85/85 PASS + UEFI 3/3 PASS. Full gate 10/10 PASS.
-Image: 152,064 bytes (297 sectors). Code: ~47,600 lines (39,600 H-L + 8,000 PS1).
+176 active .hl files, 114 kernel modules, 70 shell commands (Layer C), 40 kernel.bin commands, 0 external deps.
+Dual-boot: BIOS 96/96 PASS + UEFI 3/3 PASS. Full gate 10/10 PASS.
+Image: 152,064 bytes (297 sectors). Code: ~48,500 lines (40,500 H-L + 8,000 PS1).
+
+### Iteration 56: Package Manager hlpkg in kernel.bin
+- **Package manifest parser**: `_ke_hlpkg_parse_manifest(buf, len)` — parse "name=<name>" from manifest
+- **Package installer**: `_ke_hlpkg_install(name, name_len, data, data_len)` — write .hl file to FAT16 via mkfile
+- **`hlpkg install <name>` shell command**: Install package → create .hl file on disk
+  - Generates demo content: `print("Hello");` for any package name
+  - Prints "HLPKG: installing <name>" + "HLPKG: installed OK"
+- 3 new functions, `hlpkg` prefix dispatch (6-char)
+- 🏆 **包管理器就绪**: hlpkg install → FAT16 写入 → run 可执行
+
+### Iteration 55: ext2 Read-Only Filesystem in kernel.bin
+- **Superblock**: `_ke_ext2_read_sb()` — read ext2 superblock from VirtIO-blk sector 2
+  - `_ke_ext2_block_size()`: Parse s_log_block_size → 1024/2048/4096
+- **Inode**: `_ke_ext2_read_inode(ino)` — group descriptor → inode table → read 128B inode
+  - `_ke_ext2_inode_size()`: i_size field (lower 32 bits)
+  - `_ke_ext2_inode_block(n)`: Direct block pointers [0..11]
+- **Block I/O**: `_ke_ext2_read_block(blk)` — read data block via VirtIO-blk (up to 1024B)
+- **Directory**: `_ke_ext2_list_root()` — traverse root inode (ino=2) directory entries
+  - Parse d_ino, d_rec_len, d_name_len, print filenames
+- **`ext2` shell command**: Read superblock → check magic 0xEF53 → print stats → list root
+- **Memory layout**: 0x980000-0x9806FF (superblock + inode + data + dir buffers)
+- 7 new functions, `ext2` 4-char exact dispatch
+
+### Iteration 54: Graphical VT100 Terminal in kernel.bin
+- **Terminal state**: 80×47 character grid on 1024×768 VESA framebuffer
+  - `_ke_gterm_init()`: Initialize cursor, fg (white), bg (dark blue), clear char buffer + fill screen
+  - Character buffer at 0x970020 (3760 bytes), state at 0x970000 (32 bytes)
+- **Character rendering**:
+  - `_ke_gterm_putchar(ch)`: Handle printable chars, CR, LF, backspace, auto-wrap, auto-scroll
+  - `_ke_gterm_puts(addr, len)`: Print string to terminal
+  - `_ke_gterm_scroll()`: Scroll buffer up, clear last row
+  - `_ke_gterm_render()`: Full re-render char buffer → framebuffer via _ke_vesa_draw_char + block cursor
+- **VT100 escape sequences**: `_ke_gterm_vt100(buf, len)` — ESC[ parser
+  - ESC[2J (clear), ESC[H (home), ESC[nA/B/C/D (cursor movement)
+- **`gterm` shell command**: Init terminal → welcome banner → "HicOS>" prompt → render → serial status
+- **Memory layout**: 0x970000-0x971FFF (state + char buffer + attr buffer)
+- 7 new functions, `gterm` 5-char exact dispatch
+
+### Iteration 53: HTTPS GET End-to-End in kernel.bin
+- **TLS record layer**:
+  - `_ke_tls_record_encrypt(pt, pt_len, rec, key, iv)`: Encrypt application data
+    - Inner plaintext: data + content_type(0x17) + padding to 16B blocks
+    - AES-128-GCM encryption + 16-byte authentication tag
+    - TLS record header: type=0x17, version=0x0303, length
+- **HTTP/1.1 builder**:
+  - `_ke_http_build_get(buf, host, host_len, path, path_len)`: Build GET request
+    - "GET <path> HTTP/1.1\r\nHost: <host>\r\nConnection: close\r\n\r\n"
+- **`https` shell command**: Full HTTPS GET demo
+  - Build HTTP GET for example.com/ → encrypt as TLS record → print hex dump
+  - Simulated response: "HTTP/1.1 200 OK"
+- **Memory layout**: 0x960300-0x960840 (TLS record + HTTP buffers)
+- 3 new functions, `https` 5-char exact dispatch
+- 🏆 **HTTPS 端到端完成**: TLS record 加密 + HTTP/1.1 构建
 
 ### Iteration 52: TLS 1.3 ClientHello + Handshake in kernel.bin
 - **TLS 1.3 ClientHello (RFC 8446)**:

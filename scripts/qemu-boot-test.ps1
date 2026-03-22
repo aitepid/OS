@@ -1200,6 +1200,92 @@ foreach ($t in $aesTests) {
 
 if (Test-Path $aesLogFile) { Remove-Item $aesLogFile -Force }
 
+# =============================================================
+# Phase 15: HTTPS + GraphicalTerminal + ext2 + hlpkg Tests
+# =============================================================
+Write-Host "`n=== Phase 15: HTTPS + GTERM + ext2 + hlpkg Tests ===" -ForegroundColor Cyan
+
+$iter53LogFile = Join-Path $repoRoot 'qemu-iter53-test.log'
+if (Test-Path $iter53LogFile) { Remove-Item $iter53LogFile -Force }
+
+$iter53Port = 55600
+$iter53Args = @(
+    '-drive', "format=raw,file=hicos-hl.img",
+    '-serial', "file:$iter53LogFile",
+    '-m', '128', '-display', 'none',
+    '-device', 'virtio-blk-pci,drive=disk0,disable-modern=on',
+    '-drive', "id=disk0,file=hicos-disk.img,format=raw,if=none",
+    '-netdev', 'user,id=net0',
+    '-device', 'virtio-net-pci,netdev=net0,disable-modern=on',
+    '-no-reboot', '-no-shutdown',
+    '-monitor', "telnet:127.0.0.1:$iter53Port,server,nowait"
+)
+
+$iter53Proc = Start-Process -FilePath $qemuPath -ArgumentList $iter53Args -PassThru -NoNewWindow
+Start-Sleep -Seconds 5
+
+try {
+    $i53Client = New-Object System.Net.Sockets.TcpClient('127.0.0.1', $iter53Port)
+    $i53Stream = $i53Client.GetStream()
+    $i53Writer = New-Object System.IO.StreamWriter($i53Stream)
+    $i53Writer.AutoFlush = $true
+    Start-Sleep -Milliseconds 500
+
+    # https command
+    foreach ($k in @('h','t','t','p','s','ret')) { $i53Writer.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 8
+
+    # gterm command
+    foreach ($k in @('g','t','e','r','m','ret')) { $i53Writer.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 5
+
+    # ext2 command
+    foreach ($k in @('e','x','t','2','ret')) { $i53Writer.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 5
+
+    # help (verify new commands in help)
+    foreach ($k in @('h','e','l','p','ret')) { $i53Writer.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 2
+
+    $i53Writer.Close(); $i53Client.Close()
+} catch {
+    Write-Host "  Iter53-56 test monitor error: $_" -ForegroundColor Yellow
+}
+
+Start-Sleep -Seconds 1
+if (-not $iter53Proc.HasExited) { $iter53Proc.Kill(); $iter53Proc.WaitForExit(3000) }
+
+$iter53Content = ''
+if (Test-Path $iter53LogFile) {
+    try { $iter53Content = [System.IO.File]::ReadAllText($iter53LogFile) } catch {}
+}
+
+$iter53Tests = @(
+    @{ name = 'https produces HTTPS: prefix'; pattern = 'HTTPS:' },
+    @{ name = 'https GET request built'; pattern = 'GET example' },
+    @{ name = 'https TLS record encrypted'; pattern = 'TLS record' },
+    @{ name = 'https simulated response'; pattern = 'HTTP/1.1 200 OK' },
+    @{ name = 'gterm produces GTERM: output'; pattern = 'GTERM:' },
+    @{ name = 'gterm 80x47 active'; pattern = '80x47' },
+    @{ name = 'ext2 produces EXT2: output'; pattern = 'EXT2:' },
+    @{ name = 'help shows https command'; pattern = 'https' },
+    @{ name = 'help shows gterm command'; pattern = 'gterm' },
+    @{ name = 'help shows ext2 command'; pattern = 'ext2' },
+    @{ name = 'help shows hlpkg command'; pattern = 'hlpkg' }
+)
+
+foreach ($t in $iter53Tests) {
+    $shellTotal++
+    if ($iter53Content -match $t.pattern) {
+        $passes += "I53-56: $($t.name)"
+        $shellPassed++
+    } else {
+        $errors += "I53-56: $($t.name)"
+    }
+}
+
+if (Test-Path $iter53LogFile) { Remove-Item $iter53LogFile -Force }
+
 Write-Host "`n=== Boot Test Results ===" -ForegroundColor Cyan
 foreach ($p in $passes) {
     Write-Host "  PASS: $p" -ForegroundColor Green
