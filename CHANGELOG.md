@@ -8,9 +8,73 @@
 
 ## v6.0 (Current)
 
-176 active .hl files, 114 kernel modules, 63 shell commands (Layer C), 33 kernel.bin commands, 0 external deps.
-Dual-boot: BIOS 74/74 PASS + UEFI 3/3 PASS. Full gate 10/10 PASS.
-Image: 152,064 bytes (297 sectors). Code: ~46,800 lines (38,800 H-L + 8,000 PS1).
+176 active .hl files, 114 kernel modules, 66 shell commands (Layer C), 36 kernel.bin commands, 0 external deps.
+Dual-boot: BIOS 85/85 PASS + UEFI 3/3 PASS. Full gate 10/10 PASS.
+Image: 152,064 bytes (297 sectors). Code: ~47,600 lines (39,600 H-L + 8,000 PS1).
+
+### Iteration 52: TLS 1.3 ClientHello + Handshake in kernel.bin
+- **TLS 1.3 ClientHello (RFC 8446)**:
+  - `_ke_tls_build_client_hello()`: Full ClientHello message construction
+    - Record header: ContentType=22, TLS 1.0 compat version
+    - Handshake header: type=1 (ClientHello), 3-byte length
+    - Protocol version TLS 1.2 (real version in extension)
+    - 32-byte client random (tick-derived)
+    - Cipher suite: TLS_AES_128_GCM_SHA256 (0x1301)
+    - Extensions: supported_versions (TLS 1.3), supported_groups (x25519),
+      signature_algorithms (rsa_pss_rsae_sha256), key_share (x25519 public key)
+- **TLS 1.3 Key Schedule**:
+  - `_ke_tls_key_schedule(shared_secret_addr)`: RFC 8446 key derivation
+    - Early secret: HKDF-Extract(0, 0^32)
+    - Handshake secret: HKDF-Extract(early_derived, shared_secret)
+    - Uses HMAC-SHA-256 + HKDF from iteration 49
+- **`tls` shell command**: Build ClientHello → run KeySchedule → display state
+  - Shows: ClientHello size, first 16 bytes hex, cipher suite, handshake key
+- **Memory layout**: 0x960000-0x9602FF (TLS working area)
+- 3 new functions, `tls` shell command wired to dispatch
+- **Shell commands (36)**: ...sha256 hmac hkdf aes gcm tls
+- 🏆 **TLS 1.3 握手框架完成**: ClientHello + KeySchedule, v7.0 HTTPS 路线图关键里程碑
+
+### Iteration 51: AES-128-GCM AEAD in kernel.bin
+- **GCM mode (NIST SP 800-38D)**:
+  - `_ke_xor16(dst, src)`: XOR 16-byte blocks
+  - `_ke_gcm_inc32(blk)`: Increment 32-bit big-endian counter
+  - `_ke_ghash_mul(dst, x, y)`: GF(2^128) multiplication (bit-by-bit, MSB-first)
+    - Right-shift with reduction polynomial R = 0xE1000...0
+  - `_ke_ghash(h, ct, ct_len, tag)`: GHASH authentication over ciphertext
+    - Block-by-block XOR + GF multiply + length block finalization
+  - `_ke_aes_gcm_encrypt(key, iv, pt, pt_len, ct, tag)`: Full AES-128-GCM
+    - H = AES(K, 0^128), J0 = IV||0x00000001
+    - CTR mode encryption: inc32 + AES(counter) XOR plaintext
+    - Authentication tag: GHASH(H, CT) XOR AES(K, J0)
+- **`gcm` shell command**: Encrypt "HicOS" with zero key/IV, print ciphertext + tag
+- **Memory layout**: 0x950400-0x950580 (GCM H/J/tag/work buffers)
+- 6 new functions, `gcm` shell command wired to dispatch
+- 🏆 **AEAD 加密就绪**: AES-128-GCM 完整实现，TLS 1.3 记录层加密可用
+
+### Iteration 50: AES-128 Block Cipher in kernel.bin
+- **AES S-Box + Inverse S-Box**:
+  - `_ke_aes_init_sbox()`: 256-byte S-Box + 256-byte inverse S-Box at 0x950000
+    - Computed from forward S-Box via `_ke_mem_w32` (128 calls, 512 bytes total)
+  - `_ke_aes_sb(val)`: S-Box lookup (memory read)
+- **AES core operations**:
+  - `_ke_aes_sub_bytes(state)`: Apply S-Box to all 16 state bytes
+  - `_ke_aes_shift_rows(state)`: Row-wise cyclic shift (0,1,2,3)
+  - `_ke_aes_xtime(a)`: GF(2^8) multiply by 2 (with reduction polynomial 0x1B)
+  - `_ke_aes_gmul(a, b)`: General GF(2^8) multiplication
+  - `_ke_aes_mix_columns(state)`: Column mixing via GF(2^8) matrix multiply
+  - `_ke_aes_add_round_key(state, round)`: XOR state with round key
+- **Key expansion**:
+  - `_ke_aes_key_expand(key_addr)`: 16-byte key → 176 bytes (11 round keys)
+    - RotWord + SubWord + Rcon per round
+    - Rcon: 1,2,4,8,16,32,64,128,27,54
+- **Encrypt**:
+  - `_ke_aes128_encrypt(state)`: 10-round AES-128 encryption in-place
+    - Initial AddRoundKey + 9 full rounds + final round (no MixColumns)
+- **`aes` shell command**: Encrypt NIST test vector, print 32-char hex ciphertext
+  - Key: 2b7e151628aed2a6abf7158809cf4f3c
+  - Plaintext: 3243f6a8885a308d313198a2e0370734
+- **Memory layout**: 0x950000-0x9502CF (S-Box + inv S-Box + round keys + state)
+- 11 new functions, `aes` shell command wired to dispatch
 
 ### Iteration 49: HMAC-SHA-256 + HKDF in kernel.bin
 - **HMAC-SHA-256 (RFC 2104)**:

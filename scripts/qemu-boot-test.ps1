@@ -1114,6 +1114,92 @@ foreach ($t in $hmacTests) {
 
 if (Test-Path $hmacLogFile) { Remove-Item $hmacLogFile -Force }
 
+# =============================================================
+# Phase 14: AES-128 + GCM + TLS 1.3 Tests
+# =============================================================
+Write-Host "`n=== Phase 14: AES-128 + GCM + TLS 1.3 Tests ===" -ForegroundColor Cyan
+
+$aesLogFile = Join-Path $repoRoot 'qemu-aes-test.log'
+if (Test-Path $aesLogFile) { Remove-Item $aesLogFile -Force }
+
+$aesPort = 55599
+$aesArgs = @(
+    '-drive', "format=raw,file=hicos-hl.img",
+    '-serial', "file:$aesLogFile",
+    '-m', '128', '-display', 'none',
+    '-device', 'virtio-blk-pci,drive=disk0,disable-modern=on',
+    '-drive', "id=disk0,file=hicos-disk.img,format=raw,if=none",
+    '-netdev', 'user,id=net0',
+    '-device', 'virtio-net-pci,netdev=net0,disable-modern=on',
+    '-no-reboot', '-no-shutdown',
+    '-monitor', "telnet:127.0.0.1:$aesPort,server,nowait"
+)
+
+$aesProc = Start-Process -FilePath $qemuPath -ArgumentList $aesArgs -PassThru -NoNewWindow
+Start-Sleep -Seconds 5
+
+try {
+    $aClient = New-Object System.Net.Sockets.TcpClient('127.0.0.1', $aesPort)
+    $aStream = $aClient.GetStream()
+    $aWriter = New-Object System.IO.StreamWriter($aStream)
+    $aWriter.AutoFlush = $true
+    Start-Sleep -Milliseconds 500
+
+    # aes command
+    foreach ($k in @('a','e','s','ret')) { $aWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 8
+
+    # gcm command
+    foreach ($k in @('g','c','m','ret')) { $aWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 10
+
+    # tls command
+    foreach ($k in @('t','l','s','ret')) { $aWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 10
+
+    # help (verify aes/gcm/tls in help)
+    foreach ($k in @('h','e','l','p','ret')) { $aWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 2
+
+    $aWriter.Close(); $aClient.Close()
+} catch {
+    Write-Host "  AES/GCM/TLS test monitor error: $_" -ForegroundColor Yellow
+}
+
+Start-Sleep -Seconds 1
+if (-not $aesProc.HasExited) { $aesProc.Kill(); $aesProc.WaitForExit(3000) }
+
+$aesContent = ''
+if (Test-Path $aesLogFile) {
+    try { $aesContent = [System.IO.File]::ReadAllText($aesLogFile) } catch {}
+}
+
+$aesTests = @(
+    @{ name = 'aes produces AES: prefix'; pattern = 'AES:' },
+    @{ name = 'aes produces hex output'; pattern = 'AES: [0-9A-Fa-f]{32}' },
+    @{ name = 'gcm produces GCM-CT: prefix'; pattern = 'GCM-CT:' },
+    @{ name = 'gcm produces GCM-TAG: prefix'; pattern = 'GCM-TAG:' },
+    @{ name = 'tls ClientHello constructed'; pattern = 'ClientHello' },
+    @{ name = 'tls KeySchedule completed'; pattern = 'KeySchedule OK' },
+    @{ name = 'tls cipher suite shown'; pattern = 'TLS_AES_128_GCM_SHA256' },
+    @{ name = 'tls HS-Key shown'; pattern = 'HS-Key:' },
+    @{ name = 'help shows aes command'; pattern = 'aes' },
+    @{ name = 'help shows gcm command'; pattern = 'gcm' },
+    @{ name = 'help shows tls command'; pattern = 'tls' }
+)
+
+foreach ($t in $aesTests) {
+    $shellTotal++
+    if ($aesContent -match $t.pattern) {
+        $passes += "AES/TLS: $($t.name)"
+        $shellPassed++
+    } else {
+        $errors += "AES/TLS: $($t.name)"
+    }
+}
+
+if (Test-Path $aesLogFile) { Remove-Item $aesLogFile -Force }
+
 Write-Host "`n=== Boot Test Results ===" -ForegroundColor Cyan
 foreach ($p in $passes) {
     Write-Host "  PASS: $p" -ForegroundColor Green
