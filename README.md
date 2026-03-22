@@ -5,7 +5,7 @@
 HicOS is a bare-metal x86_64 operating system written entirely in **Hilbert-Lang (H-L)**.
 **Zero JavaScript. Zero Rust. Zero C. Zero external dependencies.**
 
-All 175 active source files are `.hl` (legacy JS-origin files purged).
+All 176 active source files are `.hl` (legacy JS-origin files purged).
 Dual-boot support: BIOS/MBR (`hicos-hl.img`, 148 KB) and UEFI/GPT (`hicos-uefi.img`, 33 MB).
 Both boot paths verified end-to-end in QEMU (42/42 BIOS checks + 3/3 UEFI checks).
 
@@ -201,23 +201,23 @@ spawn worker_thread;
 
 | Metric | Value |
 |---|---|
-| Active `.hl` files | 164 (114 kernel + 27 userspace + 23 infra) |
-| Total lines of code | ~38,500 (32,154 H-L + 6,352 PS1) |
+| Active `.hl` files | 176 (114 kernel + 27 userspace + 35 infra) |
+| Total lines of code | ~45,900 (38,082 H-L + 7,773 PS1) |
 | Archived files | 0 (legacy JS-origin files purged) |
 | `.js` files | **0** |
 | `.rs` files | **0** |
 | `.json` files | **0** (replaced by `manifest.hl`) |
 | External dependencies | **0** |
 | Self-hosting | Yes (`hl-bootstrap.hl` compiles itself) |
-| BIOS boot image | `hicos-hl.img` = 41,472 bytes (81 sectors, MBR 0x55AA) |
+| BIOS boot image | `hicos-hl.img` = 152,064 bytes (297 sectors, MBR 0x55AA) |
 | UEFI boot image | `hicos-uefi.img` = 33 MB (GPT + ESP FAT16 + BOOTX64.EFI) |
 | QEMU BIOS test | **42/42 PASS** (serial鈫扨CI鈫扸irtIO鈫扸ESA鈫扗HCP鈫扗NS鈫扲ing3鈫抯hell) |
 | QEMU UEFI test | **3/3 PASS** (OVMF鈫扜PT鈫扙SP鈫扨E32+鈫抯erial+ConOut) |
 | Full gate | **7/7 PASS** (workspace+boot+runtime+layout+binary+QEMU+bootstrap) |
 | Build scripts | 17 PowerShell scripts in `scripts/` |
 | Kernel modules | 114 in `bare-kernel/hl/` |
-| Kernel functions | 995 |
-| Shell commands (Layer C) | 55 (in shell.hl) |
+| Kernel functions | 1,121 |
+| Shell commands (Layer C) | 60 (in shell.hl) |
 | Shell commands (QEMU verified) | 18 (in hicos-hl.img) |
 | H-L Language | Classes, inheritance, decorators, list comprehensions, generators, typed exceptions, type hints, deep destructuring |
 | Kernel features | IDT, PIC, PIT, PS/2 keyboard+mouse, serial shell, VGA console |
@@ -274,7 +274,7 @@ The build chain is fully self-contained with native code generation:
 4. **x86_64 encoder** 鈥?126 instructions, all three modes (16/32/64-bit)
 5. **System V AMD64 ABI** 鈥?RDI/RSI/RDX/RCX/R8/R9, 16-byte stack alignment
 6. Boot image builder assembles MBR + stage2 + kernel
-7. `hicos-hl.img` (6 KB) is the stage-0 bootstrap binary
+7. `hicos-hl.img` (148 KB) is the stage-0 bootstrap binary
 
 No Cargo. No npm. No webpack. No Make. No Node.js.
 The OS IS the compiler. The compiler IS the OS.

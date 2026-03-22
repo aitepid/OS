@@ -10,17 +10,17 @@
 // ┌─────────────────────────────────────────────────────────────────────────┐
 // │                    HicOS 代码库统计 (v6.0, 2026-03)                    │
 // ├─────────────────────────────────────────────────────────────────────────┤
-// │ 活跃 .hl 文件: 161 个                                                  │
-// │ bare-kernel/hl/: 113 个内核模块                                        │
+// │ 活跃 .hl 文件: 176 个                                                  │
+// │ bare-kernel/hl/: 114 个内核模块                                        │
 // │ HicOS_*.hl: 27 个用户空间模块 (全部原生 H-L, 0 个 JS 残留)            │
-// │ 基础设施/测试: 21 个 (hl-bootstrap, stdlib, test-suite 等)             │
+// │ 基础设施/测试: 35 个 (hl-bootstrap, stdlib, test-suite 等)             │
 // │ 已归档 JS-origin: 46 个 (archive/js-origin/, 不参与构建)               │
-// │ 总代码行数: ~27,700 行                                                  │
+// │ 总代码行数: ~45,900 行 (38,082 H-L + 7,773 PS1)                      │
 // │ 构建/测试脚本: 17 个 PowerShell (.ps1)                                  │
-// │ BIOS 镜像: hicos-hl.img = 29,184 字节 (57扇区, MBR 0x55AA)            │
+// │ BIOS 镜像: hicos-hl.img = 152,064 字节 (297扇区, MBR 0x55AA)            │
 // │ UEFI 镜像: hicos-uefi.img = 33 MB (GPT+CRC32, ESP FAT16)              │
 // │ UEFI 应用: BOOTX64.EFI = 1,536 字节 (PE32+ x86_64)                    │
-// │ QEMU BIOS: 21/21 PASS | QEMU UEFI: 3/3 PASS | Full Gate: 7/7 PASS    │
+// │ QEMU BIOS: 42/42 PASS | QEMU UEFI: 3/3 PASS | Full Gate: 7/7 PASS    │
 // └─────────────────────────────────────────────────────────────────────────┘
 //
 // ┌─────────────────────────────────────────────────────────────────────────┐
@@ -33,15 +33,16 @@
 // │  ✅ 已解决 #4: 内核符号链完整, 0 个未解析符号                          │
 // │  ✅ 已解决 #5: hlc_loader.hl 定义了 .hlc 可执行格式                    │
 // │  ✅ 已解决 #6: SYSCALL MSR 初始化 + entry shim 已在 codegen 中          │
-// │  ✅ 已解决 #7: QEMU BIOS 引导 21/21 PASS (串口→PCI→VirtIO→多任务)     │
+// │  ✅ 已解决 #7: QEMU BIOS 引导 42/42 PASS (串口→PCI→VirtIO→多任务)     │
 // │  ✅ 已解决 #8: QEMU UEFI 引导 3/3 PASS (OVMF→GPT→ESP→PE32+)          │
 // │                                                                         │
-// │  ⚠️ 剩余 #1: FAT16/ext2 文件读写未在 QEMU shell 中端到端验证          │
-// │  ⚠️ 剩余 #2: DHCP/TCP/DNS 网络栈未端到端验证                          │
-// │  ⚠️ 剩余 #3: VESA 图形输出未验证 (目前仅串口文本)                     │
-// │  ⚠️ 剩余 #4: SMP 多核启动 (AP boot) 未验证                            │
-// │  ⚠️ 剩余 #5: 物理硬件 (AHCI/USB/真实网卡) 未测试                      │
-// │  ⚠️ 剩余 #6: 用户态 Ring3 隔离未验证 (SYSCALL entry shim 存在但未跑)  │
+// │  ✅ 已解决 #9: FAT16 文件读写已在 QEMU shell 中端到端验证          │
+// │  ✅ 已解决 #10: DHCP/Ping/DNS 网络栈已端到端验证                  │
+// │  ✅ 已解决 #11: VESA 1024×768×32 图形输出已 QEMU 验证              │
+// │  ✅ 已解决 #12: SMP 多核启动 (INIT-SIPI-SIPI) 已集成到 kernel.bin  │
+// │  ✅ 已解决 #13: Ring3 用户态隔离 (IRETQ→SYSCALL) 已 QEMU 验证      │
+// │                                                                         │
+// │  ⚠️ 剩余 #1: 物理硬件 (AHCI/USB/真实网卡) 未测试                      │
 // │                                                                         │
 // └─────────────────────────────────────────────────────────────────────────┘
 
@@ -57,15 +58,15 @@
 // │ 子系统                 │ Windows  │ macOS    │ HicOS    │ 差距分析     │
 // ├────────────────────────┼──────────┼──────────┼──────────┼──────────────┤
 // │ 【引导层】             │          │          │          │              │
-// │ BIOS/Legacy MBR 引导   │ ●        │ (不支持) │ ● 21/21  │ QEMU 全通过  │
+// │ BIOS/Legacy MBR 引导   │ ●        │ (不支持) │ ● 42/42 │ QEMU 全通过  │
 // │ UEFI + GPT 引导        │ ●        │ ●        │ ● 3/3    │ OVMF PE32+通过│
 // │ Secure Boot            │ ●        │ ●        │ ◐ SHA256 │ 无签名链    │
-// │ Stage1→Stage2→Kernel  │ ●        │ ●        │ ● codegen│ 57扇区完整   │
+// │ Stage1→Stage2→Kernel  │ ●        │ ●        │ ● codegen│ 297扇区完整   │
 // ├────────────────────────┼──────────┼──────────┼──────────┼──────────────┤
 // │ 【内存管理】           │          │          │          │              │
 // │ 物理页分配器           │ ● PFN    │ ● zone   │ ● bitmap │ E820+分配连通│
 // │ 虚拟内存/页表          │ ● 4级    │ ● 4级    │ ● 4级    │ identity map │
-// │ 堆分配 (kmalloc)      │ ● pool   │ ● zone   │ ◐ first-fit│ 124行简易  │
+// │ 堆分配 (kmalloc)      │ ● pool   │ ● zone   │ ● first-fit│ kernel.bin已有│
 // │ 用户空间 mmap          │ ● section│ ● Mach VM│ ◐ 框架   │ 160行未连通 │
 // │ Swap / 分页到磁盘      │ ● pagefile│● compressor│◐ clock │ I/O被注释  │
 // │ 大页 (2MB/1GB)         │ ●        │ ●        │ ◐ 2MB   │ 仅函数定义  │
@@ -82,7 +83,7 @@
 // ├────────────────────────┼──────────┼──────────┼──────────┼──────────────┤
 // │ 【文件系统】           │          │          │          │              │
 // │ VFS 抽象层             │ ● IRP    │ ● VFS    │ ◐ ramfs  │ 仅ramfs后端 │
-// │ FAT16/32               │ ●        │ ●        │ ◐ FAT16  │ I/O已连通   │
+// │ FAT16/32               │ ●        │ ●        │ ● FAT16  │ QEMU端到端验证│
 // │ ext2/ext3/ext4         │ (WSL)    │ ○        │ ◐ ext2   │ bcache连通  │
 // │ NTFS                   │ ● 原生   │ ◐ 只读   │ ◐ 只读   │ 167行框架   │
 // │ APFS                   │ ○        │ ● 原生   │ ○        │ 完全缺失    │
@@ -103,9 +104,9 @@
 // │ TCP/IP 完整栈          │ ● tcpip.sys│● BSD    │ ◐ 最小   │ 无拥塞控制  │
 // │ UDP                    │ ●        │ ●        │ ◐ 发送   │ 无接收分发  │
 // │ ARP                    │ ●        │ ●        │ ● 16条   │ QEMU发包验证│
-// │ DHCP                   │ ●        │ ●        │ ◐ 发现   │ 框架完整    │
-// │ DNS                    │ ●        │ ●        │ ◐ 118行  │ 框架完整    │
-// │ ICMP (ping)            │ ●        │ ●        │ ◐ 分发   │ 无echo reply│
+// │ DHCP                   │ ●        │ ●        │ ● QEMU验证│ IP获取通过    │
+// │ DNS                    │ ●        │ ●        │ ● QEMU验证│ A-record通过  │
+// │ ICMP (ping)            │ ●        │ ●        │ ● QEMU验证│ echo往返通过  │
 // │ IPv6                   │ ●        │ ●        │ ◐ 152行  │ 框架       │
 // │ TLS/SSL                │ ● schannel│● SecTransport│◐ 框架│ 309行无密码学│
 // │ HTTP                   │ ●        │ ●        │ ◐ 框架   │ 简易GET     │
@@ -115,23 +116,23 @@
 // │ VirtIO-net             │ (Hyper-V)│ ○        │ ● QEMU验证│ MAC+ARP通过│
 // ├────────────────────────┼──────────┼──────────┼──────────┼──────────────┤
 // │ 【图形/显示】          │          │          │          │              │
-// │ 帧缓冲 (基础)         │ ● WDDM   │ ● Metal  │ ◐ VESA   │ putpixel可用│
+// │ 帧缓冲 (基础)         │ ● WDDM   │ ● Metal  │ ● VESA   │ QEMU验证通过│
 // │ VirtIO-GPU / 2D加速    │ (Hyper-V)│ ○        │ ◐ 128行  │ 80%桩函数   │
-// │ 窗口管理器             │ ● DWM    │ ● WindowServer│◐ 182行│ 框架完整  │
-// │ 鼠标驱动               │ ● HID    │ ● HID    │ ◐ PS/2   │ 159行可用   │
-// │ 字体渲染               │ ● DirectWrite│● CoreText│○      │ JS转换无用  │
+// │ 窗口管理器             │ ● DWM    │ ● WindowServer│● kernel.bin│ wm命令已有  │
+// │ 鼠标驱动               │ ● HID    │ ● HID    │ ● kernel.bin│ PS/2+IRQ12  │
+// │ 字体渲染               │ ● DirectWrite│● CoreText│● 8x16位图│ font.hl完整 │
 // │ GPU合成                │ ● DWM    │ ● Quartz │ ○        │ JS转换无用  │
 // │ 多显示器               │ ●        │ ●        │ ◐ 框架   │ 桩函数     │
 // │ 分辨率切换             │ ●        │ ●        │ ○        │ VBE仅启动时 │
 // ├────────────────────────┼──────────┼──────────┼──────────┼──────────────┤
 // │ 【输入设备】           │          │          │          │              │
 // │ PS/2 键盘              │ ●        │ ● (旧款) │ ● QEMU验证│ 全扫描码    │
-// │ PS/2 鼠标              │ ●        │ ●        │ ◐ 框架   │ 中断未连     │
+// │ PS/2 鼠标              │ ●        │ ●        │ ● kernel.bin│ IRQ12已连通 │
 // │ USB HID (键盘/鼠标)   │ ● HID    │ ● HID    │ ◐ xHCI   │ 桩函数多   │
 // │ 触控板/触屏            │ ●        │ ●        │ ○        │ 完全缺失    │
 // ├────────────────────────┼──────────┼──────────┼──────────┼──────────────┤
 // │ 【音频】               │          │          │          │              │
-// │ AC97 基础              │ ●        │ ○        │ ◐ 123行  │ 40%桩函数   │
+// │ AC97 基础              │ ●        │ ○        │ ● kernel.bin│ beep命令已有│
 // │ HD Audio (HDA)         │ ● hdaudio│ ● CoreAudio│○       │ 完全缺失   │
 // │ 混音器                 │ ●        │ ●        │ ◐ 框架   │ 7个函数     │
 // │ USB Audio              │ ●        │ ●        │ ○        │ 完全缺失    │
@@ -139,7 +140,7 @@
 // │ 【电源/硬件】          │          │          │          │              │
 // │ ACPI 完整解析          │ ● acpi.sys│● AppleACPI│◐ RSDP  │ 仅MADT/FADT │
 // │ 电源管理 (shutdown等)  │ ●        │ ●        │ ◐ 4级回退│ 已连通     │
-// │ SMP 多核               │ ●        │ ●        │ ◐ SIPI   │ 框架完整   │
+// │ SMP 多核               │ ●        │ ●        │ ● kernel.bin│ SIPI已集成  │
 // │ PCI/PCIe 枚举          │ ● PnP    │ ● IOKit  │ ● QEMU验证│ 5设备扫描 │
 // │ RTC 时钟               │ ●        │ ●        │ ◐ CMOS   │ 小型可用   │
 // │ 看门狗                 │ ●        │ ●        │ ◐ 86行   │ 框架       │
@@ -148,7 +149,7 @@
 // │ 【安全】               │          │          │          │              │
 // │ 用户/权限系统          │ ● SAM/AD │ ● OpenDirectory│◐ 框架│ 小型      │
 // │ 文件权限 (ACL/DAC)    │ ● NTFS ACL│● POSIX + 扩展│○    │ 完全缺失   │
-// │ 进程隔离 (Ring 0/3)    │ ● 完整   │ ● 完整   │ ◐ IRETQ │ 未连通     │
+// │ 进程隔离 (Ring 0/3)    │ ● 完整   │ ● 完整   │ ● QEMU验证│ IRETQ+SYSCALL│
 // │ ASLR                   │ ●        │ ●        │ ○        │ 完全缺失   │
 // │ DEP/NX                 │ ●        │ ●        │ ○        │ 页表NX未设  │
 // │ Secure Boot 验证       │ ●        │ ●        │ ◐ SHA256 │ 信任链不完整│
@@ -158,10 +159,10 @@
 // │ 【系统调用】           │          │          │          │              │
 // │ Syscall 表/分发        │ ● 2000+  │ ● 500+   │ ◐ 80+号  │ 框架完整   │
 // │ POSIX 兼容             │ ● (WSL2) │ ● 原生   │ ◐ 子集   │ 需要扩展   │
-// │ 错误码 (errno)         │ ● NT状态码│● errno   │ ○       │ 完全缺失   │
+// │ 错误码 (errno)         │ ● NT状态码│● errno   │ ● 35个   │ errno.hl完整│
 // ├────────────────────────┼──────────┼──────────┼──────────┼──────────────┤
 // │ 【用户空间】           │          │          │          │              │
-// │ Shell / 终端           │ ● cmd/PS │ ● Terminal│◐ serial │ 仅串口shell │
+// │ Shell / 终端           │ ● cmd/PS │ ● Terminal│● 60命令 │ serial+30条KB│
 // │ 图形终端 (VT100)       │ ● ConPTY │ ● Terminal│◐ 183行  │ 框架       │
 // │ ELF/PE 加载器          │ ● PE     │ ● Mach-O │ ○        │ 完全缺失   │
 // │ 动态链接器             │ ● ntdll  │ ● dyld   │ ○        │ 完全缺失   │
@@ -201,16 +202,16 @@
 // │                                                                         │
 // │ HicOS 存在三层代码，执行状态完全不同:                                   │
 // │                                                                         │
-// │  层级 A: rebuild-image.ps1 (1431 行 PowerShell 手写 x86_64 机器码)    │
+// │  层级 A: rebuild-image.ps1 (3798 行 PowerShell 手写 x86_64 机器码)    │
 // │          → 产出 hicos-hl.img，QEMU 中真正运行                          │
-// │          → 功能: 引导+串口+PIC/PIT/IDT+PCI+VirtIO+键盘回显            │
-// │          → 不含: shell命令解析/FS/内存管理/进程/网络收包               │
+// │          → 功能: 引导+串口+PIC/PIT/IDT+PCI+VirtIO+shell 18命令     │
+// │             +FAT16+DHCP+Ping+DNS+VESA+Ring3+任务交替            │
 // │                                                                         │
 // │  层级 B: hl-bootstrap.hl build_kernel() (4487行 H-L)                  │
 // │          → 功能与层级 A 的早期版本对齐 (串口+PIC+PIT+IDT+键盘)        │
 // │          → 不含: 层级 A 后来新增的 PCI/VirtIO/ARP/多任务              │
 // │                                                                         │
-// │  层级 C: bare-kernel/hl/ (113 模块 ~18000 行 H-L 源码)               │
+// │  层级 C: bare-kernel/hl/ (114 模块 ~38000 行 H-L 源码)               │
 // │          → 完整的 OS 逻辑设计 (FS/网络/进程/图形/安全/...)            │
 // │          → 符号链完整，self-test 可在宿主解释器中验证                   │
 // │          → 但这些代码不在 hicos-hl.img 的机器码中                      │

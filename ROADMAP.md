@@ -8,7 +8,7 @@ As of v4.2, we prioritize hl-bootstrap-build-test.ps1 for the entry of build and
 
 | 鎸囨爣 | 鍊?|
 |------|-----|
-| H-L 婧愭枃浠?| 175 涓??`.hl` (114 鍐呮牳 + 27 鐢ㄦ埛绌洪棿 + 23 鍩虹璁炬柦) |
+| H-L 婧愭枃浠?| 176 涓??`.hl` (114 鍐呮牳 + 27 鐢ㄦ埛绌洪棿 + 35 鍩虹璁炬柦) |
 | 鍐呮牳妯″潡 | 114 涓?(`bare-kernel/hl/`) |
 | 鍐呮牳鍑芥暟 | 1121 涓??|
 | BIOS 寮曞闀滃儚 | `hicos-hl.img` = 152,064 瀛楄妭 (297 鎵囧尯) |
@@ -19,11 +19,11 @@ As of v4.2, we prioritize hl-bootstrap-build-test.ps1 for the entry of build and
 | QEMU BIOS 娴嬭瘯 | **42/42 PASS** (鍚?shell/FAT16/DHCP/DNS/VESA/Ring3) |
 | QEMU UEFI 娴嬭瘯 | **3/3 PASS** |
 | Full Gate | **7/7 PASS** |
-| rebuild-image.ps1 | 3,676 琛?(鎵嬪啓 x86_64 鏈哄櫒鐮? |
+| rebuild-image.ps1 | 3,798 行 (手写 x86_64 机器码) |
 | hl-bootstrap.hl | 4,630 琛?(206 鍑芥暟, 7 quadrant) |
-| Shell 鍛戒护 (Layer C) | 55 涓?(shell.hl 璁捐绾? |
-| Shell 鍛戒护 (QEMU 楠岃瘉) | 18 涓?(hicos-hl.img 闀滃儚涓? |
-| 鎬讳唬鐮佽鏁?| ~38,500 琛?(32,154 H-L + 6,352 PS1) |
+| Shell 鍛戒护 (Layer C) | 60 涓?(shell.hl 璁捐绾? |
+| Shell 命令 (QEMU 验证) | 18 个 (层级A) + 30 个 (kernel.bin) |
+| 鎬讳唬鐮佽鏁?| ~45,900 琛?(38,082 H-L + 7,773 PS1) |
 | hl-bootstrap 瀹夸富 | 鉁?Shim 鏀寔 build/test/interpret/lex/boot/gate/info/compile 鍛戒护 |
 | QEMU 楠岃瘉鐨勫瓙绯荤粺 | Serial, PIC, PIT, IDT, PS/2, PCI, VirtIO-blk, VirtIO-net, Timer, Task, GPT, FAT16, PE32+, VESA, SYSCALL, DHCP, DNS, ICMP, Ring3 |
 

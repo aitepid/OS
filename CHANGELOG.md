@@ -8,9 +8,9 @@
 
 ## v6.0 (Current)
 
-176 active .hl files, 114 kernel modules, 55 shell commands (Layer C), 30 kernel.bin commands, 0 external deps.
+176 active .hl files, 114 kernel modules, 60 shell commands (Layer C), 30 kernel.bin commands, 0 external deps.
 Dual-boot: BIOS 42/42 PASS + UEFI 3/3 PASS. Full gate 7/7 PASS.
-Image: 152,064 bytes (297 sectors). Code: ~40,400 lines (33,500 H-L + 6,993 PS1).
+Image: 152,064 bytes (297 sectors). Code: ~45,900 lines (38,082 H-L + 7,773 PS1).
 
 ### Iteration 45: HicOS Installer in kernel.bin
 - **7-step installer**: `_ke_cmd_install()` — interactive disk installation workflow

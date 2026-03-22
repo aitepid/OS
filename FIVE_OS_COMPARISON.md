@@ -1,6 +1,6 @@
 # HicOS vs Windows 11 / Linux / macOS / HarmonyOS -- Deep Technical Comparison
 
-> Generated from auditing all 184 .hl source files (100 kernel modules),
+> Generated from auditing all 176 .hl source files (114 kernel modules),
 > the bootable image, and cross-referencing against publicly documented
 > kernel internals of each production OS. This report is **brutally honest**.
 
@@ -11,14 +11,14 @@
 | Dimension | HicOS | Windows 11 | Linux 6.x | macOS 14 | HarmonyOS 4 |
 |---|---|---|---|---|---|
 | **Maturity** | Prototype (pre-alpha) | 38 years | 33 years | 23 years (XNU) | 5 years |
-| **Code volume** | ~40K lines .hl | ~50M lines C/C++ | ~35M lines C | ~20M lines C/C++/Obj-C | ~10M+ lines C/C++/Java |
+| **Code volume** | ~46K lines .hl | ~50M lines C/C++ | ~35M lines C | ~20M lines C/C++/Obj-C | ~10M+ lines C/C++/Java |
 | **Boot to userspace** | Partial (serial shell) | Yes | Yes | Yes | Yes |
 | **Can run 1 user program** | No (ELF loader defined) | Yes | Yes | Yes | Yes |
 | **Self-hosting compiler** | Yes (interpreted) | Yes (MSVC) | Yes (GCC) | Yes (Clang) | Partial (LLVM) |
 | **Real hardware tested** | No (QEMU only) | Billions of devices | Billions of devices | ~2B devices | ~800M devices |
 
 **Honest assessment**: HicOS boots to an interactive serial shell with
-working interrupts (timer + keyboard + mouse). 100 kernel modules cover
+working interrupts (timer + keyboard + mouse). 114 kernel modules cover
 memory management (kmalloc + page alloc + swap + mmap + Hilbert spatial allocator),
 scheduling (CFS + futex + rwlock + poll/epoll), networking (VirtIO + ARP +
 IPv4/IPv6 + UDP/TCP + ICMP + DHCP + DNS + NTP + TLS 1.3), IPC (pipes +

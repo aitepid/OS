@@ -1,8 +1,8 @@
 # HicOS Architecture
 
 HicOS is a bare-metal x86_64 operating system written entirely in H-L (Hilbert-Lang).
-114 kernel modules, 27 userspace modules, 55 shell commands (Layer C), 18 QEMU-verified commands, zero external dependencies.
-Dual-boot: BIOS/MBR (41 KB) + UEFI/GPT (33 MB, PE32+ BOOTX64.EFI).
+114 kernel modules, 27 userspace modules, 60 shell commands (Layer C), 18 QEMU-verified commands, zero external dependencies.
+Dual-boot: BIOS/MBR (148 KB) + UEFI/GPT (33 MB, PE32+ BOOTX64.EFI).
 
 ## Boot Chain
 

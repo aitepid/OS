@@ -14,20 +14,20 @@
 | **B: H-L 编译器** | `hl-bootstrap.hl` build_kernel() | ⚠️ 可执行但产出较旧 | 串口+PIC+PIT+IDT+键盘 (不含 PCI/VirtIO) |
 | **C: 内核源码** | `bare-kernel/hl/` 114 模块 | ✅ kernel.bin 集成到镜像 | 编译产出 kernel.bin 19,672B, 1,121函数, 30条shell命令, 含PCI+VirtIO-blk/net+TCP+FAT16+安装器+内存+任务+鼠标+字体+WM+SMP+AHCI+USB+ACPI+AC97+RTC+微型解释器 |
 
-**当前状态**: 层级 A 有 20+ 个功能已 QEMU 验证（含 shell 18 条命令）；层级 C 的 kernel.bin 已编译并集成到镜像，在 0x120000 运行 25 条独立 shell 命令（含 VirtIO-blk磁盘读写+FAT16格式化与目录列表+TCP/VirtIO-net/内存/任务/鼠标/字体/WM/SMP/AHCI/USB/AC97音频/RTC时间）。A/C 融合正在进行中。
+**当前状态**: 层级 A 有 20+ 个功能已 QEMU 验证（含 shell 18 条命令）；层级 C 的 kernel.bin 已编译并集成到镜像，在 0x120000 运行 30 条独立 shell 命令（含 VirtIO-blk磁盘读写+FAT16格式化与目录列表+TCP/VirtIO-net/内存/任务/鼠标/字体/WM/SMP/AHCI/USB/AC97音频/RTC时间）。A/C 融合正在进行中。
 
 ### 代码库统计
 
 | 指标 | 值 |
 |------|-----|
-| H-L 源文件 (活跃) | 175 个 `.hl` |
+| H-L 源文件 (活跃) | 176 个 `.hl` |
 | 内核模块 | 114 个 (`bare-kernel/hl/`) |
 | 内核函数定义 | 1,121 个 |
 | 用户空间模块 | 27 个 (`HicOS_*.hl`) — 全部原生，0 个桩 |
 | 基础设施/测试 | 34 个 (hl-bootstrap, stdlib, test-suite 等) |
-| 总代码行数 | ~38,700 行 (31,800 H-L + 6,993 PS1) |
+| 总代码行数 | ~45,900 行 (38,082 H-L + 7,773 PS1) |
 | 构建/测试脚本 | 17 个 PowerShell 脚本 (`scripts/`) |
-| BIOS 可引导镜像 | `hicos-hl.img` = 151,552 字节 (296扇区, MBR 0x55AA ✓) |
+| BIOS 可引导镜像 | `hicos-hl.img` = 152,064 字节 (297扇区, MBR 0x55AA ✓) |
 | UEFI 可引导镜像 | `hicos-uefi.img` = 33 MB (GPT+CRC32, ESP FAT16) |
 | UEFI 应用程序 | `BOOTX64.EFI` = 1,536 字节 (PE32+ x86_64) |
 | kernel.bin (编译产出) | 19,672 字节, 1,105 符号, 1,121 函数, 30 shell 命令 |
