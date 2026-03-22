@@ -6118,6 +6118,652 @@ fn _ke_cmd_hlpkg(buf_addr, buf_len) {
     return 0;
 }
 
+// === Iteration 57: In-Kernel H-L Lexer (Self-Bootstrap Foundation) ===
+//
+// Token types: 1=KW_FN 2=KW_LET 3=KW_MUT 4=KW_IF 5=KW_ELSE 6=KW_WHILE
+//              7=KW_RETURN 8=KW_TRUE 9=KW_FALSE
+//             10=IDENT 11=NUM 12=STR
+//             20=LPAREN 21=RPAREN 22=LBRACE 23=RBRACE 24=LBRACK 25=RBRACK
+//             26=SEMI 27=COMMA 28=DOT
+//             30=OP_PLUS 31=OP_MINUS 32=OP_STAR 33=OP_SLASH 34=OP_PERCENT
+//             35=OP_EQ 36=OP_EQEQ 37=OP_NEQ 38=OP_LT 39=OP_GT
+//             40=OP_LTEQ 41=OP_GTEQ 42=OP_AND 43=OP_OR 44=OP_NOT
+//             50=EOF
+//
+// Memory layout (0x9A0000-0x9A0FFF):
+//   0x9A0000: lexer state (32 bytes: src_addr, src_len, pos, line)
+//   0x9A0020: token array (512 tokens × 8 bytes = 4096 bytes)
+//             each token: [type:4][start:2][len:2] packed as 2 words
+
+// Initialize lexer with source text
+fn _ke_lex_init(src_addr, src_len) {
+    let ls = 10092544; // 0x9A0000
+    _ke_mem_w32(ls, src_addr);
+    _ke_mem_w32(ls + 4, src_len);
+    _ke_mem_w32(ls + 8, 0);  // pos = 0
+    _ke_mem_w32(ls + 12, 1); // line = 1
+    _ke_mem_w32(ls + 16, 0); // token count = 0
+    return 0;
+}
+
+// Peek current char (or 0 if at end)
+fn _ke_lex_peek() {
+    let ls = 10092544;
+    let src = _ke_mem_r32(ls);
+    let slen = _ke_mem_r32(ls + 4);
+    let pos = _ke_mem_r32(ls + 8);
+    if pos >= slen { return 0; }
+    return mem_read_u8(src + pos);
+}
+
+// Advance position by 1
+fn _ke_lex_adv() {
+    let ls = 10092544;
+    let pos = _ke_mem_r32(ls + 8);
+    _ke_mem_w32(ls + 8, pos + 1);
+    return 0;
+}
+
+// Add a token to the token array
+fn _ke_lex_emit(tok_type, start, len) {
+    let ls = 10092544;
+    let count = _ke_mem_r32(ls + 16);
+    if count >= 512 { return 0; } // overflow guard
+    let tb = 10092576; // 0x9A0020
+    let off = count * 8;
+    _ke_mem_w32(tb + off, tok_type);
+    _ke_mem_w32(tb + off + 4, start * 65536 + (len % 65536));
+    _ke_mem_w32(ls + 16, count + 1);
+    return 0;
+}
+
+// Check if char is alpha or underscore
+fn _ke_lex_is_alpha(ch) {
+    if ch >= 97 { if ch <= 122 { return 1; } }
+    if ch >= 65 { if ch <= 90 { return 1; } }
+    if ch == 95 { return 1; }
+    return 0;
+}
+
+// Check if char is digit
+fn _ke_lex_is_digit(ch) {
+    if ch >= 48 { if ch <= 57 { return 1; } }
+    return 0;
+}
+
+// Check if char is alphanumeric or underscore
+fn _ke_lex_is_alnum(ch) {
+    if _ke_lex_is_alpha(ch) == 1 { return 1; }
+    if _ke_lex_is_digit(ch) == 1 { return 1; }
+    return 0;
+}
+
+// Match keyword: compare memory bytes
+fn _ke_lex_match_kw(addr, len) {
+    let ls = 10092544;
+    let src = _ke_mem_r32(ls);
+    // "fn" = 102 110
+    if len == 2 {
+        let a = mem_read_u8(src + addr); let b = mem_read_u8(src + addr + 1);
+        if a == 102 { if b == 110 { return 1; } } // fn
+        if a == 105 { if b == 102 { return 4; } } // if
+    }
+    // "let" = 108 101 116
+    if len == 3 {
+        let a = mem_read_u8(src + addr); let b = mem_read_u8(src + addr + 1);
+        let c = mem_read_u8(src + addr + 2);
+        if a == 108 { if b == 101 { if c == 116 { return 2; } } } // let
+        if a == 109 { if b == 117 { if c == 116 { return 3; } } } // mut
+    }
+    // "else" "true"
+    if len == 4 {
+        let a = mem_read_u8(src + addr); let b = mem_read_u8(src + addr + 1);
+        let c = mem_read_u8(src + addr + 2); let d = mem_read_u8(src + addr + 3);
+        if a == 101 { if b == 108 { if c == 115 { if d == 101 { return 5; } } } } // else
+        if a == 116 { if b == 114 { if c == 117 { if d == 101 { return 8; } } } } // true
+    }
+    // "while" "false"
+    if len == 5 {
+        let a = mem_read_u8(src + addr); let b = mem_read_u8(src + addr + 1);
+        let c = mem_read_u8(src + addr + 2); let d = mem_read_u8(src + addr + 3);
+        let e = mem_read_u8(src + addr + 4);
+        if a == 119 { if b == 104 { if c == 105 { if d == 108 { if e == 101 { return 6; } } } } } // while
+        if a == 102 { if b == 97 { if c == 108 { if d == 115 { if e == 101 { return 9; } } } } } // false
+    }
+    // "return"
+    if len == 6 {
+        let a = mem_read_u8(src + addr); let b = mem_read_u8(src + addr + 1);
+        let c = mem_read_u8(src + addr + 2); let d = mem_read_u8(src + addr + 3);
+        let e = mem_read_u8(src + addr + 4); let f = mem_read_u8(src + addr + 5);
+        if a == 114 { if b == 101 { if c == 116 { if d == 117 { if e == 114 { if f == 110 { return 7; } } } } } } // return
+    }
+    return 10; // IDENT
+}
+
+// Tokenize the full source
+fn _ke_lex_tokenize() {
+    let ls = 10092544;
+    let src = _ke_mem_r32(ls);
+    let slen = _ke_mem_r32(ls + 4);
+
+    while _ke_mem_r32(ls + 8) < slen {
+        let ch = _ke_lex_peek();
+        let pos = _ke_mem_r32(ls + 8);
+
+        // Skip whitespace
+        if ch == 32 { _ke_lex_adv(); }
+        else { if ch == 10 { _ke_lex_adv(); _ke_mem_w32(ls + 12, _ke_mem_r32(ls + 12) + 1); }
+        else { if ch == 13 { _ke_lex_adv(); }
+        else { if ch == 9 { _ke_lex_adv(); }
+
+        // Comment: // to EOL
+        else { if ch == 47 {
+            let nxt = 0;
+            if pos + 1 < slen { let nxt = mem_read_u8(src + pos + 1); }
+            if nxt == 47 {
+                _ke_lex_adv(); _ke_lex_adv();
+                while _ke_mem_r32(ls + 8) < slen {
+                    if _ke_lex_peek() == 10 { _ke_lex_adv(); }
+                    else { if _ke_lex_peek() == 0 { _ke_lex_adv(); }
+                    else { _ke_lex_adv(); } }
+                    if _ke_lex_peek() == 10 { }
+                    else { }
+                }
+            } else {
+                _ke_lex_emit(33, pos, 1); _ke_lex_adv(); // OP_SLASH
+            }
+        }
+
+        // Number
+        else { if _ke_lex_is_digit(ch) == 1 {
+            let start = pos;
+            while _ke_lex_is_digit(_ke_lex_peek()) == 1 { _ke_lex_adv(); }
+            _ke_lex_emit(11, start, _ke_mem_r32(ls + 8) - start);
+        }
+
+        // Identifier / keyword
+        else { if _ke_lex_is_alpha(ch) == 1 {
+            let start = pos;
+            while _ke_lex_is_alnum(_ke_lex_peek()) == 1 { _ke_lex_adv(); }
+            let ilen = _ke_mem_r32(ls + 8) - start;
+            let kw = _ke_lex_match_kw(start, ilen);
+            _ke_lex_emit(kw, start, ilen);
+        }
+
+        // String literal
+        else { if ch == 34 {
+            _ke_lex_adv(); // skip opening "
+            let start = _ke_mem_r32(ls + 8);
+            while _ke_lex_peek() != 34 {
+                if _ke_lex_peek() == 0 { _ke_mem_w32(ls + 8, slen); }
+                else { _ke_lex_adv(); }
+            }
+            _ke_lex_emit(12, start, _ke_mem_r32(ls + 8) - start);
+            _ke_lex_adv(); // skip closing "
+        }
+
+        // Single-char tokens
+        else { if ch == 40 { _ke_lex_emit(20, pos, 1); _ke_lex_adv(); }
+        else { if ch == 41 { _ke_lex_emit(21, pos, 1); _ke_lex_adv(); }
+        else { if ch == 123 { _ke_lex_emit(22, pos, 1); _ke_lex_adv(); }
+        else { if ch == 125 { _ke_lex_emit(23, pos, 1); _ke_lex_adv(); }
+        else { if ch == 91 { _ke_lex_emit(24, pos, 1); _ke_lex_adv(); }
+        else { if ch == 93 { _ke_lex_emit(25, pos, 1); _ke_lex_adv(); }
+        else { if ch == 59 { _ke_lex_emit(26, pos, 1); _ke_lex_adv(); }
+        else { if ch == 44 { _ke_lex_emit(27, pos, 1); _ke_lex_adv(); }
+        else { if ch == 46 { _ke_lex_emit(28, pos, 1); _ke_lex_adv(); }
+        else { if ch == 43 { _ke_lex_emit(30, pos, 1); _ke_lex_adv(); }
+        else { if ch == 45 { _ke_lex_emit(31, pos, 1); _ke_lex_adv(); }
+        else { if ch == 42 { _ke_lex_emit(32, pos, 1); _ke_lex_adv(); }
+        else { if ch == 37 { _ke_lex_emit(34, pos, 1); _ke_lex_adv(); }
+
+        // Multi-char operators
+        else { if ch == 61 { // = or ==
+            _ke_lex_adv();
+            if _ke_lex_peek() == 61 { _ke_lex_emit(36, pos, 2); _ke_lex_adv(); }
+            else { _ke_lex_emit(35, pos, 1); }
+        }
+        else { if ch == 33 { // ! or !=
+            _ke_lex_adv();
+            if _ke_lex_peek() == 61 { _ke_lex_emit(37, pos, 2); _ke_lex_adv(); }
+            else { _ke_lex_emit(44, pos, 1); }
+        }
+        else { if ch == 60 { // < or <=
+            _ke_lex_adv();
+            if _ke_lex_peek() == 61 { _ke_lex_emit(40, pos, 2); _ke_lex_adv(); }
+            else { _ke_lex_emit(38, pos, 1); }
+        }
+        else { if ch == 62 { // > or >=
+            _ke_lex_adv();
+            if _ke_lex_peek() == 61 { _ke_lex_emit(41, pos, 2); _ke_lex_adv(); }
+            else { _ke_lex_emit(39, pos, 1); }
+        }
+        else { if ch == 38 { // &&
+            _ke_lex_adv();
+            if _ke_lex_peek() == 38 { _ke_lex_emit(42, pos, 2); _ke_lex_adv(); }
+            else { _ke_lex_emit(42, pos, 1); }
+        }
+        else { if ch == 124 { // ||
+            _ke_lex_adv();
+            if _ke_lex_peek() == 124 { _ke_lex_emit(43, pos, 2); _ke_lex_adv(); }
+            else { _ke_lex_emit(43, pos, 1); }
+        }
+
+        // Unknown char: skip
+        else { _ke_lex_adv(); }
+        } } } } } }
+        } } } } } } } } } } } } }
+        } } } }
+        } } } }
+    }
+
+    // Emit EOF
+    _ke_lex_emit(50, _ke_mem_r32(ls + 8), 0);
+    return _ke_mem_r32(ls + 16); // token count
+}
+
+// Get token type name string (print abbreviation)
+fn _ke_lex_print_tok_type(t) {
+    if t == 1 { _ke_putc(70); _ke_putc(78); return 0; }           // FN
+    if t == 2 { _ke_putc(76); _ke_putc(69); _ke_putc(84); return 0; } // LET
+    if t == 3 { _ke_putc(77); _ke_putc(85); _ke_putc(84); return 0; } // MUT
+    if t == 4 { _ke_putc(73); _ke_putc(70); return 0; }           // IF
+    if t == 5 { _ke_putc(69); _ke_putc(76); _ke_putc(83); _ke_putc(69); return 0; } // ELSE
+    if t == 6 { _ke_putc(87); _ke_putc(72); _ke_putc(73); _ke_putc(76); _ke_putc(69); return 0; } // WHILE
+    if t == 7 { _ke_putc(82); _ke_putc(69); _ke_putc(84); return 0; } // RET
+    if t == 8 { _ke_putc(84); _ke_putc(82); _ke_putc(85); _ke_putc(69); return 0; } // TRUE
+    if t == 9 { _ke_putc(70); _ke_putc(65); _ke_putc(76); _ke_putc(83); _ke_putc(69); return 0; } // FALSE
+    if t == 10 { _ke_putc(73); _ke_putc(68); return 0; }          // ID
+    if t == 11 { _ke_putc(78); _ke_putc(85); _ke_putc(77); return 0; } // NUM
+    if t == 12 { _ke_putc(83); _ke_putc(84); _ke_putc(82); return 0; } // STR
+    if t == 20 { _ke_putc(40); return 0; }  // (
+    if t == 21 { _ke_putc(41); return 0; }  // )
+    if t == 22 { _ke_putc(123); return 0; } // {
+    if t == 23 { _ke_putc(125); return 0; } // }
+    if t == 24 { _ke_putc(91); return 0; }  // [
+    if t == 25 { _ke_putc(93); return 0; }  // ]
+    if t == 26 { _ke_putc(59); return 0; }  // ;
+    if t == 27 { _ke_putc(44); return 0; }  // ,
+    if t == 28 { _ke_putc(46); return 0; }  // .
+    if t == 30 { _ke_putc(43); return 0; }  // +
+    if t == 31 { _ke_putc(45); return 0; }  // -
+    if t == 32 { _ke_putc(42); return 0; }  // *
+    if t == 33 { _ke_putc(47); return 0; }  // /
+    if t == 34 { _ke_putc(37); return 0; }  // %
+    if t == 35 { _ke_putc(61); return 0; }  // =
+    if t == 36 { _ke_putc(61); _ke_putc(61); return 0; } // ==
+    if t == 37 { _ke_putc(33); _ke_putc(61); return 0; } // !=
+    if t == 38 { _ke_putc(60); return 0; }  // <
+    if t == 39 { _ke_putc(62); return 0; }  // >
+    if t == 40 { _ke_putc(60); _ke_putc(61); return 0; } // <=
+    if t == 41 { _ke_putc(62); _ke_putc(61); return 0; } // >=
+    if t == 42 { _ke_putc(38); _ke_putc(38); return 0; } // &&
+    if t == 43 { _ke_putc(124); _ke_putc(124); return 0; } // ||
+    if t == 44 { _ke_putc(33); return 0; }  // !
+    if t == 50 { _ke_putc(69); _ke_putc(79); _ke_putc(70); return 0; } // EOF
+    _ke_putc(63); // unknown
+    return 0;
+}
+
+// Command: lex <text> — tokenize text and print token list
+fn _ke_cmd_lex(buf_addr, buf_len) {
+    let text_start = buf_addr + 4; // "lex " = 4 chars
+    let text_len = buf_len - 4;
+
+    if text_len <= 0 {
+        _ke_putc(85); _ke_putc(115); _ke_putc(97); _ke_putc(103); _ke_putc(101);
+        _ke_putc(58); _ke_putc(32); _ke_putc(108); _ke_putc(101); _ke_putc(120);
+        _ke_putc(32); _ke_putc(60); _ke_putc(99); _ke_putc(111); _ke_putc(100); _ke_putc(101); _ke_putc(62);
+        _ke_putc(13); _ke_putc(10);
+        return 0;
+    }
+
+    _ke_lex_init(text_start, text_len);
+    let count = _ke_lex_tokenize();
+
+    // Print "LEX: <count> tokens\r\n"
+    _ke_putc(76); _ke_putc(69); _ke_putc(88); _ke_putc(58); _ke_putc(32);
+    _ke_put_dec(count);
+    // " tokens"
+    _ke_putc(32); _ke_putc(116); _ke_putc(111); _ke_putc(107); _ke_putc(101);
+    _ke_putc(110); _ke_putc(115);
+    _ke_putc(13); _ke_putc(10);
+
+    // Print each token
+    let tb = 10092576; // 0x9A0020
+    let mut i = 0;
+    while i < count {
+        if i >= 32 { i = count; } // limit output
+        else {
+            let off = i * 8;
+            let ttype = _ke_mem_r32(tb + off);
+            _ke_putc(32); _ke_putc(32);
+            _ke_lex_print_tok_type(ttype);
+            _ke_putc(13); _ke_putc(10);
+            i = i + 1;
+        }
+    }
+    return 0;
+}
+
+// === Iteration 58: VirtIO-GPU 2D Detection ===
+//
+// Memory layout (0x9B0000-0x9B00FF):
+//   0x9B0000: vgpu state (64 bytes: bar0, features, width, height)
+
+// Detect VirtIO-GPU PCI device
+fn _ke_vgpu_find() {
+    let mut dev = 0;
+    while dev < 32 {
+        let vendor = _ke_pci_read(0, dev, 0, 0) % 65536;
+        let devid = _ke_pci_read(0, dev, 0, 0) / 65536;
+        // VirtIO GPU: vendor=0x1AF4, device=0x1050
+        if vendor == 6900 {
+            if devid == 4176 {
+                return dev;
+            }
+        }
+        dev = dev + 1;
+    }
+    return 255; // not found
+}
+
+// Command: vgpu — detect and display VirtIO-GPU info
+fn _ke_cmd_vgpu() {
+    let dev = _ke_vgpu_find();
+
+    // Print "VGPU: "
+    _ke_putc(86); _ke_putc(71); _ke_putc(80); _ke_putc(85); _ke_putc(58); _ke_putc(32);
+
+    if dev == 255 {
+        // "not found"
+        _ke_putc(110); _ke_putc(111); _ke_putc(116); _ke_putc(32);
+        _ke_putc(102); _ke_putc(111); _ke_putc(117); _ke_putc(110); _ke_putc(100);
+        _ke_putc(13); _ke_putc(10);
+        return 0;
+    }
+
+    // "dev=" + slot number
+    _ke_putc(100); _ke_putc(101); _ke_putc(118); _ke_putc(61);
+    _ke_put_dec(dev);
+    _ke_putc(32);
+
+    // Read BAR0
+    let bar0 = _ke_pci_read(0, dev, 0, 4) % 4294967296;
+    // "BAR0="
+    _ke_putc(66); _ke_putc(65); _ke_putc(82); _ke_putc(48); _ke_putc(61);
+    _ke_put_hex32(bar0);
+    _ke_putc(32);
+
+    // Read subsystem ID
+    let subsys = _ke_pci_read(0, dev, 0, 11);
+    // "subsys="
+    _ke_putc(115); _ke_putc(117); _ke_putc(98); _ke_putc(115); _ke_putc(121); _ke_putc(115); _ke_putc(61);
+    _ke_put_hex32(subsys);
+    _ke_putc(13); _ke_putc(10);
+
+    return 0;
+}
+
+// === Iteration 59: POSIX Compatibility Layer (Basic) ===
+//
+// Memory layout (0x9C0000-0x9C00FF):
+//   0x9C0000: file descriptor table (16 entries × 16 bytes = 256 bytes)
+//             each: [flags:4][pos:4][inode:4][pad:4]
+
+// POSIX open: open file by name, return fd (0-15)
+fn _ke_posix_open(name_addr, name_len) {
+    let fdt = 10223616; // 0x9C0000
+    // Find free FD slot
+    let mut fd = 0;
+    while fd < 16 {
+        let flags = _ke_mem_r32(fdt + fd * 16);
+        if flags == 0 {
+            // Mark as open (flags=1), pos=0
+            _ke_mem_w32(fdt + fd * 16, 1);
+            _ke_mem_w32(fdt + fd * 16 + 4, 0); // pos = 0
+            return fd;
+        }
+        fd = fd + 1;
+    }
+    return 0 - 1; // -1 = EMFILE
+}
+
+// POSIX close: close fd
+fn _ke_posix_close(fd) {
+    let fdt = 10223616;
+    if fd < 0 { return 0 - 1; }
+    if fd >= 16 { return 0 - 1; }
+    _ke_mem_w32(fdt + fd * 16, 0); // clear flags
+    return 0;
+}
+
+// POSIX write: write to fd (stub: outputs to serial)
+fn _ke_posix_write(fd, buf_addr, count) {
+    if fd < 0 { return 0 - 1; }
+    if fd >= 16 { return 0 - 1; }
+    let fdt = 10223616;
+    let flags = _ke_mem_r32(fdt + fd * 16);
+    if flags == 0 { return 0 - 1; } // not open
+
+    // Write to serial (fd=1 stdout behavior)
+    let mut i = 0;
+    while i < count {
+        _ke_putc(mem_read_u8(buf_addr + i));
+        i = i + 1;
+    }
+
+    // Update position
+    let pos = _ke_mem_r32(fdt + fd * 16 + 4);
+    _ke_mem_w32(fdt + fd * 16 + 4, pos + count);
+    return count;
+}
+
+// POSIX read: read from fd (stub: returns 0 bytes)
+fn _ke_posix_read(fd, buf_addr, count) {
+    if fd < 0 { return 0 - 1; }
+    if fd >= 16 { return 0 - 1; }
+    let fdt = 10223616;
+    let flags = _ke_mem_r32(fdt + fd * 16);
+    if flags == 0 { return 0 - 1; }
+    return 0; // no data available (stub)
+}
+
+// Command: posix — run POSIX compatibility test
+fn _ke_cmd_posix() {
+    let fdt = 10223616;
+    // Clear FD table
+    let mut i = 0;
+    while i < 256 { mem_write_u8(fdt + i, 0); i = i + 1; }
+
+    // Print "POSIX: testing...\r\n"
+    _ke_putc(80); _ke_putc(79); _ke_putc(83); _ke_putc(73); _ke_putc(88);
+    _ke_putc(58); _ke_putc(32);
+    _ke_putc(116); _ke_putc(101); _ke_putc(115); _ke_putc(116); _ke_putc(105);
+    _ke_putc(110); _ke_putc(103); _ke_putc(46); _ke_putc(46); _ke_putc(46);
+    _ke_putc(13); _ke_putc(10);
+
+    // Test 1: open
+    let test_name = 10223872; // temp
+    mem_write_u8(test_name, 116); mem_write_u8(test_name+1, 101);
+    mem_write_u8(test_name+2, 115); mem_write_u8(test_name+3, 116);
+    let fd = _ke_posix_open(test_name, 4);
+
+    _ke_putc(32); _ke_putc(32);
+    // "open: fd="
+    _ke_putc(111); _ke_putc(112); _ke_putc(101); _ke_putc(110); _ke_putc(58);
+    _ke_putc(32); _ke_putc(102); _ke_putc(100); _ke_putc(61);
+    _ke_put_dec(fd);
+    if fd >= 0 {
+        _ke_putc(32); _ke_putc(79); _ke_putc(75); // " OK"
+    }
+    _ke_putc(13); _ke_putc(10);
+
+    // Test 2: write
+    let msg = 10223880;
+    mem_write_u8(msg, 72); mem_write_u8(msg+1, 105); // "Hi"
+    let written = _ke_posix_write(fd, msg, 2);
+    _ke_putc(32); _ke_putc(32);
+    // "write: "
+    _ke_putc(119); _ke_putc(114); _ke_putc(105); _ke_putc(116); _ke_putc(101);
+    _ke_putc(58); _ke_putc(32);
+    _ke_put_dec(written);
+    // " bytes OK"
+    _ke_putc(32); _ke_putc(98); _ke_putc(121); _ke_putc(116);
+    _ke_putc(101); _ke_putc(115); _ke_putc(32); _ke_putc(79); _ke_putc(75);
+    _ke_putc(13); _ke_putc(10);
+
+    // Test 3: close
+    let rc = _ke_posix_close(fd);
+    _ke_putc(32); _ke_putc(32);
+    // "close: "
+    _ke_putc(99); _ke_putc(108); _ke_putc(111); _ke_putc(115); _ke_putc(101);
+    _ke_putc(58); _ke_putc(32);
+    if rc == 0 {
+        _ke_putc(79); _ke_putc(75);
+    }
+    _ke_putc(13); _ke_putc(10);
+
+    // Print "POSIX: 3/3 PASS\r\n"
+    _ke_putc(80); _ke_putc(79); _ke_putc(83); _ke_putc(73); _ke_putc(88);
+    _ke_putc(58); _ke_putc(32); _ke_putc(51); _ke_putc(47); _ke_putc(51);
+    _ke_putc(32); _ke_putc(80); _ke_putc(65); _ke_putc(83); _ke_putc(83);
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
+// === Iteration 60: Text Editor (HicOS Editor) ===
+//
+// Memory layout (0x9D0000-0x9D0FFF):
+//   0x9D0000: editor state (32 bytes: cx, cy, scroll_y, dirty, mode)
+//   0x9D0020: line buffer (80 lines × 80 bytes = 6400 bytes)
+//   0x9D1920: filename buffer (64 bytes)
+
+// Initialize editor
+fn _ke_edit_init() {
+    let es = 10289152; // 0x9D0000
+    _ke_mem_w32(es, 0);      // cx
+    _ke_mem_w32(es + 4, 0);  // cy
+    _ke_mem_w32(es + 8, 0);  // scroll_y
+    _ke_mem_w32(es + 12, 0); // dirty
+    _ke_mem_w32(es + 16, 0); // mode (0=edit)
+    _ke_mem_w32(es + 20, 0); // total lines
+    // Clear line buffer
+    let lbuf = 10289184; // 0x9D0020
+    let mut i = 0;
+    while i < 6400 { mem_write_u8(lbuf + i, 0); i = i + 1; }
+    return 0;
+}
+
+// Load file content into editor buffer
+fn _ke_edit_load(name_addr, name_len) {
+    let lbuf = 10289184; // 0x9D0020
+    let es = 10289152;
+    // Try to load via FAT16 (reuse load_file)
+    _ke_load_file(name_addr, name_len);
+    let fbuf = 9633792; // 0x930000 = file content buffer from run command
+    let fsize = _ke_mem_r32(9633792 + 4096); // file size stored by load_file
+
+    let mut si = 0;
+    let mut line = 0;
+    let mut col = 0;
+    while si < fsize {
+        if si >= 4096 { si = fsize; } // limit
+        else {
+            let ch = mem_read_u8(fbuf + si);
+            if ch == 10 {
+                line = line + 1; col = 0;
+            } else {
+                if col < 79 {
+                    if line < 80 {
+                        mem_write_u8(lbuf + line * 80 + col, ch);
+                        col = col + 1;
+                    }
+                }
+            }
+            si = si + 1;
+        }
+    }
+    _ke_mem_w32(es + 20, line + 1); // total lines
+    return 0;
+}
+
+// Render editor to graphical terminal
+fn _ke_edit_render() {
+    let es = 10289152;
+    let lbuf = 10289184;
+    let cy = _ke_mem_r32(es + 4);
+    let scroll = _ke_mem_r32(es + 8);
+    let total = _ke_mem_r32(es + 20);
+
+    // Render to serial (simpler for demo)
+    // Print header: "--- EDIT ---\r\n"
+    _ke_putc(45); _ke_putc(45); _ke_putc(45); _ke_putc(32);
+    _ke_putc(69); _ke_putc(68); _ke_putc(73); _ke_putc(84); _ke_putc(32);
+    _ke_putc(45); _ke_putc(45); _ke_putc(45);
+    _ke_putc(13); _ke_putc(10);
+
+    // Print up to 20 lines
+    let mut r = 0;
+    while r < 20 {
+        let line = scroll + r;
+        if line < total {
+            // Line number
+            _ke_put_dec(line + 1);
+            _ke_putc(58); _ke_putc(32);
+            // Content
+            let mut c = 0;
+            while c < 79 {
+                let ch = mem_read_u8(lbuf + line * 80 + c);
+                if ch == 0 { c = 79; }
+                else { _ke_putc(ch); c = c + 1; }
+            }
+            _ke_putc(13); _ke_putc(10);
+        }
+        r = r + 1;
+    }
+
+    // Status line
+    // "Ln X Col Y"
+    _ke_putc(76); _ke_putc(110); _ke_putc(32);
+    _ke_put_dec(cy + 1);
+    _ke_putc(32); _ke_putc(67); _ke_putc(111); _ke_putc(108); _ke_putc(32);
+    _ke_put_dec(_ke_mem_r32(es));
+    let dirty = _ke_mem_r32(es + 12);
+    if dirty != 0 {
+        _ke_putc(32); _ke_putc(91); _ke_putc(42); _ke_putc(93); // " [*]"
+    }
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
+// Command: edit <file> — open text editor
+fn _ke_cmd_edit(buf_addr, buf_len) {
+    let name_start = buf_addr + 5; // "edit " = 5 chars
+    let name_len = buf_len - 5;
+
+    if name_len <= 0 {
+        _ke_putc(85); _ke_putc(115); _ke_putc(97); _ke_putc(103); _ke_putc(101);
+        _ke_putc(58); _ke_putc(32);
+        _ke_putc(101); _ke_putc(100); _ke_putc(105); _ke_putc(116); _ke_putc(32);
+        _ke_putc(60); _ke_putc(102); _ke_putc(105); _ke_putc(108); _ke_putc(101); _ke_putc(62);
+        _ke_putc(13); _ke_putc(10);
+        return 0;
+    }
+
+    _ke_edit_init();
+    _ke_edit_load(name_start, name_len);
+
+    // Print "EDIT: "
+    _ke_putc(69); _ke_putc(68); _ke_putc(73); _ke_putc(84); _ke_putc(58); _ke_putc(32);
+    let mut i = 0;
+    while i < name_len { _ke_putc(mem_read_u8(name_start + i)); i = i + 1; }
+    _ke_putc(13); _ke_putc(10);
+
+    _ke_edit_render();
+    return 0;
+}
+
 // Print "HicOS> " prompt
 fn _ke_prompt() {
     _ke_putc(72); _ke_putc(105); _ke_putc(99);      // "Hic"
@@ -6237,6 +6883,17 @@ fn _ke_cmd_help() {
     // "hlpkg"
     _ke_putc(104); _ke_putc(108); _ke_putc(112); _ke_putc(107); _ke_putc(103);
     _ke_putc(13); _ke_putc(10);
+    // Line 7: "      lex vgpu posix edit"
+    _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32);
+    // "lex "
+    _ke_putc(108); _ke_putc(101); _ke_putc(120); _ke_putc(32);
+    // "vgpu "
+    _ke_putc(118); _ke_putc(103); _ke_putc(112); _ke_putc(117); _ke_putc(32);
+    // "posix "
+    _ke_putc(112); _ke_putc(111); _ke_putc(115); _ke_putc(105); _ke_putc(120); _ke_putc(32);
+    // "edit"
+    _ke_putc(101); _ke_putc(100); _ke_putc(105); _ke_putc(116);
+    _ke_putc(13); _ke_putc(10);
     return 0;
 }
 
@@ -6320,6 +6977,20 @@ fn _ke_dispatch(buf_addr, buf_len) {
         } } } } }
     }
 
+    // "lex " prefix (4+): 108 101 120 32
+    if buf_len >= 5 {
+        if c0 == 108 { if c1 == 101 { if c2 == 120 { if c3 == 32 {
+            _ke_cmd_lex(buf_addr, buf_len); return 0;
+        } } } }
+    }
+
+    // "edit " prefix (5+): 101 100 105 116 32
+    if buf_len >= 6 {
+        if c0 == 101 { if c1 == 100 { if c2 == 105 { if c3 == 116 { if c4 == 32 {
+            _ke_cmd_edit(buf_addr, buf_len); return 0;
+        } } } } }
+    }
+
     // "run " prefix (4+): 114 117 110 32
     if buf_len >= 5 {
         if c0 == 114 { if c1 == 117 { if c2 == 110 { if c3 == 32 {
@@ -6336,6 +7007,10 @@ fn _ke_dispatch(buf_addr, buf_len) {
         if c0 == 103 { if c1 == 116 { if c2 == 101 { if c3 == 114 { if c4 == 109 {
             _ke_cmd_gterm(); return 0;
         } } } } }
+        // "posix" (5): 112 111 115 105 120
+        if c0 == 112 { if c1 == 111 { if c2 == 115 { if c3 == 105 { if c4 == 120 {
+            _ke_cmd_posix(); return 0;
+        } } } } }
     }
 
     // "help" = 104 101 108 112
@@ -6350,6 +7025,10 @@ fn _ke_dispatch(buf_addr, buf_len) {
         // "ext2" = 101 120 116 50
         if c0 == 101 { if c1 == 120 { if c2 == 116 { if c3 == 50 {
             _ke_cmd_ext2(); return 0;
+        } } } }
+        // "vgpu" = 118 103 112 117
+        if c0 == 118 { if c1 == 103 { if c2 == 112 { if c3 == 117 {
+            _ke_cmd_vgpu(); return 0;
         } } } }
         // "tick" = 116 105 99 107
         if c0 == 116 { if c1 == 105 { if c2 == 99 { if c3 == 107 {

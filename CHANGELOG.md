@@ -8,9 +8,59 @@
 
 ## v6.0 (Current)
 
-176 active .hl files, 114 kernel modules, 70 shell commands (Layer C), 40 kernel.bin commands, 0 external deps.
-Dual-boot: BIOS 96/96 PASS + UEFI 3/3 PASS. Full gate 10/10 PASS.
-Image: 152,064 bytes (297 sectors). Code: ~48,500 lines (40,500 H-L + 8,000 PS1).
+176 active .hl files, 114 kernel modules, 74 shell commands (Layer C), 44 kernel.bin commands, 0 external deps.
+Dual-boot: BIOS 107/107 PASS + UEFI 3/3 PASS. Full gate 10/10 PASS.
+Image: 152,064 bytes (297 sectors). Code: ~49,200 lines (41,200 H-L + 8,000 PS1).
+
+### Iteration 60: Text Editor (HicOS Editor) in kernel.bin
+- **Editor state**: cursor position, scroll offset, dirty flag, line buffer (80 lines × 80 cols)
+  - `_ke_edit_init()`: Initialize editor state + clear 6400-byte line buffer
+  - Memory at 0x9D0000-0x9D1FFF (state + line buffer + filename)
+- **File loading**: `_ke_edit_load(name, len)` — load FAT16 file into line buffer
+  - Reuses `_ke_load_file()` from interpreter, splits on newlines into 80-col rows
+- **Rendering**: `_ke_edit_render()` — display file content + status line to serial
+  - Line numbers, up to 20 visible rows, cursor position (Ln/Col), dirty indicator [*]
+- **`edit <file>` shell command**: Open file in editor → load → render
+- **Memory layout**: 0x9D0000-0x9D1FFF (editor state + 6400B line buffer + filename)
+- 4 new functions, `edit` prefix dispatch (5-char)
+- 🏆 **桌面应用: 文本编辑器** — 第一个 HicOS 原生应用程序
+
+### Iteration 59: POSIX Compatibility Layer in kernel.bin
+- **File descriptor table**: 16 entries × 16 bytes at 0x9C0000
+  - `_ke_posix_open(name, len)`: Allocate fd slot, set flags=1, pos=0
+  - `_ke_posix_close(fd)`: Clear fd slot
+  - `_ke_posix_write(fd, buf, count)`: Write to serial (stdout), update position
+  - `_ke_posix_read(fd, buf, count)`: Read stub (returns 0)
+- **`posix` shell command**: Run open→write→close test cycle → "POSIX: 3/3 PASS"
+- **Memory layout**: 0x9C0000-0x9C00FF (16-entry fd table)
+- 5 new functions, `posix` 5-char exact dispatch
+
+### Iteration 58: VirtIO-GPU 2D Detection in kernel.bin
+- **PCI detection**: `_ke_vgpu_find()` — scan PCI bus for VirtIO-GPU (0x1AF4:0x1050)
+- **`vgpu` shell command**: Detect GPU → print slot, BAR0, subsystem ID
+- **Memory layout**: 0x9B0000-0x9B00FF (vgpu state)
+- 2 new functions, `vgpu` 4-char exact dispatch
+
+### Iteration 57: In-Kernel H-L Lexer in kernel.bin
+- **Lexer core**:
+  - `_ke_lex_init(src, len)`: Initialize lexer state at 0x9A0000
+  - `_ke_lex_peek()`: Peek current source char
+  - `_ke_lex_adv()`: Advance position
+  - `_ke_lex_emit(type, start, len)`: Add token to array (512 max)
+  - `_ke_lex_tokenize()`: Full tokenization loop → returns token count
+- **Token recognition**: 50 token types
+  - Keywords: fn, let, mut, if, else, while, return, true, false
+  - Literals: NUM (digits), STR (quoted), IDENT (alpha + alnum)
+  - Operators: + - * / % = == != < > <= >= && || !
+  - Delimiters: ( ) { } [ ] ; , .
+  - Comments: // to EOL (skipped)
+  - EOF sentinel
+- **Keyword matching**: `_ke_lex_match_kw(addr, len)` — byte-by-byte comparison for 9 keywords
+- **Token printer**: `_ke_lex_print_tok_type(t)` — 35+ type abbreviations (FN, LET, NUM, etc.)
+- **`lex <code>` shell command**: Tokenize input → print "LEX: N tokens" + token list
+- **Memory layout**: 0x9A0000-0x9A0FFF (lexer state + 4096B token array)
+- 11 new functions, `lex` prefix dispatch (4-char)
+- 🏆 **内核自举基础**: H-L 词法分析器在 kernel.bin 中运行, v8.0 编译器自举第一步
 
 ### Iteration 56: Package Manager hlpkg in kernel.bin
 - **Package manifest parser**: `_ke_hlpkg_parse_manifest(buf, len)` — parse "name=<name>" from manifest

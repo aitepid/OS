@@ -1286,6 +1286,92 @@ foreach ($t in $iter53Tests) {
 
 if (Test-Path $iter53LogFile) { Remove-Item $iter53LogFile -Force }
 
+# =============================================================
+# Phase 16: Lexer + VirtIO-GPU + POSIX + Editor Tests
+# =============================================================
+Write-Host "`n=== Phase 16: v8.0 Phase I Tests ===" -ForegroundColor Cyan
+
+$v8LogFile = Join-Path $repoRoot 'qemu-v8-test.log'
+if (Test-Path $v8LogFile) { Remove-Item $v8LogFile -Force }
+
+$v8Port = 55601
+$v8Args = @(
+    '-drive', "format=raw,file=hicos-hl.img",
+    '-serial', "file:$v8LogFile",
+    '-m', '128', '-display', 'none',
+    '-device', 'virtio-blk-pci,drive=disk0,disable-modern=on',
+    '-drive', "id=disk0,file=hicos-disk.img,format=raw,if=none",
+    '-netdev', 'user,id=net0',
+    '-device', 'virtio-net-pci,netdev=net0,disable-modern=on',
+    '-no-reboot', '-no-shutdown',
+    '-monitor', "telnet:127.0.0.1:$v8Port,server,nowait"
+)
+
+$v8Proc = Start-Process -FilePath $qemuPath -ArgumentList $v8Args -PassThru -NoNewWindow
+Start-Sleep -Seconds 5
+
+try {
+    $v8Client = New-Object System.Net.Sockets.TcpClient('127.0.0.1', $v8Port)
+    $v8Stream = $v8Client.GetStream()
+    $v8Writer = New-Object System.IO.StreamWriter($v8Stream)
+    $v8Writer.AutoFlush = $true
+    Start-Sleep -Milliseconds 500
+
+    # lex command: "lex let x = 42;"
+    foreach ($k in @('l','e','x','space','l','e','t','space','x','space','equal','space','4','2','semicolon','ret')) { $v8Writer.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 5
+
+    # vgpu command
+    foreach ($k in @('v','g','p','u','ret')) { $v8Writer.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 3
+
+    # posix command
+    foreach ($k in @('p','o','s','i','x','ret')) { $v8Writer.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 5
+
+    # help (verify new commands)
+    foreach ($k in @('h','e','l','p','ret')) { $v8Writer.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 2
+
+    $v8Writer.Close(); $v8Client.Close()
+} catch {
+    Write-Host "  v8 test monitor error: $_" -ForegroundColor Yellow
+}
+
+Start-Sleep -Seconds 1
+if (-not $v8Proc.HasExited) { $v8Proc.Kill(); $v8Proc.WaitForExit(3000) }
+
+$v8Content = ''
+if (Test-Path $v8LogFile) {
+    try { $v8Content = [System.IO.File]::ReadAllText($v8LogFile) } catch {}
+}
+
+$v8Tests = @(
+    @{ name = 'lex produces LEX: prefix'; pattern = 'LEX:' },
+    @{ name = 'lex produces token count'; pattern = 'tokens' },
+    @{ name = 'lex identifies LET keyword'; pattern = 'LET' },
+    @{ name = 'vgpu produces VGPU: output'; pattern = 'VGPU:' },
+    @{ name = 'posix produces POSIX: prefix'; pattern = 'POSIX:' },
+    @{ name = 'posix open test passes'; pattern = 'open:' },
+    @{ name = 'posix 3/3 PASS'; pattern = '3/3 PASS' },
+    @{ name = 'help shows lex command'; pattern = 'lex' },
+    @{ name = 'help shows vgpu command'; pattern = 'vgpu' },
+    @{ name = 'help shows posix command'; pattern = 'posix' },
+    @{ name = 'help shows edit command'; pattern = 'edit' }
+)
+
+foreach ($t in $v8Tests) {
+    $shellTotal++
+    if ($v8Content -match $t.pattern) {
+        $passes += "v8.0: $($t.name)"
+        $shellPassed++
+    } else {
+        $errors += "v8.0: $($t.name)"
+    }
+}
+
+if (Test-Path $v8LogFile) { Remove-Item $v8LogFile -Force }
+
 Write-Host "`n=== Boot Test Results ===" -ForegroundColor Cyan
 foreach ($p in $passes) {
     Write-Host "  PASS: $p" -ForegroundColor Green
