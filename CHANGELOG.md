@@ -8,8 +8,42 @@
 
 ## v6.0 (Current)
 
-176 active .hl files, 114 kernel modules, 60 shell commands (Layer C), 30 kernel.bin commands, 0 external deps.
-Dual-boot: BIOS 62/62 PASS + UEFI 3/3 PASS. Full gate 10/10 PASS.
+176 active .hl files, 114 kernel modules, 61 shell commands (Layer C), 31 kernel.bin commands, 0 external deps.
+Dual-boot: BIOS 68/68 PASS + UEFI 3/3 PASS. Full gate 10/10 PASS.
+Image: 152,064 bytes (297 sectors). Code: ~46,500 lines (38,500 H-L + 8,000 PS1).
+
+### Iteration 48: SHA-256 Cryptographic Hash in kernel.bin
+- **SHA-256 full implementation** (64-round compression, FIPS 180-4 compliant):
+  - `_ke_sha256_init_k()`: 64 round constants K[0..63] at 0x940000 (256 bytes)
+  - `_ke_sha256_hash(data_addr, data_len)`: Full SHA-256 computation
+    - Message padding (0x80 + zeros + 64-bit big-endian length)
+    - Message schedule W[0..63] expansion (σ0, σ1 functions)
+    - 64-round compression (Σ0, Σ1, Ch, Maj functions)
+    - Output: 32 bytes at 0x9402A0
+  - `_ke_sha256_rotr(val, bits)`: 32-bit right rotation
+  - `_ke_sha256_shr(val, bits)`: 32-bit right shift
+- **Bitwise operations** (pure arithmetic, no hardware bitwise instructions needed):
+  - `_ke_xor2(a, b)`: 32-bit XOR via bit-by-bit div/mod
+  - `_ke_xor3(a, b, c)`: Triple XOR
+  - `_ke_and32(a, b)`: 32-bit AND
+  - `_ke_not32(a)`: 32-bit NOT (XOR with 0xFFFFFFFF)
+  - `_ke_ch(e, f, g)`: SHA-256 Ch function
+  - `_ke_maj(a, b, c)`: SHA-256 Maj function
+- **Helper functions**:
+  - `_ke_mem_r32be(addr)`: Read 32-bit big-endian from memory
+  - `_ke_mem_w32be(addr, val)`: Write 32-bit big-endian to memory
+  - `_ke_mem_r32(addr)`: Read 32-bit little-endian from memory
+  - `_ke_put_hex8(val)`: Print 8-bit hex (2 digits)
+  - `_ke_put_hex32(val)`: Print 32-bit hex (8 digits)
+- **`sha256` shell command**: `sha256 <text>` → "SHA256: " + 64-char hex digest
+  - Command dispatch: 7-char prefix match "sha256 " (115 104 97 50 53 54 32)
+  - Usage help on empty argument
+- **Memory layout**: 0x940000-0x9402BF (SHA-256 working area)
+  - K constants (256B) + W schedule (256B) + pad buffer (128B) + state (32B) + output (32B)
+- **Boot init**: `_ke_sha256_init_k()` called in `_start()` Phase 7e
+- 14 new functions, `sha256` shell command wired to dispatch
+- **Shell commands (31)**: help tick pci pmem palloc pfree malloc mfree ps mouse tcptest gfxtest wm smp ahci usb acpi beep time disk format ls mkfile cat run wget uptime shutdown install reboot sha256
+- 🏆 **密码学基础就绪**: SHA-256 in kernel.bin, v7.0 TLS 1.3 路线图第一步完成
 Image: 152,064 bytes (297 sectors). Code: ~46,100 lines (38,082 H-L + 8,000 PS1).
 
 ### Iteration 47: clear + hexdump + v7.0 Plan

@@ -3855,6 +3855,384 @@ fn _ke_sc2ascii(sc) {
     return 0;
 }
 
+// === Iteration 48: SHA-256 Cryptographic Hash ===
+//
+// Memory layout:
+//   0x940000: K[0..63] round constants (64 × 4 = 256 bytes)
+//   0x940100: W[0..63] message schedule (64 × 4 = 256 bytes)
+//   0x940200: padded message buffer (128 bytes max)
+//   0x940280: hash state a..h (8 × 4 = 32 bytes)
+//   0x9402A0: hash output (32 bytes)
+
+// Read 32-bit big-endian from memory
+fn _ke_mem_r32be(addr) {
+    let b0 = mem_read_u8(addr);
+    let b1 = mem_read_u8(addr + 1);
+    let b2 = mem_read_u8(addr + 2);
+    let b3 = mem_read_u8(addr + 3);
+    return b0 * 16777216 + b1 * 65536 + b2 * 256 + b3;
+}
+
+// Write 32-bit big-endian to memory
+fn _ke_mem_w32be(addr, val) {
+    let v = val % 4294967296;
+    mem_write_u8(addr, (v / 16777216) % 256);
+    mem_write_u8(addr + 1, (v / 65536) % 256);
+    mem_write_u8(addr + 2, (v / 256) % 256);
+    mem_write_u8(addr + 3, v % 256);
+    return 0;
+}
+
+// Read 32-bit LE from memory (generic)
+fn _ke_mem_r32(addr) {
+    let b0 = mem_read_u8(addr);
+    let b1 = mem_read_u8(addr + 1);
+    let b2 = mem_read_u8(addr + 2);
+    let b3 = mem_read_u8(addr + 3);
+    return b3 * 16777216 + b2 * 65536 + b1 * 256 + b0;
+}
+
+// Print 8-bit hex value (2 digits)
+fn _ke_put_hex8(val) {
+    _ke_put_hex4(val / 16);
+    _ke_put_hex4(val);
+    return 0;
+}
+
+// Print 32-bit hex value (8 digits)
+fn _ke_put_hex32(val) {
+    _ke_put_hex8((val / 16777216) % 256);
+    _ke_put_hex8((val / 65536) % 256);
+    _ke_put_hex8((val / 256) % 256);
+    _ke_put_hex8(val % 256);
+    return 0;
+}
+
+// 32-bit right rotate
+fn _ke_sha256_rotr(val, bits) {
+    let mask = 4294967295;
+    let v = val % 4294967296;
+    // v >> bits
+    let mut divisor = 1;
+    let mut i = 0;
+    while i < bits { divisor = divisor * 2; i = i + 1; }
+    let right = v / divisor;
+    // v << (32 - bits)
+    let mut left_mul = 1;
+    i = 0;
+    while i < 32 - bits { left_mul = left_mul * 2; i = i + 1; }
+    let left = (v % divisor) * left_mul;
+    return (right + left) % 4294967296;
+}
+
+// 32-bit right shift
+fn _ke_sha256_shr(val, bits) {
+    let v = val % 4294967296;
+    let mut divisor = 1;
+    let mut i = 0;
+    while i < bits { divisor = divisor * 2; i = i + 1; }
+    return v / divisor;
+}
+
+// Initialize SHA-256 K constants at 0x940000 (64 × 4 bytes, LE)
+fn _ke_sha256_init_k() {
+    let base = 9699328; // 0x940000
+    // K[0..63] — SHA-256 round constants (first 32 bits of fractional parts of cube roots of first 64 primes)
+    _ke_mem_w32(base +   0, 1116352408);  _ke_mem_w32(base +   4, 1899447441);
+    _ke_mem_w32(base +   8, 3049323471);  _ke_mem_w32(base +  12, 3921009573);
+    _ke_mem_w32(base +  16,  961987163);  _ke_mem_w32(base +  20, 1508970993);
+    _ke_mem_w32(base +  24, 2453635748);  _ke_mem_w32(base +  28, 2870763221);
+    _ke_mem_w32(base +  32, 3624381080);  _ke_mem_w32(base +  36,  310598401);
+    _ke_mem_w32(base +  40,  607225278);  _ke_mem_w32(base +  44, 1426881987);
+    _ke_mem_w32(base +  48, 1925078388);  _ke_mem_w32(base +  52, 2162078206);
+    _ke_mem_w32(base +  56, 2614888103);  _ke_mem_w32(base +  60, 3248222580);
+    _ke_mem_w32(base +  64, 3835390401);  _ke_mem_w32(base +  68, 4022224774);
+    _ke_mem_w32(base +  72,  264347078);  _ke_mem_w32(base +  76,  604807628);
+    _ke_mem_w32(base +  80,  770255983);  _ke_mem_w32(base +  84, 1249150122);
+    _ke_mem_w32(base +  88, 1555081692);  _ke_mem_w32(base +  92, 1996064986);
+    _ke_mem_w32(base +  96, 2554220882);  _ke_mem_w32(base + 100, 2821834349);
+    _ke_mem_w32(base + 104, 2952996808);  _ke_mem_w32(base + 108, 3210313671);
+    _ke_mem_w32(base + 112, 3336571891);  _ke_mem_w32(base + 116, 3584528711);
+    _ke_mem_w32(base + 120,  113926993);  _ke_mem_w32(base + 124,  338241895);
+    _ke_mem_w32(base + 128,  666307205);  _ke_mem_w32(base + 132,  773529912);
+    _ke_mem_w32(base + 136, 1294757372);  _ke_mem_w32(base + 140, 1396182291);
+    _ke_mem_w32(base + 144, 1695183700);  _ke_mem_w32(base + 148, 1986661051);
+    _ke_mem_w32(base + 152, 2177026350);  _ke_mem_w32(base + 156, 2456956037);
+    _ke_mem_w32(base + 160, 2730485921);  _ke_mem_w32(base + 164, 2820302411);
+    _ke_mem_w32(base + 168, 3259730800);  _ke_mem_w32(base + 172, 3345764771);
+    _ke_mem_w32(base + 176, 3516065817);  _ke_mem_w32(base + 180, 3600352804);
+    _ke_mem_w32(base + 184, 4094571909);  _ke_mem_w32(base + 188,  275423344);
+    _ke_mem_w32(base + 192,  430227734);  _ke_mem_w32(base + 196,  506948616);
+    _ke_mem_w32(base + 200,  659060556);  _ke_mem_w32(base + 204,  883997877);
+    _ke_mem_w32(base + 208,  958139571);  _ke_mem_w32(base + 212, 1322822218);
+    _ke_mem_w32(base + 216, 1537002063);  _ke_mem_w32(base + 220, 1747873779);
+    _ke_mem_w32(base + 224, 1955562222);  _ke_mem_w32(base + 228, 2024104815);
+    _ke_mem_w32(base + 232, 2227730452);  _ke_mem_w32(base + 236, 2361852424);
+    _ke_mem_w32(base + 240, 2428436474);  _ke_mem_w32(base + 244, 2756734187);
+    _ke_mem_w32(base + 248, 3204031479);  _ke_mem_w32(base + 252, 3329325298);
+    return 0;
+}
+
+// SHA-256 hash: data at data_addr, length data_len bytes
+// Result: 32 bytes at 0x9402A0 (8 × 32-bit words, big-endian)
+fn _ke_sha256_hash(data_addr, data_len) {
+    let k_base = 9699328;       // 0x940000: K constants
+    let w_base = 9699584;       // 0x940100: W schedule
+    let pad_base = 9699840;     // 0x940200: padded message
+    let state_base = 9699968;   // 0x940280: hash state
+    let out_base = 9700000;     // 0x9402A0: hash output
+
+    // === Step 1: Pad message ===
+    // Copy data to pad buffer
+    let mut pi = 0;
+    while pi < data_len {
+        mem_write_u8(pad_base + pi, mem_read_u8(data_addr + pi));
+        pi = pi + 1;
+    }
+    // Append 0x80
+    mem_write_u8(pad_base + pi, 128);
+    pi = pi + 1;
+    // Pad with zeros to 56 mod 64
+    while pi % 64 != 56 {
+        mem_write_u8(pad_base + pi, 0);
+        pi = pi + 1;
+    }
+    // Append length in bits as 64-bit big-endian
+    let bit_len = data_len * 8;
+    mem_write_u8(pad_base + pi, 0); pi = pi + 1;
+    mem_write_u8(pad_base + pi, 0); pi = pi + 1;
+    mem_write_u8(pad_base + pi, 0); pi = pi + 1;
+    mem_write_u8(pad_base + pi, 0); pi = pi + 1;
+    mem_write_u8(pad_base + pi, (bit_len / 16777216) % 256); pi = pi + 1;
+    mem_write_u8(pad_base + pi, (bit_len / 65536) % 256); pi = pi + 1;
+    mem_write_u8(pad_base + pi, (bit_len / 256) % 256); pi = pi + 1;
+    mem_write_u8(pad_base + pi, bit_len % 256); pi = pi + 1;
+    let pad_len = pi;
+
+    // === Step 2: Initialize hash values (H0..H7) ===
+    _ke_mem_w32(state_base +  0, 1779033703);  // H0 = 0x6a09e667
+    _ke_mem_w32(state_base +  4, 3144134277);  // H1 = 0xbb67ae85
+    _ke_mem_w32(state_base +  8, 1013904242);  // H2 = 0x3c6ef372
+    _ke_mem_w32(state_base + 12, 2773480762);  // H3 = 0xa54ff53a
+    _ke_mem_w32(state_base + 16, 1359893119);  // H4 = 0x510e527f
+    _ke_mem_w32(state_base + 20, 2600822924);  // H5 = 0x9b05688c
+    _ke_mem_w32(state_base + 24,  528734635);  // H6 = 0x1f83d9ab
+    _ke_mem_w32(state_base + 28, 1541459225);  // H7 = 0x5be0cd19
+
+    // === Step 3: Process each 64-byte block ===
+    let num_blocks = pad_len / 64;
+    let mut blk = 0;
+    while blk < num_blocks {
+        let boff = blk * 64;
+
+        // Parse 16 words from block (big-endian → native u32)
+        let mut wi = 0;
+        while wi < 16 {
+            let addr = pad_base + boff + wi * 4;
+            let word = _ke_mem_r32be(addr);
+            _ke_mem_w32(w_base + wi * 4, word);
+            wi = wi + 1;
+        }
+
+        // Extend to 64 words: W[i] = sig1(W[i-2]) + W[i-7] + sig0(W[i-15]) + W[i-16]
+        wi = 16;
+        while wi < 64 {
+            let w2  = _ke_mem_r32(w_base + (wi - 2) * 4);
+            let w7  = _ke_mem_r32(w_base + (wi - 7) * 4);
+            let w15 = _ke_mem_r32(w_base + (wi - 15) * 4);
+            let w16 = _ke_mem_r32(w_base + (wi - 16) * 4);
+
+            // sig0 = ROTR(w15, 7) XOR ROTR(w15, 18) XOR SHR(w15, 3)
+            let r7  = _ke_sha256_rotr(w15, 7);
+            let r18 = _ke_sha256_rotr(w15, 18);
+            let s3  = _ke_sha256_shr(w15, 3);
+            // XOR via: a^b = (a+b) - 2*(a AND b)  — but we don't have AND
+            // Use bit-by-bit XOR through arithmetic:
+            // XOR3(a,b,c) = a+b+c - 2*(pairs) ... too complex
+            // Alternative: compute XOR bit-by-bit using div/mod
+            let s0 = _ke_xor3(r7, r18, s3);
+
+            // sig1 = ROTR(w2, 17) XOR ROTR(w2, 19) XOR SHR(w2, 10)
+            let r17 = _ke_sha256_rotr(w2, 17);
+            let r19 = _ke_sha256_rotr(w2, 19);
+            let s10 = _ke_sha256_shr(w2, 10);
+            let s1 = _ke_xor3(r17, r19, s10);
+
+            let wval = (s1 + w7 + s0 + w16) % 4294967296;
+            _ke_mem_w32(w_base + wi * 4, wval);
+            wi = wi + 1;
+        }
+
+        // Initialize working variables
+        let mut a = _ke_mem_r32(state_base +  0);
+        let mut b = _ke_mem_r32(state_base +  4);
+        let mut c = _ke_mem_r32(state_base +  8);
+        let mut d = _ke_mem_r32(state_base + 12);
+        let mut e = _ke_mem_r32(state_base + 16);
+        let mut f = _ke_mem_r32(state_base + 20);
+        let mut g = _ke_mem_r32(state_base + 24);
+        let mut h = _ke_mem_r32(state_base + 28);
+
+        // 64 rounds
+        let mut ri = 0;
+        while ri < 64 {
+            let ki = _ke_mem_r32(k_base + ri * 4);
+            let wi_val = _ke_mem_r32(w_base + ri * 4);
+
+            // Sigma1 = ROTR(e,6) XOR ROTR(e,11) XOR ROTR(e,25)
+            let Sigma1 = _ke_xor3(_ke_sha256_rotr(e, 6), _ke_sha256_rotr(e, 11), _ke_sha256_rotr(e, 25));
+
+            // Ch = (e AND f) XOR ((NOT e) AND g)
+            let ch = _ke_ch(e, f, g);
+
+            let temp1 = (h + Sigma1 + ch + ki + wi_val) % 4294967296;
+
+            // Sigma0 = ROTR(a,2) XOR ROTR(a,13) XOR ROTR(a,22)
+            let Sigma0 = _ke_xor3(_ke_sha256_rotr(a, 2), _ke_sha256_rotr(a, 13), _ke_sha256_rotr(a, 22));
+
+            // Maj = (a AND b) XOR (a AND c) XOR (b AND c)
+            let maj = _ke_maj(a, b, c);
+
+            let temp2 = (Sigma0 + maj) % 4294967296;
+
+            h = g;
+            g = f;
+            f = e;
+            e = (d + temp1) % 4294967296;
+            d = c;
+            c = b;
+            b = a;
+            a = (temp1 + temp2) % 4294967296;
+
+            ri = ri + 1;
+        }
+
+        // Add to hash state
+        _ke_mem_w32(state_base +  0, (a + _ke_mem_r32(state_base +  0)) % 4294967296);
+        _ke_mem_w32(state_base +  4, (b + _ke_mem_r32(state_base +  4)) % 4294967296);
+        _ke_mem_w32(state_base +  8, (c + _ke_mem_r32(state_base +  8)) % 4294967296);
+        _ke_mem_w32(state_base + 12, (d + _ke_mem_r32(state_base + 12)) % 4294967296);
+        _ke_mem_w32(state_base + 16, (e + _ke_mem_r32(state_base + 16)) % 4294967296);
+        _ke_mem_w32(state_base + 20, (f + _ke_mem_r32(state_base + 20)) % 4294967296);
+        _ke_mem_w32(state_base + 24, (g + _ke_mem_r32(state_base + 24)) % 4294967296);
+        _ke_mem_w32(state_base + 28, (h + _ke_mem_r32(state_base + 28)) % 4294967296);
+
+        blk = blk + 1;
+    }
+
+    // === Step 4: Output hash (32 bytes, big-endian) at out_base ===
+    let mut oi = 0;
+    while oi < 8 {
+        let hval = _ke_mem_r32(state_base + oi * 4);
+        _ke_mem_w32be(out_base + oi * 4, hval);
+        oi = oi + 1;
+    }
+
+    return 0;
+}
+
+// Bitwise XOR of two 32-bit values (bit-by-bit using div/mod)
+fn _ke_xor2(a, b) {
+    let va = a % 4294967296;
+    let vb = b % 4294967296;
+    let mut result = 0;
+    let mut bit = 1;
+    let mut i = 0;
+    while i < 32 {
+        let ba = (va / bit) % 2;
+        let bb = (vb / bit) % 2;
+        if ba != bb {
+            result = result + bit;
+        }
+        bit = bit * 2;
+        i = i + 1;
+    }
+    return result;
+}
+
+// Bitwise XOR of three 32-bit values
+fn _ke_xor3(a, b, c) {
+    return _ke_xor2(_ke_xor2(a, b), c);
+}
+
+// Bitwise AND of two 32-bit values
+fn _ke_and32(a, b) {
+    let va = a % 4294967296;
+    let vb = b % 4294967296;
+    let mut result = 0;
+    let mut bit = 1;
+    let mut i = 0;
+    while i < 32 {
+        let ba = (va / bit) % 2;
+        let bb = (vb / bit) % 2;
+        if ba == 1 { if bb == 1 {
+            result = result + bit;
+        } }
+        bit = bit * 2;
+        i = i + 1;
+    }
+    return result;
+}
+
+// Bitwise NOT of a 32-bit value
+fn _ke_not32(a) {
+    return _ke_xor2(a, 4294967295);
+}
+
+// Ch(e, f, g) = (e AND f) XOR ((NOT e) AND g)
+fn _ke_ch(e, f, g) {
+    let ef = _ke_and32(e, f);
+    let neg = _ke_not32(e);
+    let ng = _ke_and32(neg, g);
+    return _ke_xor2(ef, ng);
+}
+
+// Maj(a, b, c) = (a AND b) XOR (a AND c) XOR (b AND c)
+fn _ke_maj(a, b, c) {
+    let ab = _ke_and32(a, b);
+    let ac = _ke_and32(a, c);
+    let bc = _ke_and32(b, c);
+    return _ke_xor3(ab, ac, bc);
+}
+
+// Command: sha256 <text> — compute SHA-256 hash and print as hex
+fn _ke_cmd_sha256(buf_addr, buf_len) {
+    // Parse: "sha256 <text>" — text starts at offset 7
+    let text_start = buf_addr + 7;
+    let text_len = buf_len - 7;
+
+    if text_len <= 0 {
+        // "Usage: sha256 <text>\r\n"
+        _ke_putc(85); _ke_putc(115); _ke_putc(97); _ke_putc(103); _ke_putc(101);
+        _ke_putc(58); _ke_putc(32);
+        _ke_putc(115); _ke_putc(104); _ke_putc(97); _ke_putc(50); _ke_putc(53); _ke_putc(54);
+        _ke_putc(32); _ke_putc(60); _ke_putc(116); _ke_putc(101); _ke_putc(120); _ke_putc(116); _ke_putc(62);
+        _ke_putc(13); _ke_putc(10);
+        return 0;
+    }
+
+    // Initialize K constants
+    _ke_sha256_init_k();
+
+    // Compute hash
+    _ke_sha256_hash(text_start, text_len);
+
+    // Print "SHA256: " prefix
+    _ke_putc(83); _ke_putc(72); _ke_putc(65); _ke_putc(50);
+    _ke_putc(53); _ke_putc(54); _ke_putc(58); _ke_putc(32);
+
+    // Print 32 bytes as hex (64 hex chars)
+    let out_base = 9700000; // 0x9402A0
+    let mut i = 0;
+    while i < 32 {
+        let byte = mem_read_u8(out_base + i);
+        _ke_put_hex8(byte);
+        i = i + 1;
+    }
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
 // Print "HicOS> " prompt
 fn _ke_prompt() {
     _ke_putc(72); _ke_putc(105); _ke_putc(99);      // "Hic"
@@ -3941,8 +4319,11 @@ fn _ke_cmd_help() {
     // "install "
     _ke_putc(105); _ke_putc(110); _ke_putc(115); _ke_putc(116);
     _ke_putc(97); _ke_putc(108); _ke_putc(108); _ke_putc(32);
-    // "reboot\r\n"
+    // "reboot "
     _ke_putc(114); _ke_putc(101); _ke_putc(98); _ke_putc(111); _ke_putc(111); _ke_putc(116);
+    _ke_putc(32);
+    // "sha256"
+    _ke_putc(115); _ke_putc(104); _ke_putc(97); _ke_putc(50); _ke_putc(53); _ke_putc(54);
     _ke_putc(13); _ke_putc(10);
     return 0;
 }
@@ -3993,6 +4374,15 @@ fn _ke_dispatch(buf_addr, buf_len) {
         if c0 == 109 { if c1 == 107 { if c2 == 102 { if c3 == 105 { if c4 == 108 { if c5 == 101 {
             if c6 == 32 {
                 _ke_cmd_mkfile(buf_addr, buf_len); return 0;
+            }
+        } } } } } }
+    }
+
+    // "sha256 " prefix (7+): 115 104 97 50 53 54 32
+    if buf_len >= 7 {
+        if c0 == 115 { if c1 == 104 { if c2 == 97 { if c3 == 50 { if c4 == 53 { if c5 == 54 {
+            if c6 == 32 {
+                _ke_cmd_sha256(buf_addr, buf_len); return 0;
             }
         } } } } } }
     }
@@ -4266,6 +4656,9 @@ fn _start() {
 
     // Phase 7d: Font init (iteration 32)
     _ke_font_init();
+
+    // Phase 7e: SHA-256 constants init (iteration 48)
+    _ke_sha256_init_k();
 
     // Phase 8: Interactive shell (iteration 25)
     _ke_shell();

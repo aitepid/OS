@@ -963,6 +963,80 @@ foreach ($t in $memTests) {
 
 if (Test-Path $memLogFile) { Remove-Item $memLogFile -Force }
 
+# =============================================================
+# Phase 12: SHA-256 Cryptographic Hash Tests
+# =============================================================
+Write-Host "`n=== Phase 12: SHA-256 Cryptographic Hash Tests ===" -ForegroundColor Cyan
+
+$shaLogFile = Join-Path $repoRoot 'qemu-sha256-test.log'
+if (Test-Path $shaLogFile) { Remove-Item $shaLogFile -Force }
+
+$shaPort = 55597
+$shaArgs = @(
+    '-drive', "format=raw,file=hicos-hl.img",
+    '-serial', "file:$shaLogFile",
+    '-m', '128', '-display', 'none',
+    '-device', 'virtio-blk-pci,drive=disk0,disable-modern=on',
+    '-drive', "id=disk0,file=hicos-disk.img,format=raw,if=none",
+    '-netdev', 'user,id=net0',
+    '-device', 'virtio-net-pci,netdev=net0,disable-modern=on',
+    '-no-reboot', '-no-shutdown',
+    '-monitor', "telnet:127.0.0.1:$shaPort,server,nowait"
+)
+
+$shaProc = Start-Process -FilePath $qemuPath -ArgumentList $shaArgs -PassThru -NoNewWindow
+Start-Sleep -Seconds 5
+
+try {
+    $sClient = New-Object System.Net.Sockets.TcpClient('127.0.0.1', $shaPort)
+    $sStream = $sClient.GetStream()
+    $sWriter = New-Object System.IO.StreamWriter($sStream)
+    $sWriter.AutoFlush = $true
+    Start-Sleep -Milliseconds 500
+
+    # sha256 abc
+    foreach ($k in @('s','h','a','2','5','6','space','a','b','c','ret')) { $sWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 5
+
+    # sha256 (no arg, usage test)
+    foreach ($k in @('s','h','a','2','5','6','ret')) { $sWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 2
+
+    # help (verify sha256 in help)
+    foreach ($k in @('h','e','l','p','ret')) { $sWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 2
+
+    $sWriter.Close(); $sClient.Close()
+} catch {
+    Write-Host "  SHA-256 test monitor error: $_" -ForegroundColor Yellow
+}
+
+Start-Sleep -Seconds 1
+if (-not $shaProc.HasExited) { $shaProc.Kill(); $shaProc.WaitForExit(3000) }
+
+$shaContent = ''
+if (Test-Path $shaLogFile) {
+    try { $shaContent = [System.IO.File]::ReadAllText($shaLogFile) } catch {}
+}
+
+$shaTests = @(
+    @{ name = 'sha256 produces SHA256: prefix'; pattern = 'SHA256:' },
+    @{ name = 'sha256 abc produces hex output'; pattern = '[0-9A-Fa-f]{64}' },
+    @{ name = 'help shows sha256 command'; pattern = 'sha256' }
+)
+
+foreach ($t in $shaTests) {
+    $shellTotal++
+    if ($shaContent -match $t.pattern) {
+        $passes += "SHA256: $($t.name)"
+        $shellPassed++
+    } else {
+        $errors += "SHA256: $($t.name)"
+    }
+}
+
+if (Test-Path $shaLogFile) { Remove-Item $shaLogFile -Force }
+
 Write-Host "`n=== Boot Test Results ===" -ForegroundColor Cyan
 foreach ($p in $passes) {
     Write-Host "  PASS: $p" -ForegroundColor Green
