@@ -8,9 +8,34 @@
 
 ## v6.0 (Current)
 
-176 active .hl files, 114 kernel modules, 61 shell commands (Layer C), 31 kernel.bin commands, 0 external deps.
-Dual-boot: BIOS 68/68 PASS + UEFI 3/3 PASS. Full gate 10/10 PASS.
-Image: 152,064 bytes (297 sectors). Code: ~46,500 lines (38,500 H-L + 8,000 PS1).
+176 active .hl files, 114 kernel modules, 63 shell commands (Layer C), 33 kernel.bin commands, 0 external deps.
+Dual-boot: BIOS 74/74 PASS + UEFI 3/3 PASS. Full gate 10/10 PASS.
+Image: 152,064 bytes (297 sectors). Code: ~46,800 lines (38,800 H-L + 8,000 PS1).
+
+### Iteration 49: HMAC-SHA-256 + HKDF in kernel.bin
+- **HMAC-SHA-256 (RFC 2104)**:
+  - `_ke_hmac_sha256(key_addr, key_len, msg_addr, msg_len)`: Full HMAC computation
+    - Key padding: if key > 64B → SHA-256(key), else pad with zeros to 64B
+    - Inner hash: SHA-256((K' ⊕ ipad) || message), ipad = 0x36 × 64
+    - Outer hash: SHA-256((K' ⊕ opad) || inner_hash), opad = 0x5c × 64
+    - Result: 32 bytes at 0x940440
+  - `_ke_xor_byte(a, b)`: 8-bit XOR via arithmetic (for ipad/opad key mixing)
+- **HKDF (RFC 5869)**:
+  - `_ke_hkdf_extract(salt_addr, salt_len, ikm_addr, ikm_len)`: PRK = HMAC(salt, IKM)
+    - Result: 32 bytes at 0x940460
+  - `_ke_hkdf_expand(prk_addr, info_addr, info_len, out_len)`: OKM expansion
+    - T(i) = HMAC(PRK, T(i-1) || info || i), up to 8 iterations (256B max)
+    - Result: up to 64 bytes at 0x940520
+- **Shell commands**:
+  - `hmac <text>`: HMAC-SHA-256 with test key "key" → "HMAC: " + 64-char hex
+  - `hkdf`: HKDF demo (salt="salt", IKM="input", info="info", L=32) → "HKDF: " + 64-char hex
+- **Memory layout**: 0x940300-0x94053F (HMAC+HKDF working area)
+  - K' key (64B) + inner buf (128B) + outer buf (128B) + HMAC out (32B)
+  - PRK (32B) + T buffer (32B) + concat buf (128B) + OKM out (64B)
+- **Dispatch**: `hmac` 5-char prefix + `hkdf` 4-char exact match
+- 6 new functions, 2 shell commands wired to dispatch + help updated
+- **Shell commands (33)**: help tick pci pmem palloc pfree malloc mfree ps mouse tcptest gfxtest wm smp ahci usb acpi beep time disk format ls mkfile cat run wget uptime shutdown install reboot sha256 hmac hkdf
+- 🏆 **TLS 1.3 密钥派生就绪**: HMAC-SHA-256 + HKDF, 迭代 50 AES-128 的前置条件完成
 
 ### Iteration 48: SHA-256 Cryptographic Hash in kernel.bin
 - **SHA-256 full implementation** (64-round compression, FIPS 180-4 compliant):

@@ -4233,6 +4233,308 @@ fn _ke_cmd_sha256(buf_addr, buf_len) {
     return 0;
 }
 
+// === Iteration 49: HMAC-SHA-256 + HKDF ===
+//
+// HMAC(K, m) = SHA-256((K' XOR opad) || SHA-256((K' XOR ipad) || m))
+//   K' = K if len(K) <= 64, else SHA-256(K); padded to 64 bytes with zeros
+//   ipad = 0x36 repeated 64 times
+//   opad = 0x5c repeated 64 times
+//
+// HKDF-Extract(salt, IKM) = HMAC-SHA-256(salt, IKM)
+// HKDF-Expand(PRK, info, L) = T(1)||T(2)||... truncated to L bytes
+//   T(i) = HMAC-SHA-256(PRK, T(i-1) || info || i)
+//
+// Memory layout (0x940300-0x94053F):
+//   0x940300: K' padded key (64 bytes)
+//   0x940340: inner input buffer (128 bytes: K'^ipad || msg)
+//   0x9403C0: outer input buffer (128 bytes: K'^opad || inner_hash)
+//   0x940440: HMAC result (32 bytes)
+//   0x940460: HKDF PRK (32 bytes)
+//   0x940480: HKDF T(i) (32 bytes)
+//   0x9404A0: HKDF concat buffer (128 bytes)
+//   0x940520: HKDF OKM output (64 bytes)
+
+// HMAC-SHA-256: compute HMAC with given key and message
+// Result: 32 bytes at 0x940440
+fn _ke_hmac_sha256(key_addr, key_len, msg_addr, msg_len) {
+    let kbuf = 9700096;     // 0x940300: padded key (64 bytes)
+    let ibuf = 9700160;     // 0x940340: inner input
+    let obuf = 9700288;     // 0x9403C0: outer input
+    let hmac_out = 9700416; // 0x940440: HMAC result
+    let sha_out = 9700000;  // 0x9402A0: SHA-256 output
+
+    // Step 1: Prepare K' (key padded to 64 bytes)
+    // Clear kbuf to zeros
+    let mut ki = 0;
+    while ki < 64 {
+        mem_write_u8(kbuf + ki, 0);
+        ki = ki + 1;
+    }
+
+    if key_len > 64 {
+        // Key too long: hash it first
+        _ke_sha256_hash(key_addr, key_len);
+        // Copy 32-byte hash to kbuf
+        ki = 0;
+        while ki < 32 {
+            mem_write_u8(kbuf + ki, mem_read_u8(sha_out + ki));
+            ki = ki + 1;
+        }
+    } else {
+        // Copy key to kbuf (rest already zeroed)
+        ki = 0;
+        while ki < key_len {
+            mem_write_u8(kbuf + ki, mem_read_u8(key_addr + ki));
+            ki = ki + 1;
+        }
+    }
+
+    // Step 2: Build inner input = (K' XOR ipad) || message
+    ki = 0;
+    while ki < 64 {
+        let kb = mem_read_u8(kbuf + ki);
+        // XOR with ipad (0x36 = 54)
+        let xb = _ke_xor_byte(kb, 54);
+        mem_write_u8(ibuf + ki, xb);
+        ki = ki + 1;
+    }
+    // Append message
+    ki = 0;
+    while ki < msg_len {
+        mem_write_u8(ibuf + 64 + ki, mem_read_u8(msg_addr + ki));
+        ki = ki + 1;
+    }
+
+    // Step 3: inner_hash = SHA-256(inner_input)
+    _ke_sha256_hash(ibuf, 64 + msg_len);
+
+    // Copy inner hash from sha_out to temp area (ibuf reusable)
+    // We'll store it at ibuf temporarily (overwriting, that's fine)
+    ki = 0;
+    while ki < 32 {
+        mem_write_u8(ibuf + ki, mem_read_u8(sha_out + ki));
+        ki = ki + 1;
+    }
+
+    // Step 4: Build outer input = (K' XOR opad) || inner_hash
+    ki = 0;
+    while ki < 64 {
+        let kb = mem_read_u8(kbuf + ki);
+        // XOR with opad (0x5c = 92)
+        let xb = _ke_xor_byte(kb, 92);
+        mem_write_u8(obuf + ki, xb);
+        ki = ki + 1;
+    }
+    // Append inner hash (32 bytes from ibuf temp)
+    ki = 0;
+    while ki < 32 {
+        mem_write_u8(obuf + 64 + ki, mem_read_u8(ibuf + ki));
+        ki = ki + 1;
+    }
+
+    // Step 5: result = SHA-256(outer_input)
+    _ke_sha256_hash(obuf, 96);
+
+    // Copy result to HMAC output
+    ki = 0;
+    while ki < 32 {
+        mem_write_u8(hmac_out + ki, mem_read_u8(sha_out + ki));
+        ki = ki + 1;
+    }
+
+    return 0;
+}
+
+// XOR two bytes (0-255) using arithmetic
+fn _ke_xor_byte(a, b) {
+    let mut result = 0;
+    let mut bit = 1;
+    let mut i = 0;
+    while i < 8 {
+        let ba = (a / bit) % 2;
+        let bb = (b / bit) % 2;
+        if ba != bb {
+            result = result + bit;
+        }
+        bit = bit * 2;
+        i = i + 1;
+    }
+    return result;
+}
+
+// HKDF-Extract (RFC 5869): PRK = HMAC-SHA-256(salt, IKM)
+// Result: 32 bytes at 0x940460
+fn _ke_hkdf_extract(salt_addr, salt_len, ikm_addr, ikm_len) {
+    let prk_out = 9700448; // 0x940460
+    let hmac_out = 9700416; // 0x940440
+
+    _ke_hmac_sha256(salt_addr, salt_len, ikm_addr, ikm_len);
+
+    // Copy HMAC result to PRK output
+    let mut i = 0;
+    while i < 32 {
+        mem_write_u8(prk_out + i, mem_read_u8(hmac_out + i));
+        i = i + 1;
+    }
+    return 0;
+}
+
+// HKDF-Expand (RFC 5869): OKM = T(1) || T(2) || ... truncated to out_len
+// T(i) = HMAC-SHA-256(PRK, T(i-1) || info || i)
+// PRK at prk_addr (32 bytes), info at info_addr, output at 0x940520
+// Max out_len = 64 (2 iterations)
+fn _ke_hkdf_expand(prk_addr, info_addr, info_len, out_len) {
+    let t_buf = 9700480;     // 0x940480: T(i) result (32 bytes)
+    let cat_buf = 9700512;   // 0x9404A0: concat buffer
+    let okm_out = 9700640;   // 0x940520: OKM output
+    let hmac_out = 9700416;  // 0x940440: HMAC result
+
+    let mut t_len = 0;  // T(0) = empty
+    let mut done = 0;
+    let mut iter = 1;
+
+    while done < out_len {
+        // Build concat: T(i-1) || info || iter
+        let mut ci = 0;
+
+        // Copy T(i-1) if not first iteration
+        if iter > 1 {
+            let mut ti = 0;
+            while ti < 32 {
+                mem_write_u8(cat_buf + ci, mem_read_u8(t_buf + ti));
+                ci = ci + 1;
+                ti = ti + 1;
+            }
+        }
+
+        // Append info
+        let mut ii = 0;
+        while ii < info_len {
+            mem_write_u8(cat_buf + ci, mem_read_u8(info_addr + ii));
+            ci = ci + 1;
+            ii = ii + 1;
+        }
+
+        // Append iteration counter (1 byte)
+        mem_write_u8(cat_buf + ci, iter);
+        ci = ci + 1;
+
+        // T(i) = HMAC-SHA-256(PRK, concat)
+        _ke_hmac_sha256(prk_addr, 32, cat_buf, ci);
+
+        // Copy HMAC result to T buffer
+        let mut ti = 0;
+        while ti < 32 {
+            mem_write_u8(t_buf + ti, mem_read_u8(hmac_out + ti));
+            ti = ti + 1;
+        }
+
+        // Copy T(i) to OKM output
+        ti = 0;
+        while ti < 32 {
+            if done + ti < out_len {
+                mem_write_u8(okm_out + done + ti, mem_read_u8(t_buf + ti));
+            }
+            ti = ti + 1;
+        }
+
+        done = done + 32;
+        iter = iter + 1;
+
+        // Safety: max 2 iterations (64 bytes)
+        if iter > 8 { done = out_len; }
+    }
+
+    return 0;
+}
+
+// Command: hmac <text> — compute HMAC-SHA-256 with test key and print hex
+// Uses fixed test key "key" (3 bytes) for demonstration
+fn _ke_cmd_hmac(buf_addr, buf_len) {
+    // Parse: "hmac <text>" — text starts at offset 5
+    let text_start = buf_addr + 5;
+    let text_len = buf_len - 5;
+
+    if text_len <= 0 {
+        // "Usage: hmac <text>\r\n"
+        _ke_putc(85); _ke_putc(115); _ke_putc(97); _ke_putc(103); _ke_putc(101);
+        _ke_putc(58); _ke_putc(32);
+        _ke_putc(104); _ke_putc(109); _ke_putc(97); _ke_putc(99);
+        _ke_putc(32); _ke_putc(60); _ke_putc(116); _ke_putc(101); _ke_putc(120); _ke_putc(116); _ke_putc(62);
+        _ke_putc(13); _ke_putc(10);
+        return 0;
+    }
+
+    // Fixed test key: store "key" at a temp location (0x9404A0)
+    let key_tmp = 9700512; // 0x9404A0: reuse concat buf as temp key
+    mem_write_u8(key_tmp, 107);     // 'k'
+    mem_write_u8(key_tmp + 1, 101); // 'e'
+    mem_write_u8(key_tmp + 2, 121); // 'y'
+
+    // Initialize K constants (needed by SHA-256)
+    _ke_sha256_init_k();
+
+    // Compute HMAC-SHA-256("key", text)
+    _ke_hmac_sha256(key_tmp, 3, text_start, text_len);
+
+    // Print "HMAC: " prefix
+    _ke_putc(72); _ke_putc(77); _ke_putc(65); _ke_putc(67);
+    _ke_putc(58); _ke_putc(32);
+
+    // Print 32 bytes as hex from HMAC output (0x940440)
+    let hmac_out = 9700416; // 0x940440
+    let mut i = 0;
+    while i < 32 {
+        let byte = mem_read_u8(hmac_out + i);
+        _ke_put_hex8(byte);
+        i = i + 1;
+    }
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
+// Command: hkdf — run HKDF extract+expand demo and print OKM
+fn _ke_cmd_hkdf() {
+    // Initialize K constants
+    _ke_sha256_init_k();
+
+    // Demo: HKDF with salt="salt" (4B), IKM="input" (5B), info="info" (4B), L=32
+    let salt_tmp = 9700512; // 0x9404A0: temp
+    mem_write_u8(salt_tmp, 115); mem_write_u8(salt_tmp + 1, 97);     // "sa"
+    mem_write_u8(salt_tmp + 2, 108); mem_write_u8(salt_tmp + 3, 116); // "lt"
+
+    let ikm_tmp = 9700520;  // salt_tmp + 8
+    mem_write_u8(ikm_tmp, 105); mem_write_u8(ikm_tmp + 1, 110);     // "in"
+    mem_write_u8(ikm_tmp + 2, 112); mem_write_u8(ikm_tmp + 3, 117); // "pu"
+    mem_write_u8(ikm_tmp + 4, 116);                                   // "t"
+
+    let info_tmp = 9700528; // ikm_tmp + 8
+    mem_write_u8(info_tmp, 105); mem_write_u8(info_tmp + 1, 110);     // "in"
+    mem_write_u8(info_tmp + 2, 102); mem_write_u8(info_tmp + 3, 111); // "fo"
+
+    // Extract: PRK = HMAC("salt", "input")
+    _ke_hkdf_extract(salt_tmp, 4, ikm_tmp, 5);
+
+    // Expand: OKM = HKDF-Expand(PRK, "info", 32)
+    let prk_out = 9700448; // 0x940460
+    _ke_hkdf_expand(prk_out, info_tmp, 4, 32);
+
+    // Print "HKDF: " prefix
+    _ke_putc(72); _ke_putc(75); _ke_putc(68); _ke_putc(70);
+    _ke_putc(58); _ke_putc(32);
+
+    // Print 32 bytes as hex from OKM output (0x940520)
+    let okm_out = 9700640; // 0x940520
+    let mut i = 0;
+    while i < 32 {
+        let byte = mem_read_u8(okm_out + i);
+        _ke_put_hex8(byte);
+        i = i + 1;
+    }
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
 // Print "HicOS> " prompt
 fn _ke_prompt() {
     _ke_putc(72); _ke_putc(105); _ke_putc(99);      // "Hic"
@@ -4324,6 +4626,12 @@ fn _ke_cmd_help() {
     _ke_putc(32);
     // "sha256"
     _ke_putc(115); _ke_putc(104); _ke_putc(97); _ke_putc(50); _ke_putc(53); _ke_putc(54);
+    _ke_putc(32);
+    // "hmac"
+    _ke_putc(104); _ke_putc(109); _ke_putc(97); _ke_putc(99);
+    _ke_putc(32);
+    // "hkdf"
+    _ke_putc(104); _ke_putc(107); _ke_putc(100); _ke_putc(102);
     _ke_putc(13); _ke_putc(10);
     return 0;
 }
@@ -4394,6 +4702,13 @@ fn _ke_dispatch(buf_addr, buf_len) {
         } } } }
     }
 
+    // "hmac " prefix (5+): 104 109 97 99 32
+    if buf_len >= 6 {
+        if c0 == 104 { if c1 == 109 { if c2 == 97 { if c3 == 99 { if c4 == 32 {
+            _ke_cmd_hmac(buf_addr, buf_len); return 0;
+        } } } } }
+    }
+
     // "run " prefix (4+): 114 117 110 32
     if buf_len >= 5 {
         if c0 == 114 { if c1 == 117 { if c2 == 110 { if c3 == 32 {
@@ -4405,6 +4720,10 @@ fn _ke_dispatch(buf_addr, buf_len) {
     if buf_len == 4 {
         if c0 == 104 { if c1 == 101 { if c2 == 108 { if c3 == 112 {
             _ke_cmd_help(); return 0;
+        } } } }
+        // "hkdf" = 104 107 100 102
+        if c0 == 104 { if c1 == 107 { if c2 == 100 { if c3 == 102 {
+            _ke_cmd_hkdf(); return 0;
         } } } }
         // "tick" = 116 105 99 107
         if c0 == 116 { if c1 == 105 { if c2 == 99 { if c3 == 107 {

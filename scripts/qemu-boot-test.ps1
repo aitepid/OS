@@ -1037,6 +1037,83 @@ foreach ($t in $shaTests) {
 
 if (Test-Path $shaLogFile) { Remove-Item $shaLogFile -Force }
 
+# =============================================================
+# Phase 13: HMAC-SHA-256 + HKDF Tests
+# =============================================================
+Write-Host "`n=== Phase 13: HMAC-SHA-256 + HKDF Tests ===" -ForegroundColor Cyan
+
+$hmacLogFile = Join-Path $repoRoot 'qemu-hmac-test.log'
+if (Test-Path $hmacLogFile) { Remove-Item $hmacLogFile -Force }
+
+$hmacPort = 55598
+$hmacArgs = @(
+    '-drive', "format=raw,file=hicos-hl.img",
+    '-serial', "file:$hmacLogFile",
+    '-m', '128', '-display', 'none',
+    '-device', 'virtio-blk-pci,drive=disk0,disable-modern=on',
+    '-drive', "id=disk0,file=hicos-disk.img,format=raw,if=none",
+    '-netdev', 'user,id=net0',
+    '-device', 'virtio-net-pci,netdev=net0,disable-modern=on',
+    '-no-reboot', '-no-shutdown',
+    '-monitor', "telnet:127.0.0.1:$hmacPort,server,nowait"
+)
+
+$hmacProc = Start-Process -FilePath $qemuPath -ArgumentList $hmacArgs -PassThru -NoNewWindow
+Start-Sleep -Seconds 5
+
+try {
+    $hClient = New-Object System.Net.Sockets.TcpClient('127.0.0.1', $hmacPort)
+    $hStream = $hClient.GetStream()
+    $hWriter = New-Object System.IO.StreamWriter($hStream)
+    $hWriter.AutoFlush = $true
+    Start-Sleep -Milliseconds 500
+
+    # hmac test
+    foreach ($k in @('h','m','a','c','space','t','e','s','t','ret')) { $hWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 5
+
+    # hkdf
+    foreach ($k in @('h','k','d','f','ret')) { $hWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 8
+
+    # help (verify hmac/hkdf in help)
+    foreach ($k in @('h','e','l','p','ret')) { $hWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 2
+
+    $hWriter.Close(); $hClient.Close()
+} catch {
+    Write-Host "  HMAC/HKDF test monitor error: $_" -ForegroundColor Yellow
+}
+
+Start-Sleep -Seconds 1
+if (-not $hmacProc.HasExited) { $hmacProc.Kill(); $hmacProc.WaitForExit(3000) }
+
+$hmacContent = ''
+if (Test-Path $hmacLogFile) {
+    try { $hmacContent = [System.IO.File]::ReadAllText($hmacLogFile) } catch {}
+}
+
+$hmacTests = @(
+    @{ name = 'hmac produces HMAC: prefix'; pattern = 'HMAC:' },
+    @{ name = 'hmac produces hex output'; pattern = 'HMAC: [0-9A-Fa-f]{64}' },
+    @{ name = 'hkdf produces HKDF: prefix'; pattern = 'HKDF:' },
+    @{ name = 'hkdf produces hex output'; pattern = 'HKDF: [0-9A-Fa-f]{64}' },
+    @{ name = 'help shows hmac command'; pattern = 'hmac' },
+    @{ name = 'help shows hkdf command'; pattern = 'hkdf' }
+)
+
+foreach ($t in $hmacTests) {
+    $shellTotal++
+    if ($hmacContent -match $t.pattern) {
+        $passes += "HMAC: $($t.name)"
+        $shellPassed++
+    } else {
+        $errors += "HMAC: $($t.name)"
+    }
+}
+
+if (Test-Path $hmacLogFile) { Remove-Item $hmacLogFile -Force }
+
 Write-Host "`n=== Boot Test Results ===" -ForegroundColor Cyan
 foreach ($p in $passes) {
     Write-Host "  PASS: $p" -ForegroundColor Green
