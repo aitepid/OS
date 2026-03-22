@@ -12,9 +12,9 @@
 |------|------|-----------|------|
 | **A: 镜像机器码** | `scripts/rebuild-image.ps1` → `hicos-hl.img` | ✅ 真正运行 | 引导+串口+PIC/PIT/IDT+PCI+VirtIO读写+VirtIO-net+**shell 20命令+FAT16+DHCP+Ping+DNS+VESA+Ring3**+任务交替 |
 | **B: H-L 编译器** | `hl-bootstrap.hl` build_kernel() | ⚠️ 可执行但产出较旧 | 串口+PIC+PIT+IDT+键盘 (不含 PCI/VirtIO) |
-| **C: 内核源码** | `bare-kernel/hl/` 114 模块 | ✅ kernel.bin 集成到镜像 | 编译产出 kernel.bin, 1,210+函数, 44条shell命令, 含密码学+TLS+HTTPS+图形终端+ext2+hlpkg+词法分析器+VirtIO-GPU+POSIX+文本编辑器 |
+| **C: 内核源码** | `bare-kernel/hl/` 114 模块 | ✅ kernel.bin 集成到镜像 | 编译产出 kernel.bin, 1,230+函数, 48条shell命令, 含密码学+TLS+HTTPS+图形终端+ext2+hlpkg+词法/AST解析器+VirtIO-GPU+POSIX+编辑器+文件管理器+浏览器+容器 |
 
-**当前状态**: v8.0 Phase I 完成。kernel.bin 运行 44 条 shell 命令，包含内核自举词法分析器+VirtIO-GPU检测+POSIX兼容层+文本编辑器。
+**当前状态**: v8.0 全部完成。kernel.bin 运行 48 条 shell 命令，包含内核自举编译器(Lexer+Parser)+VirtIO-GPU+POSIX+编辑器+文件管理器+文字浏览器+容器隔离。
 
 ### 代码库统计
 
@@ -30,8 +30,8 @@
 | BIOS 可引导镜像 | `hicos-hl.img` = 152,064 字节 (297扇区, MBR 0x55AA ✓) |
 | UEFI 可引导镜像 | `hicos-uefi.img` = 33 MB (GPT+CRC32, ESP FAT16) |
 | UEFI 应用程序 | `BOOTX64.EFI` = 1,536 字节 (PE32+ x86_64) |
-| kernel.bin (编译产出) | 1,210+ 函数, 44 shell 命令 |
-| QEMU BIOS 引导测试 | **107/107 PASS** (含 16 个测试阶段, 涵盖 shell + FAT16 + net + Ring3 + HW + disk + install + run + mem + sha256 + hmac + aes/gcm/tls + https/gterm/ext2/hlpkg + lex/vgpu/posix/edit) |
+| kernel.bin (编译产出) | 1,230+ 函数, 48 shell 命令 |
+| QEMU BIOS 引导测试 | **117/117 PASS** (含 17 个测试阶段) |
 | QEMU UEFI 引导测试 | **3/3 PASS** |
 | Full Gate | **10/10 PASS** |
 | 二进制分析 | 13/13 检查通过 (MBR+Stage1+Stage2+Kernel) |

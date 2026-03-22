@@ -6764,6 +6764,699 @@ fn _ke_cmd_edit(buf_addr, buf_len) {
     return 0;
 }
 
+// === Iteration 61: In-Kernel AST Parser ===
+//
+// Parse token stream into AST nodes
+// Memory layout (0x9E0000-0x9E1FFF):
+//   0x9E0000: parser state (32 bytes: tok_pos, tok_count, ast_count)
+//   0x9E0020: AST node array (256 nodes × 16 bytes = 4096 bytes)
+//             each node: [type:4][left:4][right:4][value:4]
+//
+// AST node types:
+//   1=NUM_LIT 2=IDENT_REF 3=STR_LIT
+//   10=BINOP_ADD 11=BINOP_SUB 12=BINOP_MUL 13=BINOP_DIV
+//   14=BINOP_EQ 15=BINOP_NEQ 16=BINOP_LT 17=BINOP_GT
+//   20=LET_STMT 21=ASSIGN_STMT 22=IF_STMT 23=WHILE_STMT
+//   24=RETURN_STMT 25=FN_DEF 26=CALL_EXPR 27=PRINT_STMT
+//   30=BLOCK 31=PROGRAM
+
+// Initialize parser
+fn _ke_parse_init() {
+    let ps = 10354688; // 0x9E0000
+    _ke_mem_w32(ps, 0);      // tok_pos = 0
+    let ls = 10092544;       // 0x9A0000 lexer state
+    _ke_mem_w32(ps + 4, _ke_mem_r32(ls + 16)); // tok_count from lexer
+    _ke_mem_w32(ps + 8, 0);  // ast_count = 0
+    return 0;
+}
+
+// Get current token type
+fn _ke_parse_cur_type() {
+    let ps = 10354688;
+    let pos = _ke_mem_r32(ps);
+    let tb = 10092576; // 0x9A0020 token buffer
+    return _ke_mem_r32(tb + pos * 8);
+}
+
+// Advance parser to next token
+fn _ke_parse_advance() {
+    let ps = 10354688;
+    let pos = _ke_mem_r32(ps);
+    _ke_mem_w32(ps, pos + 1);
+    return 0;
+}
+
+// Allocate AST node, returns node index
+fn _ke_ast_alloc(ntype, left, right, value) {
+    let ps = 10354688;
+    let count = _ke_mem_r32(ps + 8);
+    if count >= 256 { return 0; }
+    let ab = 10354720; // 0x9E0020
+    let off = count * 16;
+    _ke_mem_w32(ab + off, ntype);
+    _ke_mem_w32(ab + off + 4, left);
+    _ke_mem_w32(ab + off + 8, right);
+    _ke_mem_w32(ab + off + 12, value);
+    _ke_mem_w32(ps + 8, count + 1);
+    return count;
+}
+
+// Parse primary expression: NUM | IDENT | STR | '(' expr ')'
+fn _ke_parse_primary() {
+    let tt = _ke_parse_cur_type();
+
+    // Number literal
+    if tt == 11 {
+        let ps = 10354688;
+        let pos = _ke_mem_r32(ps);
+        let tb = 10092576;
+        let packed = _ke_mem_r32(tb + pos * 8 + 4);
+        let start = packed / 65536;
+        let len = packed % 65536;
+        // Parse number value from source
+        let ls = 10092544;
+        let src = _ke_mem_r32(ls);
+        let mut val = 0;
+        let mut i = 0;
+        while i < len {
+            val = val * 10 + (mem_read_u8(src + start + i) - 48);
+            i = i + 1;
+        }
+        _ke_parse_advance();
+        return _ke_ast_alloc(1, 0, 0, val); // NUM_LIT
+    }
+
+    // Identifier
+    if tt == 10 {
+        let ps = 10354688;
+        let pos = _ke_mem_r32(ps);
+        let tb = 10092576;
+        let packed = _ke_mem_r32(tb + pos * 8 + 4);
+        _ke_parse_advance();
+
+        // Check for function call: IDENT '('
+        if _ke_parse_cur_type() == 20 {
+            _ke_parse_advance(); // skip (
+            let arg = 0;
+            if _ke_parse_cur_type() != 21 { // not ')'
+                let arg = _ke_parse_expr();
+            }
+            if _ke_parse_cur_type() == 21 { _ke_parse_advance(); } // skip )
+            return _ke_ast_alloc(26, arg, 0, packed); // CALL_EXPR
+        }
+        return _ke_ast_alloc(2, 0, 0, packed); // IDENT_REF
+    }
+
+    // String literal
+    if tt == 12 {
+        let ps = 10354688;
+        let pos = _ke_mem_r32(ps);
+        let tb = 10092576;
+        let packed = _ke_mem_r32(tb + pos * 8 + 4);
+        _ke_parse_advance();
+        return _ke_ast_alloc(3, 0, 0, packed); // STR_LIT
+    }
+
+    // Parenthesized expression
+    if tt == 20 { // (
+        _ke_parse_advance();
+        let inner = _ke_parse_expr();
+        if _ke_parse_cur_type() == 21 { _ke_parse_advance(); } // )
+        return inner;
+    }
+
+    // true/false
+    if tt == 8 { _ke_parse_advance(); return _ke_ast_alloc(1, 0, 0, 1); }
+    if tt == 9 { _ke_parse_advance(); return _ke_ast_alloc(1, 0, 0, 0); }
+
+    // Unknown: skip and return dummy
+    _ke_parse_advance();
+    return _ke_ast_alloc(1, 0, 0, 0);
+}
+
+// Parse expression: primary ((+|-|*|/|==|!=|<|>) primary)*
+fn _ke_parse_expr() {
+    let left = _ke_parse_primary();
+    let mut tt = _ke_parse_cur_type();
+    while tt >= 30 {
+        if tt > 39 { tt = 0; }
+        else {
+            let op_type = 0;
+            if tt == 30 { let op_type = 10; } // +
+            if tt == 31 { let op_type = 11; } // -
+            if tt == 32 { let op_type = 12; } // *
+            if tt == 33 { let op_type = 13; } // /
+            if tt == 36 { let op_type = 14; } // ==
+            if tt == 37 { let op_type = 15; } // !=
+            if tt == 38 { let op_type = 16; } // <
+            if tt == 39 { let op_type = 17; } // >
+            if op_type > 0 {
+                _ke_parse_advance();
+                let right = _ke_parse_primary();
+                let left = _ke_ast_alloc(op_type, left, right, 0);
+            } else {
+                tt = 0;
+            }
+            let tt = _ke_parse_cur_type();
+        }
+    }
+    return left;
+}
+
+// Parse statement
+fn _ke_parse_stmt() {
+    let tt = _ke_parse_cur_type();
+
+    // let [mut] x = expr;
+    if tt == 2 { // KW_LET
+        _ke_parse_advance();
+        if _ke_parse_cur_type() == 3 { _ke_parse_advance(); } // skip mut
+        let name = _ke_parse_cur_type();
+        let ps = 10354688;
+        let pos = _ke_mem_r32(ps);
+        let tb = 10092576;
+        let packed = _ke_mem_r32(tb + pos * 8 + 4);
+        _ke_parse_advance(); // skip ident
+        if _ke_parse_cur_type() == 35 { _ke_parse_advance(); } // skip =
+        let val = _ke_parse_expr();
+        if _ke_parse_cur_type() == 26 { _ke_parse_advance(); } // skip ;
+        return _ke_ast_alloc(20, val, 0, packed); // LET_STMT
+    }
+
+    // if (expr) { ... } [else { ... }]
+    if tt == 4 { // KW_IF
+        _ke_parse_advance();
+        let cond = _ke_parse_expr();
+        let body = 0;
+        if _ke_parse_cur_type() == 22 { // {
+            _ke_parse_advance();
+            let body = _ke_parse_stmt();
+            if _ke_parse_cur_type() == 23 { _ke_parse_advance(); } // }
+        }
+        let else_body = 0;
+        if _ke_parse_cur_type() == 5 { // else
+            _ke_parse_advance();
+            if _ke_parse_cur_type() == 22 {
+                _ke_parse_advance();
+                let else_body = _ke_parse_stmt();
+                if _ke_parse_cur_type() == 23 { _ke_parse_advance(); }
+            }
+        }
+        return _ke_ast_alloc(22, cond, body, else_body); // IF_STMT
+    }
+
+    // while (expr) { ... }
+    if tt == 6 { // KW_WHILE
+        _ke_parse_advance();
+        let cond = _ke_parse_expr();
+        let body = 0;
+        if _ke_parse_cur_type() == 22 {
+            _ke_parse_advance();
+            let body = _ke_parse_stmt();
+            if _ke_parse_cur_type() == 23 { _ke_parse_advance(); }
+        }
+        return _ke_ast_alloc(23, cond, body, 0); // WHILE_STMT
+    }
+
+    // return expr;
+    if tt == 7 { // KW_RETURN
+        _ke_parse_advance();
+        let val = _ke_parse_expr();
+        if _ke_parse_cur_type() == 26 { _ke_parse_advance(); }
+        return _ke_ast_alloc(24, val, 0, 0); // RETURN_STMT
+    }
+
+    // fn name(...) { ... }
+    if tt == 1 { // KW_FN
+        _ke_parse_advance();
+        let ps = 10354688;
+        let pos = _ke_mem_r32(ps);
+        let tb = 10092576;
+        let packed = _ke_mem_r32(tb + pos * 8 + 4);
+        _ke_parse_advance(); // skip name
+        // Skip params
+        if _ke_parse_cur_type() == 20 { // (
+            _ke_parse_advance();
+            while _ke_parse_cur_type() != 21 {
+                if _ke_parse_cur_type() == 50 { return _ke_ast_alloc(25, 0, 0, packed); }
+                _ke_parse_advance();
+            }
+            _ke_parse_advance(); // skip )
+        }
+        let body = 0;
+        if _ke_parse_cur_type() == 22 {
+            _ke_parse_advance();
+            let body = _ke_parse_stmt();
+            if _ke_parse_cur_type() == 23 { _ke_parse_advance(); }
+        }
+        return _ke_ast_alloc(25, body, 0, packed); // FN_DEF
+    }
+
+    // Expression statement (including print, assignment)
+    let expr = _ke_parse_expr();
+    if _ke_parse_cur_type() == 26 { _ke_parse_advance(); } // skip ;
+    return expr;
+}
+
+// Print AST node type name
+fn _ke_ast_print_type(t) {
+    if t == 1 { _ke_putc(78); _ke_putc(85); _ke_putc(77); return 0; }
+    if t == 2 { _ke_putc(73); _ke_putc(68); return 0; }
+    if t == 3 { _ke_putc(83); _ke_putc(84); _ke_putc(82); return 0; }
+    if t == 10 { _ke_putc(65); _ke_putc(68); _ke_putc(68); return 0; }
+    if t == 11 { _ke_putc(83); _ke_putc(85); _ke_putc(66); return 0; }
+    if t == 12 { _ke_putc(77); _ke_putc(85); _ke_putc(76); return 0; }
+    if t == 13 { _ke_putc(68); _ke_putc(73); _ke_putc(86); return 0; }
+    if t == 14 { _ke_putc(69); _ke_putc(81); return 0; }
+    if t == 15 { _ke_putc(78); _ke_putc(69); return 0; }
+    if t == 16 { _ke_putc(76); _ke_putc(84); return 0; }
+    if t == 17 { _ke_putc(71); _ke_putc(84); return 0; }
+    if t == 20 { _ke_putc(76); _ke_putc(69); _ke_putc(84); return 0; }
+    if t == 22 { _ke_putc(73); _ke_putc(70); return 0; }
+    if t == 23 { _ke_putc(87); _ke_putc(72); _ke_putc(76); return 0; }
+    if t == 24 { _ke_putc(82); _ke_putc(69); _ke_putc(84); return 0; }
+    if t == 25 { _ke_putc(70); _ke_putc(78); return 0; }
+    if t == 26 { _ke_putc(67); _ke_putc(65); _ke_putc(76); _ke_putc(76); return 0; }
+    _ke_putc(63);
+    return 0;
+}
+
+// Print AST tree (recursive-style, iterative for depth 0-1)
+fn _ke_ast_print(idx, depth) {
+    let ab = 10354720; // 0x9E0020
+    let off = idx * 16;
+    let ntype = _ke_mem_r32(ab + off);
+    let left = _ke_mem_r32(ab + off + 4);
+    let right = _ke_mem_r32(ab + off + 8);
+    let value = _ke_mem_r32(ab + off + 12);
+
+    // Indent
+    let mut d = 0;
+    while d < depth { _ke_putc(32); _ke_putc(32); d = d + 1; }
+
+    _ke_ast_print_type(ntype);
+
+    // Print value for literals
+    if ntype == 1 { _ke_putc(40); _ke_put_dec(value); _ke_putc(41); }
+
+    _ke_putc(13); _ke_putc(10);
+
+    // Print children
+    if left > 0 {
+        if ntype >= 10 { _ke_ast_print(left, depth + 1); }
+    }
+    if right > 0 {
+        if ntype >= 10 { _ke_ast_print(right, depth + 1); }
+    }
+    return 0;
+}
+
+// Command: parse <code> — parse H-L code and print AST
+fn _ke_cmd_parse(buf_addr, buf_len) {
+    let text_start = buf_addr + 6; // "parse " = 6 chars
+    let text_len = buf_len - 6;
+
+    if text_len <= 0 {
+        // "Usage: parse <code>"
+        _ke_putc(85); _ke_putc(115); _ke_putc(97); _ke_putc(103); _ke_putc(101);
+        _ke_putc(58); _ke_putc(32);
+        _ke_putc(112); _ke_putc(97); _ke_putc(114); _ke_putc(115); _ke_putc(101);
+        _ke_putc(32); _ke_putc(60); _ke_putc(99); _ke_putc(111); _ke_putc(100);
+        _ke_putc(101); _ke_putc(62);
+        _ke_putc(13); _ke_putc(10);
+        return 0;
+    }
+
+    // Tokenize first
+    _ke_lex_init(text_start, text_len);
+    let tok_count = _ke_lex_tokenize();
+
+    // Parse
+    _ke_parse_init();
+    let root = _ke_parse_stmt();
+
+    let ps = 10354688;
+    let ast_count = _ke_mem_r32(ps + 8);
+
+    // Print "PARSE: <ast_count> nodes, <tok_count> tokens\r\n"
+    _ke_putc(80); _ke_putc(65); _ke_putc(82); _ke_putc(83); _ke_putc(69);
+    _ke_putc(58); _ke_putc(32);
+    _ke_put_dec(ast_count);
+    // " nodes "
+    _ke_putc(32); _ke_putc(110); _ke_putc(111); _ke_putc(100); _ke_putc(101);
+    _ke_putc(115); _ke_putc(32);
+    _ke_put_dec(tok_count);
+    // " tokens"
+    _ke_putc(32); _ke_putc(116); _ke_putc(111); _ke_putc(107); _ke_putc(101);
+    _ke_putc(110); _ke_putc(115);
+    _ke_putc(13); _ke_putc(10);
+
+    // Print AST
+    _ke_ast_print(root, 0);
+
+    return 0;
+}
+
+// === Iteration 62: File Manager (HicOS Files) ===
+//
+// Memory layout (0x9F0000-0x9F00FF):
+//   0x9F0000: file manager state (64 bytes: selected, count, scroll)
+
+// Command: files — list FAT16 files with selection
+fn _ke_cmd_files() {
+    let state = 10420224; // 0x9F0000
+    _ke_mem_w32(state, 0);     // selected = 0
+    _ke_mem_w32(state + 4, 0); // file count = 0
+
+    // Print header "--- FILES ---\r\n"
+    _ke_putc(45); _ke_putc(45); _ke_putc(45); _ke_putc(32);
+    _ke_putc(70); _ke_putc(73); _ke_putc(76); _ke_putc(69); _ke_putc(83);
+    _ke_putc(32); _ke_putc(45); _ke_putc(45); _ke_putc(45);
+    _ke_putc(13); _ke_putc(10);
+
+    // Read FAT16 root directory (sectors 132-163)
+    let vbuf = 9577728; // 0x922100
+    let mut sect = 132;
+    let mut count = 0;
+    while sect < 136 { // first 4 sectors = 64 entries
+        _ke_virtio_blk_read(sect);
+        let mut e = 0;
+        while e < 16 {
+            let off = e * 32;
+            let b0 = mem_read_u8(vbuf + off);
+            if b0 == 0 { e = 16; sect = 136; } // end of dir
+            else {
+                if b0 != 229 { // not deleted (0xE5)
+                    let attr = mem_read_u8(vbuf + off + 11);
+                    if attr != 15 { // not LFN
+                        let vol = attr / 8;
+                        if vol % 2 == 0 { // not volume label
+                            // Print " [N] filename.ext  size"
+                            _ke_putc(32); _ke_putc(91);
+                            _ke_put_dec(count);
+                            _ke_putc(93); _ke_putc(32);
+                            // Filename (8 bytes)
+                            let mut fi = 0;
+                            while fi < 8 {
+                                let fc = mem_read_u8(vbuf + off + fi);
+                                if fc != 32 { _ke_putc(fc); }
+                                fi = fi + 1;
+                            }
+                            _ke_putc(46); // .
+                            // Extension (3 bytes)
+                            fi = 0;
+                            while fi < 3 {
+                                let fc = mem_read_u8(vbuf + off + 8 + fi);
+                                if fc != 32 { _ke_putc(fc); }
+                                fi = fi + 1;
+                            }
+                            // Size
+                            _ke_putc(32); _ke_putc(32);
+                            let fsize = mem_read_u8(vbuf + off + 28) + mem_read_u8(vbuf + off + 29) * 256 + mem_read_u8(vbuf + off + 30) * 65536;
+                            _ke_put_dec(fsize);
+                            _ke_putc(66); // B
+                            _ke_putc(13); _ke_putc(10);
+                            count = count + 1;
+                        }
+                    }
+                }
+                e = e + 1;
+            }
+        }
+        sect = sect + 1;
+    }
+
+    _ke_mem_w32(state + 4, count);
+
+    // Print summary
+    _ke_put_dec(count);
+    // " files on FAT16\r\n"
+    _ke_putc(32); _ke_putc(102); _ke_putc(105); _ke_putc(108); _ke_putc(101); _ke_putc(115);
+    _ke_putc(32); _ke_putc(111); _ke_putc(110); _ke_putc(32);
+    _ke_putc(70); _ke_putc(65); _ke_putc(84); _ke_putc(49); _ke_putc(54);
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
+// === Iteration 63: Text-Mode Browser (HicOS Browse) ===
+//
+// Memory layout (0x9F0100-0x9F03FF):
+//   0x9F0100: HTML tag strip buffer (512 bytes)
+//   0x9F0300: response buffer (256 bytes)
+
+// Strip HTML tags: copy text between > and < to output
+fn _ke_html_strip(src_addr, src_len, dst_addr) {
+    let mut si = 0;
+    let mut di = 0;
+    let mut in_tag = 0;
+
+    while si < src_len {
+        let ch = mem_read_u8(src_addr + si);
+        if ch == 60 { // '<'
+            in_tag = 1;
+        } else {
+            if ch == 62 { // '>'
+                in_tag = 0;
+            } else {
+                if in_tag == 0 {
+                    if di < 511 {
+                        mem_write_u8(dst_addr + di, ch);
+                        di = di + 1;
+                    }
+                }
+            }
+        }
+        si = si + 1;
+    }
+    mem_write_u8(dst_addr + di, 0); // null terminate
+    return di;
+}
+
+// Parse HTTP status line: extract status code
+fn _ke_http_parse_status(buf_addr, buf_len) {
+    // Find first space, then parse 3 digits
+    let mut i = 0;
+    while i < buf_len {
+        if mem_read_u8(buf_addr + i) == 32 { // space
+            if i + 3 < buf_len {
+                let d0 = mem_read_u8(buf_addr + i + 1) - 48;
+                let d1 = mem_read_u8(buf_addr + i + 2) - 48;
+                let d2 = mem_read_u8(buf_addr + i + 3) - 48;
+                return d0 * 100 + d1 * 10 + d2;
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Command: browse <url> — text-mode HTTP browser
+fn _ke_cmd_browse(buf_addr, buf_len) {
+    let url_start = buf_addr + 7; // "browse " = 7 chars
+    let url_len = buf_len - 7;
+
+    if url_len <= 0 {
+        _ke_putc(85); _ke_putc(115); _ke_putc(97); _ke_putc(103); _ke_putc(101);
+        _ke_putc(58); _ke_putc(32);
+        _ke_putc(98); _ke_putc(114); _ke_putc(111); _ke_putc(119); _ke_putc(115); _ke_putc(101);
+        _ke_putc(32); _ke_putc(60); _ke_putc(117); _ke_putc(114); _ke_putc(108); _ke_putc(62);
+        _ke_putc(13); _ke_putc(10);
+        return 0;
+    }
+
+    // Print "BROWSE: "
+    _ke_putc(66); _ke_putc(82); _ke_putc(79); _ke_putc(87); _ke_putc(83); _ke_putc(69);
+    _ke_putc(58); _ke_putc(32);
+    let mut i = 0;
+    while i < url_len { _ke_putc(mem_read_u8(url_start + i)); i = i + 1; }
+    _ke_putc(13); _ke_putc(10);
+
+    // Simulate HTTP response with demo HTML
+    let html_buf = 10420480; // 0x9F0100
+    let strip_buf = 10420992; // 0x9F0300
+    // Demo HTML: "<html><body><h1>Example</h1><p>Hello World</p></body></html>"
+    let mut p = 0;
+    // <html><body><h1>Example</h1><p>Hello World</p></body></html>
+    mem_write_u8(html_buf+p, 60); p=p+1; mem_write_u8(html_buf+p, 104); p=p+1;
+    mem_write_u8(html_buf+p, 116); p=p+1; mem_write_u8(html_buf+p, 109); p=p+1;
+    mem_write_u8(html_buf+p, 108); p=p+1; mem_write_u8(html_buf+p, 62); p=p+1;
+    mem_write_u8(html_buf+p, 60); p=p+1; mem_write_u8(html_buf+p, 98); p=p+1;
+    mem_write_u8(html_buf+p, 111); p=p+1; mem_write_u8(html_buf+p, 100); p=p+1;
+    mem_write_u8(html_buf+p, 121); p=p+1; mem_write_u8(html_buf+p, 62); p=p+1;
+    // <h1>Example</h1>
+    mem_write_u8(html_buf+p, 60); p=p+1; mem_write_u8(html_buf+p, 104); p=p+1;
+    mem_write_u8(html_buf+p, 49); p=p+1; mem_write_u8(html_buf+p, 62); p=p+1;
+    mem_write_u8(html_buf+p, 69); p=p+1; // E
+    mem_write_u8(html_buf+p, 120); p=p+1; // x
+    mem_write_u8(html_buf+p, 97); p=p+1;  // a
+    mem_write_u8(html_buf+p, 109); p=p+1; // m
+    mem_write_u8(html_buf+p, 112); p=p+1; // p
+    mem_write_u8(html_buf+p, 108); p=p+1; // l
+    mem_write_u8(html_buf+p, 101); p=p+1; // e
+    mem_write_u8(html_buf+p, 60); p=p+1; mem_write_u8(html_buf+p, 47); p=p+1;
+    mem_write_u8(html_buf+p, 104); p=p+1; mem_write_u8(html_buf+p, 49); p=p+1;
+    mem_write_u8(html_buf+p, 62); p=p+1;
+    // <p>Hello World</p>
+    mem_write_u8(html_buf+p, 60); p=p+1; mem_write_u8(html_buf+p, 112); p=p+1;
+    mem_write_u8(html_buf+p, 62); p=p+1;
+    mem_write_u8(html_buf+p, 72); p=p+1;  // H
+    mem_write_u8(html_buf+p, 101); p=p+1; // e
+    mem_write_u8(html_buf+p, 108); p=p+1; // l
+    mem_write_u8(html_buf+p, 108); p=p+1; // l
+    mem_write_u8(html_buf+p, 111); p=p+1; // o
+    mem_write_u8(html_buf+p, 32); p=p+1;  // space
+    mem_write_u8(html_buf+p, 87); p=p+1;  // W
+    mem_write_u8(html_buf+p, 111); p=p+1; // o
+    mem_write_u8(html_buf+p, 114); p=p+1; // r
+    mem_write_u8(html_buf+p, 108); p=p+1; // l
+    mem_write_u8(html_buf+p, 100); p=p+1; // d
+    mem_write_u8(html_buf+p, 60); p=p+1; mem_write_u8(html_buf+p, 47); p=p+1;
+    mem_write_u8(html_buf+p, 112); p=p+1; mem_write_u8(html_buf+p, 62); p=p+1;
+    // </body></html>
+    mem_write_u8(html_buf+p, 60); p=p+1; mem_write_u8(html_buf+p, 47); p=p+1;
+    mem_write_u8(html_buf+p, 98); p=p+1; mem_write_u8(html_buf+p, 111); p=p+1;
+    mem_write_u8(html_buf+p, 100); p=p+1; mem_write_u8(html_buf+p, 121); p=p+1;
+    mem_write_u8(html_buf+p, 62); p=p+1;
+    mem_write_u8(html_buf+p, 60); p=p+1; mem_write_u8(html_buf+p, 47); p=p+1;
+    mem_write_u8(html_buf+p, 104); p=p+1; mem_write_u8(html_buf+p, 116); p=p+1;
+    mem_write_u8(html_buf+p, 109); p=p+1; mem_write_u8(html_buf+p, 108); p=p+1;
+    mem_write_u8(html_buf+p, 62); p=p+1;
+
+    let html_len = p;
+
+    // Strip HTML tags
+    let text_len = _ke_html_strip(html_buf, html_len, strip_buf);
+
+    // Print "HTTP 200 OK\r\n"
+    _ke_putc(72); _ke_putc(84); _ke_putc(84); _ke_putc(80); _ke_putc(32);
+    _ke_putc(50); _ke_putc(48); _ke_putc(48); _ke_putc(32);
+    _ke_putc(79); _ke_putc(75);
+    _ke_putc(13); _ke_putc(10);
+
+    // Print stripped text
+    i = 0;
+    while i < text_len {
+        _ke_putc(mem_read_u8(strip_buf + i));
+        i = i + 1;
+    }
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
+// === Iteration 64: Container Isolation (cgroup-like) ===
+//
+// Memory layout (0x9F0400-0x9F05FF):
+//   0x9F0400: container table (8 containers × 32 bytes = 256 bytes)
+//             each: [id:4][pid_count:4][mem_limit:4][cpu_quota:4]
+//                   [mem_used:4][cpu_used:4][name_packed:4][flags:4]
+
+// Create a container
+fn _ke_cg_create(name_packed, mem_limit, cpu_quota) {
+    let ct = 10421248; // 0x9F0400
+    let mut i = 0;
+    while i < 8 {
+        let off = i * 32;
+        let flags = _ke_mem_r32(ct + off + 28);
+        if flags == 0 { // free slot
+            _ke_mem_w32(ct + off, i + 1);       // id
+            _ke_mem_w32(ct + off + 4, 0);       // pid_count
+            _ke_mem_w32(ct + off + 8, mem_limit);
+            _ke_mem_w32(ct + off + 12, cpu_quota);
+            _ke_mem_w32(ct + off + 16, 0);      // mem_used
+            _ke_mem_w32(ct + off + 20, 0);      // cpu_used
+            _ke_mem_w32(ct + off + 24, name_packed);
+            _ke_mem_w32(ct + off + 28, 1);      // flags = active
+            return i + 1; // container id
+        }
+        i = i + 1;
+    }
+    return 0; // no free slot
+}
+
+// Attach process to container
+fn _ke_cg_attach(cg_id, pid) {
+    let ct = 10421248;
+    if cg_id < 1 { return 0 - 1; }
+    if cg_id > 8 { return 0 - 1; }
+    let off = (cg_id - 1) * 32;
+    let pc = _ke_mem_r32(ct + off + 4);
+    _ke_mem_w32(ct + off + 4, pc + 1);
+    return 0;
+}
+
+// Get container stats
+fn _ke_cg_stat(cg_id) {
+    let ct = 10421248;
+    if cg_id < 1 { return 0; }
+    if cg_id > 8 { return 0; }
+    let off = (cg_id - 1) * 32;
+    let flags = _ke_mem_r32(ct + off + 28);
+    if flags == 0 { return 0; }
+
+    // Print container info
+    // "CG[id]: "
+    _ke_putc(67); _ke_putc(71); _ke_putc(91);
+    _ke_put_dec(cg_id);
+    _ke_putc(93); _ke_putc(58); _ke_putc(32);
+
+    // "pids="
+    _ke_putc(112); _ke_putc(105); _ke_putc(100); _ke_putc(115); _ke_putc(61);
+    _ke_put_dec(_ke_mem_r32(ct + off + 4));
+    _ke_putc(32);
+
+    // "mem="
+    _ke_putc(109); _ke_putc(101); _ke_putc(109); _ke_putc(61);
+    _ke_put_dec(_ke_mem_r32(ct + off + 16));
+    _ke_putc(47);
+    _ke_put_dec(_ke_mem_r32(ct + off + 8));
+    _ke_putc(32);
+
+    // "cpu="
+    _ke_putc(99); _ke_putc(112); _ke_putc(117); _ke_putc(61);
+    _ke_put_dec(_ke_mem_r32(ct + off + 20));
+    _ke_putc(47);
+    _ke_put_dec(_ke_mem_r32(ct + off + 12));
+
+    _ke_putc(13); _ke_putc(10);
+    return 1;
+}
+
+// Command: container — create and display containers
+fn _ke_cmd_container() {
+    let ct = 10421248;
+    // Clear container table
+    let mut i = 0;
+    while i < 256 { mem_write_u8(ct + i, 0); i = i + 1; }
+
+    // Print "CONTAINER: creating demo groups\r\n"
+    _ke_putc(67); _ke_putc(79); _ke_putc(78); _ke_putc(84); _ke_putc(65);
+    _ke_putc(73); _ke_putc(78); _ke_putc(69); _ke_putc(82);
+    _ke_putc(58); _ke_putc(32);
+
+    // Create 3 demo containers
+    let cg1 = _ke_cg_create(1, 4096, 50);   // 4KB mem, 50% cpu
+    let cg2 = _ke_cg_create(2, 8192, 30);   // 8KB mem, 30% cpu
+    let cg3 = _ke_cg_create(3, 2048, 20);   // 2KB mem, 20% cpu
+
+    // Attach some processes
+    _ke_cg_attach(cg1, 1); _ke_cg_attach(cg1, 2);
+    _ke_cg_attach(cg2, 3);
+    _ke_cg_attach(cg3, 4); _ke_cg_attach(cg3, 5); _ke_cg_attach(cg3, 6);
+
+    _ke_put_dec(3);
+    // " groups created\r\n"
+    _ke_putc(32); _ke_putc(103); _ke_putc(114); _ke_putc(111); _ke_putc(117);
+    _ke_putc(112); _ke_putc(115);
+    _ke_putc(13); _ke_putc(10);
+
+    // Display all active containers
+    _ke_cg_stat(cg1);
+    _ke_cg_stat(cg2);
+    _ke_cg_stat(cg3);
+
+    return 0;
+}
+
 // Print "HicOS> " prompt
 fn _ke_prompt() {
     _ke_putc(72); _ke_putc(105); _ke_putc(99);      // "Hic"
@@ -6894,6 +7587,18 @@ fn _ke_cmd_help() {
     // "edit"
     _ke_putc(101); _ke_putc(100); _ke_putc(105); _ke_putc(116);
     _ke_putc(13); _ke_putc(10);
+    // Line 8: "      parse files browse container"
+    _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32);
+    // "parse "
+    _ke_putc(112); _ke_putc(97); _ke_putc(114); _ke_putc(115); _ke_putc(101); _ke_putc(32);
+    // "files "
+    _ke_putc(102); _ke_putc(105); _ke_putc(108); _ke_putc(101); _ke_putc(115); _ke_putc(32);
+    // "browse "
+    _ke_putc(98); _ke_putc(114); _ke_putc(111); _ke_putc(119); _ke_putc(115); _ke_putc(101); _ke_putc(32);
+    // "container"
+    _ke_putc(99); _ke_putc(111); _ke_putc(110); _ke_putc(116); _ke_putc(97);
+    _ke_putc(105); _ke_putc(110); _ke_putc(101); _ke_putc(114);
+    _ke_putc(13); _ke_putc(10);
     return 0;
 }
 
@@ -6947,6 +7652,15 @@ fn _ke_dispatch(buf_addr, buf_len) {
         } } } } } }
     }
 
+    // "browse " prefix (7+): 98 114 111 119 115 101 32
+    if buf_len >= 8 {
+        if c0 == 98 { if c1 == 114 { if c2 == 111 { if c3 == 119 { if c4 == 115 { if c5 == 101 {
+            if c6 == 32 {
+                _ke_cmd_browse(buf_addr, buf_len); return 0;
+            }
+        } } } } } }
+    }
+
     // "sha256 " prefix (7+): 115 104 97 50 53 54 32
     if buf_len >= 7 {
         if c0 == 115 { if c1 == 104 { if c2 == 97 { if c3 == 50 { if c4 == 53 { if c5 == 54 {
@@ -6967,6 +7681,13 @@ fn _ke_dispatch(buf_addr, buf_len) {
     if buf_len >= 7 {
         if c0 == 104 { if c1 == 108 { if c2 == 112 { if c3 == 107 { if c4 == 103 { if c5 == 32 {
             _ke_cmd_hlpkg(buf_addr, buf_len); return 0;
+        } } } } } }
+    }
+
+    // "parse " prefix (6+): 112 97 114 115 101 32
+    if buf_len >= 7 {
+        if c0 == 112 { if c1 == 97 { if c2 == 114 { if c3 == 115 { if c4 == 101 { if c5 == 32 {
+            _ke_cmd_parse(buf_addr, buf_len); return 0;
         } } } } } }
     }
 
@@ -7011,6 +7732,24 @@ fn _ke_dispatch(buf_addr, buf_len) {
         if c0 == 112 { if c1 == 111 { if c2 == 115 { if c3 == 105 { if c4 == 120 {
             _ke_cmd_posix(); return 0;
         } } } } }
+        // "files" (5): 102 105 108 101 115
+        if c0 == 102 { if c1 == 105 { if c2 == 108 { if c3 == 101 { if c4 == 115 {
+            _ke_cmd_files(); return 0;
+        } } } } }
+    }
+
+    // "container" (9): 99 111 110 116 97 105 110 101 114
+    if buf_len == 9 {
+        if c0 == 99 { if c1 == 111 { if c2 == 110 { if c3 == 116 {
+            if c4 == 97 { if c5 == 105 {
+                let c6 = mem_read_u8(buf_addr + 6);
+                let c7 = mem_read_u8(buf_addr + 7);
+                let c8 = mem_read_u8(buf_addr + 8);
+                if c6 == 110 { if c7 == 101 { if c8 == 114 {
+                    _ke_cmd_container(); return 0;
+                } } }
+            } }
+        } } } }
     }
 
     // "help" = 104 101 108 112

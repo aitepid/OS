@@ -8,9 +8,58 @@
 
 ## v6.0 (Current)
 
-176 active .hl files, 114 kernel modules, 74 shell commands (Layer C), 44 kernel.bin commands, 0 external deps.
-Dual-boot: BIOS 107/107 PASS + UEFI 3/3 PASS. Full gate 10/10 PASS.
-Image: 152,064 bytes (297 sectors). Code: ~49,200 lines (41,200 H-L + 8,000 PS1).
+176 active .hl files, 114 kernel modules, 78 shell commands (Layer C), 48 kernel.bin commands, 0 external deps.
+Dual-boot: BIOS 117/117 PASS + UEFI 3/3 PASS. Full gate 10/10 PASS.
+Image: 152,064 bytes (297 sectors). Code: ~50,000 lines (42,000 H-L + 8,000 PS1).
+
+### Iteration 64: Container Isolation (cgroup-like) in kernel.bin
+- **Container table**: 8 containers × 32 bytes at 0x9F0400
+  - `_ke_cg_create(name, mem_limit, cpu_quota)`: Allocate container slot, set resource limits
+  - `_ke_cg_attach(cg_id, pid)`: Attach process to container group
+  - `_ke_cg_stat(cg_id)`: Print container stats (pids, mem used/limit, cpu used/quota)
+- **`container` shell command**: Create 3 demo groups → attach 6 PIDs → display stats
+- **Memory layout**: 0x9F0400-0x9F05FF (8-entry container table)
+- 4 new functions, `container` 9-char exact dispatch
+- 🏆 **v8.0 发布里程碑**: 自举编译器 + 桌面三件套 + 容器隔离
+
+### Iteration 63: Text-Mode Browser (HicOS Browse) in kernel.bin
+- **HTML tag stripper**: `_ke_html_strip(src, len, dst)` — remove `<tag>` keep text
+- **HTTP status parser**: `_ke_http_parse_status(buf, len)` — extract 3-digit status code
+- **`browse <url>` shell command**: HTTP GET → HTML strip → display plain text
+  - Simulated response: `<html><body><h1>Example</h1><p>Hello World</p></body></html>`
+  - Output: "HTTP 200 OK" + "ExampleHello World"
+- **Memory layout**: 0x9F0100-0x9F03FF (HTML buffer + strip buffer)
+- 3 new functions, `browse` 7-char prefix dispatch
+
+### Iteration 62: File Manager (HicOS Files) in kernel.bin
+- **FAT16 directory browser**: `_ke_cmd_files()` — read root directory, display indexed file list
+  - Numbered entries: `[0] HELLO.HL  42B`
+  - Skip deleted (0xE5), LFN (0x0F), volume labels
+  - File count summary: "N files on FAT16"
+- **`files` shell command**: 5-char exact dispatch
+- **Memory layout**: 0x9F0000-0x9F00FF (file manager state)
+- 1 new function
+
+### Iteration 61: In-Kernel AST Parser in kernel.bin
+- **Parser core**:
+  - `_ke_parse_init()`: Initialize parser state at 0x9E0000
+  - `_ke_parse_cur_type()`: Get current token type
+  - `_ke_parse_advance()`: Advance to next token
+  - `_ke_ast_alloc(type, left, right, value)`: Allocate AST node (256 max)
+- **Expression parsing**: `_ke_parse_expr()` — recursive descent
+  - Primary: NUM, IDENT, STR, parenthesized, true/false
+  - Binary: +, -, *, /, ==, !=, <, >
+  - Function calls: IDENT(args)
+- **Statement parsing**: `_ke_parse_stmt()`
+  - let [mut] x = expr; | if (cond) { body } [else { body }]
+  - while (cond) { body } | return expr; | fn name(params) { body }
+  - Expression statements
+- **AST printer**: `_ke_ast_print(idx, depth)` — indented tree display
+  - 17 node type names: NUM, ID, STR, ADD, SUB, MUL, DIV, EQ, NE, LT, GT, LET, IF, WHL, RET, FN, CALL
+- **`parse <code>` shell command**: Tokenize → parse → print "PARSE: N nodes M tokens" + AST tree
+- **Memory layout**: 0x9E0000-0x9E1FFF (parser state + 4096B AST array)
+- 10 new functions, `parse` 6-char prefix dispatch
+- 🏆 **编译器自举第二步**: Lexer + Parser 在 kernel.bin 中运行
 
 ### Iteration 60: Text Editor (HicOS Editor) in kernel.bin
 - **Editor state**: cursor position, scroll offset, dirty flag, line buffer (80 lines × 80 cols)

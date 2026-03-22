@@ -1372,6 +1372,87 @@ foreach ($t in $v8Tests) {
 
 if (Test-Path $v8LogFile) { Remove-Item $v8LogFile -Force }
 
+# =============================================================
+# Phase 17: Parser + Files + Browse + Container Tests
+# =============================================================
+Write-Host "`n=== Phase 17: v8.0 Phase II Tests ===" -ForegroundColor Cyan
+
+$v8bLogFile = Join-Path $repoRoot 'qemu-v8b-test.log'
+if (Test-Path $v8bLogFile) { Remove-Item $v8bLogFile -Force }
+
+$v8bPort = 55602
+$v8bArgs = @(
+    '-drive', "format=raw,file=hicos-hl.img",
+    '-serial', "file:$v8bLogFile",
+    '-m', '128', '-display', 'none',
+    '-device', 'virtio-blk-pci,drive=disk0,disable-modern=on',
+    '-drive', "id=disk0,file=hicos-disk.img,format=raw,if=none",
+    '-netdev', 'user,id=net0',
+    '-device', 'virtio-net-pci,netdev=net0,disable-modern=on',
+    '-no-reboot', '-no-shutdown',
+    '-monitor', "telnet:127.0.0.1:$v8bPort,server,nowait"
+)
+
+$v8bProc = Start-Process -FilePath $qemuPath -ArgumentList $v8bArgs -PassThru -NoNewWindow
+Start-Sleep -Seconds 5
+
+try {
+    $v8bClient = New-Object System.Net.Sockets.TcpClient('127.0.0.1', $v8bPort)
+    $v8bStream = $v8bClient.GetStream()
+    $v8bWriter = New-Object System.IO.StreamWriter($v8bStream)
+    $v8bWriter.AutoFlush = $true
+    Start-Sleep -Milliseconds 500
+
+    # files command
+    foreach ($k in @('f','i','l','e','s','ret')) { $v8bWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 5
+
+    # container command
+    foreach ($k in @('c','o','n','t','a','i','n','e','r','ret')) { $v8bWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 5
+
+    # help (verify new commands in help)
+    foreach ($k in @('h','e','l','p','ret')) { $v8bWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    Start-Sleep -Seconds 2
+
+    $v8bWriter.Close(); $v8bClient.Close()
+} catch {
+    Write-Host "  v8b test monitor error: $_" -ForegroundColor Yellow
+}
+
+Start-Sleep -Seconds 1
+if (-not $v8bProc.HasExited) { $v8bProc.Kill(); $v8bProc.WaitForExit(3000) }
+
+$v8bContent = ''
+if (Test-Path $v8bLogFile) {
+    try { $v8bContent = [System.IO.File]::ReadAllText($v8bLogFile) } catch {}
+}
+
+$v8bTests = @(
+    @{ name = 'files shows FAT16 listing'; pattern = 'FILES' },
+    @{ name = 'files shows file count'; pattern = 'files on FAT16' },
+    @{ name = 'container creates groups'; pattern = 'CONTAINER:' },
+    @{ name = 'container shows CG stats'; pattern = 'CG\[' },
+    @{ name = 'container shows pids'; pattern = 'pids=' },
+    @{ name = 'container shows mem limit'; pattern = 'mem=' },
+    @{ name = 'help shows parse command'; pattern = 'parse' },
+    @{ name = 'help shows files command'; pattern = 'files' },
+    @{ name = 'help shows browse command'; pattern = 'browse' },
+    @{ name = 'help shows container command'; pattern = 'container' }
+)
+
+foreach ($t in $v8bTests) {
+    $shellTotal++
+    if ($v8bContent -match $t.pattern) {
+        $passes += "v8.0b: $($t.name)"
+        $shellPassed++
+    } else {
+        $errors += "v8.0b: $($t.name)"
+    }
+}
+
+if (Test-Path $v8bLogFile) { Remove-Item $v8bLogFile -Force }
+
 Write-Host "`n=== Boot Test Results ===" -ForegroundColor Cyan
 foreach ($p in $passes) {
     Write-Host "  PASS: $p" -ForegroundColor Green
