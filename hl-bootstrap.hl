@@ -395,6 +395,10 @@ quadrant parser {
     // Parser state: tokens array and current position
     // Returns AST as nested arrays: [node_type, ...children]
 
+    fn parse(tokens) {
+        return parse_program(tokens);
+    }
+
     fn parse_program(tokens) {
         let mut pos = 0;
         let mut stmts = [];
@@ -2858,6 +2862,7 @@ quadrant x86enc {
     fn emit_mov_ah_imm8(buf, v) { buf_emit(buf, 180); buf_emit(buf, v); }
     fn emit_mov_al_imm8(buf, v) { buf_emit(buf, 176); buf_emit(buf, v); }
     fn emit_mov_bx_imm16(buf, v) { buf_emit(buf, 187); buf_emit16(buf, v); }
+    fn emit_mov_di_imm16(buf, v) { buf_emit(buf, 191); buf_emit16(buf, v); }
     fn emit_mov_ch_imm8(buf, v) { buf_emit(buf, 181); buf_emit(buf, v); }
     fn emit_mov_cl_imm8(buf, v) { buf_emit(buf, 177); buf_emit(buf, v); }
     fn emit_mov_dh_imm8(buf, v) { buf_emit(buf, 182); buf_emit(buf, v); }
@@ -3299,56 +3304,17 @@ quadrant image_builder {
         x86enc.emit_mov_ss_ax(buf);
         x86enc.emit_mov_sp_imm16(buf, 31744);
         x86enc.emit_sti(buf);
-        // INT 13h: read stage2
-        x86enc.emit_mov_ah_imm8(buf, 2);
-        x86enc.emit_mov_al_imm8(buf, s2_sectors);
-        x86enc.emit_mov_ch_imm8(buf, 0);
-        x86enc.emit_mov_cl_imm8(buf, 2);
-        x86enc.emit_mov_dh_imm8(buf, 0);
+        // INT 13h extensions: AH=42h, DS:SI -> Disk Address Packet
+        let dap_ptr_patch = x86enc.buf_len(buf) + 1;
+        x86enc.buf_emit(buf, 190);  // mov si, imm16
+        x86enc.buf_emit16(buf, 0);
         x86enc.emit_mov_dl_imm8(buf, 128);
-        x86enc.emit_mov_bx_imm16(buf, 32768);
+        x86enc.emit_mov_ah_imm8(buf, 66);
         x86enc.emit_int(buf, 19);
         // Enable A20
         x86enc.emit_in_al_imm8(buf, 146);
         x86enc.emit_or_al_imm8(buf, 2);
         x86enc.emit_out_imm8_al(buf, 146);
-
-        // === E820 Memory Map Detection ===
-        // Store entry count at 0x500, entries starting at 0x504
-        // Each entry: base(8) + length(8) + type(4) = 20 bytes
-        // Use INT 15h, AX=E820h
-        x86enc.emit_mov_bx_imm16(buf, 0);     // ebx = continuation (0 = start)
-        x86enc.emit_mov_di_imm16(buf, 1284);   // di = 0x504 (first entry)
-        // xor bp, bp (counter)
-        x86enc.buf_emit(buf, 49); x86enc.buf_emit(buf, 237);
-
-        // E820 loop start
-        let e820_loop = x86enc.buf_len(buf);
-        x86enc.emit_mov_eax_imm32(buf, 57568);  // eax = 0xE820
-        x86enc.emit_mov_ecx_imm32(buf, 20);     // ecx = 20 (buffer size)
-        x86enc.emit_mov_edx_imm32(buf, 1397006915); // edx = 'SMAP' = 0x534D4150
-        x86enc.emit_int(buf, 21);                // INT 15h
-        // On carry flag set = end of list or error
-        x86enc.buf_emit(buf, 114);               // JC (done)
-        let e820_done_patch = x86enc.buf_len(buf);
-        x86enc.buf_emit(buf, 0);                 // patch target
-        // inc bp (count entries)
-        x86enc.buf_emit(buf, 102); x86enc.buf_emit(buf, 69);
-        // add di, 20 (next entry slot)
-        x86enc.buf_emit(buf, 131); x86enc.buf_emit(buf, 199); x86enc.buf_emit(buf, 20);
-        // test ebx, ebx (if ebx=0, list complete)
-        x86enc.buf_emit(buf, 102); x86enc.buf_emit(buf, 9); x86enc.buf_emit(buf, 219);
-        x86enc.buf_emit(buf, 117);               // JNZ loop
-        let e820_back = e820_loop - x86enc.buf_len(buf) - 1;
-        x86enc.buf_emit(buf, e820_back % 256);
-        // Done: store count at 0x500
-        let e820_done = x86enc.buf_len(buf);
-        set_at(buf[0], e820_done_patch, (e820_done - e820_done_patch - 1) % 256);
-        // mov [0x500], bp (store entry count)
-        x86enc.buf_emit(buf, 102); // operand size override
-        x86enc.buf_emit(buf, 137); x86enc.buf_emit(buf, 46);  // mov [imm16], bp
-        x86enc.buf_emit(buf, 0);   // lo
-        x86enc.buf_emit(buf, 5);   // hi (0x500)
         // Print "HL!" via BIOS
         let chars = [72, 76, 33, 13, 10];
         let mut ci = 0;
@@ -3360,8 +3326,30 @@ quadrant image_builder {
             x86enc.emit_int(buf, 16);
             ci = ci + 1;
         }
+        let dap_off = x86enc.buf_len(buf);
+        let dap_addr = 31744 + dap_off;
+        set_at(buf[0], dap_ptr_patch, dap_addr % 256);
+        set_at(buf[0], dap_ptr_patch + 1, (dap_addr / 256) % 256);
+        x86enc.buf_emit(buf, 16);                   // DAP size
+        x86enc.buf_emit(buf, 0);                    // reserved
+        x86enc.buf_emit16(buf, s2_sectors);         // sectors to read
+        x86enc.buf_emit16(buf, 32768);              // offset = 0x8000
+        x86enc.buf_emit16(buf, 0);                  // segment = 0x0000
+        x86enc.buf_emit32(buf, 1);                  // LBA low = 1
+        x86enc.buf_emit32(buf, 0);                  // LBA high = 0
         // Jump to stage2
         x86enc.emit_jmp_far16(buf, 0, 32768);
+        let dap_off = x86enc.buf_len(buf);
+        let dap_addr = 31744 + dap_off;
+        set_at(buf[0], dap_ptr_patch, dap_addr % 256);
+        set_at(buf[0], dap_ptr_patch + 1, (dap_addr / 256) % 256);
+        x86enc.buf_emit(buf, 16);                   // DAP size
+        x86enc.buf_emit(buf, 0);                    // reserved
+        x86enc.buf_emit16(buf, s2_sectors);         // sectors to read
+        x86enc.buf_emit16(buf, 32768);              // offset = 0x8000
+        x86enc.buf_emit16(buf, 0);                  // segment = 0x0000
+        x86enc.buf_emit32(buf, 1);                  // LBA low = 1
+        x86enc.buf_emit32(buf, 0);                  // LBA high = 0
         // Pad to 510 + boot signature
         x86enc.buf_pad_to(buf, 510);
         x86enc.buf_emit(buf, 85);
@@ -3370,7 +3358,7 @@ quadrant image_builder {
     }
 
     // Build Stage 2: real mode -> protected mode -> long mode
-    fn build_stage2(kernel_addr) {
+    fn build_stage2(kernel_addr, kern_src, kern_dwords) {
         let buf = x86enc.new_buf(32768);
         x86enc.emit_cli(buf);
         // LGDT (address patched later)
@@ -3396,6 +3384,18 @@ quadrant image_builder {
         x86enc.emit_mov_ds_ax(buf);
         x86enc.emit_mov_es_ax(buf);
         x86enc.emit_mov_ss_ax(buf);
+        // Copy kernel from BIOS load position to kernel_addr
+        // 32-bit flat mode: all 4GB accessible, no paging yet
+        // mov esi, kern_src (BE + imm32)
+        x86enc.buf_emit(buf, 190);
+        x86enc.buf_emit32(buf, kern_src);
+        // mov edi, kernel_addr
+        x86enc.emit_mov_edi_imm32(buf, kernel_addr);
+        // mov ecx, kern_dwords
+        x86enc.emit_mov_ecx_imm32(buf, kern_dwords);
+        // cld; rep movsd
+        x86enc.emit_cld(buf);
+        x86enc.buf_emit(buf, 243); x86enc.buf_emit(buf, 165);
         // Setup identity paging
         x86enc.emit_mov_edi_imm32(buf, 4096);
         x86enc.emit_mov_ecx_imm32(buf, 3072);
@@ -3409,14 +3409,16 @@ quadrant image_builder {
         x86enc.emit_mov_edi_imm32(buf, 8192);
         x86enc.emit_mov_eax_imm32(buf, 12291);
         x86enc.emit_mov_mem_edi_eax(buf);
-        // PD[0] -> 2MB page at 0
+        // PD[0..63] -> 64 x 2MB pages = 128MB identity mapping
         x86enc.emit_mov_edi_imm32(buf, 12288);
         x86enc.emit_mov_eax_imm32(buf, 131);
+        x86enc.emit_mov_ecx_imm32(buf, 64);
+        // loop: mov [edi], eax; add eax, 0x200000; add edi, 8; dec ecx; jnz loop
         x86enc.emit_mov_mem_edi_eax(buf);
-        // PD[1] -> 2MB page at 2MB
-        x86enc.emit_mov_edi_imm32(buf, 12296);
-        x86enc.emit_mov_eax_imm32(buf, 2097283);
-        x86enc.emit_mov_mem_edi_eax(buf);
+        x86enc.buf_emit(buf, 5); x86enc.buf_emit32(buf, 2097152);
+        x86enc.buf_emit(buf, 131); x86enc.buf_emit(buf, 199); x86enc.buf_emit(buf, 8);
+        x86enc.buf_emit(buf, 73);
+        x86enc.buf_emit(buf, 117); x86enc.buf_emit(buf, 243);
         // Load CR3
         x86enc.emit_mov_eax_imm32(buf, 4096);
         x86enc.emit_mov_cr3_eax(buf);
@@ -3469,72 +3471,7 @@ quadrant image_builder {
         set_at(buf[0], lgdt_patch + 1, (gdtr_addr / 256) % 256);
         set_at(buf[0], lgdt_patch + 2, (gdtr_addr / 65536) % 256);
         set_at(buf[0], lgdt_patch + 3, (gdtr_addr / 16777216) % 256);
-        // -----------------------------------------
-        // Kernel base: 2MB mark (identity mapped)
-        //   64K for boot stack (0x300000-0x301000)
-        //   128K for BSS (0x301000-0x303000)
-        //   128K for heap (0x303000-0x305000)
-        //   512K for kernel code/data (0x200000-0x300000)
-        //   text seg 0: 0x584000 .. 0x80000
-        //   data seg 0: 0x7C000 .. 0x200000
-        //   bss  seg 0: 0x200000 .. 0x300000
-        //   stack: 0x300000 .. 0x301000
-        //   (The other 1.5MB are reserved for user programs)
-        // -----------------------------------------
-
-        // Build complete image: stage1 + stage2 + kernel
-        // Truncate kern_buf to 512-byte boundary (MBR size)
-        while len(kern_buf) > 512 { pop(kern_buf); }
-        // Pad stage1 to 512 bytes (if needed)
-        let s1_size = len(kern_buf);
-        while len(kern_buf) < 512 { push(kern_buf, 0); }
-        // Calculate total image size
-        let total_size = 512 + s2_sectors * 512 + len(kern_buf);
-        // Round up to sector size
-        let img_sectors = (total_size + 511) / 512;
-        // Pad image to full size
-        let mut img = [];
-        let mut i = 0;
-        while i < img_sectors * 512 {
-            push(img, 0);
-            i = i + 1;
-        }
-        // Copy stages to image
-        // Stage 1: MBR (boot sector)
-        let mut sec = 0;
-        while sec < 1 {
-            let mut b = 0;
-            while b < 512 {
-                set_at(img, sec * 512 + b, get_at(kern_buf, b));
-                b = b + 1;
-            }
-            sec = sec + 1;
-        }
-        // Stage 2: sectors 2..(s2_sectors+1)
-        sec = 1;
-        let mut s2i = 0;
-        while sec < s2_sectors + 1 {
-            let mut b = 0;
-            while b < 512 {
-                set_at(img, sec * 512 + b, get_at(s2_bytes, s2i));
-                b = b + 1;
-                s2i = s2i + 1;
-            }
-            sec = sec + 1;
-        }
-        // Kernel: sectors (s2_sectors+1)..(img_sectors)
-        sec = s2_sectors + 1;
-        let mut ki = 0;
-        while sec < img_sectors {
-            let mut b = 0;
-            while b < 512 {
-                set_at(img, sec * 512 + b, get_at(kern_buf, ki));
-                b = b + 1;
-                ki = ki + 1;
-            }
-            sec = sec + 1;
-        }
-        return img;
+        return buf[0];
     }
 
     // ================================================================
@@ -3601,8 +3538,8 @@ quadrant image_builder {
             x86enc.emit_mov_edx_imm32(buf, COM1 + 5);
             x86enc.emit_in_al_dx(buf);
             x86enc.emit_test_al_imm8(buf, 32);
-            // jz -6 (retry loop)
-            x86enc.buf_emit(buf, 116); x86enc.buf_emit(buf, 250);
+            // jz back to wait loop start
+            x86enc.buf_emit(buf, 116); x86enc.buf_emit(buf, 246);
             // Send character
             x86enc.emit_mov_edx_imm32(buf, COM1);
             let ascii = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
@@ -3757,20 +3694,20 @@ quadrant image_builder {
         x86enc.buf_emit(isr_buf, 72); x86enc.buf_emit(isr_buf, 131);
         x86enc.buf_emit(isr_buf, 255); x86enc.buf_emit(isr_buf, 32);
         // jne skip_tick
-        x86enc.buf_emit(isr_buf, 117); x86enc.buf_emit(isr_buf, 14);
+        x86enc.buf_emit(isr_buf, 117); x86enc.buf_emit(isr_buf, 10);
         // inc qword [0x300000]
         x86enc.buf_emit(isr_buf, 72); x86enc.buf_emit(isr_buf, 255);
         x86enc.buf_emit(isr_buf, 4); x86enc.buf_emit(isr_buf, 37);
         x86enc.buf_emit32(isr_buf, 3145728);  // 0x300000
         // jmp send_eoi
-        x86enc.buf_emit(isr_buf, 235); x86enc.buf_emit(isr_buf, 26);
+        x86enc.buf_emit(isr_buf, 235); x86enc.buf_emit(isr_buf, 22);
 
         // skip_tick: Handle keyboard (vector 33)
         // cmp rdi, 33
         x86enc.buf_emit(isr_buf, 72); x86enc.buf_emit(isr_buf, 131);
         x86enc.buf_emit(isr_buf, 255); x86enc.buf_emit(isr_buf, 33);
         // jne send_eoi
-        x86enc.buf_emit(isr_buf, 117); x86enc.buf_emit(isr_buf, 18);
+        x86enc.buf_emit(isr_buf, 117); x86enc.buf_emit(isr_buf, 26);
         // in al, 0x60 (read PS/2 scancode)
         x86enc.buf_emit(isr_buf, 228); x86enc.buf_emit(isr_buf, 96);
         // movzx rax, al
@@ -3919,10 +3856,8 @@ quadrant image_builder {
             ib = ib + 1;
         }
         // LIDT [idtr_addr]
-        x86enc.buf_emit(buf, 15); x86enc.buf_emit(buf, 1);
-        x86enc.buf_emit(buf, 29);  // LIDT m16&64 with SIB
-        x86enc.buf_emit(buf, 37);
-        x86enc.buf_emit32(buf, idtr_addr);
+        x86enc.emit_mov_rax_imm64(buf, idtr_addr);
+        x86enc.emit_lidt_mem(buf, 0);
 
         // STI (enable interrupts)
         x86enc.emit_sti(buf);
@@ -3934,7 +3869,7 @@ quadrant image_builder {
             x86enc.emit_mov_edx_imm32(buf, COM1 + 5);
             x86enc.emit_in_al_dx(buf);
             x86enc.emit_test_al_imm8(buf, 32);
-            x86enc.buf_emit(buf, 116); x86enc.buf_emit(buf, 250);
+            x86enc.buf_emit(buf, 116); x86enc.buf_emit(buf, 246);
             x86enc.emit_mov_edx_imm32(buf, COM1);
             let ch2 = status[ci];
             let mut code2 = 32;
@@ -3981,7 +3916,7 @@ quadrant image_builder {
         x86enc.emit_mov_edx_imm32(buf, COM1 + 5);
         x86enc.emit_in_al_dx(buf);
         x86enc.emit_test_al_imm8(buf, 32);
-        x86enc.buf_emit(buf, 116); x86enc.buf_emit(buf, 250);
+        x86enc.buf_emit(buf, 116); x86enc.buf_emit(buf, 246);
         // Send scancode (simplified: just send raw byte for now)
         x86enc.emit_mov_edx_imm32(buf, COM1);
         // mov rax, [0x300008] again
@@ -4011,8 +3946,10 @@ quadrant image_builder {
         // Build stage 1 (MBR)
         let s1_bytes = build_stage1(s2_sectors + kern_sectors);
 
-        // Build stage 2
-        let s2_buf_data = build_stage2(kernel_addr);
+        // Build stage 2 (with kernel copy parameters)
+        let kern_src = 32768 + s2_sectors * 512;
+        let kern_dwords = (len(kern_bytes) + 3) / 4;
+        let s2_buf_data = build_stage2(kernel_addr, kern_src, kern_dwords);
 
         // Assemble image
         let img_size = total_sectors * 512;

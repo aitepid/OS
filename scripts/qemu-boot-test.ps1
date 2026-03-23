@@ -28,7 +28,10 @@ function Resolve-Qemu {
     if ($cmd) { return $cmd.Source }
     $candidates = @(
         'C:\Program Files\qemu\qemu-system-x86_64.exe',
-        'C:\Program Files (x86)\qemu\qemu-system-x86_64.exe'
+        'C:\Program Files (x86)\qemu\qemu-system-x86_64.exe',
+        "$env:USERPROFILE\scoop\apps\qemu\current\qemu-system-x86_64.exe",
+        'C:\ProgramData\chocolatey\bin\qemu-system-x86_64.exe',
+        'C:\msys64\usr\bin\qemu-system-x86_64.exe'
     )
     if ($env:QEMU_HOME) {
         $candidates = ,(Join-Path $env:QEMU_HOME 'qemu-system-x86_64.exe') + $candidates
@@ -37,6 +40,28 @@ function Resolve-Qemu {
         if (Test-Path $p) { return $p }
     }
     return $null
+}
+
+function Start-QemuLogged {
+    param(
+        [string]$QemuPath,
+        [object[]]$ArgumentList,
+        [string]$LogFile
+    )
+
+    $argsCopy = New-Object System.Collections.ArrayList
+    foreach ($a in $ArgumentList) { [void]$argsCopy.Add($a) }
+
+    $serialIdx = $argsCopy.IndexOf('-serial')
+    if ($serialIdx -ge 0 -and ($serialIdx + 1) -lt $argsCopy.Count) {
+        $argsCopy[$serialIdx + 1] = 'stdio'
+    }
+
+    $stderrFile = "$LogFile.stderr.txt"
+    if (Test-Path $LogFile) { Remove-Item $LogFile -Force }
+    if (Test-Path $stderrFile) { Remove-Item $stderrFile -Force }
+
+    return Start-Process -FilePath $QemuPath -ArgumentList $argsCopy.ToArray() -PassThru -NoNewWindow -RedirectStandardOutput $LogFile -RedirectStandardError $stderrFile
 }
 
 if (-not (Test-Path 'hicos-hl.img')) {
@@ -83,7 +108,7 @@ $qemuArgs = @(
 )
 
 # Start QEMU process
-$proc = Start-Process -FilePath $qemuPath -ArgumentList $qemuArgs -PassThru -NoNewWindow
+$proc = Start-QemuLogged -QemuPath $qemuPath -ArgumentList $qemuArgs -LogFile $logFile
 
 # --- Wait for serial output ---
 $deadline = (Get-Date).AddSeconds($TimeoutSec)
@@ -265,7 +290,7 @@ $cmdQemuArgs = @(
     '-monitor', "telnet:127.0.0.1:$monPort,server,nowait"
 )
 
-$cmdProc = Start-Process -FilePath $qemuPath -ArgumentList $cmdQemuArgs -PassThru -NoNewWindow
+$cmdProc = Start-QemuLogged -QemuPath $qemuPath -ArgumentList $cmdQemuArgs -LogFile $cmdLogFile
 $shellPassed = 0
 $shellTotal = 0
 
@@ -350,7 +375,7 @@ $fatQemuArgs = @(
     '-monitor', "telnet:127.0.0.1:$fatPort,server,nowait"
 )
 
-$fatProc = Start-Process -FilePath $qemuPath -ArgumentList $fatQemuArgs -PassThru -NoNewWindow
+$fatProc = Start-QemuLogged -QemuPath $qemuPath -ArgumentList $fatQemuArgs -LogFile $fatLogFile
 
 try {
     Start-Sleep -Seconds 5
@@ -429,7 +454,7 @@ $netArgs = @(
     '-monitor', 'telnet:127.0.0.1:55591,server,nowait'
 )
 
-$netProc = Start-Process -FilePath $qemuPath -ArgumentList $netArgs -PassThru -NoNewWindow
+$netProc = Start-QemuLogged -QemuPath $qemuPath -ArgumentList $netArgs -LogFile $netLogFile
 Start-Sleep -Seconds 5
 
 try {
@@ -518,7 +543,7 @@ $r3Args = @(
     '-monitor', 'telnet:127.0.0.1:55598,server,nowait'
 )
 
-$r3Proc = Start-Process -FilePath $qemuPath -ArgumentList $r3Args -PassThru -NoNewWindow
+$r3Proc = Start-QemuLogged -QemuPath $qemuPath -ArgumentList $r3Args -LogFile $r3LogFile
 Start-Sleep -Seconds 5
 
 try {
@@ -585,7 +610,7 @@ $hwArgs = @(
     '-monitor', "telnet:127.0.0.1:$hwPort,server,nowait"
 )
 
-$hwProc = Start-Process -FilePath $qemuPath -ArgumentList $hwArgs -PassThru -NoNewWindow
+$hwProc = Start-QemuLogged -QemuPath $qemuPath -ArgumentList $hwArgs -LogFile $hwLogFile
 Start-Sleep -Seconds 5
 
 try {
@@ -674,7 +699,7 @@ $diskArgs = @(
     '-monitor', "telnet:127.0.0.1:$diskPort,server,nowait"
 )
 
-$diskProc = Start-Process -FilePath $qemuPath -ArgumentList $diskArgs -PassThru -NoNewWindow
+$diskProc = Start-QemuLogged -QemuPath $qemuPath -ArgumentList $diskArgs -LogFile $diskLogFile
 Start-Sleep -Seconds 5
 
 try {
@@ -764,7 +789,7 @@ $instArgs = @(
     '-monitor', "telnet:127.0.0.1:$instPort,server,nowait"
 )
 
-$instProc = Start-Process -FilePath $qemuPath -ArgumentList $instArgs -PassThru -NoNewWindow
+$instProc = Start-QemuLogged -QemuPath $qemuPath -ArgumentList $instArgs -LogFile $instLogFile
 Start-Sleep -Seconds 5
 
 try {
@@ -835,7 +860,7 @@ $runArgs = @(
     '-monitor', "telnet:127.0.0.1:$runPort,server,nowait"
 )
 
-$runProc = Start-Process -FilePath $qemuPath -ArgumentList $runArgs -PassThru -NoNewWindow
+$runProc = Start-QemuLogged -QemuPath $qemuPath -ArgumentList $runArgs -LogFile $runLogFile
 Start-Sleep -Seconds 5
 
 try {
@@ -910,7 +935,7 @@ $memArgs = @(
     '-monitor', "telnet:127.0.0.1:$memPort,server,nowait"
 )
 
-$memProc = Start-Process -FilePath $qemuPath -ArgumentList $memArgs -PassThru -NoNewWindow
+$memProc = Start-QemuLogged -QemuPath $qemuPath -ArgumentList $memArgs -LogFile $memLogFile
 Start-Sleep -Seconds 5
 
 try {
@@ -984,7 +1009,7 @@ $shaArgs = @(
     '-monitor', "telnet:127.0.0.1:$shaPort,server,nowait"
 )
 
-$shaProc = Start-Process -FilePath $qemuPath -ArgumentList $shaArgs -PassThru -NoNewWindow
+$shaProc = Start-QemuLogged -QemuPath $qemuPath -ArgumentList $shaArgs -LogFile $shaLogFile
 Start-Sleep -Seconds 5
 
 try {
@@ -1058,7 +1083,7 @@ $hmacArgs = @(
     '-monitor', "telnet:127.0.0.1:$hmacPort,server,nowait"
 )
 
-$hmacProc = Start-Process -FilePath $qemuPath -ArgumentList $hmacArgs -PassThru -NoNewWindow
+$hmacProc = Start-QemuLogged -QemuPath $qemuPath -ArgumentList $hmacArgs -LogFile $hmacLogFile
 Start-Sleep -Seconds 5
 
 try {
@@ -1135,7 +1160,7 @@ $aesArgs = @(
     '-monitor', "telnet:127.0.0.1:$aesPort,server,nowait"
 )
 
-$aesProc = Start-Process -FilePath $qemuPath -ArgumentList $aesArgs -PassThru -NoNewWindow
+$aesProc = Start-QemuLogged -QemuPath $qemuPath -ArgumentList $aesArgs -LogFile $aesLogFile
 Start-Sleep -Seconds 5
 
 try {
@@ -1221,7 +1246,7 @@ $iter53Args = @(
     '-monitor', "telnet:127.0.0.1:$iter53Port,server,nowait"
 )
 
-$iter53Proc = Start-Process -FilePath $qemuPath -ArgumentList $iter53Args -PassThru -NoNewWindow
+$iter53Proc = Start-QemuLogged -QemuPath $qemuPath -ArgumentList $iter53Args -LogFile $iter53LogFile
 Start-Sleep -Seconds 5
 
 try {
@@ -1307,7 +1332,7 @@ $v8Args = @(
     '-monitor', "telnet:127.0.0.1:$v8Port,server,nowait"
 )
 
-$v8Proc = Start-Process -FilePath $qemuPath -ArgumentList $v8Args -PassThru -NoNewWindow
+$v8Proc = Start-QemuLogged -QemuPath $qemuPath -ArgumentList $v8Args -LogFile $v8LogFile
 Start-Sleep -Seconds 5
 
 try {
@@ -1393,7 +1418,7 @@ $v8bArgs = @(
     '-monitor', "telnet:127.0.0.1:$v8bPort,server,nowait"
 )
 
-$v8bProc = Start-Process -FilePath $qemuPath -ArgumentList $v8bArgs -PassThru -NoNewWindow
+$v8bProc = Start-QemuLogged -QemuPath $qemuPath -ArgumentList $v8bArgs -LogFile $v8bLogFile
 Start-Sleep -Seconds 5
 
 try {
@@ -1474,7 +1499,7 @@ $v9Args = @(
     '-monitor', "telnet:127.0.0.1:$v9Port,server,nowait"
 )
 
-$v9Proc = Start-Process -FilePath $qemuPath -ArgumentList $v9Args -PassThru -NoNewWindow
+$v9Proc = Start-QemuLogged -QemuPath $qemuPath -ArgumentList $v9Args -LogFile $v9LogFile
 Start-Sleep -Seconds 5
 
 try {
@@ -1562,7 +1587,7 @@ $v9bArgs = @(
     '-monitor', "telnet:127.0.0.1:$v9bPort,server,nowait"
 )
 
-$v9bProc = Start-Process -FilePath $qemuPath -ArgumentList $v9bArgs -PassThru -NoNewWindow
+$v9bProc = Start-QemuLogged -QemuPath $qemuPath -ArgumentList $v9bArgs -LogFile $v9bLogFile
 Start-Sleep -Seconds 5
 
 try {

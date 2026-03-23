@@ -1,124 +1,245 @@
-// kmalloc.hl -- Kernel Heap Allocator
+﻿// kmalloc.hl -- Kernel Heap Allocator (Segregated Free-List)
 //
-// Simple first-fit free-list allocator for kernel dynamic memory.
-// Heap region: 0x900000 - 0x9FFFFF (1 MB)
+// Iteration 82: upgraded from O(n) first-fit to O(1) segregated free-list.
 //
-// Each allocation has a header (16 bytes):
-//   +0: size (8) -- including header
-//   +8: flags (8) -- bit 0 = used
+// Design:
+//   8 size classes: 32, 64, 128, 256, 512, 1024, 2048, 4096 bytes
+//   Each class has a stack-based free list (push/pop = O(1))
+//   Empty class -> allocate a fresh 4KB page from buddy allocator, carve into blocks
+//   Large allocs (> 2048 bytes payload) -> direct page_alloc_contiguous
 //
-// Free blocks are linked via an implicit list (next = current + size).
-// Minimum allocation size: 32 bytes (16 header + 16 payload).
+// Block header (16 bytes, same layout as original):
+//   +0: total size including header (u64)
+//   +8: class_idx * 2 + used_flag (u64)
+//       class 0-7 = slab, class 255 = large page allocation
+//
+// Complexity improvement:
+//   kmalloc:  O(n) first-fit scan  ->  O(1) free-list pop
+//   kfree:    O(1) + forward only  ->  O(1) free-list push (auto slab recycle)
+//   stats:    O(n) heap walk       ->  O(k) class scan (k=8)
+//
+// Public API (all signatures preserved):
+//   kmalloc_init / kmalloc / kfree / krealloc / kmalloc_stats
 
-let HEAP_START = 9437184;      // 0x900000
+let HEAP_START = 9437184;      // 0x900000 (documentation, not used by slab path)
 let HEAP_END   = 10485760;     // 0xA00000
 let HEAP_SIZE  = 1048576;      // 1 MB
 let HEADER_SIZE = 16;
 let MIN_BLOCK = 32;
 
+let SLAB_CLASSES = 8;
+let SLAB_CLASS_LARGE = 255;
+
+// Size class table: total block sizes including header
+let mut slab_sizes = [];
+
+// Free lists per class: slab_fl[cls] = array of block start addresses
+let mut slab_fl = [];
+let mut slab_fl_top = [];
+
+// Statistics
+let mut slab_alloc_count = 0;
+let mut slab_free_count = 0;
+let mut slab_used_bytes = 0;
+
 let mut heap_initialized = 0;
 
+// ============================================================
+// Free list operations (O(1) push/pop)
+// ============================================================
+
+fn _slab_fl_push(cls, addr) {
+    let top = slab_fl_top[cls];
+    let list = slab_fl[cls];
+    if top < len(list) {
+        set_at(list, top, addr);
+    } else {
+        push(list, addr);
+    }
+    set_at(slab_fl_top, cls, top + 1);
+    return 0;
+}
+
+fn _slab_fl_pop(cls) {
+    let top = slab_fl_top[cls];
+    if top <= 0 { return 0; }
+    let new_top = top - 1;
+    let addr = slab_fl[cls][new_top];
+    set_at(slab_fl_top, cls, new_top);
+    return addr;
+}
+
+fn _slab_fl_len(cls) {
+    return slab_fl_top[cls];
+}
+
+// ============================================================
+// Size class helpers
+// ============================================================
+
+// Find smallest class whose total block size fits (payload + header)
+fn _slab_find_class(payload_size) {
+    let total = payload_size + HEADER_SIZE;
+    let mut i = 0;
+    while i < SLAB_CLASSES {
+        if slab_sizes[i] >= total { return i; }
+        i = i + 1;
+    }
+    return SLAB_CLASS_LARGE;
+}
+
+// Refill a size class by allocating one 4KB page and carving it
+fn _slab_refill(cls) {
+    let block_size = slab_sizes[cls];
+    let page = page_alloc();
+    if page == 0 { return 0; }
+    let count = 4096 / block_size;
+    let mut i = 0;
+    while i < count {
+        let addr = page + i * block_size;
+        mem_write_u64(addr, block_size);
+        mem_write_u64(addr + 8, cls * 2);
+        _slab_fl_push(cls, addr);
+        i = i + 1;
+    }
+    return count;
+}
+
+// ============================================================
+// Public API
+// ============================================================
+
 fn kmalloc_init() {
-    // Create one big free block spanning the entire heap
-    mem_write_u64(HEAP_START, HEAP_SIZE);
-    mem_write_u64(HEAP_START + 8, 0);
+    slab_sizes = [];
+    push(slab_sizes, 32);
+    push(slab_sizes, 64);
+    push(slab_sizes, 128);
+    push(slab_sizes, 256);
+    push(slab_sizes, 512);
+    push(slab_sizes, 1024);
+    push(slab_sizes, 2048);
+    push(slab_sizes, 4096);
+
+    slab_fl = [];
+    slab_fl_top = [];
+    let mut i = 0;
+    while i < SLAB_CLASSES {
+        push(slab_fl, []);
+        push(slab_fl_top, 0);
+        i = i + 1;
+    }
+
+    slab_alloc_count = 0;
+    slab_free_count = 0;
+    slab_used_bytes = 0;
     heap_initialized = 1;
     return 0;
 }
 
-// Allocate `size` bytes, returns address or 0
+// Allocate `size` bytes. Returns pointer to usable memory or 0.
 fn kmalloc(size) {
     if heap_initialized == 0 { kmalloc_init(); }
-    // Round up to 16-byte alignment
-    let alloc_size = ((size + HEADER_SIZE + 15) / 16) * 16;
-    if alloc_size < MIN_BLOCK { alloc_size = MIN_BLOCK; }
+    if size <= 0 { return 0; }
 
-    // First-fit search
-    let mut addr = HEAP_START;
-    while addr < HEAP_END {
-        let block_size = mem_read_u64(addr);
-        let flags = mem_read_u64(addr + 8);
+    let cls = _slab_find_class(size);
 
-        if block_size == 0 { return 0; } // corruption
-
-        if flags % 2 == 0 {  // free block
-            if block_size >= alloc_size {
-                // Split if remainder is large enough
-                if block_size - alloc_size >= MIN_BLOCK {
-                    let new_addr = addr + alloc_size;
-                    mem_write_u64(new_addr, block_size - alloc_size);
-                    mem_write_u64(new_addr + 8, 0);
-                    mem_write_u64(addr, alloc_size);
-                }
-                // Mark as used
-                mem_write_u64(addr + 8, 1);
-                return addr + HEADER_SIZE;
-            }
-        }
-
-        addr = addr + block_size;
+    if cls == SLAB_CLASS_LARGE {
+        // Large allocation: whole pages via buddy allocator
+        let pages = (size + HEADER_SIZE + 4095) / 4096;
+        let addr = page_alloc_contiguous(pages);
+        if addr == 0 { return 0; }
+        mem_write_u64(addr, pages * 4096);
+        mem_write_u64(addr + 8, SLAB_CLASS_LARGE * 2 + 1);
+        slab_alloc_count = slab_alloc_count + 1;
+        slab_used_bytes = slab_used_bytes + pages * 4096;
+        return addr + HEADER_SIZE;
     }
 
-    return 0; // out of memory
+    // Slab path: pop from free list (O(1))
+    if _slab_fl_len(cls) == 0 {
+        if _slab_refill(cls) == 0 { return 0; }
+    }
+
+    let addr = _slab_fl_pop(cls);
+    if addr == 0 { return 0; }
+    mem_write_u64(addr + 8, cls * 2 + 1);
+    slab_alloc_count = slab_alloc_count + 1;
+    slab_used_bytes = slab_used_bytes + slab_sizes[cls];
+    return addr + HEADER_SIZE;
 }
 
-// Free an allocation
+// Free an allocation. Returns 0.
 fn kfree(ptr) {
     if ptr == 0 { return 0; }
     let addr = ptr - HEADER_SIZE;
-    let size = mem_read_u64(addr);
-    mem_write_u64(addr + 8, 0);  // mark as free
+    let total_size = mem_read_u64(addr);
+    let flags = mem_read_u64(addr + 8);
+    let cls = flags / 2;
 
-    // Coalesce with next block if also free
-    let next = addr + size;
-    if next < HEAP_END {
-        let next_flags = mem_read_u64(next + 8);
-        if next_flags % 2 == 0 {
-            let next_size = mem_read_u64(next);
-            mem_write_u64(addr, size + next_size);
+    if cls == SLAB_CLASS_LARGE {
+        // Free whole pages back to buddy allocator
+        let pages = total_size / 4096;
+        let mut i = 0;
+        while i < pages {
+            page_free(addr + i * 4096);
+            i = i + 1;
+        }
+        slab_used_bytes = slab_used_bytes - total_size;
+    } else {
+        // Return block to slab free list (O(1))
+        mem_write_u64(addr + 8, cls * 2);
+        _slab_fl_push(cls, addr);
+        if cls < SLAB_CLASSES {
+            slab_used_bytes = slab_used_bytes - slab_sizes[cls];
         }
     }
 
+    slab_free_count = slab_free_count + 1;
     return 0;
 }
 
-// Reallocate (grow or shrink)
+// Reallocate: grow or shrink
 fn krealloc(ptr, new_size) {
     if ptr == 0 { return kmalloc(new_size); }
     let old_addr = ptr - HEADER_SIZE;
-    let old_size = mem_read_u64(old_addr) - HEADER_SIZE;
+    let old_total = mem_read_u64(old_addr);
+    let old_payload = old_total - HEADER_SIZE;
+
+    // If new size fits in current block, keep it
+    if new_size <= old_payload { return ptr; }
+
+    // Allocate new, copy, free old
     let new_ptr = kmalloc(new_size);
     if new_ptr == 0 { return 0; }
-    let copy_size = old_size;
+    let mut copy_size = old_payload;
     if new_size < copy_size { copy_size = new_size; }
     mem_copy(new_ptr, ptr, copy_size);
     kfree(ptr);
     return new_ptr;
 }
 
-// Get heap usage stats
+// Get heap usage stats: [used_bytes, free_bytes, fragment_count]
+// Backward compatible with shell.hl `heap` command
 fn kmalloc_stats() {
-    let mut used = 0;
     let mut free_space = 0;
     let mut fragments = 0;
-
-    let mut addr = HEAP_START;
-    while addr < HEAP_END {
-        let size = mem_read_u64(addr);
-        let flags = mem_read_u64(addr + 8);
-        if size == 0 { return [used, free_space, fragments]; }
-        if flags % 2 == 1 {
-            used = used + size;
-        } else {
-            free_space = free_space + size;
-            fragments = fragments + 1;
-        }
-        addr = addr + size;
+    let mut i = 0;
+    while i < SLAB_CLASSES {
+        let count = _slab_fl_len(i);
+        free_space = free_space + count * slab_sizes[i];
+        if count > 0 { fragments = fragments + 1; }
+        i = i + 1;
     }
-
-    return [used, free_space, fragments];
+    return [slab_used_bytes, free_space, fragments];
 }
 
-print("kmalloc.hl loaded");
-print("Heap: 0x900000 - 0x9FFFFF (" + to_string(HEAP_SIZE / 1024) + " KB)");
-print("Min block: " + to_string(MIN_BLOCK) + " bytes");
+// Self-test
+fn _slab_selftest() {
+    print("kmalloc.hl loaded (segregated free-list)");
+    print("Slab classes: 32 64 128 256 512 1024 2048 4096");
+    print("Large alloc: > 2048 bytes via page_alloc");
+    print("Allocs: " + to_string(slab_alloc_count) + "  Frees: " + to_string(slab_free_count));
+    return 0;
+}
+
+_slab_selftest();

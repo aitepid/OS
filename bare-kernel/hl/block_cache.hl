@@ -1,24 +1,145 @@
-// block_cache.hl -- Block Device Cache (Buffer Cache)
+﻿// block_cache.hl -- Block Device Cache (Hash + LRU)
 //
-// Caches disk blocks in memory to reduce I/O.
-// Write-back policy: dirty blocks written on sync or eviction.
-// LRU replacement for cache misses.
+// Iteration 83: upgraded from O(n) linear scan to O(1) hash + LRU.
 //
+// Design:
+//   Hash table (separate chaining): 64 buckets
+//     bcache_lookup:  O(1) average (was O(n) linear scan)
+//   LRU doubly-linked list:
+//     bcache_evict_lru: O(1) remove tail (was O(n) min-age scan)
+//     Access promotion: O(1) move-to-front
+//
+// Write-back policy unchanged: dirty blocks written on sync or eviction.
 // Critical for filesystem performance (ext2, ext4, FAT16, NTFS).
-// Linux equivalent: buffer_head / page cache.
+//
+// Public API (all signatures preserved):
+//   bcache_init / bcache_read / bcache_write / bcache_sync
+//   bcache_invalidate / bcache_status / bcache_lookup
 
-let BCACHE_SIZE = 64;          // 64 cached blocks
-let BCACHE_BLOCK_SIZE = 4096;  // match ext4 block size
+let BCACHE_SIZE = 64;
+let BCACHE_BLOCK_SIZE = 4096;
 let BCACHE_DATA_BASE = 11534336;  // 0xB00000
+let BCACHE_HASH_BUCKETS = 64;
 
 let mut bcache_count = 0;
 
-// Cache entry: [device_id, block_num, dirty, age, data_addr]
+// Per-slot parallel arrays
 let bcache_dev = [];
 let bcache_block = [];
 let bcache_dirty = [];
-let bcache_age = [];
 let bcache_valid = [];
+
+// Hash table: separate chaining
+let mut bcache_ht = [];          // bcache_ht[bucket] = first slot in chain (-1 if empty)
+let mut bcache_ht_next = [];     // bcache_ht_next[slot] = next slot in same bucket (-1 if end)
+
+// LRU doubly-linked list (array-based)
+let mut bcache_lru_prev = [];    // prev in LRU order (-1 = head boundary)
+let mut bcache_lru_next = [];    // next in LRU order (-1 = tail boundary)
+let mut bcache_lru_head = 0 - 1; // most recently used slot
+let mut bcache_lru_tail = 0 - 1; // least recently used slot (eviction candidate)
+
+// ============================================================
+// Hash table operations (O(1) average with separate chaining)
+// ============================================================
+
+fn _bcache_hash(dev, blk) {
+    let h = dev * 65537 + blk;
+    let r = h % BCACHE_HASH_BUCKETS;
+    if r < 0 { return r + BCACHE_HASH_BUCKETS; }
+    return r;
+}
+
+fn _ht_insert(dev, blk, slot) {
+    let bucket = _bcache_hash(dev, blk);
+    set_at(bcache_ht_next, slot, bcache_ht[bucket]);
+    set_at(bcache_ht, bucket, slot);
+    return 0;
+}
+
+fn _ht_remove(dev, blk) {
+    let bucket = _bcache_hash(dev, blk);
+    let mut prev = 0 - 1;
+    let mut cur = bcache_ht[bucket];
+    while cur >= 0 {
+        if bcache_dev[cur] == dev {
+            if bcache_block[cur] == blk {
+                if prev < 0 {
+                    set_at(bcache_ht, bucket, bcache_ht_next[cur]);
+                } else {
+                    set_at(bcache_ht_next, prev, bcache_ht_next[cur]);
+                }
+                set_at(bcache_ht_next, cur, 0 - 1);
+                return 1;
+            }
+        }
+        prev = cur;
+        cur = bcache_ht_next[cur];
+    }
+    return 0;
+}
+
+fn _ht_lookup(dev, blk) {
+    let bucket = _bcache_hash(dev, blk);
+    let mut cur = bcache_ht[bucket];
+    while cur >= 0 {
+        if bcache_valid[cur] == 1 {
+            if bcache_dev[cur] == dev {
+                if bcache_block[cur] == blk {
+                    return cur;
+                }
+            }
+        }
+        cur = bcache_ht_next[cur];
+    }
+    return 0 - 1;
+}
+
+// ============================================================
+// LRU doubly-linked list operations (all O(1))
+// ============================================================
+
+fn _lru_remove(slot) {
+    let p = bcache_lru_prev[slot];
+    let n = bcache_lru_next[slot];
+    if p >= 0 {
+        set_at(bcache_lru_next, p, n);
+    } else {
+        bcache_lru_head = n;
+    }
+    if n >= 0 {
+        set_at(bcache_lru_prev, n, p);
+    } else {
+        bcache_lru_tail = p;
+    }
+    set_at(bcache_lru_prev, slot, 0 - 1);
+    set_at(bcache_lru_next, slot, 0 - 1);
+    return 0;
+}
+
+fn _lru_push_front(slot) {
+    set_at(bcache_lru_prev, slot, 0 - 1);
+    set_at(bcache_lru_next, slot, bcache_lru_head);
+    if bcache_lru_head >= 0 {
+        set_at(bcache_lru_prev, bcache_lru_head, slot);
+    }
+    bcache_lru_head = slot;
+    if bcache_lru_tail < 0 {
+        bcache_lru_tail = slot;
+    }
+    return 0;
+}
+
+fn _lru_promote(slot) {
+    if slot == bcache_lru_head { return 0; }
+    _lru_remove(slot);
+    _lru_push_front(slot);
+    return 0;
+}
+
+// ============================================================
+// Public API
+// ============================================================
 
 fn bcache_init() {
     let mut i = 0;
@@ -26,10 +147,20 @@ fn bcache_init() {
         push(bcache_dev, 0);
         push(bcache_block, 0);
         push(bcache_dirty, 0);
-        push(bcache_age, 0);
         push(bcache_valid, 0);
+        push(bcache_ht_next, 0 - 1);
+        push(bcache_lru_prev, 0 - 1);
+        push(bcache_lru_next, 0 - 1);
         i = i + 1;
     }
+    bcache_ht = [];
+    i = 0;
+    while i < BCACHE_HASH_BUCKETS {
+        push(bcache_ht, 0 - 1);
+        i = i + 1;
+    }
+    bcache_lru_head = 0 - 1;
+    bcache_lru_tail = 0 - 1;
     bcache_count = 0;
     return 0;
 }
@@ -39,98 +170,79 @@ fn bcache_data_addr(slot) {
 }
 
 fn bcache_lookup(dev, block) {
-    let mut i = 0;
-    while i < BCACHE_SIZE {
-        if bcache_valid[i] == 1 {
-            if bcache_dev[i] == dev {
-                if bcache_block[i] == block {
-                    bcache_age[i] = bcache_age[i] + 1; // LRU bump
-                    return i;
-                }
-            }
-        }
-        i = i + 1;
+    let slot = _ht_lookup(dev, block);
+    if slot >= 0 {
+        _lru_promote(slot);
     }
-    return 0 - 1; // cache miss
+    return slot;
 }
 
 fn bcache_evict_lru() {
-    let mut min_age = 999999;
-    let mut victim = 0;
-    let mut i = 0;
-    while i < BCACHE_SIZE {
-        if bcache_valid[i] == 1 {
-            if bcache_age[i] < min_age {
-                min_age = bcache_age[i];
-                victim = i;
-            }
-        }
-        i = i + 1;
-    }
-    // Write back if dirty
+    let victim = bcache_lru_tail;
+    if victim < 0 { return 0; }
     if bcache_dirty[victim] == 1 {
         bcache_writeback(victim);
     }
-    bcache_valid[victim] = 0;
+    _ht_remove(bcache_dev[victim], bcache_block[victim]);
+    _lru_remove(victim);
+    set_at(bcache_valid, victim, 0);
     return victim;
 }
 
 fn bcache_writeback(slot) {
-    // Write block back to disk via VirtIO-blk
     let sector = bcache_block[slot] * (BCACHE_BLOCK_SIZE / 512);
     let sectors = BCACHE_BLOCK_SIZE / 512;
     virtio_blk_write(sector, sectors, bcache_data_addr(slot));
-    bcache_dirty[slot] = 0;
+    set_at(bcache_dirty, slot, 0);
     return 0;
 }
 
 fn bcache_read(dev, block) {
-    // Check cache first
     let slot = bcache_lookup(dev, block);
     if slot >= 0 {
-        return bcache_data_addr(slot); // cache hit
+        return bcache_data_addr(slot);
     }
     // Cache miss: find free slot or evict
     let mut free_slot = 0 - 1;
     let mut i = 0;
     while i < BCACHE_SIZE {
-        if bcache_valid[i] == 0 { free_slot = i; break; }
+        if bcache_valid[i] == 0 {
+            free_slot = i;
+            i = BCACHE_SIZE;
+        }
         i = i + 1;
     }
     if free_slot < 0 { free_slot = bcache_evict_lru(); }
 
-    // Read from disk into cache via VirtIO-blk
     let sector = block * (BCACHE_BLOCK_SIZE / 512);
     let sectors = BCACHE_BLOCK_SIZE / 512;
     virtio_blk_read(sector, sectors, bcache_data_addr(free_slot));
 
-    bcache_dev[free_slot] = dev;
-    bcache_block[free_slot] = block;
-    bcache_dirty[free_slot] = 0;
-    bcache_age[free_slot] = 1;
-    bcache_valid[free_slot] = 1;
+    set_at(bcache_dev, free_slot, dev);
+    set_at(bcache_block, free_slot, block);
+    set_at(bcache_dirty, free_slot, 0);
+    set_at(bcache_valid, free_slot, 1);
+    _ht_insert(dev, block, free_slot);
+    _lru_push_front(free_slot);
     bcache_count = bcache_count + 1;
 
     return bcache_data_addr(free_slot);
 }
 
 fn bcache_write(dev, block, data_addr) {
-    let slot = bcache_lookup(dev, block);
-    if slot < 0 {
-        // Not cached: bring into cache first
+    let mut target = bcache_lookup(dev, block);
+    if target < 0 {
         bcache_read(dev, block);
-        slot = bcache_lookup(dev, block);
+        target = bcache_lookup(dev, block);
     }
-    if slot >= 0 {
-        // Copy data and mark dirty
-        mem_copy(bcache_data_addr(slot), data_addr, BCACHE_BLOCK_SIZE);
-        bcache_dirty[slot] = 1;
+    if target >= 0 {
+        mem_copy(bcache_data_addr(target), data_addr, BCACHE_BLOCK_SIZE);
+        set_at(bcache_dirty, target, 1);
     }
     return 0;
 }
 
 fn bcache_sync() {
-    // Write all dirty blocks
     let mut i = 0;
     let mut written = 0;
     while i < BCACHE_SIZE {
@@ -146,13 +258,14 @@ fn bcache_sync() {
 }
 
 fn bcache_invalidate(dev) {
-    // Invalidate all blocks for a device (on unmount)
     let mut i = 0;
     while i < BCACHE_SIZE {
         if bcache_valid[i] == 1 {
             if bcache_dev[i] == dev {
                 if bcache_dirty[i] == 1 { bcache_writeback(i); }
-                bcache_valid[i] = 0;
+                _ht_remove(bcache_dev[i], bcache_block[i]);
+                _lru_remove(i);
+                set_at(bcache_valid, i, 0);
             }
         }
         i = i + 1;
@@ -172,5 +285,5 @@ fn bcache_status() {
     return to_string(valid) + "/" + to_string(BCACHE_SIZE) + " cached, " + to_string(dirty) + " dirty";
 }
 
-print("block_cache.hl loaded");
-print("Block cache: " + to_string(BCACHE_SIZE) + " blocks, LRU, write-back");
+print("block_cache.hl loaded (hash + LRU)");
+print("Block cache: " + to_string(BCACHE_SIZE) + " blocks, hash O(1) lookup, LRU O(1) evict");

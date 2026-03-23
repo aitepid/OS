@@ -1,10 +1,10 @@
-# rebuild-image.ps1 -- Regenerate hicos-hl.img with correct sector count
+# rebuild-image.ps1 -- Rebuild the BIOS boot image `hicos-hl.img`
 #
-# Faithfully implements the hl-bootstrap.hl build() pipeline:
-#   Stage1 (MBR) + Stage2 (real→long mode) + Kernel (serial+IDT+PIT+shell)
+# Host-side image layout:
+#   Stage1 (MBR) + Stage2 (real→long mode loader) + kernel payload
 #
-# This is a temporary host-side builder until the H-L interpreter
-# supports nested arrays and can run hl-bootstrap.hl natively.
+# This remains a temporary host-side builder until `hl-bootstrap.hl`
+# can own the full image build path again.
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
@@ -49,6 +49,7 @@ function emit_mov_ch_imm8([byte]$v) { buf_emit 0xB5; buf_emit $v }
 function emit_mov_cl_imm8([byte]$v) { buf_emit 0xB1; buf_emit $v }
 function emit_mov_dh_imm8([byte]$v) { buf_emit 0xB6; buf_emit $v }
 function emit_mov_dl_imm8([byte]$v) { buf_emit 0xB2; buf_emit $v }
+function emit_mov_dx_imm16([uint16]$v) { buf_emit 0xBA; buf_emit16 $v }
 function emit_mov_di_imm16([uint16]$v) { buf_emit 0xBF; buf_emit16 $v }
 function emit_int([byte]$n) { buf_emit 0xCD; buf_emit $n }
 function emit_jmp_far16([uint16]$seg, [uint16]$off) { buf_emit 0xEA; buf_emit16 $off; buf_emit16 $seg }
@@ -103,7 +104,7 @@ function emit_serial_string([string]$text, [uint32]$com1) {
         emit_mov_edx_imm32 ($com1 + 5)
         emit_in_al_dx
         emit_test_al_imm8 0x20
-        buf_emit 0x74; buf_emit 0xFA  # JZ -6
+        buf_emit 0x74; buf_emit 0xF6  # JZ -10
         # Send character
         emit_mov_edx_imm32 $com1
         emit_mov_al_imm8 ([byte]$code)
@@ -139,7 +140,7 @@ function emit_serial_hex_eax([uint32]$com1) {
     emit_mov_edx_imm32 ($com1 + 5)
     emit_in_al_dx
     emit_test_al_imm8 0x20
-    buf_emit 0x74; buf_emit 0xFA  # jz -6
+    buf_emit 0x74; buf_emit 0xF6  # jz -10
     # Send char
     emit_mov_edx_imm32 $com1
     buf_emit 0x44; buf_emit 0x88; buf_emit 0xC8  # mov al, r9b
@@ -174,6 +175,20 @@ function emit_cmd_check([string]$cmd) {
     buf_emit 0x0F; buf_emit 0x85; buf_emit32 0                  # jne skip (patched)
 }
 
+function emit_cmd_prefix_check([string]$prefix) {
+    $script:cmd_patches = @()
+    for ($i = 0; $i -lt $prefix.Length; $i++) {
+        $ch = [byte][char]$prefix[$i]
+        if ($i -eq 0) {
+            buf_emit 0x80; buf_emit 0x3E; buf_emit $ch
+        } else {
+            buf_emit 0x80; buf_emit 0x7E; buf_emit ([byte]$i); buf_emit $ch
+        }
+        $script:cmd_patches += (buf_len)
+        buf_emit 0x0F; buf_emit 0x85; buf_emit32 0
+    }
+}
+
 # Patch all jne's from last emit_cmd_check to jump to current position
 function patch_cmd_skip {
     $target = buf_len
@@ -198,7 +213,7 @@ function emit_serial_hex_byte([uint32]$com1) {
     buf_emit 0x04; buf_emit 0x30  # add al, '0'
     buf_emit 0x41; buf_emit 0x88; buf_emit 0xC2  # mov r10b, al (save char)
     emit_mov_edx_imm32 ($com1 + 5); emit_in_al_dx; emit_test_al_imm8 0x20
-    buf_emit 0x74; buf_emit 0xFA
+    buf_emit 0x74; buf_emit 0xF6
     emit_mov_edx_imm32 $com1
     buf_emit 0x44; buf_emit 0x88; buf_emit 0xD0  # mov al, r10b
     emit_out_dx_al
@@ -209,10 +224,137 @@ function emit_serial_hex_byte([uint32]$com1) {
     buf_emit 0x04; buf_emit 0x30
     buf_emit 0x41; buf_emit 0x88; buf_emit 0xC2  # mov r10b, al
     emit_mov_edx_imm32 ($com1 + 5); emit_in_al_dx; emit_test_al_imm8 0x20
-    buf_emit 0x74; buf_emit 0xFA
+    buf_emit 0x74; buf_emit 0xF6
     emit_mov_edx_imm32 $com1
     buf_emit 0x44; buf_emit 0x88; buf_emit 0xD0  # mov al, r10b
     emit_out_dx_al
+}
+
+function emit_serial_dec_byte_from_abs32([uint32]$addr, [uint32]$com1) {
+    buf_emit 0x0F; buf_emit 0xB6; buf_emit 0x04; buf_emit 0x25; buf_emit32 $addr
+    buf_emit 0x31; buf_emit 0xD2
+    buf_emit 0xB9; buf_emit32 100
+    buf_emit 0xF7; buf_emit 0xF1
+    buf_emit 0x04; buf_emit 0x30
+    buf_emit 0x50
+    emit_mov_edx_imm32 ($com1 + 5); emit_in_al_dx; emit_test_al_imm8 0x20
+    buf_emit 0x74; buf_emit 0xF6
+    buf_emit 0x58
+    emit_mov_edx_imm32 $com1; emit_out_dx_al
+
+    buf_emit 0x0F; buf_emit 0xB6; buf_emit 0x04; buf_emit 0x25; buf_emit32 $addr
+    buf_emit 0x31; buf_emit 0xD2; buf_emit 0xB9; buf_emit32 100; buf_emit 0xF7; buf_emit 0xF1
+    buf_emit 0x89; buf_emit 0xD0
+    buf_emit 0x31; buf_emit 0xD2; buf_emit 0xB9; buf_emit32 10; buf_emit 0xF7; buf_emit 0xF1
+    buf_emit 0x04; buf_emit 0x30
+    buf_emit 0x50
+    emit_mov_edx_imm32 ($com1 + 5); emit_in_al_dx; emit_test_al_imm8 0x20
+    buf_emit 0x74; buf_emit 0xF6
+    buf_emit 0x58
+    emit_mov_edx_imm32 $com1; emit_out_dx_al
+
+    buf_emit 0x0F; buf_emit 0xB6; buf_emit 0x04; buf_emit 0x25; buf_emit32 $addr
+    buf_emit 0x31; buf_emit 0xD2; buf_emit 0xB9; buf_emit32 10; buf_emit 0xF7; buf_emit 0xF1
+    buf_emit 0x89; buf_emit 0xD0; buf_emit 0x04; buf_emit 0x30
+    buf_emit 0x50
+    emit_mov_edx_imm32 ($com1 + 5); emit_in_al_dx; emit_test_al_imm8 0x20
+    buf_emit 0x74; buf_emit 0xF6
+    buf_emit 0x58
+    emit_mov_edx_imm32 $com1; emit_out_dx_al
+}
+
+function emit_stage2_kernel_read_chs_loop([uint16]$kernelSectors) {
+    buf_emit 0xB9; buf_emit16 $kernelSectors                 # mov cx, total kernel sectors
+    $kernelLbaPatch = (buf_len) + 1
+    buf_emit 0xBF; buf_emit16 0                              # mov di, first kernel LBA (patched)
+    $loadSegPatch = (buf_len) + 4
+    buf_emit 0xC7; buf_emit 0x06; buf_emit16 0x0590; buf_emit16 0  # mov word [0x590], load segment (patched)
+
+    $readLoopOff = buf_len
+    buf_emit 0x85; buf_emit 0xC9                             # test cx, cx
+    buf_emit 0x74; $jeDonePatch = buf_len; buf_emit 0        # je done
+    buf_emit 0x51                                            # push cx
+    buf_emit 0x57                                            # push di
+    buf_emit 0x89; buf_emit 0xF8                             # mov ax, di
+    buf_emit 0x31; buf_emit 0xD2                             # xor dx, dx
+    buf_emit 0xBB; buf_emit16 63                             # mov bx, 63
+    buf_emit 0xF7; buf_emit 0xF3                             # div bx
+    buf_emit 0x88; buf_emit 0xD1                             # mov cl, dl
+    buf_emit 0xFE; buf_emit 0xC1                             # inc cl (sector = rem + 1)
+    buf_emit 0x31; buf_emit 0xD2                             # xor dx, dx
+    buf_emit 0xBB; buf_emit16 16                             # mov bx, 16
+    buf_emit 0xF7; buf_emit 0xF3                             # div bx
+    buf_emit 0x88; buf_emit 0xD6                             # mov dh, dl (head)
+    buf_emit 0x88; buf_emit 0xC5                             # mov ch, al (cylinder)
+    buf_emit 0xA1; buf_emit16 0x0590                         # mov ax, [0x590]
+    buf_emit 0x8E; buf_emit 0xC0                             # mov es, ax
+    buf_emit 0xBB; buf_emit16 0                              # mov bx, 0
+    emit_mov_ah_imm8 0x02
+    emit_mov_al_imm8 1
+    emit_mov_dl_imm8 0x80
+    emit_int 0x13
+    buf_emit 0x5F                                            # pop di
+    buf_emit 0x59                                            # pop cx
+    buf_emit 0x47                                            # inc di
+    buf_emit 0x49                                            # dec cx
+    buf_emit 0x83; buf_emit 0x06; buf_emit16 0x0590; buf_emit 32  # add word [0x590], 32 paragraphs
+    $jmpBackRel = $readLoopOff - (buf_len + 2)
+    buf_emit 0xEB; buf_emit ([byte]($jmpBackRel -band 0xFF))
+
+    $readDoneOff = buf_len
+    buf_set $jeDonePatch ([byte]($readDoneOff - $jeDonePatch - 1))
+
+    return [PSCustomObject]@{
+        KernelLbaPatch = $kernelLbaPatch
+        LoadSegPatch = $loadSegPatch
+    }
+}
+
+function emit_stage1_load_stage2_chs([byte]$stage2Sectors, [uint16]$loadOffset) {
+    emit_mov_ah_imm8 0x02
+    emit_mov_al_imm8 $stage2Sectors
+    emit_mov_ch_imm8 0
+    emit_mov_cl_imm8 2
+    emit_mov_dh_imm8 0
+    emit_mov_dl_imm8 0x80
+    emit_mov_bx_imm16 $loadOffset
+    emit_int 0x13
+}
+
+function emit_virtq_push_desc0_from_abs([uint32]$availBaseAddr, [uint32]$availIdxAddr) {
+    buf_emit 0x8B; buf_emit 0x3C; buf_emit 0x25; buf_emit32 $availBaseAddr  # mov edi, [avail_base]
+    buf_emit 0x0F; buf_emit 0xB7; buf_emit 0x04; buf_emit 0x25; buf_emit32 $availIdxAddr  # movzx eax, word [avail_idx]
+    buf_emit 0x89; buf_emit 0xC1                    # mov ecx, eax
+    buf_emit 0xD1; buf_emit 0xE1                    # shl ecx, 1 (idx*2)
+    buf_emit 0x83; buf_emit 0xC1; buf_emit 4        # add ecx, 4
+    buf_emit 0x66; buf_emit 0xC7; buf_emit 0x04; buf_emit 0x0F; buf_emit16 0  # mov word [rdi+rcx], 0
+    buf_emit 0xFF; buf_emit 0xC0                    # inc eax
+    buf_emit 0x66; buf_emit 0x89; buf_emit 0x47; buf_emit 2  # mov word [rdi+2], ax
+    buf_emit 0x66; buf_emit 0x89; buf_emit 0x04; buf_emit 0x25; buf_emit32 $availIdxAddr
+}
+
+function emit_virtio_notify_queue_from_bar_abs([uint32]$barAddr, [byte]$queueIndex) {
+    buf_emit 0x0F; buf_emit 0xAE; buf_emit 0xF0    # mfence
+    buf_emit 0x8B; buf_emit 0x1C; buf_emit 0x25; buf_emit32 $barAddr  # mov ebx, [BAR]
+    buf_emit 0x8D; buf_emit 0x53; buf_emit 0x10    # lea edx, [rbx+16]
+    buf_emit 0xB0; buf_emit $queueIndex; buf_emit 0xEE  # mov al, queue; out dx, al
+}
+
+function emit_virtq_poll_used_loop {
+    buf_emit 0xBA; buf_emit32 0x200000              # mov edx, 2M (timeout)
+    $poll_top = buf_len
+    buf_emit 0x0F; buf_emit 0xB7; buf_emit 0x47; buf_emit 2  # movzx eax, word [rdi+2]
+    buf_emit 0x39; buf_emit 0xC8                    # cmp eax, ecx
+    buf_emit 0x7D; buf_emit 4                       # jge done
+    buf_emit 0xFF; buf_emit 0xCA                    # dec edx
+    buf_emit 0x75                                    # jnz poll
+    buf_emit ([byte](($poll_top - (buf_len) - 1) -band 0xFF))
+}
+
+function emit_virtq_poll_used_from_abs([uint32]$availIdxAddr, [uint32]$usedBaseAddr) {
+    buf_emit 0x0F; buf_emit 0xB7; buf_emit 0x0C; buf_emit 0x25; buf_emit32 $availIdxAddr  # movzx ecx, word [avail_idx]
+    buf_emit 0x8B; buf_emit 0x3C; buf_emit 0x25; buf_emit32 $usedBaseAddr                 # mov edi, [used_base]
+    emit_virtq_poll_used_loop
 }
 
 Write-Host '=== Rebuilding hicos-hl.img ===' -ForegroundColor Cyan
@@ -495,24 +637,6 @@ buf_emit 0x49; buf_emit 0xC7; buf_emit 0xC5; buf_emit32 0  # mov r13, 0 (dev)
 buf_emit 0x49; buf_emit 0xBF; buf_emit32 0x300208; buf_emit32 0  # mov r15, 0x300208
 
 $pci_loop_start = buf_len
-# Build PCI address: 0x80000000 | (r13 << 11)
-# mov eax, r13d
-buf_emit 0x44; buf_emit 0x89; buf_emit 0xE8  # mov eax, r13d
-# shl eax, 11
-buf_emit 0xC1; buf_emit 0xE0; buf_emit 11
-# or eax, 0x80000000
-buf_emit 0x0D; buf_emit32 0x80000000
-# out 0xCF8, eax
-emit_mov_edx_imm32 0xCF8
-emit_out_dx_al  # wrong - need outl (32-bit)
-# Actually need: mov dx, 0xCF8; out dx, eax (0xEF for out dx,eax)
-# Fix: use the right instruction
-
-# Redo PCI config read properly
-# We need outd (out dx, eax) which is opcode 0xEF
-$script:buf.RemoveRange($pci_loop_start, (buf_len) - $pci_loop_start)
-
-$pci_loop_start = buf_len
 # Build config address: eax = 0x80000000 | (dev << 11) | (reg=0)
 # mov eax, r13d
 buf_emit 0x44; buf_emit 0x89; buf_emit 0xE8  # mov eax, r13d
@@ -563,7 +687,7 @@ buf_emit 0x4C; buf_emit 0x89; buf_emit 0xE0  # mov rax, r12
 emit_serial_string "  [ok] PCI: " $COM1
 # Print count digit via serial
 emit_mov_edx_imm32 ($COM1 + 5); emit_in_al_dx; emit_test_al_imm8 0x20
-buf_emit 0x74; buf_emit 0xFA  # jz -6
+buf_emit 0x74; buf_emit 0xF6  # jz -10
 emit_mov_edx_imm32 $COM1
 buf_emit 0x4C; buf_emit 0x89; buf_emit 0xE0  # mov rax, r12
 buf_emit 0x04; buf_emit 0x30                  # add al, '0'
@@ -822,7 +946,7 @@ buf_emit 0xF7; buf_emit 0xF1  # div ecx (eax=quo, edx=rem)
 buf_emit 0x04; buf_emit 0x30  # add al, '0'
 buf_emit 0x50  # push rax (save)
 emit_mov_edx_imm32 ($COM1 + 5); emit_in_al_dx; emit_test_al_imm8 0x20
-buf_emit 0x74; buf_emit 0xFA
+buf_emit 0x74; buf_emit 0xF6
 buf_emit 0x58  # pop rax
 emit_mov_edx_imm32 $COM1; emit_out_dx_al
 # Print units digit (remainder was in edx, now need to reload)
@@ -833,7 +957,7 @@ buf_emit 0x89; buf_emit 0xD0  # mov eax, edx
 buf_emit 0x04; buf_emit 0x30
 buf_emit 0x50
 emit_mov_edx_imm32 ($COM1 + 5); emit_in_al_dx; emit_test_al_imm8 0x20
-buf_emit 0x74; buf_emit 0xFA
+buf_emit 0x74; buf_emit 0xF6
 buf_emit 0x58
 emit_mov_edx_imm32 $COM1; emit_out_dx_al
 emit_serial_string " MB)`r`n" $COM1
@@ -1223,7 +1347,7 @@ emit_mov_al_imm8 15; emit_out_dx_al
 
 # Read MAC address from device config (BAR+20..25)
 emit_serial_string "  [ok] VirtIO-net: MAC=" $COM1
-# Read 6 bytes unrolled (simpler than loop, avoids jump overflow)
+# Read 6 bytes unrolled to keep the emitter straightforward and local.
 for ($mi = 0; $mi -lt 6; $mi++) {
     if ($mi -gt 0) { emit_serial_string ":" $COM1 }
     # in al, (BAR + 20 + $mi)
@@ -1437,10 +1561,8 @@ buf_emit 0xE9; buf_emit32 0  # patched
 # Convention: RAX=syscall number (0=exit, 1=print_char with RDI=char)
 $syscall_entry_off = buf_len
 
-# Save caller state (minimal)
-buf_emit 0x48; buf_emit 0x87; buf_emit 0xE4  # xchg rsp, [kernel_rsp]... nah, just use TSS RSP0
-# Actually on SYSCALL, RSP is NOT changed! We must switch manually.
-# Save user RSP, load kernel RSP
+# Save user RSP, then switch to the kernel stack.
+buf_emit 0x48; buf_emit 0x87; buf_emit 0xE4  # xchg rsp, rsp (two-byte no-op)
 buf_emit 0x48; buf_emit 0x89; buf_emit 0x24; buf_emit 0x25; buf_emit32 0x6100  # mov [0x6100], rsp (save user RSP)
 buf_emit 0x48; buf_emit 0xBC  # mov rsp, imm64 (kernel stack)
 buf_emit32 0x70000; buf_emit32 0
@@ -1462,7 +1584,7 @@ buf_emit 0x0F; buf_emit 0x85; buf_emit32 0  # jne just_return (patched)
 buf_emit 0x89; buf_emit 0xF8  # mov eax, edi (char)
 buf_emit 0x50  # push rax
 emit_mov_edx_imm32 ($COM1 + 5); emit_in_al_dx; emit_test_al_imm8 0x20
-buf_emit 0x74; buf_emit 0xFA  # jz wait
+buf_emit 0x74; buf_emit 0xF6  # jz wait
 buf_emit 0x58  # pop rax
 emit_mov_edx_imm32 $COM1; emit_out_dx_al
 
@@ -1511,9 +1633,8 @@ buf_set ($jmp_past_syscall + 3) $b_ps[2]; buf_set ($jmp_past_syscall + 4) $b_ps[
 emit_serial_string "  [ok] Modules: 113 kernel, 27 userspace`r`n" $COM1
 emit_serial_string "=== Boot Complete (all subsystems nominal) ===`r`n" $COM1
 
-# === Iteration 22: CALL kernel.bin _start ===
-# Absolute address = 0x120000 + _start offset (read from kernel.entry)
-# Use: mov rax, addr; call rax
+# === Call appended `kernel.bin` entrypoint when present ===
+# Absolute address = 0x120000 + `_start` offset (read from `kernel.entry`)
 if ($kb_entry_offset -ge 0 -and (Test-Path (Join-Path $PSScriptRoot '..\bare-kernel\kernel.bin'))) {
     $start_addr = [int64]0x120000 + $kb_entry_offset
     Write-Host "  Emitting CALL _start at 0x$($start_addr.ToString('X'))" -ForegroundColor Cyan
@@ -1667,39 +1788,14 @@ buf_emit 0xC7; buf_emit 0x47; buf_emit 40; buf_emit32 1
 buf_emit 0x66; buf_emit 0xC7; buf_emit 0x47; buf_emit 44; buf_emit16 2
 buf_emit 0x66; buf_emit 0xC7; buf_emit 0x47; buf_emit 46; buf_emit16 0
 
-# Load avail_idx from [0x300270], add to avail ring
-buf_emit 0x8B; buf_emit 0x3C; buf_emit 0x25; buf_emit32 0x300260  # mov edi, [avail_base]
-buf_emit 0x0F; buf_emit 0xB7; buf_emit 0x04; buf_emit 0x25; buf_emit32 0x300270  # movzx eax, word [0x300270]
-# ring[idx % qsize] = 0 (desc chain starts at desc 0)
-# ring entry offset = 4 + (idx % qsize) * 2;  for simplicity assume idx < qsize
-buf_emit 0x89; buf_emit 0xC1                    # mov ecx, eax
-buf_emit 0xD1; buf_emit 0xE1                    # shl ecx, 1 (idx*2)
-buf_emit 0x83; buf_emit 0xC1; buf_emit 4        # add ecx, 4
-buf_emit 0x66; buf_emit 0xC7; buf_emit 0x04; buf_emit 0x0F; buf_emit16 0  # mov word [rdi+rcx], 0
-# avail->idx = current+1
-buf_emit 0xFF; buf_emit 0xC0                    # inc eax
-buf_emit 0x66; buf_emit 0x89; buf_emit 0x47; buf_emit 2  # mov word [rdi+2], ax
-# Store updated idx back
-buf_emit 0x66; buf_emit 0x89; buf_emit 0x04; buf_emit 0x25; buf_emit32 0x300270
+# Load avail_idx from [0x300270], add desc 0 to the avail ring, and bump idx.
+emit_virtq_push_desc0_from_abs 0x300260 0x300270
 
 # mfence + notify
-buf_emit 0x0F; buf_emit 0xAE; buf_emit 0xF0    # mfence
-buf_emit 0x8B; buf_emit 0x1C; buf_emit 0x25; buf_emit32 0x300238  # mov ebx, [BAR0]
-buf_emit 0x8D; buf_emit 0x53; buf_emit 0x10    # lea edx, [rbx+16]
-buf_emit 0xB0; buf_emit 0; buf_emit 0xEE       # mov al, 0; out dx, al
+emit_virtio_notify_queue_from_bar_abs 0x300238 0
 
-# Poll used ring: wait for used->idx >= our avail idx
-# eax still has our expected used_idx (from the inc above)
-buf_emit 0x0F; buf_emit 0xB7; buf_emit 0x0C; buf_emit 0x25; buf_emit32 0x300270  # movzx ecx, word [0x300270]
-buf_emit 0x8B; buf_emit 0x3C; buf_emit 0x25; buf_emit32 0x300268  # mov edi, [used_base]
-buf_emit 0xBA; buf_emit32 0x200000              # mov edx, 2M (timeout counter)
-$disk_poll = buf_len
-buf_emit 0x0F; buf_emit 0xB7; buf_emit 0x47; buf_emit 2  # movzx eax, word [rdi+2]
-buf_emit 0x39; buf_emit 0xC8                    # cmp eax, ecx
-buf_emit 0x7D; buf_emit 4                       # jge done
-buf_emit 0xFF; buf_emit 0xCA                    # dec edx
-buf_emit 0x75                                    # jnz poll
-buf_emit ([byte](($disk_poll - (buf_len) - 1) -band 0xFF))
+# Poll used ring: wait for used->idx >= our expected avail idx.
+emit_virtq_poll_used_from_abs 0x300270 0x300268
 
 # Read status
 buf_emit 0x0F; buf_emit 0xB6; buf_emit 0x04; buf_emit 0x25; buf_emit32 0x500210  # movzx eax, byte [status]
@@ -1740,31 +1836,20 @@ buf_emit 0x8B; buf_emit 0x04; buf_emit 0x25; buf_emit32 0x300290  # mov eax, [tx
 buf_emit 0xC1; buf_emit 0xE0; buf_emit 4  # shl eax, 4
 buf_emit 0x05; buf_emit32 0x610000  # add eax, 0x610000
 buf_emit 0x89; buf_emit 0xC7  # mov edi, eax (avail_base)
+buf_emit 0x89; buf_emit 0x3C; buf_emit 0x25; buf_emit32 0x300294  # mov [0x300294], edi
 
-# Load TX avail idx from [0x300298]
-buf_emit 0x0F; buf_emit 0xB7; buf_emit 0x04; buf_emit 0x25; buf_emit32 0x300298
-# ring[idx % qsize] = 0
-buf_emit 0x89; buf_emit 0xC1; buf_emit 0xD1; buf_emit 0xE1  # mov ecx, eax; shl ecx, 1
-buf_emit 0x83; buf_emit 0xC1; buf_emit 4                    # add ecx, 4
-buf_emit 0x66; buf_emit 0xC7; buf_emit 0x04; buf_emit 0x0F; buf_emit16 0  # ring[idx] = 0
-# avail->idx = idx+1
-buf_emit 0xFF; buf_emit 0xC0                                # inc eax
-buf_emit 0x66; buf_emit 0x89; buf_emit 0x47; buf_emit 2    # mov [edi+2], ax
-buf_emit 0x66; buf_emit 0x89; buf_emit 0x04; buf_emit 0x25; buf_emit32 0x300298  # save
+# Load TX avail idx from [0x300298], add desc 0 to the avail ring, and bump idx.
+emit_virtq_push_desc0_from_abs 0x300294 0x300298
 
 # mfence + notify TX queue 1
-buf_emit 0x0F; buf_emit 0xAE; buf_emit 0xF0
-buf_emit 0x8B; buf_emit 0x1C; buf_emit 0x25; buf_emit32 0x300280  # mov ebx, [net BAR]
-buf_emit 0x8D; buf_emit 0x53; buf_emit 0x10  # lea edx, [rbx+16]
-buf_emit 0xB0; buf_emit 1; buf_emit 0xEE     # mov al, 1; out dx, al (notify queue 1)
+emit_virtio_notify_queue_from_bar_abs 0x300280 1
 
-# Poll TX used ring
-buf_emit 0x0F; buf_emit 0xB7; buf_emit 0x0C; buf_emit 0x25; buf_emit32 0x300298
+# Poll TX used ring: load expected idx, compute TX used_base, then poll.
+buf_emit 0x0F; buf_emit 0xB7; buf_emit 0x0C; buf_emit 0x25; buf_emit32 0x300298  # movzx ecx, word [tx_avail_idx]
 # Compute used_base for TX: align4096(avail_base + 6 + qsize*2)
 buf_emit 0x8B; buf_emit 0x04; buf_emit 0x25; buf_emit32 0x300290  # tx_qsize
 buf_emit 0xD1; buf_emit 0xE0  # shl eax, 1 (qsize*2)
 buf_emit 0x83; buf_emit 0xC0; buf_emit 6  # add eax, 6
-# add avail_base: avail_base = 0x610000 + qsize*16
 buf_emit 0x8B; buf_emit 0x3C; buf_emit 0x25; buf_emit32 0x300290
 buf_emit 0xC1; buf_emit 0xE7; buf_emit 4  # shl edi, 4
 buf_emit 0x81; buf_emit 0xC7; buf_emit32 0x610000  # add edi, 0x610000
@@ -1772,14 +1857,7 @@ buf_emit 0x01; buf_emit 0xF8  # add eax, edi
 buf_emit 0x05; buf_emit32 0xFFF  # add eax, 0xFFF
 buf_emit 0x25; buf_emit32 0xFFFFF000  # align
 buf_emit 0x89; buf_emit 0xC7  # mov edi, eax (used_base)
-buf_emit 0xBA; buf_emit32 0x200000  # timeout
-$net_tx_poll = buf_len
-buf_emit 0x0F; buf_emit 0xB7; buf_emit 0x47; buf_emit 2  # movzx eax, word [rdi+2]
-buf_emit 0x39; buf_emit 0xC8  # cmp eax, ecx
-buf_emit 0x7D; buf_emit 4
-buf_emit 0xFF; buf_emit 0xCA
-buf_emit 0x75
-buf_emit ([byte](($net_tx_poll - (buf_len) - 1) -band 0xFF))
+emit_virtq_poll_used_loop
 emit_ret
 
 # === net_rx_poll subroutine ===
@@ -1840,10 +1918,7 @@ buf_emit 0xFF; buf_emit 0xC0
 buf_emit 0x66; buf_emit 0x89; buf_emit 0x47; buf_emit 2  # avail->idx++
 
 # Notify RX queue 0
-buf_emit 0x0F; buf_emit 0xAE; buf_emit 0xF0
-buf_emit 0x8B; buf_emit 0x1C; buf_emit 0x25; buf_emit32 0x300280
-buf_emit 0x8D; buf_emit 0x53; buf_emit 0x10
-buf_emit 0xB0; buf_emit 0; buf_emit 0xEE  # notify queue 0
+emit_virtio_notify_queue_from_bar_abs 0x300280 0
 
 buf_emit 0x58  # pop rax (restore len)
 buf_emit 0x59  # pop rcx
@@ -1902,10 +1977,7 @@ buf_emit ([byte](($rx_post_loop - (buf_len) - 1) -band 0xFF))
 # Set avail->idx = 8
 buf_emit 0x66; buf_emit 0xC7; buf_emit 0x47; buf_emit 2; buf_emit16 8
 # Notify RX queue 0
-buf_emit 0x0F; buf_emit 0xAE; buf_emit 0xF0
-buf_emit 0x8B; buf_emit 0x1C; buf_emit 0x25; buf_emit32 0x300280
-buf_emit 0x8D; buf_emit 0x53; buf_emit 0x10
-buf_emit 0xB0; buf_emit 0; buf_emit 0xEE
+emit_virtio_notify_queue_from_bar_abs 0x300280 0
 
 # === Initialize command buffer ===
 # Memory layout: 0x300800 = cmd buffer (128 bytes), 0x300880 = write index (8 bytes)
@@ -1929,7 +2001,7 @@ buf_emit 0x48; buf_emit 0x8B; buf_emit 0x04; buf_emit 0x25; buf_emit32 0x300030 
 buf_emit 0x04; buf_emit ([byte][char]'A')  # add al, 'A' (0→'A', 1→'B')
 buf_emit 0x50  # push rax
 emit_mov_edx_imm32 ($COM1 + 5); emit_in_al_dx; emit_test_al_imm8 0x20
-buf_emit 0x74; buf_emit 0xFA
+buf_emit 0x74; buf_emit 0xF6
 buf_emit 0x58  # pop rax
 emit_mov_edx_imm32 $COM1; emit_out_dx_al
 # skip_heartbeat:
@@ -1987,7 +2059,7 @@ buf_emit 0x48; buf_emit 0xFF; buf_emit 0x0C; buf_emit 0x25; buf_emit32 0x300880
 # Echo: BS(8) + Space(32) + BS(8) to erase character on terminal
 foreach ($bsc in @(8, 32, 8)) {
     emit_mov_edx_imm32 ($COM1 + 5); emit_in_al_dx; emit_test_al_imm8 0x20
-    buf_emit 0x74; buf_emit 0xFA
+    buf_emit 0x74; buf_emit 0xF6
     emit_mov_edx_imm32 $COM1; emit_mov_al_imm8 $bsc; emit_out_dx_al
 }
 # jmp loop_start
@@ -2041,7 +2113,7 @@ buf_emit 0x88; buf_emit 0x1F  # mov [rdi], bl
 buf_emit 0x48; buf_emit 0xFF; buf_emit 0x04; buf_emit 0x25; buf_emit32 0x300880
 # Echo character via serial
 emit_mov_edx_imm32 ($COM1 + 5); emit_in_al_dx; emit_test_al_imm8 0x20
-buf_emit 0x74; buf_emit 0xFA
+buf_emit 0x74; buf_emit 0xF6
 buf_emit 0x48; buf_emit 0x89; buf_emit 0xD8  # mov rax, rbx
 emit_mov_edx_imm32 $COM1
 emit_out_dx_al
@@ -2357,7 +2429,7 @@ $ls_name_loop = buf_len
 buf_emit 0x41; buf_emit 0x0F; buf_emit 0xB6; buf_emit 0x44; buf_emit 0x0D; buf_emit 0  # movzx eax, byte [r13+rcx]
 buf_emit 0x50  # push rax
 emit_mov_edx_imm32 ($COM1 + 5); emit_in_al_dx; emit_test_al_imm8 0x20
-buf_emit 0x74; buf_emit 0xFA
+buf_emit 0x74; buf_emit 0xF6
 buf_emit 0x58  # pop rax
 emit_mov_edx_imm32 $COM1; emit_out_dx_al
 buf_emit 0xFF; buf_emit 0xC1                    # inc ecx
@@ -2372,7 +2444,7 @@ $ls_ext_loop = buf_len
 buf_emit 0x41; buf_emit 0x0F; buf_emit 0xB6; buf_emit 0x44; buf_emit 0x0D; buf_emit 0
 buf_emit 0x50
 emit_mov_edx_imm32 ($COM1 + 5); emit_in_al_dx; emit_test_al_imm8 0x20
-buf_emit 0x74; buf_emit 0xFA; buf_emit 0x58
+buf_emit 0x74; buf_emit 0xF6; buf_emit 0x58
 emit_mov_edx_imm32 $COM1; emit_out_dx_al
 buf_emit 0xFF; buf_emit 0xC1
 buf_emit 0x83; buf_emit 0xF9; buf_emit 11       # cmp ecx, 11
@@ -2408,38 +2480,20 @@ buf_emit 0xE9; buf_emit32_signed ($cmd_return - (buf_len) - 4)
 patch_cmd_skip
 
 # --- Command: mkfile (mkfile FILENAME.EXT data...) ---
-# Creates a file in root directory with given content
-# Parse: skip "mkfile " (7 chars), next 11 chars = 8.3 name (space-padded), rest = data
+# Creates a file in the root directory with inline content.
 emit_cmd_check "mkfile"
-# We need the full command buffer, not just "mkfile" match
-# RSI already = 0x300800 from dispatch, but we matched "mkfile" so buffer starts with "mkfile "
-# The emit_cmd_check matched exact "mkfile" with null - but user types "mkfile X data"
-# So the null check will fail. We need a prefix match instead.
-# WORKAROUND: skip this command for now, handle in a simpler way
-# Actually, emit_cmd_check checks exact match including null terminator.
-# "mkfile" won't match "mkfile test.txt hello" because byte[6] != 0.
-# We need a different approach: check first 6 bytes = "mkfile" and byte[6] = ' '
-patch_cmd_skip  # undo the exact match, we'll redo with prefix
+# `emit_cmd_check` performs an exact string match including the null terminator.
+# `mkfile` accepts trailing arguments, so command recognition uses a dedicated
+# prefix matcher for `mkfile ` instead of the exact-match helper above.
+patch_cmd_skip
 
 # --- Command: mkfile (prefix match) ---
 # Check first 7 bytes: "mkfile " (with space)
-$script:cmd_patches = @()
-$mkfile_prefix = "mkfile "
-for ($i = 0; $i -lt $mkfile_prefix.Length; $i++) {
-    $ch = [byte][char]$mkfile_prefix[$i]
-    if ($i -eq 0) {
-        buf_emit 0x80; buf_emit 0x3E; buf_emit $ch
-    } else {
-        buf_emit 0x80; buf_emit 0x7E; buf_emit ([byte]$i); buf_emit $ch
-    }
-    $script:cmd_patches += (buf_len)
-    buf_emit 0x0F; buf_emit 0x85; buf_emit32 0
-}
+emit_cmd_prefix_check "mkfile "
 
-# Parse filename: bytes 7-17 (up to 11 chars) are filename in 8.3 format
-# For simplicity: read up to first space after offset 7 as filename, rest as data
-# We'll use a simple approach: first word after "mkfile " = filename (up to 8 chars),
-# assume no extension for now, pad with spaces to 11 bytes
+# Parse filename and payload from the command buffer.
+# The current parser treats the first token after `mkfile ` as the 8.3 name and
+# the remaining bytes as inline file data.
 
 # Allocate dir entry in scratch at 0x511000 (32 bytes)
 # Clear it
@@ -2592,18 +2646,7 @@ buf_emit 0xE9; buf_emit32_signed ($cmd_return - (buf_len) - 4)
 patch_cmd_skip
 
 # --- Command: cat (prefix match: "cat ") ---
-$script:cmd_patches = @()
-$cat_prefix = "cat "
-for ($i = 0; $i -lt $cat_prefix.Length; $i++) {
-    $ch = [byte][char]$cat_prefix[$i]
-    if ($i -eq 0) {
-        buf_emit 0x80; buf_emit 0x3E; buf_emit $ch
-    } else {
-        buf_emit 0x80; buf_emit 0x7E; buf_emit ([byte]$i); buf_emit $ch
-    }
-    $script:cmd_patches += (buf_len)
-    buf_emit 0x0F; buf_emit 0x85; buf_emit32 0
-}
+emit_cmd_prefix_check "cat "
 
 # Read root dir sector 132
 buf_emit 0x41; buf_emit 0xB0; buf_emit 132
@@ -2686,7 +2729,7 @@ buf_emit 0x74; buf_emit 0
 buf_emit 0x0F; buf_emit 0xB6; buf_emit 0x1E     # movzx ebx, byte [rsi]
 buf_emit 0x51  # push rcx
 emit_mov_edx_imm32 ($COM1 + 5); emit_in_al_dx; emit_test_al_imm8 0x20
-buf_emit 0x74; buf_emit 0xFA
+buf_emit 0x74; buf_emit 0xF6
 buf_emit 0x88; buf_emit 0xD8                    # mov al, bl
 emit_mov_edx_imm32 $COM1; emit_out_dx_al
 buf_emit 0x59  # pop rcx
@@ -2721,35 +2764,9 @@ buf_set ($jnz_has_ip + 2) $b_hi[0]; buf_set ($jnz_has_ip + 3) $b_hi[1]
 buf_set ($jnz_has_ip + 4) $b_hi[2]; buf_set ($jnz_has_ip + 5) $b_hi[3]
 # Print IP as dotted decimal (4 octets from [0x3002A8])
 emit_call_puts_str "inet: "
-# Print each octet: load byte, divide by 100/10/1, print digits
 for ($oct = 0; $oct -lt 4; $oct++) {
     if ($oct -gt 0) { emit_call_puts_str "." }
-    # movzx eax, byte [0x3002A8 + $oct]
-    buf_emit 0x0F; buf_emit 0xB6; buf_emit 0x04; buf_emit 0x25; buf_emit32 (0x3002A8 + $oct)
-    # Print decimal: hundreds digit
-    buf_emit 0x31; buf_emit 0xD2  # xor edx, edx
-    buf_emit 0xB9; buf_emit32 100; buf_emit 0xF7; buf_emit 0xF1  # div ecx=100
-    buf_emit 0x04; buf_emit 0x30  # add al, '0'
-    buf_emit 0x50  # push rax
-    emit_mov_edx_imm32 ($COM1 + 5); emit_in_al_dx; emit_test_al_imm8 0x20
-    buf_emit 0x74; buf_emit 0xFA; buf_emit 0x58
-    emit_mov_edx_imm32 $COM1; emit_out_dx_al
-    # Reload, get tens
-    buf_emit 0x0F; buf_emit 0xB6; buf_emit 0x04; buf_emit 0x25; buf_emit32 (0x3002A8 + $oct)
-    buf_emit 0x31; buf_emit 0xD2; buf_emit 0xB9; buf_emit32 100; buf_emit 0xF7; buf_emit 0xF1  # /100
-    buf_emit 0x89; buf_emit 0xD0  # mov eax, edx (remainder)
-    buf_emit 0x31; buf_emit 0xD2; buf_emit 0xB9; buf_emit32 10; buf_emit 0xF7; buf_emit 0xF1
-    buf_emit 0x04; buf_emit 0x30; buf_emit 0x50
-    emit_mov_edx_imm32 ($COM1 + 5); emit_in_al_dx; emit_test_al_imm8 0x20
-    buf_emit 0x74; buf_emit 0xFA; buf_emit 0x58
-    emit_mov_edx_imm32 $COM1; emit_out_dx_al
-    # Units
-    buf_emit 0x0F; buf_emit 0xB6; buf_emit 0x04; buf_emit 0x25; buf_emit32 (0x3002A8 + $oct)
-    buf_emit 0x31; buf_emit 0xD2; buf_emit 0xB9; buf_emit32 10; buf_emit 0xF7; buf_emit 0xF1
-    buf_emit 0x89; buf_emit 0xD0; buf_emit 0x04; buf_emit 0x30; buf_emit 0x50
-    emit_mov_edx_imm32 ($COM1 + 5); emit_in_al_dx; emit_test_al_imm8 0x20
-    buf_emit 0x74; buf_emit 0xFA; buf_emit 0x58
-    emit_mov_edx_imm32 $COM1; emit_out_dx_al
+    emit_serial_dec_byte_from_abs32 (0x3002A8 + $oct) $COM1
 }
 emit_call_puts_str "`r`n"
 buf_emit 0xE9; buf_emit32_signed ($cmd_return - (buf_len) - 4)
@@ -2925,19 +2942,7 @@ emit_call_puts_str "DHCP: IP acquired "
 # Print IP octets
 for ($oct = 0; $oct -lt 4; $oct++) {
     if ($oct -gt 0) { emit_call_puts_str "." }
-    buf_emit 0x0F; buf_emit 0xB6; buf_emit 0x04; buf_emit 0x25; buf_emit32 (0x3002A8 + $oct)
-    buf_emit 0x31; buf_emit 0xD2; buf_emit 0xB9; buf_emit32 10; buf_emit 0xF7; buf_emit 0xF1
-    buf_emit 0x04; buf_emit 0x30; buf_emit 0x50
-    emit_mov_edx_imm32 ($COM1 + 5); emit_in_al_dx; emit_test_al_imm8 0x20
-    buf_emit 0x74; buf_emit 0xFA; buf_emit 0x58
-    emit_mov_edx_imm32 $COM1; emit_out_dx_al
-    # Units
-    buf_emit 0x0F; buf_emit 0xB6; buf_emit 0x04; buf_emit 0x25; buf_emit32 (0x3002A8 + $oct)
-    buf_emit 0x31; buf_emit 0xD2; buf_emit 0xB9; buf_emit32 10; buf_emit 0xF7; buf_emit 0xF1
-    buf_emit 0x89; buf_emit 0xD0; buf_emit 0x04; buf_emit 0x30; buf_emit 0x50
-    emit_mov_edx_imm32 ($COM1 + 5); emit_in_al_dx; emit_test_al_imm8 0x20
-    buf_emit 0x74; buf_emit 0xFA; buf_emit 0x58
-    emit_mov_edx_imm32 $COM1; emit_out_dx_al
+    emit_serial_dec_byte_from_abs32 (0x3002A8 + $oct) $COM1
 }
 emit_call_puts_str " (simplified, single offer)`r`n"
 buf_emit 0xE9; buf_emit32_signed ($cmd_return - (buf_len) - 4)
@@ -3342,29 +3347,7 @@ emit_call_puts_str "example.com = "
 # Print 4 octets from [0x3002B0..0x3002B3] (saved IP) as decimal
 for ($oct = 0; $oct -lt 4; $oct++) {
     if ($oct -gt 0) { emit_call_puts_str "." }
-    buf_emit 0x0F; buf_emit 0xB6; buf_emit 0x04; buf_emit 0x25; buf_emit32 (0x3002B0 + $oct)
-    # hundreds
-    buf_emit 0x31; buf_emit 0xD2; buf_emit 0xB9; buf_emit32 100; buf_emit 0xF7; buf_emit 0xF1
-    buf_emit 0x04; buf_emit 0x30; buf_emit 0x50
-    emit_mov_edx_imm32 ($COM1 + 5); emit_in_al_dx; emit_test_al_imm8 0x20
-    buf_emit 0x74; buf_emit 0xFA; buf_emit 0x58
-    emit_mov_edx_imm32 $COM1; emit_out_dx_al
-    # tens
-    buf_emit 0x0F; buf_emit 0xB6; buf_emit 0x04; buf_emit 0x25; buf_emit32 (0x3002B0 + $oct)
-    buf_emit 0x31; buf_emit 0xD2; buf_emit 0xB9; buf_emit32 100; buf_emit 0xF7; buf_emit 0xF1
-    buf_emit 0x89; buf_emit 0xD0
-    buf_emit 0x31; buf_emit 0xD2; buf_emit 0xB9; buf_emit32 10; buf_emit 0xF7; buf_emit 0xF1
-    buf_emit 0x04; buf_emit 0x30; buf_emit 0x50
-    emit_mov_edx_imm32 ($COM1 + 5); emit_in_al_dx; emit_test_al_imm8 0x20
-    buf_emit 0x74; buf_emit 0xFA; buf_emit 0x58
-    emit_mov_edx_imm32 $COM1; emit_out_dx_al
-    # units
-    buf_emit 0x0F; buf_emit 0xB6; buf_emit 0x04; buf_emit 0x25; buf_emit32 (0x3002B0 + $oct)
-    buf_emit 0x31; buf_emit 0xD2; buf_emit 0xB9; buf_emit32 10; buf_emit 0xF7; buf_emit 0xF1
-    buf_emit 0x89; buf_emit 0xD0; buf_emit 0x04; buf_emit 0x30; buf_emit 0x50
-    emit_mov_edx_imm32 ($COM1 + 5); emit_in_al_dx; emit_test_al_imm8 0x20
-    buf_emit 0x74; buf_emit 0xFA; buf_emit 0x58
-    emit_mov_edx_imm32 $COM1; emit_out_dx_al
+    emit_serial_dec_byte_from_abs32 (0x3002B0 + $oct) $COM1
 }
 emit_call_puts_str "`r`n"
 buf_emit 0xE9; buf_emit32_signed ($cmd_return - (buf_len) - 4)
@@ -3620,9 +3603,9 @@ $kern_bytes = [byte[]]$script:buf.ToArray()
 $kern_sectors = [math]::Ceiling($kern_bytes.Length / 512)
 Write-Host "  Kernel: $($kern_bytes.Length) bytes ($kern_sectors sectors)" -ForegroundColor White
 
-# === Iteration 22: Append kernel.bin to kern_bytes ===
-# Pad handwritten kernel to 128 KB (0x20000), then append compiled kernel.bin
-# kernel.bin code will run at 0x120000 (0x100000 + 0x20000)
+# === Append optional `kernel.bin` payload after the handwritten kernel ===
+# Pad the handwritten kernel to 128 KB (0x20000), then append `kernel.bin`.
+# The appended payload runs at 0x120000 (0x100000 + 0x20000).
 # Note: $kernelBinPath and $kb_entry_offset were pre-read at script start
 if (Test-Path $kernelBinPath) {
     $kb_data = [System.IO.File]::ReadAllBytes($kernelBinPath)
@@ -3653,22 +3636,18 @@ $s2_origin = [uint32]0x8000
 
 emit_cli
 
-# === VESA VBE Mode Set (real mode, before PE) ===
-# VBE Get Mode Info for mode 0x118 (1024×768×32bpp)
-# ES:DI = 0x0000:0x5000 (mode info buffer, 256 bytes)
-emit_xor_ax_ax; emit_mov_es_ax
-buf_emit 0xB8; buf_emit16 0x4F01  # mov ax, 0x4F01
-buf_emit 0xB9; buf_emit16 0x0118  # mov cx, 0x118
-emit_mov_di_imm16 0x5000
-emit_int 0x10
-# Save PhysBasePtr from mode info offset 40 (0x5028) to 0x7000
-buf_emit 0x66; buf_emit 0xA1; buf_emit16 0x5028  # mov eax, [0x5028]
-buf_emit 0x66; buf_emit 0xA3; buf_emit16 0x7000  # mov [0x7000], eax
-# VBE Set Mode: mode 0x118 + LFB (bit 14)
-buf_emit 0xB8; buf_emit16 0x4F02  # mov ax, 0x4F02
-buf_emit 0xBB; buf_emit16 0x4118  # mov bx, 0x4118
-emit_int 0x10
-# === End VESA ===
+# === VESA disabled for headless boot path ===
+# QEMU `-display none` may not provide a usable VBE path during Stage2.
+# Clear the stored LFB address; the kernel can treat this as "no framebuffer".
+buf_emit 0x66; buf_emit 0x31; buf_emit 0xC0              # xor eax, eax
+buf_emit 0x66; buf_emit 0xA3; buf_emit16 0x7000          # mov [0x7000], eax
+
+# === Load kernel after Stage2 (real mode, BIOS CHS one-sector loop) ===
+# QEMU BIOS exposes a 63-sector, 16-head geometry for this small image, so the
+# kernel still fits in cylinder 0 and can be loaded with a compact CHS loop.
+$stage2KernelLoader = emit_stage2_kernel_read_chs_loop ([uint16]$kern_sectors)
+$s2_kernel_lba_patch = [int]$stage2KernelLoader.KernelLbaPatch
+$s2_kernel_seg_patch = [int]$stage2KernelLoader.LoadSegPatch
 
 # LGDT placeholder (patch later)
 $lgdt_patch = (buf_len) + 3
@@ -3742,7 +3721,7 @@ buf_set ($j64_patch + 3) ([byte](($addr64 -shr 24) -band 0xFF))
 emit_mov_rsp_imm64 0x70000
 emit_cld
 
-# Copy kernel: src = 0x8000 + (1+s2_sectors)*512, dst = 0x100000, len = kern_bytes.Length
+# Copy kernel: src = 0x8000 + s2_sectors*512, dst = 0x100000, len = kern_bytes.Length
 # Use rep movsb: RSI=src, RDI=dst, RCX=count
 # Note: $s2_sectors not yet known here; emit placeholder imm64, patch after Stage 2 finalized
 # mov rsi, <kern_src placeholder>
@@ -3792,120 +3771,34 @@ $s2_sectors = [math]::Ceiling($s2_bytes.Length / 512)
 Write-Host "  Stage2: $($s2_bytes.Length) bytes ($s2_sectors sectors)" -ForegroundColor White
 
 # Patch kern_src in Stage 2 code (was placeholder, now $s2_sectors is known)
-$kern_src = [uint64]($s2_origin + (1 + $s2_sectors) * 512)
+# Stage1 loads from LBA 1 to 0x8000, so Stage2 starts at 0x8000 and the kernel
+# begins immediately after the Stage2 sectors.
+$kern_src = [uint64]($s2_origin + $s2_sectors * 512)
 $ks_bytes = [System.BitConverter]::GetBytes([uint64]$kern_src)
 for ($p = 0; $p -lt 8; $p++) { $s2_bytes[$kern_src_patch_off + $p] = $ks_bytes[$p] }
+$s2_kernel_lba = [uint16](1 + $s2_sectors)
+$s2_load_seg = [uint16](0x0800 + ($s2_sectors * 32))
+$s2_bytes[$s2_kernel_lba_patch] = [byte]($s2_kernel_lba -band 0xFF)
+$s2_bytes[$s2_kernel_lba_patch + 1] = [byte](($s2_kernel_lba -shr 8) -band 0xFF)
+$s2_bytes[$s2_kernel_seg_patch] = [byte]($s2_load_seg -band 0xFF)
+$s2_bytes[$s2_kernel_seg_patch + 1] = [byte](($s2_load_seg -shr 8) -band 0xFF)
 Write-Host "  Patched kern_src = 0x$([Convert]::ToString([int64]$kern_src, 16).ToUpper()) in Stage2" -ForegroundColor DarkGray
 
 # =========================================
 # Build Stage 1 (MBR)
 # =========================================
-$read_sectors = $s2_sectors + $kern_sectors
+$read_sectors = $s2_sectors
 $script:buf = [System.Collections.ArrayList]::new()
 
 emit_cli; emit_xor_ax_ax; emit_mov_ds_ax; emit_mov_es_ax; emit_mov_ss_ax
 emit_mov_sp_imm16 0x7C00
 emit_sti
 
-# INT 13h Extended Read (AH=42h) using DAP at 0x600
-# Split into chunks of 64 sectors to avoid 64KB DMA boundary crossing
-# DAP: size(1)=16, reserved(1)=0, count(2), buf_off(2), buf_seg(2), lba(8)
-
-# Initialize persistent DAP fields at 0x600
-# mov byte [0x600], 16 (packet size)
-buf_emit 0xC6; buf_emit 0x06; buf_emit16 0x0600; buf_emit 16
-# mov byte [0x601], 0 (reserved)
-buf_emit 0xC6; buf_emit 0x06; buf_emit16 0x0601; buf_emit 0
-# mov dword [0x60C], 0 (LBA high - always 0)
-buf_emit 0x66; buf_emit 0xC7; buf_emit 0x06; buf_emit16 0x060C; buf_emit32 0
-
-# Chunked read loop using registers:
-#   CX = remaining sectors, BX = current buffer offset, DI = current LBA
-$chunkSize = 64  # sectors per chunk
-# mov cx, total_sectors
-buf_emit 0xB9; buf_emit16 ([uint16]$read_sectors)
-# mov bx, 0x8000  (buffer start)
-buf_emit 0xBB; buf_emit16 0x8000
-# mov di, 1  (LBA start = sector 1)
-buf_emit 0xBF; buf_emit16 1
-
-# .read_loop:
-$read_loop_off = buf_len
-# cmp cx, 0
-buf_emit 0x83; buf_emit 0xF9; buf_emit 0  # cmp cx, 0
-# je .read_done (patched later)
-buf_emit 0x74  # je rel8
-$je_done_patch = buf_len
-buf_emit 0  # placeholder
-
-# mov ax, chunk_size (max per call)
-buf_emit 0xB8; buf_emit16 ([uint16]$chunkSize)
-# cmp cx, ax -- if remaining < chunk, use remaining
-buf_emit 0x39; buf_emit 0xC1  # cmp cx, ax
-# jae .use_chunk (remaining >= chunk)
-buf_emit 0x73; buf_emit 2  # jae +2
-# mov ax, cx (use remaining)
-buf_emit 0x89; buf_emit 0xC8  # mov ax, cx
-
-# .use_chunk: Store count, buf, LBA into DAP
-# mov word [0x602], ax  (sector count)
-buf_emit 0xA3; buf_emit16 0x0602
-# mov word [0x604], bx  (buffer offset)
-buf_emit 0x89; buf_emit 0x1E; buf_emit16 0x0604
-# mov word [0x606], 0x0000  (buffer segment)
-buf_emit 0xC7; buf_emit 0x06; buf_emit16 0x0606; buf_emit16 0
-# mov dword [0x608], edi  (LBA low -- DI in 16-bit, zero-extend)
-# Use: mov [0x608], di; mov word [0x60A], 0
-buf_emit 0x89; buf_emit 0x3E; buf_emit16 0x0608
-buf_emit 0xC7; buf_emit 0x06; buf_emit16 0x060A; buf_emit16 0
-
-# Save AX (chunk count this iteration)
-buf_emit 0x50  # push ax
-
-# INT 13h: AH=42h, SI=0x600, DL=0x80
-emit_mov_ah_imm8 0x42
-buf_emit 0xBE; buf_emit16 0x0600  # mov si, 0x600
-emit_mov_dl_imm8 0x80
-emit_int 0x13
-
-# Restore AX (chunk count)
-buf_emit 0x58  # pop ax
-
-# Advance: CX -= AX, BX += AX*512, DI += AX
-# sub cx, ax
-buf_emit 0x29; buf_emit 0xC1  # sub cx, ax
-# Compute AX*512: shl ax, 9 (but 16-bit, so use: push cx; mov cl,9; shl ax,cl; pop cx)
-buf_emit 0x51  # push cx
-buf_emit 0xB1; buf_emit 9  # mov cl, 9
-buf_emit 0xD3; buf_emit 0xE0  # shl ax, cl
-buf_emit 0x59  # pop cx
-# add bx, ax  (advance buffer pointer)
-buf_emit 0x01; buf_emit 0xC3  # add bx, ax
-# Restore AX = chunk count (need to re-derive from AX*512: shr ax, 9)
-buf_emit 0x51  # push cx
-buf_emit 0xB1; buf_emit 9  # mov cl, 9
-buf_emit 0xD3; buf_emit 0xE8  # shr ax, cl
-buf_emit 0x59  # pop cx
-# add di, ax  (advance LBA)
-buf_emit 0x01; buf_emit 0xC7  # add di, ax
-
-# jmp .read_loop
-$jmp_back_rel = $read_loop_off - (buf_len + 2)
-buf_emit 0xEB; buf_emit ([byte]($jmp_back_rel -band 0xFF))  # jmp rel8
-
-# .read_done: patch the je target
-$read_done_off = buf_len
-buf_set $je_done_patch ([byte]($read_done_off - $je_done_patch - 1))
+# INT 13h CHS read: load Stage2 only (sectors 2..)
+emit_stage1_load_stage2_chs ([byte]$s2_sectors) 0x8000
 
 # A20
 emit_in_al_imm8 0x92; emit_or_al_imm8 2; emit_out_imm8_al 0x92
-
-# "HL!\r\n" via BIOS
-foreach ($c in @(72, 76, 33, 13, 10)) {
-    emit_mov_ah_imm8 0x0E; emit_mov_al_imm8 ([byte]$c)
-    buf_emit 0xB3; buf_emit 0x07  # mov bl, 7
-    emit_int 0x10
-}
 
 # JMP to Stage2
 emit_jmp_far16 0 0x8000

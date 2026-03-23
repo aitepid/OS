@@ -15,13 +15,17 @@
 //
 // 本轮已确认：
 //   - hl-bootstrap-build-test 通过
+//   - validate-workspace 通过
 //   - boot-readiness 通过
 //   - runtime-path-readiness 通过
 //   - image-layout-readiness 通过
+//   - boot-binary-analysis 通过
+//   - perf-baseline 通过
 //   - release-validate 通过
 //
-// 本轮未完成：
-//   - full-gate 未完整跑完，因此不再把其历史数字写成“最新状态”
+// 本轮环境限制：
+//   - qemu-boot-test / qemu-uefi-test 依赖 QEMU
+//   - 当前主机未安装 QEMU，因此本轮记为“跳过”而非“完整通过”
 
 // ============================================================================
 // 二、三层架构判断
@@ -55,6 +59,49 @@
 //   - kill <pid> [sig]
 //   - ps 显示信号相关信息
 //   - shell.hl 中 kill 已切换到 signal_send(..., SIGTERM)
+//
+// Iteration 75:
+//   - 命令历史环形缓冲区（32 条 × 64 字节 @ 0x350000）
+//   - ↑/↓ 方向键浏览历史（PS/2 扩展扫描码 0xE0 前缀）
+//   - ←/→ 方向键行内光标移动
+//   - history 命令显示历史列表
+//   - hostname 命令
+//   - shell.hl 命令数 56 → 58
+//   - 版本字符串统一更新为 6.0
+//
+// Iteration 76:
+//   - hostname 接入 kernel.bin 原生命令分发（_ke_cmd_hostname）
+//   - uname 接入 kernel.bin 原生命令分发（_ke_cmd_uname: "HicOS 6.0 x86_64 Hilbert-Lang"）
+//   - date 接入 kernel.bin 原生命令分发（_ke_cmd_date 委托 _ke_cmd_time RTC 读取）
+//   - 帮助文本新增第 11 行: date uname hostname history
+//   - shell.hl 中 uname 输出统一为 "HicOS 6.0 x86_64 Hilbert-Lang"
+//
+// Iteration 77:
+//   - netstat 接入 kernel.bin 原生命令分发（扫描 64 TCB @ 0x800000）
+//   - arp 接入 kernel.bin 原生命令分发（ARP 缓存 @ 0x360000）
+//   - 新增辅助函数: _ke_print_ip / _ke_print_mac / _ke_print_tcp_state
+//   - _ke_arp_init() 接入 _start() Phase 7k
+//   - shell.hl 命令数 58 → 60
+//
+// Iteration 78:
+//   - Shell pipe 语法 (cmd1 | cmd2) 接入 kernel.bin 原生 shell
+//   - _ke_find_pipe / _ke_pipe_exec / _ke_pipe_cap_start / _ke_pipe_cap_stop
+//   - 管道捕获缓冲区 4KB @ 0x370000
+//   - _ke_sc2ascii 扩展: | [ ] ` 按键映射
+//   - _ke_shell enter 处理增加 pipe 检测
+//
+// Iteration 79:
+//   - grep 接入 kernel.bin 原生命令分发
+//   - _ke_grep_match 子串匹配 + _ke_cmd_grep 管道过滤
+//   - _ke_putc 集成捕获标志检查，cmd1 | grep pattern 可正常工作
+//   - _ke_pipe_exec 简化：左侧输出被捕获，右侧可读取并过滤
+//   - shell.hl 命令数 60 → 61
+//
+// Iteration 80:
+//   - 阶段发布整理完成
+//   - README / PROJECT_STATUS / ROADMAP / CHANGELOG / PLAN 口径统一
+//   - Host-side 门禁重新复核通过
+//   - QEMU 相关门禁因当前环境未安装 QEMU 记为“跳过”而非“已完整通过”
 
 // ============================================================================
 // 四、当前推进重点
@@ -75,12 +122,17 @@
 // ============================================================================
 //
 // 建议按以下顺序推进：
-//   - 迭代 75：命令历史 + 方向键
-//   - 迭代 76：hostname / uname / date
-//   - 迭代 77：netstat / arp
-//   - 迭代 78：Shell pipe
-//   - 迭代 79：grep
-//   - 迭代 80：阶段发布整理
+//   - 迭代 75：命令历史 + 方向键 ✅ 已完成
+//   - 迭代 76：hostname / uname / date ✅ 已完成
+//   - 迭代 77：netstat / arp ✅ 已完成
+//   - 迭代 78：Shell pipe ✅ 已完成
+//   - 迭代 79：grep ✅ 已完成
+//   - 迭代 80：阶段发布整理 ✅ 已完成
+//   - 迭代 81：QEMU 环境下补齐 BIOS/UEFI 真实运行门禁
+//   - 迭代 82：pipe + grep + 文件命令真实用例闭环
+//   - 迭代 83：网络命令真实链路增强
+//   - 迭代 84：存储/VFS/run 路径增强
+//   - 迭代 85：第二轮发布收敛
 
 // ============================================================================
 // 六、文档维护规则
@@ -97,8 +149,8 @@ fn advancement_status() {
     print("=== HicOS 项目推进策划案（同步版） ===");
     print("活跃 .hl: 176 | 内核模块: 114 | scripts: 19");
     print("主入口: scripts/hl-bootstrap-build-test.ps1");
-    print("最近完成: iteration 73 / 74");
-    print("下一步: full-gate 复核 + iteration 75+");
+    print("最近完成: iteration 73-80");
+    print("下一步: iteration 81+（QEMU 门禁 / 真实运行路径 / 第二轮收敛）");
 }
 
 advancement_status();

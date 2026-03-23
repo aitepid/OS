@@ -72,7 +72,18 @@ fn _ke_has_cpu_err(vec) {
 }
 
 // Helper: serial putchar (blocking TX wait)
+// When pipe capture flag is set (0x371000 == 1), output goes to capture
+// buffer instead of serial — this enables proper "cmd1 | grep" behavior.
 fn _ke_putc(ch) {
+    let cap_flag = mem_read_u64(3608576);  // PIPE_CAP_FLAG_ADDR = 0x371000
+    if cap_flag == 1 {
+        let pos = mem_read_u64(3608584);  // PIPE_CAP_POS_ADDR = 0x371008
+        if pos < 4096 {
+            mem_write_u8(3604480 + pos, ch);  // PIPE_CAP_BUF = 0x370000
+            mem_write_u64(3608584, pos + 1);
+        }
+        return 0;
+    }
     let mut ready = 0;
     while ready == 0 {
         let status = port_in_u8(1021); // COM1+5: line status
@@ -3860,6 +3871,10 @@ fn _ke_sc2ascii(sc) {
     if sc == 51 { return 44; }   // ','
     if sc == 52 { return 46; }   // '.'
     if sc == 53 { return 47; }   // '/'
+    if sc == 43 { return 124; }  // '|' (backslash key, used as pipe)
+    if sc == 26 { return 91; }   // '['
+    if sc == 27 { return 93; }   // ']'
+    if sc == 41 { return 96; }   // '`'
     return 0;
 }
 
@@ -8926,6 +8941,29 @@ fn _ke_cmd_help() {
     // "kill"
     _ke_putc(107); _ke_putc(105); _ke_putc(108); _ke_putc(108);
     _ke_putc(13); _ke_putc(10);
+    // Line 11: "      date uname hostname history"
+    _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32);
+    // "date "
+    _ke_putc(100); _ke_putc(97); _ke_putc(116); _ke_putc(101); _ke_putc(32);
+    // "uname "
+    _ke_putc(117); _ke_putc(110); _ke_putc(97); _ke_putc(109); _ke_putc(101); _ke_putc(32);
+    // "hostname "
+    _ke_putc(104); _ke_putc(111); _ke_putc(115); _ke_putc(116);
+    _ke_putc(110); _ke_putc(97); _ke_putc(109); _ke_putc(101); _ke_putc(32);
+    // "history"
+    _ke_putc(104); _ke_putc(105); _ke_putc(115); _ke_putc(116);
+    _ke_putc(111); _ke_putc(114); _ke_putc(121);
+    _ke_putc(13); _ke_putc(10);
+    // Line 12: "      netstat arp grep"
+    _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32);
+    // "netstat "
+    _ke_putc(110); _ke_putc(101); _ke_putc(116); _ke_putc(115);
+    _ke_putc(116); _ke_putc(97); _ke_putc(116); _ke_putc(32);
+    // "arp "
+    _ke_putc(97); _ke_putc(114); _ke_putc(112); _ke_putc(32);
+    // "grep"
+    _ke_putc(103); _ke_putc(114); _ke_putc(101); _ke_putc(112);
+    _ke_putc(13); _ke_putc(10);
     return 0;
 }
 
@@ -8936,6 +8974,479 @@ fn _ke_cmd_tick() {
     _ke_putc(84); _ke_putc(105); _ke_putc(99); _ke_putc(107); _ke_putc(58); _ke_putc(32);
     _ke_put_dec(tick);
     _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
+// === Iteration 76: hostname / uname / date ===
+
+// Command: hostname — print system hostname
+fn _ke_cmd_hostname() {
+    // "hicos\r\n"
+    _ke_putc(104); _ke_putc(105); _ke_putc(99); _ke_putc(111); _ke_putc(115);
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
+// Command: uname — print system info
+fn _ke_cmd_uname() {
+    // "HicOS 6.0 x86_64 Hilbert-Lang\r\n"
+    // "HicOS "
+    _ke_putc(72); _ke_putc(105); _ke_putc(99); _ke_putc(79); _ke_putc(83); _ke_putc(32);
+    // "6.0 "
+    _ke_putc(54); _ke_putc(46); _ke_putc(48); _ke_putc(32);
+    // "x86_64 "
+    _ke_putc(120); _ke_putc(56); _ke_putc(54); _ke_putc(95); _ke_putc(54); _ke_putc(52); _ke_putc(32);
+    // "Hilbert-Lang"
+    _ke_putc(72); _ke_putc(105); _ke_putc(108); _ke_putc(98); _ke_putc(101); _ke_putc(114); _ke_putc(116);
+    _ke_putc(45);
+    _ke_putc(76); _ke_putc(97); _ke_putc(110); _ke_putc(103);
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
+// Command: date — display date/time (delegates to _ke_cmd_time)
+fn _ke_cmd_date() {
+    _ke_cmd_time();
+    return 0;
+}
+
+// === Iteration 77: netstat / arp ===
+//
+// netstat: scan TCP connection table at 0x800000 (64 TCBs × 256 bytes)
+//   Displays: local_port, remote_ip:port, state
+// arp: display native ARP cache at 0x360000
+//   Layout: 16 entries × 16 bytes each (4B ip + 6B mac + 2B flags + 4B padding)
+
+let ARP_NATIVE_BASE = 3538944;  // 0x360000
+let ARP_NATIVE_MAX = 16;
+let ARP_NATIVE_ENTRY = 16;
+let ARP_NATIVE_COUNT_ADDR = 3539200;  // 0x360100
+
+// Initialize native ARP cache
+fn _ke_arp_init() {
+    mem_write_u64(ARP_NATIVE_COUNT_ADDR, 0);
+    let mut i = 0;
+    while i < ARP_NATIVE_MAX * ARP_NATIVE_ENTRY {
+        mem_write_u8(ARP_NATIVE_BASE + i, 0);
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Print IP address from 32-bit big-endian packed value
+fn _ke_print_ip(ip) {
+    _ke_put_dec((ip / 16777216) % 256);
+    _ke_putc(46);
+    _ke_put_dec((ip / 65536) % 256);
+    _ke_putc(46);
+    _ke_put_dec((ip / 256) % 256);
+    _ke_putc(46);
+    _ke_put_dec(ip % 256);
+    return 0;
+}
+
+// Print MAC address from 6 bytes at addr
+fn _ke_print_mac(addr) {
+    let mut i = 0;
+    while i < 6 {
+        let b = mem_read_u8(addr + i);
+        _ke_put_hex8(b);
+        if i < 5 { _ke_putc(58); }  // ':'
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Print TCP state name
+fn _ke_print_tcp_state(state) {
+    if state == 0 { _ke_putc(67); _ke_putc(76); _ke_putc(79); _ke_putc(83); _ke_putc(69); _ke_putc(68); return 0; }
+    if state == 1 { _ke_putc(76); _ke_putc(73); _ke_putc(83); _ke_putc(84); _ke_putc(69); _ke_putc(78); return 0; }
+    if state == 2 { _ke_putc(83); _ke_putc(89); _ke_putc(78); _ke_putc(95); _ke_putc(83); _ke_putc(69); _ke_putc(78); _ke_putc(84); return 0; }
+    if state == 3 { _ke_putc(83); _ke_putc(89); _ke_putc(78); _ke_putc(95); _ke_putc(82); _ke_putc(67); _ke_putc(86); _ke_putc(68); return 0; }
+    if state == 4 { _ke_putc(69); _ke_putc(83); _ke_putc(84); _ke_putc(65); _ke_putc(66); return 0; }
+    if state == 5 { _ke_putc(70); _ke_putc(73); _ke_putc(78); _ke_putc(95); _ke_putc(87); _ke_putc(49); return 0; }
+    if state == 6 { _ke_putc(70); _ke_putc(73); _ke_putc(78); _ke_putc(95); _ke_putc(87); _ke_putc(50); return 0; }
+    if state == 7 { _ke_putc(67); _ke_putc(76); _ke_putc(83); _ke_putc(95); _ke_putc(87); _ke_putc(65); _ke_putc(73); _ke_putc(84); return 0; }
+    if state == 8 { _ke_putc(67); _ke_putc(76); _ke_putc(79); _ke_putc(83); _ke_putc(73); _ke_putc(78); _ke_putc(71); return 0; }
+    if state == 9 { _ke_putc(76); _ke_putc(65); _ke_putc(83); _ke_putc(84); _ke_putc(95); _ke_putc(65); _ke_putc(67); _ke_putc(75); return 0; }
+    if state == 10 { _ke_putc(84); _ke_putc(73); _ke_putc(77); _ke_putc(69); _ke_putc(95); _ke_putc(87); return 0; }
+    _ke_putc(63);
+    return 0;
+}
+
+// Command: netstat — display active TCP connections
+fn _ke_cmd_netstat() {
+    let tcb_base = 8388608;  // 0x800000
+    let tcb_size = 256;
+    let max_tcp = 64;
+
+    // Header: "Proto Local      Remote          State\r\n"
+    _ke_putc(80); _ke_putc(114); _ke_putc(111); _ke_putc(116); _ke_putc(111); // "Proto"
+    _ke_putc(32);
+    _ke_putc(76); _ke_putc(111); _ke_putc(99); _ke_putc(97); _ke_putc(108); // "Local"
+    _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32);
+    _ke_putc(32);
+    _ke_putc(82); _ke_putc(101); _ke_putc(109); _ke_putc(111); _ke_putc(116); _ke_putc(101); // "Remote"
+    _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32);
+    _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32);
+    _ke_putc(83); _ke_putc(116); _ke_putc(97); _ke_putc(116); _ke_putc(101); // "State"
+    _ke_putc(13); _ke_putc(10);
+
+    let mut count = 0;
+    let mut i = 0;
+    while i < max_tcp {
+        let addr = tcb_base + i * tcb_size;
+        let state = mem_read_u64(addr);
+        if state != 0 {
+            // "tcp  "
+            _ke_putc(116); _ke_putc(99); _ke_putc(112);
+            _ke_putc(32); _ke_putc(32);
+
+            // Local: 0.0.0.0:port
+            let lip = mem_read_u32(addr + 8);
+            let lport = mem_read_u32(addr + 12);
+            _ke_print_ip(lip);
+            _ke_putc(58);  // ':'
+            _ke_put_dec(lport);
+            _ke_putc(32);
+
+            // Remote: ip:port
+            let rip = mem_read_u32(addr + 16);
+            let rport = mem_read_u32(addr + 20);
+            _ke_print_ip(rip);
+            _ke_putc(58);
+            _ke_put_dec(rport);
+            _ke_putc(32);
+
+            // State
+            _ke_print_tcp_state(state);
+            _ke_putc(13); _ke_putc(10);
+            count = count + 1;
+        }
+        i = i + 1;
+    }
+
+    if count == 0 {
+        // "(no active connections)\r\n"
+        _ke_putc(40);
+        _ke_putc(110); _ke_putc(111); _ke_putc(32);
+        _ke_putc(97); _ke_putc(99); _ke_putc(116); _ke_putc(105); _ke_putc(118); _ke_putc(101);
+        _ke_putc(32);
+        _ke_putc(99); _ke_putc(111); _ke_putc(110); _ke_putc(110); _ke_putc(101);
+        _ke_putc(99); _ke_putc(116); _ke_putc(105); _ke_putc(111); _ke_putc(110); _ke_putc(115);
+        _ke_putc(41);
+        _ke_putc(13); _ke_putc(10);
+    } else {
+        _ke_put_dec(count);
+        // " connection(s)\r\n"
+        _ke_putc(32);
+        _ke_putc(99); _ke_putc(111); _ke_putc(110); _ke_putc(110); _ke_putc(101);
+        _ke_putc(99); _ke_putc(116); _ke_putc(105); _ke_putc(111); _ke_putc(110);
+        _ke_putc(40); _ke_putc(115); _ke_putc(41);
+        _ke_putc(13); _ke_putc(10);
+    }
+    return 0;
+}
+
+// Command: arp — display ARP cache
+fn _ke_cmd_arp() {
+    let count = mem_read_u64(ARP_NATIVE_COUNT_ADDR);
+
+    // Header: "IP Address       MAC Address       Flags\r\n"
+    _ke_putc(73); _ke_putc(80); _ke_putc(32);  // "IP "
+    _ke_putc(65); _ke_putc(100); _ke_putc(100); _ke_putc(114); _ke_putc(101); _ke_putc(115); _ke_putc(115); // "Address"
+    _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32);
+    _ke_putc(77); _ke_putc(65); _ke_putc(67);  // "MAC"
+    _ke_putc(32);
+    _ke_putc(65); _ke_putc(100); _ke_putc(100); _ke_putc(114); _ke_putc(101); _ke_putc(115); _ke_putc(115); // "Address"
+    _ke_putc(13); _ke_putc(10);
+
+    if count == 0 {
+        // "(empty)\r\n"
+        _ke_putc(40);
+        _ke_putc(101); _ke_putc(109); _ke_putc(112); _ke_putc(116); _ke_putc(121);
+        _ke_putc(41);
+        _ke_putc(13); _ke_putc(10);
+
+        // Also display our network config
+        // "Config: 10.0.2.15 gw 10.0.2.2\r\n"
+        _ke_putc(67); _ke_putc(111); _ke_putc(110); _ke_putc(102); _ke_putc(105); _ke_putc(103); _ke_putc(58); _ke_putc(32);
+        // Our IP (from VirtIO-net init at 0x902020)
+        _ke_putc(49); _ke_putc(48); _ke_putc(46); _ke_putc(48); _ke_putc(46);
+        _ke_putc(50); _ke_putc(46); _ke_putc(49); _ke_putc(53);
+        // " gw "
+        _ke_putc(32); _ke_putc(103); _ke_putc(119); _ke_putc(32);
+        // Gateway
+        _ke_putc(49); _ke_putc(48); _ke_putc(46); _ke_putc(48); _ke_putc(46);
+        _ke_putc(50); _ke_putc(46); _ke_putc(50);
+        _ke_putc(13); _ke_putc(10);
+        return 0;
+    }
+
+    let mut i = 0;
+    while i < count {
+        if i >= ARP_NATIVE_MAX { i = count; }
+        else {
+            let entry = ARP_NATIVE_BASE + i * ARP_NATIVE_ENTRY;
+            let ip = _ke_mem_r32be(entry);
+            // IP
+            _ke_print_ip(ip);
+            // Pad to 16 chars
+            _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32);
+            _ke_putc(32); _ke_putc(32);
+            // MAC (6 bytes at entry+4)
+            _ke_print_mac(entry + 4);
+            _ke_putc(13); _ke_putc(10);
+            i = i + 1;
+        }
+    }
+
+    _ke_put_dec(count);
+    // " entries\r\n"
+    _ke_putc(32);
+    _ke_putc(101); _ke_putc(110); _ke_putc(116); _ke_putc(114); _ke_putc(105); _ke_putc(101); _ke_putc(115);
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
+// === Iteration 78: Shell Pipe ===
+//
+// Memory layout:
+//   0x370000: pipe capture buffer (4096 bytes)
+//   0x371000: pipe_capture_flag (u64) — 1 = capturing, 0 = normal
+//   0x371008: pipe_capture_pos  (u64) — current write position in capture buffer
+//   0x371010: pipe_right_buf    (64 bytes) — right-side command buffer
+//
+// When pipe_capture_flag == 1, _ke_putc_pipe routes output to capture buffer
+// instead of serial port.
+
+let PIPE_CAP_BUF = 3604480;       // 0x370000
+let PIPE_CAP_SIZE = 4096;
+let PIPE_CAP_FLAG_ADDR = 3608576;  // 0x371000
+let PIPE_CAP_POS_ADDR = 3608584;   // 0x371008
+let PIPE_RIGHT_BUF = 3608592;      // 0x371010
+
+// Start capturing output
+fn _ke_pipe_cap_start() {
+    // Zero capture buffer
+    let mut i = 0;
+    while i < PIPE_CAP_SIZE {
+        mem_write_u8(PIPE_CAP_BUF + i, 0);
+        i = i + 1;
+    }
+    mem_write_u64(PIPE_CAP_POS_ADDR, 0);
+    mem_write_u64(PIPE_CAP_FLAG_ADDR, 1);
+    return 0;
+}
+
+// Stop capturing output, return bytes captured
+fn _ke_pipe_cap_stop() {
+    mem_write_u64(PIPE_CAP_FLAG_ADDR, 0);
+    return mem_read_u64(PIPE_CAP_POS_ADDR);
+}
+
+// Output one char — either to serial or to capture buffer
+fn _ke_putc_pipe(ch) {
+    let capturing = mem_read_u64(PIPE_CAP_FLAG_ADDR);
+    if capturing == 1 {
+        let pos = mem_read_u64(PIPE_CAP_POS_ADDR);
+        if pos < PIPE_CAP_SIZE {
+            mem_write_u8(PIPE_CAP_BUF + pos, ch);
+            mem_write_u64(PIPE_CAP_POS_ADDR, pos + 1);
+        }
+        return 0;
+    }
+    _ke_putc(ch);
+    return 0;
+}
+
+// Find pipe character '|' (ASCII 124) in command buffer
+// Returns position of '|' or -1 if not found
+fn _ke_find_pipe(buf_addr, buf_len) {
+    let mut i = 0;
+    while i < buf_len {
+        if mem_read_u8(buf_addr + i) == 124 { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+// Execute a piped command: "cmd1 | cmd2"
+// - Run cmd1 with output captured to pipe buffer (not printed to serial)
+// - Run cmd2 which can read the captured output (e.g. grep filters it)
+// Returns 1 if pipe was found and executed, 0 if no pipe
+fn _ke_pipe_exec(buf_addr, buf_len) {
+    let pipe_pos = _ke_find_pipe(buf_addr, buf_len);
+    if pipe_pos < 0 { return 0; }
+
+    // Left command: bytes [0..pipe_pos), trim trailing spaces
+    let mut left_len = pipe_pos;
+    let mut trimming = 1;
+    while trimming == 1 {
+        if left_len == 0 { trimming = 0; }
+        else {
+            if mem_read_u8(buf_addr + left_len - 1) == 32 { left_len = left_len - 1; }
+            else { trimming = 0; }
+        }
+    }
+
+    // Right command: bytes [pipe_pos+1..buf_len), skip leading spaces
+    let mut right_start = pipe_pos + 1;
+    let mut skipping = 1;
+    while skipping == 1 {
+        if right_start >= buf_len { skipping = 0; }
+        else {
+            if mem_read_u8(buf_addr + right_start) == 32 { right_start = right_start + 1; }
+            else { skipping = 0; }
+        }
+    }
+    let right_len = buf_len - right_start;
+
+    if left_len == 0 { return 0; }
+    if right_len == 0 { return 0; }
+
+    // Step 1: Capture left command output to pipe buffer
+    // _ke_putc itself checks capture flag, so all output goes to buffer
+    _ke_pipe_cap_start();
+    _ke_dispatch(buf_addr, left_len);
+    let cap_len = _ke_pipe_cap_stop();
+
+    // Store captured length for right-side command to read
+    mem_write_u64(PIPE_CAP_POS_ADDR, cap_len);
+
+    // Step 2: Copy right command to PIPE_RIGHT_BUF and dispatch
+    let mut ri = 0;
+    let mut rlen = right_len;
+    if rlen > 60 { rlen = 60; }
+    while ri < rlen {
+        mem_write_u8(PIPE_RIGHT_BUF + ri, mem_read_u8(buf_addr + right_start + ri));
+        ri = ri + 1;
+    }
+
+    _ke_dispatch(PIPE_RIGHT_BUF, rlen);
+
+    return 1;
+}
+
+// === Iteration 79: grep ===
+//
+// "grep <pattern>" — when used after pipe, scans pipe capture buffer
+//   for lines containing <pattern> substring and prints matching lines.
+// "grep <pattern>" standalone — prints usage hint.
+//
+// Memory: reads from PIPE_CAP_BUF (0x370000), length at PIPE_CAP_POS_ADDR.
+// Line delimiter: LF (10) or CR (13).
+
+// Check if line [line_addr..line_addr+line_len) contains pattern [pat_addr..+pat_len)
+fn _ke_grep_match(line_addr, line_len, pat_addr, pat_len) {
+    if pat_len == 0 { return 1; }
+    if line_len < pat_len { return 0; }
+    let limit = line_len - pat_len + 1;
+    let mut i = 0;
+    while i < limit {
+        let mut j = 0;
+        let mut ok = 1;
+        while j < pat_len {
+            if ok == 1 {
+                if mem_read_u8(line_addr + i + j) != mem_read_u8(pat_addr + j) {
+                    ok = 0;
+                }
+            }
+            j = j + 1;
+        }
+        if ok == 1 { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Command: grep <pattern> — filter piped input or show usage
+fn _ke_cmd_grep(buf_addr, buf_len) {
+    // Parse pattern: "grep " = 5 chars
+    if buf_len <= 5 {
+        // "Usage: cmd | grep <pattern>\r\n"
+        _ke_putc(85); _ke_putc(115); _ke_putc(97); _ke_putc(103); _ke_putc(101);
+        _ke_putc(58); _ke_putc(32);
+        _ke_putc(99); _ke_putc(109); _ke_putc(100);
+        _ke_putc(32); _ke_putc(124); _ke_putc(32);
+        _ke_putc(103); _ke_putc(114); _ke_putc(101); _ke_putc(112);
+        _ke_putc(32); _ke_putc(60);
+        _ke_putc(112); _ke_putc(97); _ke_putc(116); _ke_putc(116);
+        _ke_putc(101); _ke_putc(114); _ke_putc(110);
+        _ke_putc(62);
+        _ke_putc(13); _ke_putc(10);
+        return 0;
+    }
+
+    let pat_addr = buf_addr + 5;
+    let pat_len = buf_len - 5;
+
+    // Read pipe capture buffer
+    let cap_len = mem_read_u64(PIPE_CAP_POS_ADDR);
+
+    if cap_len == 0 {
+        // No piped input — show hint
+        // "(no piped input)\r\n"
+        _ke_putc(40);
+        _ke_putc(110); _ke_putc(111); _ke_putc(32);
+        _ke_putc(112); _ke_putc(105); _ke_putc(112); _ke_putc(101); _ke_putc(100);
+        _ke_putc(32);
+        _ke_putc(105); _ke_putc(110); _ke_putc(112); _ke_putc(117); _ke_putc(116);
+        _ke_putc(41);
+        _ke_putc(13); _ke_putc(10);
+        return 0;
+    }
+
+    // Scan capture buffer line by line
+    let mut line_start = 0;
+    let mut matches = 0;
+    let mut pos = 0;
+    while pos <= cap_len {
+        let mut is_eol = 0;
+        if pos == cap_len { is_eol = 1; }
+        else {
+            let ch = mem_read_u8(PIPE_CAP_BUF + pos);
+            if ch == 10 { is_eol = 1; }
+        }
+
+        if is_eol == 1 {
+            let line_len = pos - line_start;
+            // Skip empty lines and CR-only
+            let mut real_len = line_len;
+            // Trim trailing CR
+            if real_len > 0 {
+                if mem_read_u8(PIPE_CAP_BUF + line_start + real_len - 1) == 13 {
+                    real_len = real_len - 1;
+                }
+            }
+
+            if real_len > 0 {
+                if _ke_grep_match(PIPE_CAP_BUF + line_start, real_len, pat_addr, pat_len) == 1 {
+                    // Print matching line
+                    let mut pi = 0;
+                    while pi < real_len {
+                        _ke_putc(mem_read_u8(PIPE_CAP_BUF + line_start + pi));
+                        pi = pi + 1;
+                    }
+                    _ke_putc(13); _ke_putc(10);
+                    matches = matches + 1;
+                }
+            }
+
+            line_start = pos + 1;
+        }
+        pos = pos + 1;
+    }
+
+    if matches == 0 {
+        // "(no match)\r\n"
+        _ke_putc(40);
+        _ke_putc(110); _ke_putc(111); _ke_putc(32);
+        _ke_putc(109); _ke_putc(97); _ke_putc(116); _ke_putc(99); _ke_putc(104);
+        _ke_putc(41);
+        _ke_putc(13); _ke_putc(10);
+    }
+
     return 0;
 }
 
@@ -8957,6 +9468,12 @@ fn _ke_dispatch(buf_addr, buf_len) {
         if c0 == 115 { if c1 == 104 { if c2 == 117 { if c3 == 116 {
             if c4 == 100 { if c5 == 111 { if c6 == 119 { if c7 == 110 {
                 _ke_cmd_shutdown(); return 0;
+            } } } }
+        } } } }
+        // "hostname" (8): 104 111 115 116 110 97 109 101
+        if c0 == 104 { if c1 == 111 { if c2 == 115 { if c3 == 116 {
+            if c4 == 110 { if c5 == 97 { if c6 == 109 { if c7 == 101 {
+                _ke_cmd_hostname(); return 0;
             } } } }
         } } } }
     }
@@ -9035,6 +9552,13 @@ fn _ke_dispatch(buf_addr, buf_len) {
         } } } }
     }
 
+    // "grep" (4) or "grep ..." (5+): 103 114 101 112
+    if buf_len >= 4 {
+        if c0 == 103 { if c1 == 114 { if c2 == 101 { if c3 == 112 {
+            _ke_cmd_grep(buf_addr, buf_len); return 0;
+        } } } }
+    }
+
     // "hlpkg " prefix (6+): 104 108 112 107 103 32
     if buf_len >= 7 {
         if c0 == 104 { if c1 == 108 { if c2 == 112 { if c3 == 107 { if c4 == 103 { if c5 == 32 {
@@ -9108,6 +9632,10 @@ fn _ke_dispatch(buf_addr, buf_len) {
         if c0 == 102 { if c1 == 105 { if c2 == 108 { if c3 == 101 { if c4 == 115 {
             _ke_cmd_files(); return 0;
         } } } } }
+        // "uname" (5): 117 110 97 109 101
+        if c0 == 117 { if c1 == 110 { if c2 == 97 { if c3 == 109 { if c4 == 101 {
+            _ke_cmd_uname(); return 0;
+        } } } } }
     }
 
     // "container" (9): 99 111 110 116 97 105 110 101 114
@@ -9151,6 +9679,10 @@ fn _ke_dispatch(buf_addr, buf_len) {
         // "tick" = 116 105 99 107
         if c0 == 116 { if c1 == 105 { if c2 == 99 { if c3 == 107 {
             _ke_cmd_tick(); return 0;
+        } } } }
+        // "date" = 100 97 116 101
+        if c0 == 100 { if c1 == 97 { if c2 == 116 { if c3 == 101 {
+            _ke_cmd_date(); return 0;
         } } } }
         // "pmem" = 112 109 101 109
         if c0 == 112 { if c1 == 109 { if c2 == 101 { if c3 == 109 {
@@ -9227,6 +9759,10 @@ fn _ke_dispatch(buf_addr, buf_len) {
         if c0 == 101 { if c1 == 110 { if c2 == 118 {
             _ke_cmd_env(); return 0;
         } } }
+        // "arp" = 97 114 112
+        if c0 == 97 { if c1 == 114 { if c2 == 112 {
+            _ke_cmd_arp(); return 0;
+        } } }
     }
 
     // "ps" = 112 115
@@ -9256,6 +9792,10 @@ fn _ke_dispatch(buf_addr, buf_len) {
         // "service" (7): 115 101 114 118 105 99 101
         if c0 == 115 { if c1 == 101 { if c2 == 114 { if c3 == 118 { if c4 == 105 { if c5 == 99 { if c6 == 101 {
             _ke_cmd_service(); return 0;
+        } } } } } } }
+        // "netstat" (7): 110 101 116 115 116 97 116
+        if c0 == 110 { if c1 == 101 { if c2 == 116 { if c3 == 115 { if c4 == 116 { if c5 == 97 { if c6 == 116 {
+            _ke_cmd_netstat(); return 0;
         } } } } } } }
     }
 
@@ -9339,11 +9879,164 @@ fn _ke_dispatch(buf_addr, buf_len) {
     return 0;
 }
 
+// === Iteration 75: Command History + Arrow Keys ===
+//
+// Memory layout:
+//   0x350000: History ring buffer — 32 entries × 64 bytes = 2048 bytes
+//   0x350800: hist_count  (u64) — total commands stored
+//   0x350808: hist_browse (u64) — current browse index (while pressing up/down)
+//   0x350810: e0_prefix   (u64) — flag: next scancode is extended (0xE0 prefix seen)
+//   0x350818: cursor_pos  (u64) — cursor position within current line (for left/right)
+//
+// Arrow key PS/2 Set 1 scancodes (extended, preceded by 0xE0):
+//   Up:    0x48   Down:  0x50
+//   Left:  0x4B   Right: 0x4D
+
+let HIST_BASE = 3407872;   // 0x350000
+let HIST_MAX = 32;
+let HIST_ENTRY_SIZE = 64;
+let HIST_COUNT_ADDR = 3409920;   // 0x350800
+let HIST_BROWSE_ADDR = 3409928;  // 0x350808
+let E0_PREFIX_ADDR = 3409936;    // 0x350810
+let CURSOR_POS_ADDR = 3409944;   // 0x350818
+
+// Initialize history system
+fn _ke_hist_init() {
+    mem_write_u64(HIST_COUNT_ADDR, 0);
+    mem_write_u64(HIST_BROWSE_ADDR, 0);
+    mem_write_u64(E0_PREFIX_ADDR, 0);
+    mem_write_u64(CURSOR_POS_ADDR, 0);
+    // Zero-fill history buffer
+    let mut i = 0;
+    while i < HIST_MAX * HIST_ENTRY_SIZE {
+        mem_write_u8(HIST_BASE + i, 0);
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Save command to history ring buffer
+fn _ke_hist_push(buf_addr, buf_len) {
+    if buf_len == 0 { return 0; }
+    let count = mem_read_u64(HIST_COUNT_ADDR);
+    let slot = count % HIST_MAX;
+    let dest = HIST_BASE + slot * HIST_ENTRY_SIZE;
+    // Clear slot
+    let mut i = 0;
+    while i < HIST_ENTRY_SIZE {
+        mem_write_u8(dest + i, 0);
+        i = i + 1;
+    }
+    // Copy command bytes (up to HIST_ENTRY_SIZE - 1)
+    let copy_len = buf_len;
+    if copy_len > HIST_ENTRY_SIZE - 1 { copy_len = HIST_ENTRY_SIZE - 1; }
+    i = 0;
+    while i < copy_len {
+        mem_write_u8(dest + i, mem_read_u8(buf_addr + i));
+        i = i + 1;
+    }
+    mem_write_u64(HIST_COUNT_ADDR, count + 1);
+    return 0;
+}
+
+// Get length of a history entry
+fn _ke_hist_entry_len(slot) {
+    let base = HIST_BASE + slot * HIST_ENTRY_SIZE;
+    let mut l = 0;
+    while l < HIST_ENTRY_SIZE - 1 {
+        if mem_read_u8(base + l) == 0 { return l; }
+        l = l + 1;
+    }
+    return l;
+}
+
+// Load history entry into command buffer, return its length
+fn _ke_hist_load(buf_addr, index) {
+    let count = mem_read_u64(HIST_COUNT_ADDR);
+    if count == 0 { return 0; }
+    // Clamp index
+    let max_back = count;
+    if max_back > HIST_MAX { max_back = HIST_MAX; }
+    if index > max_back { index = max_back; }
+    if index < 1 { return 0; }
+    // Map: index=1 → most recent, index=max_back → oldest
+    let abs_idx = count - index;
+    let slot = abs_idx % HIST_MAX;
+    let src = HIST_BASE + slot * HIST_ENTRY_SIZE;
+    let entry_len = _ke_hist_entry_len(slot);
+    // Copy to command buffer
+    let mut i = 0;
+    while i < entry_len {
+        mem_write_u8(buf_addr + i, mem_read_u8(src + i));
+        i = i + 1;
+    }
+    // Null-terminate
+    mem_write_u8(buf_addr + entry_len, 0);
+    return entry_len;
+}
+
+// Erase current line on terminal (backspace over buf_len chars)
+fn _ke_line_erase(buf_len) {
+    let mut i = 0;
+    while i < buf_len {
+        _ke_putc(8); _ke_putc(32); _ke_putc(8);
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Reprint command buffer to terminal
+fn _ke_line_reprint(buf_addr, buf_len) {
+    let mut i = 0;
+    while i < buf_len {
+        _ke_putc(mem_read_u8(buf_addr + i));
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Print history listing (called by "history" command dispatch)
+fn _ke_cmd_history() {
+    let count = mem_read_u64(HIST_COUNT_ADDR);
+    if count == 0 {
+        // "  (empty)\r\n"
+        _ke_putc(32); _ke_putc(32); _ke_putc(40);
+        _ke_putc(101); _ke_putc(109); _ke_putc(112);
+        _ke_putc(116); _ke_putc(121); _ke_putc(41);
+        _ke_putc(13); _ke_putc(10);
+        return 0;
+    }
+    let mut show = count;
+    if show > HIST_MAX { show = HIST_MAX; }
+    let start = count - show;
+    let mut idx = start;
+    while idx < count {
+        let slot = idx % HIST_MAX;
+        let entry_len = _ke_hist_entry_len(slot);
+        // Print index number
+        _ke_putc(32); _ke_putc(32);
+        _ke_put_dec(idx + 1);
+        _ke_putc(32); _ke_putc(32);
+        // Print entry text
+        let src = HIST_BASE + slot * HIST_ENTRY_SIZE;
+        let mut c = 0;
+        while c < entry_len {
+            _ke_putc(mem_read_u8(src + c));
+            c = c + 1;
+        }
+        _ke_putc(13); _ke_putc(10);
+        idx = idx + 1;
+    }
+    return 0;
+}
+
 // Interactive shell loop
 fn _ke_shell() {
     let cmd_buf = 3211264;     // 0x310000: command buffer (64 bytes)
     let mut buf_len = 0;
+    let mut hist_nav = 0;      // 0 = not browsing; 1+ = how many entries back
 
+    _ke_hist_init();
     _ke_prompt();
 
     while 1 == 1 {
@@ -9355,27 +10048,109 @@ fn _ke_shell() {
             mem_write_u64(3145744, 0);       // clear flag
             let sc = mem_read_u64(3145736);  // read scancode
 
-            // Ignore key-up events (bit 7 set)
-            if sc < 128 {
-                let ch = _ke_sc2ascii(sc);
-                if ch == 10 {
-                    // Enter: execute command
-                    _ke_putc(13); _ke_putc(10);
-                    _ke_dispatch(cmd_buf, buf_len);
-                    buf_len = 0;
-                    _ke_prompt();
-                } else if ch == 8 {
-                    // Backspace
-                    if buf_len > 0 {
-                        buf_len = buf_len - 1;
-                        _ke_putc(8); _ke_putc(32); _ke_putc(8);
+            // Handle E0 prefix for extended scancodes (arrow keys)
+            let e0_flag = mem_read_u64(E0_PREFIX_ADDR);
+            if sc == 224 {
+                // 0xE0 prefix: set flag, wait for next scancode
+                mem_write_u64(E0_PREFIX_ADDR, 1);
+            } else if e0_flag == 1 {
+                // Extended scancode follows 0xE0
+                mem_write_u64(E0_PREFIX_ADDR, 0);
+                // Ignore key-up events (bit 7 set) for extended keys
+                if sc < 128 {
+                    if sc == 72 {
+                        // Up arrow (0x48): navigate history backward
+                        let count = mem_read_u64(HIST_COUNT_ADDR);
+                        let max_back = count;
+                        if max_back > HIST_MAX { max_back = HIST_MAX; }
+                        if hist_nav < max_back {
+                            _ke_line_erase(buf_len);
+                            hist_nav = hist_nav + 1;
+                            buf_len = _ke_hist_load(cmd_buf, hist_nav);
+                            _ke_line_reprint(cmd_buf, buf_len);
+                        }
+                    } else if sc == 80 {
+                        // Down arrow (0x50): navigate history forward
+                        if hist_nav > 0 {
+                            _ke_line_erase(buf_len);
+                            hist_nav = hist_nav - 1;
+                            if hist_nav == 0 {
+                                // Back to empty new line
+                                buf_len = 0;
+                            } else {
+                                buf_len = _ke_hist_load(cmd_buf, hist_nav);
+                            }
+                            _ke_line_reprint(cmd_buf, buf_len);
+                        }
+                    } else if sc == 75 {
+                        // Left arrow (0x4B): move cursor left
+                        let cpos = mem_read_u64(CURSOR_POS_ADDR);
+                        if cpos < buf_len {
+                            _ke_putc(8);  // backspace (move cursor left)
+                            mem_write_u64(CURSOR_POS_ADDR, cpos + 1);
+                        }
+                    } else if sc == 77 {
+                        // Right arrow (0x4D): move cursor right
+                        let cpos = mem_read_u64(CURSOR_POS_ADDR);
+                        if cpos > 0 {
+                            // Re-echo char at cursor position to move right
+                            let char_idx = buf_len - cpos;
+                            _ke_putc(mem_read_u8(cmd_buf + char_idx));
+                            mem_write_u64(CURSOR_POS_ADDR, cpos - 1);
+                        }
                     }
-                } else if ch > 0 {
-                    // Printable char: store and echo
-                    if buf_len < 60 {
-                        mem_write_u8(cmd_buf + buf_len, ch);
-                        buf_len = buf_len + 1;
-                        _ke_putc(ch);
+                }
+            } else {
+                // Normal (non-extended) scancode
+                // Ignore key-up events (bit 7 set)
+                if sc < 128 {
+                    let ch = _ke_sc2ascii(sc);
+                    if ch == 10 {
+                        // Enter: save to history, execute command
+                        mem_write_u64(CURSOR_POS_ADDR, 0);
+                        _ke_putc(13); _ke_putc(10);
+                        if buf_len > 0 {
+                            _ke_hist_push(cmd_buf, buf_len);
+                        }
+                        // Check for "history" command (7 bytes: 104 105 115 116 111 114 121)
+                        let mut handled = 0;
+                        if buf_len == 7 {
+                            if mem_read_u8(cmd_buf) == 104 {
+                            if mem_read_u8(cmd_buf + 1) == 105 {
+                            if mem_read_u8(cmd_buf + 2) == 115 {
+                            if mem_read_u8(cmd_buf + 3) == 116 {
+                            if mem_read_u8(cmd_buf + 4) == 111 {
+                            if mem_read_u8(cmd_buf + 5) == 114 {
+                            if mem_read_u8(cmd_buf + 6) == 121 {
+                                _ke_cmd_history();
+                                handled = 1;
+                            } } } } } } }
+                        }
+                        if handled == 0 {
+                            if buf_len > 0 {
+                                // Try pipe execution first
+                                let piped = _ke_pipe_exec(cmd_buf, buf_len);
+                                if piped == 0 {
+                                    _ke_dispatch(cmd_buf, buf_len);
+                                }
+                            }
+                        }
+                        buf_len = 0;
+                        hist_nav = 0;
+                        _ke_prompt();
+                    } else if ch == 8 {
+                        // Backspace
+                        if buf_len > 0 {
+                            buf_len = buf_len - 1;
+                            _ke_putc(8); _ke_putc(32); _ke_putc(8);
+                        }
+                    } else if ch > 0 {
+                        // Printable char: store and echo
+                        if buf_len < 60 {
+                            mem_write_u8(cmd_buf + buf_len, ch);
+                            buf_len = buf_len + 1;
+                            _ke_putc(ch);
+                        }
                     }
                 }
             }
@@ -9385,6 +10160,13 @@ fn _ke_shell() {
 }
 
 fn _start() {
+    // Clear pipe capture state very early.
+    // Iteration 79 added _ke_putc capture redirection via 0x371000/0x371008;
+    // these locations must be zero before the first serial output or early
+    // boot logs may be redirected into the pipe buffer instead of COM1.
+    mem_write_u64(3608576, 0);  // 0x371000: PIPE_CAP_FLAG_ADDR
+    mem_write_u64(3608584, 0);  // 0x371008: PIPE_CAP_POS_ADDR
+
     // Phase 1: Serial init (COM1 38400 8N1)
     port_out_u8(1017, 0);    // COM1+1: disable interrupts
     port_out_u8(1019, 128);  // COM1+3: set DLAB
@@ -9454,7 +10236,20 @@ fn _start() {
     // Phase 7h: Signal system ready (iteration 74)
     // Signal fields (pending/blocked at task+48/+56) zeroed by _ke_task_init
 
-    // Phase 8: Interactive shell (iteration 25)
+    // Phase 7i: Command history init (iteration 75)
+    // History ring buffer at 0x350000, initialized in _ke_shell via _ke_hist_init
+
+    // Phase 7j: hostname/uname/date native commands (iteration 76)
+    // No init needed — commands read RTC/static strings directly
+
+    // Phase 7k: ARP cache init (iteration 77)
+    _ke_arp_init();
+
+    // Phase 7l: Shell pipe support (iteration 78) + grep (iteration 79)
+    // Pipe capture buffer at 0x370000, initialized on use
+    // _ke_putc checks capture flag for proper pipe redirection
+
+    // Phase 8: Interactive shell (iteration 25, enhanced iter 75-79)
     _ke_shell();
 
     return 0;

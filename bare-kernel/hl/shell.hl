@@ -3,31 +3,33 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 56 commands:
+// 61 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
 //   cache ntp wdog tmpfs fw rand cg pty sock shm trace hrt sysfs
 //   services svc(start/stop/status) kinfo run kill mkdir rm
+//   history hostname netstat grep
+//   Shell pipe: cmd1 | cmd2
 
 fn shell_handle(cmd) {
     if cmd == "help" {
         serial_print("=== HicOS Shell Commands ===");
-        serial_print("System:   help ver uptime date uname reboot shutdown kinfo");
+        serial_print("System:   help ver uptime date uname reboot shutdown kinfo hostname");
         serial_print("Memory:   free heap meminfo");
         serial_print("Tasks:    ps kill run (kill sends SIGTERM by default)");
         serial_print("Signals:  SIGTERM=15 SIGKILL=9 SIGSTOP=19 SIGCONT=18");
         serial_print("Files:    ls cat echo mkdir rm");
         serial_print("Disk:     disk_info format install");
-        serial_print("Network:  ifconfig ping dns arp");
+        serial_print("Network:  ifconfig ping dns arp netstat");
         serial_print("Hardware: lspci lsusb cpus dev beep ahci usb acpi");
         serial_print("Services: services svc start|stop|status <name>");
-        serial_print("Debug:    hilbert dmesg trace panic rand");
+        serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
     }
 
     if cmd == "ver" {
-        return "HicOS 5.0 -- Hilbert-Lang Kernel (112 modules, pure H-L, zero deps)";
+        return "HicOS 6.0 -- Hilbert-Lang Kernel (114 modules, pure H-L, zero deps)";
     }
 
     if cmd == "uptime" {
@@ -229,7 +231,16 @@ fn shell_handle_ext(cmd) {
         return "uid=" + to_string(current_uid) + " gid=" + to_string(current_gid);
     }
     if cmd == "uname" {
-        return "HicOS 5.0 x86_64 H-L";
+        return "HicOS 6.0 x86_64 Hilbert-Lang";
+    }
+    if cmd == "hostname" {
+        return "hicos";
+    }
+    if cmd == "history" {
+        return "(history is handled in kernel.bin shell loop)";
+    }
+    if cmd == "netstat" {
+        return "(netstat is handled in kernel.bin native dispatch)";
     }
     if cmd == "lsusb" {
         return "USB: XHCI host, " + to_string(xhci_max_ports) + " ports";
@@ -337,7 +348,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 56 commands");
+print("shell.hl loaded -- 61 commands");
 
 // Main shell loop (called from kernel_init)
 fn shell_main() {
