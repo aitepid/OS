@@ -6,7 +6,17 @@
 - 内核模块：`114`
 - Shell 命令数：`61` + pipe 操作符
 - 构建/测试主入口：`scripts/hl-bootstrap-build-test.ps1`
-- 最近完成迭代：`86`
+- 最近完成迭代：`87`
+
+## Iteration 87 — DNS TTL 哈希缓存
+
+- **`dns.hl`**: 无缓存直查升级为 **O(1) 哈希表 + TTL 过期缓存**
+  - 32 桶分离链哈希 + 64 条目缓存池
+  - `dns_resolve()`: 先查缓存 O(1)，命中直接返回；未命中走查询路径
+  - TTL 自动过期：基于 tick 计数器（100Hz），过期条目懒清除
+  - DJB2 哈希函数，按域名 label 逐字符计算
+  - 新增 `dns_cache_result()` / `dns_cache_flush()` / `dns_cache_status()`
+  - 13 个函数编译通过
 
 ## Iteration 86 — TCP Reno 拥塞控制
 

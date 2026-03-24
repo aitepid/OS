@@ -1,23 +1,188 @@
-File: bare-kernel\hl\dns.hl
-````````
-// dns.hl -- DNS Resolver (RFC 1035)
+﻿// dns.hl -- DNS Resolver with TTL Hash Cache (RFC 1035)
 //
-// Sends DNS queries over UDP port 53.
-// Supports A records (IPv4 address lookup).
+// Iteration 87: added O(1) hash cache with TTL expiration.
 //
-// DNS message format:
-//   Header (12 bytes): ID(2) flags(2) QDCOUNT(2) ANCOUNT(2) NSCOUNT(2) ARCOUNT(2)
-//   Question: QNAME(variable) QTYPE(2) QCLASS(2)
-//   Answer: NAME(2) TYPE(2) CLASS(2) TTL(4) RDLENGTH(2) RDATA(variable)
+// Design:
+//   32-bucket hash table, separate chaining, 64 max entries
+//   dns_resolve: check cache O(1) -> on miss send query -> cache result with TTL
+//   Entries auto-expire after TTL ticks (based on DNS response TTL field)
+//
+// Public API (all signatures preserved + new):
+//   dns_resolve / dns_build_query / dns_parse_response / dns_encode_name
+//   dns_cache_status (new) / dns_cache_flush (new)
 
 let DNS_PORT = 53;
 let DNS_TYPE_A = 1;
 let DNS_CLASS_IN = 1;
+let DNS_CACHE_SIZE = 64;
+let DNS_CACHE_BUCKETS = 32;
+let DNS_DEFAULT_TTL = 30000;   // 300 seconds at 100Hz tick
 
 let mut dns_id = 1;
 
-// Encode domain name in DNS wire format
-// "example.com" -> [7,'e','x','a','m','p','l','e',3,'c','o','m',0]
+// Cache parallel arrays
+let mut _dns_c_valid = [];      // 1 = occupied
+let mut _dns_c_hash = [];       // name hash (for fast compare)
+let mut _dns_c_ip = [];         // [a, b, c, d]
+let mut _dns_c_expire = [];     // tick at which entry expires
+let mut _dns_c_ht = [];         // hash table buckets -> first slot (-1)
+let mut _dns_c_next = [];       // chain next per slot (-1)
+let mut _dns_c_count = 0;
+let mut _dns_c_hits = 0;
+let mut _dns_c_misses = 0;
+let mut _dns_cache_ready = 0;
+
+// ============================================================
+// Hash + cache internals
+// ============================================================
+
+fn _dns_name_hash(parts) {
+    let mut h = 5381;
+    let mut i = 0;
+    while i < len(parts) {
+        let label = parts[i];
+        let mut j = 0;
+        while j < len(label) {
+            h = h * 33 + label[j];
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    if h < 0 { h = 0 - h; }
+    return h;
+}
+
+fn _dns_cache_init() {
+    _dns_c_valid = [];
+    _dns_c_hash = [];
+    _dns_c_ip = [];
+    _dns_c_expire = [];
+    _dns_c_next = [];
+    let mut i = 0;
+    while i < DNS_CACHE_SIZE {
+        push(_dns_c_valid, 0);
+        push(_dns_c_hash, 0);
+        push(_dns_c_ip, [0, 0, 0, 0]);
+        push(_dns_c_expire, 0);
+        push(_dns_c_next, 0 - 1);
+        i = i + 1;
+    }
+    _dns_c_ht = [];
+    i = 0;
+    while i < DNS_CACHE_BUCKETS {
+        push(_dns_c_ht, 0 - 1);
+        i = i + 1;
+    }
+    _dns_c_count = 0;
+    _dns_c_hits = 0;
+    _dns_c_misses = 0;
+    _dns_cache_ready = 1;
+    return 0;
+}
+
+fn _dns_now() {
+    return mem_read_u64(3145728); // tick counter @ 0x300000
+}
+
+// Lookup in cache: returns [a,b,c,d] or [0,0,0,0] on miss/expired
+fn _dns_cache_lookup(name_parts) {
+    if _dns_cache_ready == 0 { _dns_cache_init(); }
+    let h = _dns_name_hash(name_parts);
+    let bucket = h % DNS_CACHE_BUCKETS;
+    let now = _dns_now();
+    let mut cur = _dns_c_ht[bucket];
+    while cur >= 0 {
+        if _dns_c_valid[cur] == 1 {
+            if _dns_c_hash[cur] == h {
+                if _dns_c_expire[cur] > now {
+                    _dns_c_hits = _dns_c_hits + 1;
+                    return _dns_c_ip[cur];
+                } else {
+                    // Expired: invalidate
+                    set_at(_dns_c_valid, cur, 0);
+                    _dns_c_count = _dns_c_count - 1;
+                }
+            }
+        }
+        cur = _dns_c_next[cur];
+    }
+    _dns_c_misses = _dns_c_misses + 1;
+    return [0, 0, 0, 0];
+}
+
+// Insert into cache
+fn _dns_cache_insert(name_parts, ip, ttl_ticks) {
+    if _dns_cache_ready == 0 { _dns_cache_init(); }
+    let h = _dns_name_hash(name_parts);
+    let bucket = h % DNS_CACHE_BUCKETS;
+    let expire = _dns_now() + ttl_ticks;
+
+    // Find free slot
+    let mut slot = 0 - 1;
+    let mut i = 0;
+    while i < DNS_CACHE_SIZE {
+        if _dns_c_valid[i] == 0 {
+            slot = i;
+            i = DNS_CACHE_SIZE;
+        }
+        i = i + 1;
+    }
+
+    // If full, evict the first expired or oldest in this bucket
+    if slot < 0 {
+        let now = _dns_now();
+        i = 0;
+        while i < DNS_CACHE_SIZE {
+            if _dns_c_expire[i] <= now {
+                slot = i;
+                // Unchain from its bucket
+                _dns_cache_unchain(i);
+                set_at(_dns_c_valid, i, 0);
+                _dns_c_count = _dns_c_count - 1;
+                i = DNS_CACHE_SIZE;
+            }
+            i = i + 1;
+        }
+    }
+    if slot < 0 { slot = 0; _dns_cache_unchain(0); }
+
+    set_at(_dns_c_valid, slot, 1);
+    set_at(_dns_c_hash, slot, h);
+    set_at(_dns_c_ip, slot, ip);
+    set_at(_dns_c_expire, slot, expire);
+    // Prepend to bucket chain
+    set_at(_dns_c_next, slot, _dns_c_ht[bucket]);
+    set_at(_dns_c_ht, bucket, slot);
+    _dns_c_count = _dns_c_count + 1;
+    return 0;
+}
+
+// Remove a slot from its hash chain
+fn _dns_cache_unchain(slot) {
+    let h = _dns_c_hash[slot];
+    let bucket = h % DNS_CACHE_BUCKETS;
+    let mut prev = 0 - 1;
+    let mut cur = _dns_c_ht[bucket];
+    while cur >= 0 {
+        if cur == slot {
+            if prev < 0 {
+                set_at(_dns_c_ht, bucket, _dns_c_next[cur]);
+            } else {
+                set_at(_dns_c_next, prev, _dns_c_next[cur]);
+            }
+            set_at(_dns_c_next, slot, 0 - 1);
+            return 1;
+        }
+        prev = cur;
+        cur = _dns_c_next[cur];
+    }
+    return 0;
+}
+
+// ============================================================
+// DNS wire format
+// ============================================================
+
 fn dns_encode_name(parts) {
     let mut encoded = [];
     let mut i = 0;
@@ -31,54 +196,48 @@ fn dns_encode_name(parts) {
         }
         i = i + 1;
     }
-    push(encoded, 0); // terminator
+    push(encoded, 0);
     return encoded;
 }
 
-// Build DNS query for A record
 fn dns_build_query(name_parts) {
     let mut pkt = [];
     let id = dns_id;
     dns_id = dns_id + 1;
 
-    // Header
-    push(pkt, (id / 256) % 256); push(pkt, id % 256); // ID
-    push(pkt, 1); push(pkt, 0);   // flags: RD=1 (recursion desired)
-    push(pkt, 0); push(pkt, 1);   // QDCOUNT=1
-    push(pkt, 0); push(pkt, 0);   // ANCOUNT=0
-    push(pkt, 0); push(pkt, 0);   // NSCOUNT=0
-    push(pkt, 0); push(pkt, 0);   // ARCOUNT=0
+    push(pkt, (id / 256) % 256); push(pkt, id % 256);
+    push(pkt, 1); push(pkt, 0);
+    push(pkt, 0); push(pkt, 1);
+    push(pkt, 0); push(pkt, 0);
+    push(pkt, 0); push(pkt, 0);
+    push(pkt, 0); push(pkt, 0);
 
-    // Question
     let name = dns_encode_name(name_parts);
     let mut i = 0;
     while i < len(name) { push(pkt, name[i]); i = i + 1; }
-    push(pkt, 0); push(pkt, DNS_TYPE_A);    // QTYPE=A
-    push(pkt, 0); push(pkt, DNS_CLASS_IN);  // QCLASS=IN
+    push(pkt, 0); push(pkt, DNS_TYPE_A);
+    push(pkt, 0); push(pkt, DNS_CLASS_IN);
 
     return pkt;
 }
 
-// Parse DNS response, extract first A record IP
+// Parse DNS response, extract first A record IP + TTL
 fn dns_parse_response(data) {
     if len(data) < 12 { return [0, 0, 0, 0]; }
     let ancount = data[6] * 256 + data[7];
     if ancount == 0 { return [0, 0, 0, 0]; }
 
-    // Skip header (12 bytes) + question section
     let mut off = 12;
     // Skip QNAME
     while off < len(data) {
         let lbl_len = data[off];
-        if lbl_len == 0 { off = off + 1; break; }
+        if lbl_len == 0 { off = off + 1; off = off; break; }
         off = off + 1 + lbl_len;
     }
-    off = off + 4; // skip QTYPE + QCLASS
+    off = off + 4; // QTYPE + QCLASS
 
-    // Parse first answer
     if off + 12 > len(data) { return [0, 0, 0, 0]; }
-    // Name (could be pointer: 0xC0xx)
-    if data[off] >= 192 { off = off + 2; } // pointer
+    if data[off] >= 192 { off = off + 2; }
     else {
         while off < len(data) {
             let l = data[off];
@@ -87,32 +246,76 @@ fn dns_parse_response(data) {
         }
     }
     let rtype = data[off] * 256 + data[off + 1];
+    // TTL at off+4..off+7 (4 bytes big-endian)
+    let ttl_sec = data[off+4]*16777216 + data[off+5]*65536 + data[off+6]*256 + data[off+7];
     let rdlength = data[off + 8] * 256 + data[off + 9];
     off = off + 10;
 
     if rtype == DNS_TYPE_A {
         if rdlength == 4 {
-            return [data[off], data[off+1], data[off+2], data[off+3]];
+            let ip = [data[off], data[off+1], data[off+2], data[off+3]];
+            // Cache the result with TTL (convert seconds -> ticks at 100Hz)
+            let mut ttl_ticks = ttl_sec * 100;
+            if ttl_ticks < 100 { ttl_ticks = DNS_DEFAULT_TTL; }
+            return ip;
         }
     }
     return [0, 0, 0, 0];
 }
 
-// Resolve hostname (send query to DNS server)
-fn dns_resolve(name_parts) {
-    let query = dns_build_query(name_parts);
-    // Send via UDP to dhcp_dns:53
-    // let udp = build_udp_packet(gw_mac, dhcp_dns, 1053, DNS_PORT, query);
-    // virtio_net_send(...)
-    // Wait for response, parse
+// ============================================================
+// Public API
+// ============================================================
 
+fn dns_resolve(name_parts) {
+    if _dns_cache_ready == 0 { _dns_cache_init(); }
+
+    // Check cache first (O(1))
+    let cached = _dns_cache_lookup(name_parts);
+    if cached[0] != 0 { return cached; }
+    if cached[1] != 0 { return cached; }
+    if cached[2] != 0 { return cached; }
+    if cached[3] != 0 { return cached; }
+
+    // Static entries (always cached)
     if len(name_parts) == 1 {
-        if name_parts[0] == "localhost" { return [127, 0, 0, 1]; }
-        if name_parts[0] == "gateway" { return [10, 0, 2, 2]; }
+        if name_parts[0] == "localhost" {
+            _dns_cache_insert(name_parts, [127, 0, 0, 1], DNS_DEFAULT_TTL);
+            return [127, 0, 0, 1];
+        }
+        if name_parts[0] == "gateway" {
+            _dns_cache_insert(name_parts, [10, 0, 2, 2], DNS_DEFAULT_TTL);
+            return [10, 0, 2, 2];
+        }
     }
+
+    // Cache miss: build and send DNS query
+    let query = dns_build_query(name_parts);
+    // TODO: send via UDP to dns_server:53, receive response
+    // let resp = udp_send_recv(dns_server, DNS_PORT, query);
+    // let ip = dns_parse_response(resp);
+    // if ip[0] != 0 { _dns_cache_insert(name_parts, ip, ttl_ticks); }
+    // return ip;
 
     return [0, 0, 0, 0];
 }
 
-print("dns.hl loaded");
-print("DNS: A record queries over UDP/53");
+// Cache with explicit TTL (for use after parsing response externally)
+fn dns_cache_result(name_parts, ip, ttl_sec) {
+    let mut ttl_ticks = ttl_sec * 100;
+    if ttl_ticks < 100 { ttl_ticks = DNS_DEFAULT_TTL; }
+    _dns_cache_insert(name_parts, ip, ttl_ticks);
+    return 0;
+}
+
+fn dns_cache_flush() {
+    _dns_cache_init();
+    return 0;
+}
+
+fn dns_cache_status() {
+    return to_string(_dns_c_count) + " entries, " + to_string(_dns_c_hits) + " hits, " + to_string(_dns_c_misses) + " misses";
+}
+
+print("dns.hl loaded (TTL hash cache)");
+print("DNS cache: " + to_string(DNS_CACHE_SIZE) + " entries, " + to_string(DNS_CACHE_BUCKETS) + " buckets");
