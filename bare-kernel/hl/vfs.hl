@@ -1,20 +1,24 @@
-// vfs.hl -- Virtual Filesystem Layer
+﻿// vfs.hl -- Virtual Filesystem Layer (Trie Mount Resolution)
 //
-// Abstraction over multiple filesystem backends:
-//   - ramfs  (in-memory, always present)
-//   - fat16  (VirtIO block device)
+// Iteration 88: mount resolution upgraded from O(n) linear scan
+// to O(depth) Trie prefix tree lookup.
 //
-// File descriptor table per-task, global open file table.
-// Path format: /dev/XXX, /mnt/disk0/path, /tmp/file
+// Trie design:
+//   Nodes indexed by parallel arrays. Each node holds one path component.
+//   Root (node 0) = "/". Children scanned by component match.
+//   vfs_resolve: split path by '/', walk Trie, track deepest mount point.
 //
-// Mount table: maps path prefix to filesystem + device
+// Public API (all signatures preserved):
+//   vfs_init / vfs_mount / vfs_mount_fat16 / vfs_resolve
+//   vfs_open / vfs_read / vfs_write / vfs_close / vfs_seek
+//   vfs_stat / vfs_readdir / vfs_mkdir / vfs_unlink
 
 let VFS_TABLE = 8650752;       // 0x840000
 let VFS_ENTRY_SIZE = 128;
 let MAX_OPEN_FILES = 256;
 let MAX_MOUNTS = 8;
+let TRIE_MAX_NODES = 32;
 
-// File descriptor flags
 let O_RDONLY = 0;
 let O_WRONLY = 1;
 let O_RDWR   = 2;
@@ -22,62 +26,155 @@ let O_CREAT  = 64;
 let O_TRUNC  = 512;
 let O_APPEND = 1024;
 
-// File types
 let FT_REGULAR = 1;
 let FT_DIR     = 2;
-let FT_CHARDEV = 3;  // serial, console
-let FT_BLKDEV  = 4;  // disk
+let FT_CHARDEV = 3;
+let FT_BLKDEV  = 4;
 let FT_PIPE    = 5;
-
-// Open file entry (128 bytes):
-//   +0:  flags (8) -- used, type, access mode
-//   +8:  fs_type (8) -- 0=ramfs, 1=fat16, 2=devfs
-//   +16: fs_inode (8) -- filesystem-specific inode/index
-//   +24: position (8) -- current read/write position
-//   +32: size (8) -- file size
-//   +40: refcount (8) -- number of FDs pointing here
-//   +48: reserved (80)
-
-// Mount entry (64 bytes):
-//   +0:  flags (8)
-//   +8:  path_prefix ptr (8)
-//   +16: fs_type (8)
-//   +24: device_id (8)
-//   +32: reserved (32)
 
 let MOUNT_TABLE = 8716288;    // 0x850000
 let mut mount_count = 0;
 
-fn vfs_init() {
-    mount_count = 0;
-    // Mount ramfs at /
-    vfs_mount("/", 0, 0);
-    // Mount devfs at /dev
-    vfs_mount("/dev", 2, 0);
-    // Mount FAT16 at /mnt/disk0 if VirtIO-blk available
-    // (deferred until virtio_blk_init succeeds)
+// ============================================================
+// Trie for mount-point prefix matching
+// ============================================================
+
+let mut _trie_label = [];      // path component ("dev","mnt",...)
+let mut _trie_children = [];   // array of child indices per node
+let mut _trie_mount = [];      // mount table index (-1 = not a mount point)
+let mut _trie_count = 0;
+
+fn _trie_init() {
+    _trie_label = [];
+    _trie_children = [];
+    _trie_mount = [];
+    // Create root node (represents "/")
+    push(_trie_label, "");
+    push(_trie_children, []);
+    push(_trie_mount, 0 - 1);
+    _trie_count = 1;
     return 0;
 }
 
-// Mount a filesystem
+fn _trie_add_child(parent, label) {
+    if _trie_count >= TRIE_MAX_NODES { return 0 - 1; }
+    let idx = _trie_count;
+    push(_trie_label, label);
+    push(_trie_children, []);
+    push(_trie_mount, 0 - 1);
+    _trie_count = _trie_count + 1;
+    push(_trie_children[parent], idx);
+    return idx;
+}
+
+fn _trie_find_child(parent, label) {
+    let kids = _trie_children[parent];
+    let mut i = 0;
+    while i < len(kids) {
+        if _trie_label[kids[i]] == label { return kids[i]; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+// Insert a mount path into the Trie, return the leaf node
+fn _trie_insert_path(path, mount_idx) {
+    let parts = _vfs_split_path(path);
+    let mut node = 0; // root
+    let mut i = 0;
+    while i < len(parts) {
+        let child = _trie_find_child(node, parts[i]);
+        if child >= 0 {
+            node = child;
+        } else {
+            node = _trie_add_child(node, parts[i]);
+            if node < 0 { return 0 - 1; }
+        }
+        i = i + 1;
+    }
+    set_at(_trie_mount, node, mount_idx);
+    return node;
+}
+
+// Split path "/dev/sda" -> ["dev","sda"], "/" -> []
+fn _vfs_split_path(path) {
+    let mut parts = [];
+    let mut cur = "";
+    let mut i = 0;
+    while i < len(path) {
+        let c = char_at(path, i);
+        if c == "/" {
+            if len(cur) > 0 {
+                push(parts, cur);
+                cur = "";
+            }
+        } else {
+            cur = cur + c;
+        }
+        i = i + 1;
+    }
+    if len(cur) > 0 { push(parts, cur); }
+    return parts;
+}
+
+// ============================================================
+// Trie-based resolve: O(path_depth) instead of O(n_mounts)
+// Returns [mount_idx, full_path]
+// ============================================================
+
+fn vfs_resolve(path) {
+    let parts = _vfs_split_path(path);
+    let mut node = 0; // root
+    let mut best_mount = 0 - 1;
+    // Check if root itself is a mount point
+    if _trie_mount[0] >= 0 { best_mount = _trie_mount[0]; }
+
+    let mut i = 0;
+    while i < len(parts) {
+        let child = _trie_find_child(node, parts[i]);
+        if child >= 0 {
+            node = child;
+            if _trie_mount[node] >= 0 {
+                best_mount = _trie_mount[node];
+            }
+            i = i + 1;
+        } else {
+            i = len(parts); // break: no deeper match
+        }
+    }
+
+    if best_mount < 0 { best_mount = 0; }
+    return [best_mount, path];
+}
+
+// ============================================================
+// Mount management
+// ============================================================
+
+fn vfs_init() {
+    _trie_init();
+    mount_count = 0;
+    vfs_mount("/", 0, 0);
+    vfs_mount("/dev", 2, 0);
+    return 0;
+}
+
 fn vfs_mount(path_prefix, fs_type, device_id) {
     if mount_count >= MAX_MOUNTS { return 0; }
     let addr = MOUNT_TABLE + mount_count * 64;
-    mem_write_u64(addr, 1);              // flags = used
-    // Store path prefix as memory string
+    mem_write_u64(addr, 1);
     mem_write_string(addr + 8, path_prefix);
     mem_write_u64(addr + 16, fs_type);
     mem_write_u64(addr + 24, device_id);
+    // Insert into Trie
+    _trie_insert_path(path_prefix, mount_count);
     mount_count = mount_count + 1;
     return 1;
 }
 
-// Mount FAT16 partition on VirtIO disk
 fn vfs_mount_fat16(mount_path, device_id) {
-    // Read boot sector from disk
     let boot_buf = page_alloc();
     virtio_blk_read(0, 1, boot_buf);
-    // Read boot sector into array for fat16_init
     let mut boot_sector = [];
     let mut i = 0;
     while i < 512 {
@@ -85,7 +182,6 @@ fn vfs_mount_fat16(mount_path, device_id) {
         i = i + 1;
     }
     page_free(boot_buf);
-    // Initialize FAT16
     let result = fat16_init(boot_sector);
     if result == 1 {
         vfs_mount(mount_path, 1, device_id);
@@ -96,53 +192,28 @@ fn vfs_mount_fat16(mount_path, device_id) {
     return 0;
 }
 
-// Resolve path to mount point + relative path
-fn vfs_resolve(path) {
-    // Find longest matching mount prefix
-    let mut best = 0;
-    let mut best_len = 0;
-    let mut mi = 0;
-    while mi < mount_count {
-        let addr = MOUNT_TABLE + mi * 64;
-        let flags = mem_read_u64(addr);
-        if flags == 1 {
-            // Compare prefix (simplified: check fs_type as proxy)
-            let fs_t = mem_read_u64(addr + 16);
-            // devfs mount has fs_type=2
-            if fs_t == 2 && len(path) >= 4 {
-                // Check if path starts with "/dev"
-                if char_at(path, 0) == "/" && char_at(path, 1) == "d" && char_at(path, 2) == "e" && char_at(path, 3) == "v" {
-                    best = mi;
-                    best_len = 4;
-                }
-            }
-        }
-        mi = mi + 1;
-    }
-    return [best, path];
-}
+// ============================================================
+// File operations (unchanged logic, uses Trie resolve)
+// ============================================================
 
-// Open a file
 fn vfs_open(path, flags) {
     let mount_info = vfs_resolve(path);
     let mount_idx = mount_info[0];
 
-    // Find free file descriptor
     let mut fd = 0;
     while fd < MAX_OPEN_FILES {
         let addr = VFS_TABLE + fd * VFS_ENTRY_SIZE;
         let f = mem_read_u64(addr);
         if f == 0 {
-            // Mark as used
             mem_write_u64(addr, 1);
             mem_write_u64(addr + 8, mem_read_u64(MOUNT_TABLE + mount_idx * 64 + 16));
-            mem_write_u64(addr + 24, 0);  // position = 0
-            mem_write_u64(addr + 40, 1);  // refcount = 1
+            mem_write_u64(addr + 24, 0);
+            mem_write_u64(addr + 40, 1);
             return fd;
         }
         fd = fd + 1;
     }
-    return 0 - 1; // no free slot
+    return 0 - 1;
 }
 
 fn vfs_read(fd, buf, count) {
@@ -153,20 +224,13 @@ fn vfs_read(fd, buf, count) {
     let inode = mem_read_u64(addr + 16);
     let pos = mem_read_u64(addr + 24);
     let size = mem_read_u64(addr + 32);
-    // Dispatch to backend
     let mut bytes_read = 0;
     if fs_type == 0 {
-        // ramfs: read from inode data
         bytes_read = ramfs_read(inode, buf, pos, count);
     }
     if fs_type == 1 {
-        // fat16: read from cluster chain
-        // inode = directory entry index for FAT16
-        // For simplicity: re-read the file data from cluster chain
-        // (A real implementation would cache the cluster chain)
-        bytes_read = 0; // FAT16 read handled at file open
+        bytes_read = 0;
     }
-    // Update position
     mem_write_u64(addr + 24, pos + bytes_read);
     return bytes_read;
 }
@@ -183,11 +247,9 @@ fn vfs_write(fd, data, count) {
         bytes_written = ramfs_write(inode, data, pos, count);
     }
     if fs_type == 1 {
-        // fat16: write via cluster chain
-        bytes_written = 0; // FAT16 write handled at higher level
+        bytes_written = 0;
     }
     mem_write_u64(addr + 24, pos + bytes_written);
-    // Update size if grew
     let old_size = mem_read_u64(addr + 32);
     if pos + bytes_written > old_size {
         mem_write_u64(addr + 32, pos + bytes_written);
@@ -198,7 +260,7 @@ fn vfs_write(fd, data, count) {
 fn vfs_close(fd) {
     if fd < 0 { return 0; }
     let addr = VFS_TABLE + fd * VFS_ENTRY_SIZE;
-    mem_write_u64(addr, 0); // clear entry
+    mem_write_u64(addr, 0);
     return 0;
 }
 
@@ -208,9 +270,9 @@ fn vfs_seek(fd, offset, whence) {
     let cur = mem_read_u64(addr + 24);
     let size = mem_read_u64(addr + 32);
     let mut new_pos = cur;
-    if whence == 0 { new_pos = offset; }           // SEEK_SET
-    if whence == 1 { new_pos = cur + offset; }     // SEEK_CUR
-    if whence == 2 { new_pos = size + offset; }    // SEEK_END
+    if whence == 0 { new_pos = offset; }
+    if whence == 1 { new_pos = cur + offset; }
+    if whence == 2 { new_pos = size + offset; }
     if new_pos < 0 { new_pos = 0; }
     mem_write_u64(addr + 24, new_pos);
     return new_pos;
@@ -221,12 +283,16 @@ fn vfs_stat(path) {
     let fs_type = mem_read_u64(MOUNT_TABLE + mount_info[0] * 64 + 16);
     if fs_type == 0 { return ramfs_stat(path); }
     if fs_type == 1 {
-        // FAT16: search root directory
         let files = fat16_list_root();
         let mut i = 0;
         while i < len(files) {
-            if files[i][0] == path || files[i][0] == mount_info[1] {
-                let ftype = 1;
+            if files[i][0] == path {
+                let mut ftype = 1;
+                if files[i][3] == 1 { ftype = 2; }
+                return [files[i][2], ftype, files[i][1], 0];
+            }
+            if files[i][0] == mount_info[1] {
+                let mut ftype = 1;
                 if files[i][3] == 1 { ftype = 2; }
                 return [files[i][2], ftype, files[i][1], 0];
             }
@@ -266,7 +332,6 @@ fn vfs_unlink(path) {
     let fs_type = mem_read_u64(MOUNT_TABLE + mount_info[0] * 64 + 16);
     if fs_type == 0 { return ramfs_unlink(path); }
     if fs_type == 1 {
-        // Find file in root dir
         let files = fat16_list_root();
         let mut i = 0;
         while i < len(files) {
@@ -277,6 +342,6 @@ fn vfs_unlink(path) {
     return 0 - 1;
 }
 
-print("vfs.hl loaded");
+print("vfs.hl loaded (Trie mount resolve)");
 print("Max open files: " + to_string(MAX_OPEN_FILES));
-print("Max mounts: " + to_string(MAX_MOUNTS));
+print("Max mounts: " + to_string(MAX_MOUNTS) + ", Trie nodes: " + to_string(TRIE_MAX_NODES));

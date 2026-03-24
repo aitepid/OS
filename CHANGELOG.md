@@ -6,7 +6,16 @@
 - 内核模块：`114`
 - Shell 命令数：`61` + pipe 操作符
 - 构建/测试主入口：`scripts/hl-bootstrap-build-test.ps1`
-- 最近完成迭代：`87`
+- 最近完成迭代：`88`
+
+## Iteration 88 — VFS Trie 前缀树挂载解析
+
+- **`vfs.hl`**: 挂载点解析从 O(n) 线性扫描升级为 **O(depth) Trie 前缀树**
+  - 32 节点 Trie，按路径组件分层（"dev"、"mnt"、"disk0"）
+  - `vfs_mount()` 同时插入挂载表 + Trie
+  - `vfs_resolve()`: 分割路径 → 逐组件走 Trie → 跟踪最深挂载点
+  - 新增 `_vfs_split_path()` / `_trie_init()` / `_trie_insert_path()` / `_trie_find_child()`
+  - 18 个函数编译通过，所有调用方无需修改
 
 ## Iteration 87 — DNS TTL 哈希缓存
 
