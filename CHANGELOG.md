@@ -7,7 +7,19 @@
 - 内核模块：`114`
 - Shell 命令数：`61` + pipe 操作符
 - 构建/测试主入口：`scripts/hl-bootstrap-build-test.ps1`
-- 最近完成迭代：`89`
+- 最近完成迭代：`91`
+
+## Iteration 91 — ARP 哈希表缓存
+
+- **`arp.hl`**: O(n) 线性扫描升级为 **O(1) 16 桶分离链哈希表**
+  - 32 条目缓存池 + 16 桶哈希（IP % 16）
+  - `arp_lookup()` / `arp_update()`: O(1) 平均
+  - 满缓存时驱逐 slot 0
+  - 加载时自动初始化（`_arp_cache_init()`）
+- **`net.hl`**: 内联 ARP 同步升级为 16 桶哈希
+  - `arp_init()` / `arp_lookup()` / `arp_update()` 全部重写
+  - 保持 `arp_input()` 调用方不变
+- 阶段 3 开始，构建 + 冒烟通过
 
 ## Iteration 89 — 阶段 2 收敛
 

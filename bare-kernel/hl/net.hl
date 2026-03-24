@@ -155,42 +155,85 @@ fn parse_eth_frame(data) {
     return [ethertype, 14]; // [type, payload_offset]
 }
 
-// ARP table (simple, max 16 entries)
-let ARP_MAX = 16;
+// ARP table -- hash-based O(1) lookup (iteration 91)
+let _NET_ARP_MAX = 16;
+let _NET_ARP_BUCKETS = 16;
 let mut arp_table_ip = [];
 let mut arp_table_mac = [];
+let mut _net_arp_valid = [];
+let mut _net_arp_ht = [];
+let mut _net_arp_next = [];
 let mut arp_count = 0;
 
+fn _net_arp_hash(ip) {
+    let h = ip % _NET_ARP_BUCKETS;
+    if h < 0 { return h + _NET_ARP_BUCKETS; }
+    return h;
+}
+
 fn arp_init() {
+    arp_table_ip = [];
+    arp_table_mac = [];
+    _net_arp_valid = [];
+    _net_arp_next = [];
     arp_count = 0;
     let mut i = 0;
-    while i < ARP_MAX {
+    while i < _NET_ARP_MAX {
         push(arp_table_ip, 0);
         push(arp_table_mac, [0, 0, 0, 0, 0, 0]);
+        push(_net_arp_valid, 0);
+        push(_net_arp_next, 0 - 1);
+        i = i + 1;
+    }
+    _net_arp_ht = [];
+    i = 0;
+    while i < _NET_ARP_BUCKETS {
+        push(_net_arp_ht, 0 - 1);
         i = i + 1;
     }
     return 0;
 }
 
 fn arp_lookup(ip_packed) {
-    let mut i = 0;
-    while i < arp_count {
-        if arp_table_ip[i] == ip_packed { return arp_table_mac[i]; }
-        i = i + 1;
+    let bucket = _net_arp_hash(ip_packed);
+    let mut cur = _net_arp_ht[bucket];
+    while cur >= 0 {
+        if _net_arp_valid[cur] == 1 {
+            if arp_table_ip[cur] == ip_packed { return arp_table_mac[cur]; }
+        }
+        cur = _net_arp_next[cur];
     }
     return [0, 0, 0, 0, 0, 0];
 }
 
 fn arp_update(ip_packed, mac) {
-    let mut i = 0;
-    while i < arp_count {
-        if arp_table_ip[i] == ip_packed { arp_table_mac[i] = mac; return 0; }
-        i = i + 1;
+    // Check existing
+    let bucket = _net_arp_hash(ip_packed);
+    let mut cur = _net_arp_ht[bucket];
+    while cur >= 0 {
+        if _net_arp_valid[cur] == 1 {
+            if arp_table_ip[cur] == ip_packed {
+                set_at(arp_table_mac, cur, mac);
+                return 0;
+            }
+        }
+        cur = _net_arp_next[cur];
     }
-    if arp_count < ARP_MAX {
-        arp_table_ip[arp_count] = ip_packed;
-        arp_table_mac[arp_count] = mac;
-        arp_count = arp_count + 1;
+    // Find free slot
+    if arp_count < _NET_ARP_MAX {
+        let mut i = 0;
+        while i < _NET_ARP_MAX {
+            if _net_arp_valid[i] == 0 {
+                set_at(arp_table_ip, i, ip_packed);
+                set_at(arp_table_mac, i, mac);
+                set_at(_net_arp_valid, i, 1);
+                set_at(_net_arp_next, i, _net_arp_ht[bucket]);
+                set_at(_net_arp_ht, bucket, i);
+                arp_count = arp_count + 1;
+                return 0;
+            }
+            i = i + 1;
+        }
     }
     return 0;
 }
