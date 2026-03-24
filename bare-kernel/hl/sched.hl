@@ -1,64 +1,253 @@
-// sched.hl -- H-L Scheduler Configuration Module
-// Replaces hardcoded scheduler params with spatial H-L logic.
+﻿// sched.hl -- Multi-Level Feedback Queue Scheduler (MLFQ)
+//
+// Iteration 97: upgraded from CFS-parameter-only to full MLFQ.
+//
+// Design:
+//   4 priority levels (0=highest, 3=lowest)
+//   Each level: circular queue, 32 slots
+//   Time quantum doubles per level: 2ms, 4ms, 8ms, 16ms
+//   Rules:
+//     1. New tasks enter level 0 (highest priority)
+//     2. If task uses entire quantum, demote to next level
+//     3. If task yields (I/O) before quantum, stay or promote
+//     4. Periodic boost: every BOOST_INTERVAL, all tasks -> level 0
+//     5. Pick: always run highest-priority non-empty queue (FIFO within level)
+//
+// Public API (preserved + new):
+//   nice_to_weight / calc_slice / should_preempt / update_vruntime (compat)
+//   mlfq_init / mlfq_insert / mlfq_pick / mlfq_demote / mlfq_yield
+//   mlfq_boost / mlfq_status (new)
 
-// CFS scheduling parameters (matching Linux kernel)
+// CFS compatibility (preserved for task.hl)
 let CFS_LATENCY_MS = 20;
 let CFS_MIN_GRANULARITY_MS = 2;
 let CFS_WAKEUP_GRAN_MS = 4;
 let DEFAULT_NICE = 0;
 let DEFAULT_WEIGHT = 1024;
 
-// Nice -> weight lookup via computation (not table)
 fn nice_to_weight(nice) {
-    // Approximate: weight = 1024 * 1.25^(-nice)
-    let w = 1024;
+    let mut w = 1024;
     let mut n = nice;
     if n > 0 {
-        while n > 0 {
-            w = w * 4 / 5;
-            n = n - 1;
-        }
+        while n > 0 { w = w * 4 / 5; n = n - 1; }
     } else {
-        while n < 0 {
-            w = w * 5 / 4;
-            n = n + 1;
-        }
+        while n < 0 { w = w * 5 / 4; n = n + 1; }
     }
     return w;
 }
 
-// Compute time slice for a process
 fn calc_slice(proc_weight, total_weight) {
     let slice = CFS_LATENCY_MS * proc_weight / total_weight;
-    if slice < CFS_MIN_GRANULARITY_MS {
-        return CFS_MIN_GRANULARITY_MS;
-    }
+    if slice < CFS_MIN_GRANULARITY_MS { return CFS_MIN_GRANULARITY_MS; }
     return slice;
 }
 
-// Check if preemption should occur
 fn should_preempt(cur_vruntime, new_vruntime, new_weight) {
     let threshold = CFS_WAKEUP_GRAN_MS * 1024 / new_weight;
-    if cur_vruntime - new_vruntime > threshold {
-        return 1;
-    }
+    if cur_vruntime - new_vruntime > threshold { return 1; }
     return 0;
 }
 
-// Update vruntime after running delta_ms
 fn update_vruntime(vruntime, delta_ms, weight) {
     return vruntime + delta_ms * 1024 / weight;
 }
 
-// Self-test
+// ============================================================
+// MLFQ: 4-level priority queues
+// ============================================================
+
+let MLFQ_LEVELS = 4;
+let MLFQ_SLOTS = 32;
+let MLFQ_BOOST_INTERVAL = 10000;  // boost every 10000 ticks (~100s at 100Hz)
+
+// Time quantum per level (ms): 2, 4, 8, 16
+let mut _mlfq_quantum = [2, 4, 8, 16];
+
+// Per-level circular queues (flat array: level * MLFQ_SLOTS + pos)
+let mut _mlfq_buf = [];
+let mut _mlfq_head = [];
+let mut _mlfq_tail = [];
+let mut _mlfq_count = [];
+
+// Per-task: current level and ticks used in current quantum
+let _MLFQ_MAX_TASKS = 128;
+let mut _mlfq_task_level = [];
+let mut _mlfq_task_used = [];
+
+let mut _mlfq_tick_counter = 0;
+let mut _mlfq_ready = 0;
+let mut _mlfq_total = 0;
+
+fn mlfq_init() {
+    _mlfq_buf = [];
+    _mlfq_head = [];
+    _mlfq_tail = [];
+    _mlfq_count = [];
+    let mut lv = 0;
+    while lv < MLFQ_LEVELS {
+        push(_mlfq_head, 0);
+        push(_mlfq_tail, 0);
+        push(_mlfq_count, 0);
+        let mut s = 0;
+        while s < MLFQ_SLOTS {
+            push(_mlfq_buf, 0 - 1);
+            s = s + 1;
+        }
+        lv = lv + 1;
+    }
+    _mlfq_task_level = [];
+    _mlfq_task_used = [];
+    let mut t = 0;
+    while t < _MLFQ_MAX_TASKS {
+        push(_mlfq_task_level, 0);
+        push(_mlfq_task_used, 0);
+        t = t + 1;
+    }
+    _mlfq_tick_counter = 0;
+    _mlfq_total = 0;
+    _mlfq_ready = 1;
+    return 0;
+}
+
+// ---- Queue helpers ----
+
+fn _mlfq_enq(level, task_idx) {
+    if _mlfq_count[level] >= MLFQ_SLOTS { return 0; }
+    let base = level * MLFQ_SLOTS;
+    let tail = _mlfq_tail[level];
+    set_at(_mlfq_buf, base + tail, task_idx);
+    set_at(_mlfq_tail, level, (tail + 1) % MLFQ_SLOTS);
+    set_at(_mlfq_count, level, _mlfq_count[level] + 1);
+    return 1;
+}
+
+fn _mlfq_deq(level) {
+    if _mlfq_count[level] == 0 { return 0 - 1; }
+    let base = level * MLFQ_SLOTS;
+    let head = _mlfq_head[level];
+    let task = _mlfq_buf[base + head];
+    set_at(_mlfq_head, level, (head + 1) % MLFQ_SLOTS);
+    set_at(_mlfq_count, level, _mlfq_count[level] - 1);
+    return task;
+}
+
+// ============================================================
+// Public MLFQ API
+// ============================================================
+
+// Insert new task at highest priority (level 0)
+fn mlfq_insert(task_idx) {
+    if _mlfq_ready == 0 { mlfq_init(); }
+    if task_idx >= _MLFQ_MAX_TASKS { return 0; }
+    set_at(_mlfq_task_level, task_idx, 0);
+    set_at(_mlfq_task_used, task_idx, 0);
+    _mlfq_enq(0, task_idx);
+    _mlfq_total = _mlfq_total + 1;
+    return 1;
+}
+
+// Pick next task: highest priority non-empty queue
+fn mlfq_pick() {
+    if _mlfq_ready == 0 { mlfq_init(); }
+    let mut lv = 0;
+    while lv < MLFQ_LEVELS {
+        if _mlfq_count[lv] > 0 {
+            let task = _mlfq_deq(lv);
+            return task;
+        }
+        lv = lv + 1;
+    }
+    return 0 - 1; // no runnable task
+}
+
+// Task used its entire quantum -> demote
+fn mlfq_demote(task_idx) {
+    if task_idx >= _MLFQ_MAX_TASKS { return 0; }
+    let cur_level = _mlfq_task_level[task_idx];
+    let mut new_level = cur_level + 1;
+    if new_level >= MLFQ_LEVELS { new_level = MLFQ_LEVELS - 1; }
+    set_at(_mlfq_task_level, task_idx, new_level);
+    set_at(_mlfq_task_used, task_idx, 0);
+    _mlfq_enq(new_level, task_idx);
+    return new_level;
+}
+
+// Task yielded (I/O) before quantum -> stay at current level or promote
+fn mlfq_yield(task_idx) {
+    if task_idx >= _MLFQ_MAX_TASKS { return 0; }
+    let cur_level = _mlfq_task_level[task_idx];
+    let mut new_level = cur_level;
+    // If yielded very early (< 25% of quantum), promote
+    let quantum = _mlfq_quantum[cur_level];
+    if _mlfq_task_used[task_idx] < quantum / 4 {
+        if cur_level > 0 { new_level = cur_level - 1; }
+    }
+    set_at(_mlfq_task_level, task_idx, new_level);
+    set_at(_mlfq_task_used, task_idx, 0);
+    _mlfq_enq(new_level, task_idx);
+    return new_level;
+}
+
+// Record one tick of execution for a task
+fn mlfq_tick(task_idx) {
+    if task_idx >= _MLFQ_MAX_TASKS { return 0; }
+    set_at(_mlfq_task_used, task_idx, _mlfq_task_used[task_idx] + 1);
+    _mlfq_tick_counter = _mlfq_tick_counter + 1;
+    // Check quantum exhausted
+    let level = _mlfq_task_level[task_idx];
+    let quantum = _mlfq_quantum[level];
+    if _mlfq_task_used[task_idx] >= quantum {
+        return 1; // signal: should demote
+    }
+    return 0;
+}
+
+// Periodic boost: move all tasks to level 0 (prevent starvation)
+fn mlfq_boost() {
+    if _mlfq_ready == 0 { return 0; }
+    let mut moved = 0;
+    let mut lv = 1;
+    while lv < MLFQ_LEVELS {
+        while _mlfq_count[lv] > 0 {
+            let task = _mlfq_deq(lv);
+            if task >= 0 {
+                set_at(_mlfq_task_level, task, 0);
+                set_at(_mlfq_task_used, task, 0);
+                _mlfq_enq(0, task);
+                moved = moved + 1;
+            }
+        }
+        lv = lv + 1;
+    }
+    _mlfq_tick_counter = 0;
+    return moved;
+}
+
+// Check if boost is due
+fn mlfq_check_boost() {
+    if _mlfq_tick_counter >= MLFQ_BOOST_INTERVAL {
+        return mlfq_boost();
+    }
+    return 0;
+}
+
+fn mlfq_status() {
+    let mut s = "mlfq:";
+    let mut lv = 0;
+    while lv < MLFQ_LEVELS {
+        s = s + " L" + to_string(lv) + "=" + to_string(_mlfq_count[lv]);
+        lv = lv + 1;
+    }
+    s = s + " total=" + to_string(_mlfq_total);
+    return s;
+}
+
+// Self-test (CFS compat)
 let w_0 = nice_to_weight(0);
 let w_5 = nice_to_weight(5);
 let w_neg5 = nice_to_weight(-5);
-print(w_0);
-print(w_5);
-print(w_neg5);
 
-let slice = calc_slice(1024, 3072);
-print(slice);
-
-print("sched.hl loaded");
+print("sched.hl loaded (MLFQ)");
+print("Levels: " + to_string(MLFQ_LEVELS) + ", quantum: 2/4/8/16ms");
+print("Boost interval: " + to_string(MLFQ_BOOST_INTERVAL) + " ticks");
+print("CFS compat: nice(0)=" + to_string(w_0) + " nice(5)=" + to_string(w_5));

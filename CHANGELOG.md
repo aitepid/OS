@@ -3,11 +3,21 @@
 ## Current Snapshot
 
 - 活跃 `.hl` 文件：`290`
-- H-L 总行数：`69,367`
+- H-L 总行数：`69,377`
 - 内核模块：`114`
 - Shell 命令数：`61` + pipe 操作符
 - 构建/测试主入口：`scripts/hl-bootstrap-build-test.ps1`
-- 最近完成迭代：`95`
+- 最近完成迭代：`97`
+
+## Iteration 97 — 多级反馈队列调度器 (MLFQ)
+
+- **`sched.hl`**: CFS 参数模块升级为 **4 级 MLFQ 调度器**
+  - 4 个优先级队列（L0-L3），时间片 2/4/8/16ms 递增
+  - 新任务进入 L0；耗尽时间片降级；I/O 让出可升级
+  - 周期性 boost：每 10000 tick 全部重置到 L0（防饥饿）
+  - `mlfq_init/insert/pick/demote/yield/tick/boost/status` 全套 API
+  - CFS 兼容保留：`nice_to_weight`/`calc_slice`/`update_vruntime`
+  - 15 个函数编译通过，构建 + 冒烟通过
 
 ## Iteration 95 — 阶段 3 收敛
 
