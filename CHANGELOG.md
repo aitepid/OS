@@ -3,11 +3,20 @@
 ## Current Snapshot
 
 - 活跃 `.hl` 文件：`290`
-- H-L 总行数：`69,377`
+- H-L 总行数：`70,693`
 - 内核模块：`114`
-- Shell 命令数：`61` + pipe 操作符
+- Shell 命令数：`63` + pipe 操作符
 - 构建/测试主入口：`scripts/hl-bootstrap-build-test.ps1`
-- 最近完成迭代：`100`
+- 最近完成迭代：`101`
+
+## Iteration 101 — 阶段 4 收敛
+
+- 全部文档重新采集并同步到仓库实际状态
+- `PROJECT_STATUS.md`：数据全量更新（290 HL / 70,693 行 / 155,648 img / 23,183 kernel.bin）
+- `ROADMAP.md`：重写为阶段 0/1/2/3/4 已完成 + 阶段 5 规划
+- `PROJECT_ADVANCEMENT_PLAN.hl`：补充迭代 97-101 完成记录 + 阶段 5 路线
+- 四阶段共 15 个内核模块算法升级全部入账
+- 门禁全通过（hl-bootstrap + validate + boot + image + runtime + qemu-smoke）
 
 ## Iteration 100 — TLS 1.3 握手状态机
 
