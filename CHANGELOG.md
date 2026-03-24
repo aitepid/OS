@@ -3,11 +3,20 @@
 ## Current Snapshot
 
 - 活跃 `.hl` 文件：`290`
-- H-L 总行数：`68,430`
+- H-L 总行数：`69,367`
 - 内核模块：`114`
 - Shell 命令数：`61` + pipe 操作符
 - 构建/测试主入口：`scripts/hl-bootstrap-build-test.ps1`
-- 最近完成迭代：`94`
+- 最近完成迭代：`95`
+
+## Iteration 95 — 阶段 3 收敛
+
+- 全部文档重新采集并同步到仓库实际状态
+- `PROJECT_STATUS.md`：数据全量更新（290 HL / 69K 行 / 22 PS1 / 155KB img / 22KB kernel.bin）
+- `ROADMAP.md`：重写为阶段 0/1/2/3 已完成 + 阶段 4 规划
+- `PROJECT_ADVANCEMENT_PLAN.hl`：补充迭代 91-95 完成记录 + 阶段 4 路线
+- 三阶段共 11 个内核模块算法升级全部入账
+- 门禁全通过（hl-bootstrap + validate + boot + image + runtime + qemu-smoke）
 
 ## Iteration 94 — SMP Per-CPU 运行队列
 
