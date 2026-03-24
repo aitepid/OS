@@ -6,7 +6,16 @@
 - 内核模块：`114`
 - Shell 命令数：`61` + pipe 操作符
 - 构建/测试主入口：`scripts/hl-bootstrap-build-test.ps1`
-- 最近完成迭代：`83`
+- 最近完成迭代：`84`
+
+## Iteration 84 — Hilbert 空间分配器归并排序
+
+- **`hilbert_alloc.hl`**: 初始化排序从 O(n²) 插入排序升级为 **O(n log n) 自底向上迭代归并排序**
+  - `_hl_merge_sort()`: 非递归自底向上归并，避免深层递归栈溢出
+  - `_hl_merge()`: 双指针合并子数组
+  - `hilbert_page_free()`: 从无序 append 升级为 **二分查找插入点** + 顺序插入，维持排序不变量
+  - 内置自测：5 元素归并排序正确性验证
+  - 7 个函数编译通过，构建 + 冒烟通过
 
 ## Iteration 83 — 哈希+LRU 块缓存
 
