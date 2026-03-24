@@ -7,7 +7,26 @@
 - 内核模块：`114`
 - Shell 命令数：`61` + pipe 操作符
 - 构建/测试主入口：`scripts/hl-bootstrap-build-test.ps1`
-- 最近完成迭代：`98`
+- 最近完成迭代：`100`
+
+## Iteration 100 — TLS 1.3 握手状态机
+
+- **`tls.hl`**: 空壳 connect 升级为 **8 状态 TLS 1.3 握手状态机**
+  - IDLE → CH_SENT → SH_RECV → EE_RECV → CERT → FIN_RECV → CF_SENT → ESTABLISHED
+  - X25519 密钥生成 + 共享密钥派生
+  - HKDF 握手密钥 → 应用密钥派生（读/写分离）
+  - 应用数据加密/解密 + HMAC-GCM 标签
+  - `tls_close()` 发送 close_notify alert
+  - `https_get()` 完整链路：DNS → TCP → TLS → HTTP GET
+  - 8 会话槽位，`tls_status()` 显示活跃/已建立
+
+## Iteration 99 — Pipe SPSC 环形缓冲区
+
+- **`pipe.hl`**: 逐字节元数据更新升级为 **批量 memcpy + lock-free SPSC**
+  - `pipe_write_batch`/`pipe_read_batch`: 分段复制（开端+绕回）
+  - writer 拥有 write_pos，reader 拥有 read_pos（无锁）
+  - 读/写端分离引用计数（`pipe_close_read`/`pipe_close_write`）
+  - 生命周期字节统计 + `pipe_status()`
 
 ## Iteration 98 — mmap 按需映射 + COW
 
