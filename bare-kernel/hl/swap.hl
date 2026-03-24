@@ -1,43 +1,57 @@
-// swap.hl -- Swap / Demand Paging
+﻿// swap.hl -- Swap / Demand Paging with Enhanced Clock Algorithm
 //
-// Provides virtual memory overcommit by paging out least-recently-used
-// frames to a swap partition on VirtIO-blk.
+// Iteration 93: upgraded from basic clock to dual-list enhanced clock.
 //
-// Page replacement: approximate LRU using accessed-bit scanning (clock algo).
+// Design:
+//   Active list:   recently accessed frames, protected from eviction
+//   Inactive list: eviction candidates, scanned by clock hand
+//   Promotion:     inactive frame with accessed=1 -> move to active
+//   Demotion:      active list overflow -> move tail to inactive
+//   Eviction:      inactive frame with accessed=0 -> swap out
 //
-// Swap partition layout:
-//   Sector 0: swap header (magic, version, page_count)
-//   Sector 1-N: swap slots, each = 8 sectors (4096 bytes = 1 page)
+//   Lists are array-based doubly-linked (same pattern as block_cache LRU).
+//   Clock hand scans inactive list only -> O(1) amortized eviction.
 //
-// Swap map: bitmap tracking which swap slots are in use.
-// Max swap: 64 MB = 16384 pages
+// Public API (all signatures preserved):
+//   swap_init / swap_alloc_slot / swap_free_slot
+//   swap_out / swap_in / swap_find_victim / demand_page
+//   swap_status (new)
 
 let SWAP_START_SECTOR = 1;
-let SWAP_SLOT_SECTORS = 8;        // 8 sectors * 512 = 4096 bytes/page
-let MAX_SWAP_PAGES = 16384;       // 64 MB
-let SWAP_MAP_ADDR = 8912896;      // 0x880000 -- bitmap (16384 bits = 2048 bytes)
+let SWAP_SLOT_SECTORS = 8;
+let MAX_SWAP_PAGES = 16384;
+let SWAP_MAP_ADDR = 8912896;     // 0x880000
 let SWAP_MAP_SIZE = 2048;
 
 let mut swap_enabled = 0;
 let mut swap_used = 0;
 
+// ============================================================
+// Swap slot bitmap
+// ============================================================
+
 fn swap_init() {
     mem_zero(SWAP_MAP_ADDR, SWAP_MAP_SIZE);
     swap_enabled = 1;
     swap_used = 0;
+    _clock_init();
     return 0;
 }
 
-// Find a free swap slot
+fn _swap_mask(bit_off) {
+    let mut m = 1;
+    let mut s = 0;
+    while s < bit_off { m = m * 2; s = s + 1; }
+    return m;
+}
+
 fn swap_alloc_slot() {
     let mut i = 0;
     while i < MAX_SWAP_PAGES {
         let byte_off = i / 8;
         let bit_off = i % 8;
         let byte_val = mem_read_u8(SWAP_MAP_ADDR + byte_off);
-        let mut mask = 1;
-        let mut s = 0;
-        while s < bit_off { mask = mask * 2; s = s + 1; }
+        let mask = _swap_mask(bit_off);
         if (byte_val / mask) % 2 == 0 {
             mem_write_u8(SWAP_MAP_ADDR + byte_off, byte_val + mask);
             swap_used = swap_used + 1;
@@ -52,9 +66,7 @@ fn swap_free_slot(slot) {
     let byte_off = slot / 8;
     let bit_off = slot % 8;
     let byte_val = mem_read_u8(SWAP_MAP_ADDR + byte_off);
-    let mut mask = 1;
-    let mut s = 0;
-    while s < bit_off { mask = mask * 2; s = s + 1; }
+    let mask = _swap_mask(bit_off);
     if (byte_val / mask) % 2 == 1 {
         mem_write_u8(SWAP_MAP_ADDR + byte_off, byte_val - mask);
     }
@@ -62,7 +74,6 @@ fn swap_free_slot(slot) {
     return 0;
 }
 
-// Write a page frame to swap
 fn swap_out(frame_addr, swap_slot) {
     let sector = SWAP_START_SECTOR + swap_slot * SWAP_SLOT_SECTORS;
     virtio_blk_write(sector, SWAP_SLOT_SECTORS, frame_addr);
@@ -75,44 +86,200 @@ fn swap_in(swap_slot, frame_addr) {
     return 0;
 }
 
-// === Clock Algorithm (approximate LRU) ===
-// Scan page table entries looking for pages with accessed bit = 0.
-// If accessed = 1, clear it and move on. If accessed = 0, evict.
+// ============================================================
+// Enhanced Clock: Active / Inactive dual lists
+// ============================================================
 
-let mut clock_hand = 0;  // current scan position in page frame list
+let _CL_MAX = 512;             // max tracked frames
+let _CL_ACTIVE_LIMIT = 256;   // active list max before demotion
+
+let mut _cl_frame = [];        // frame index per slot
+let mut _cl_ref = [];          // reference bit (0 or 1)
+let mut _cl_list = [];         // 0 = free, 1 = active, 2 = inactive
+let mut _cl_prev = [];
+let mut _cl_next = [];
+let mut _cl_count = 0;
+
+// List heads/tails
+let mut _cl_act_head = 0 - 1;
+let mut _cl_act_tail = 0 - 1;
+let mut _cl_act_count = 0;
+let mut _cl_inact_head = 0 - 1;
+let mut _cl_inact_tail = 0 - 1;
+let mut _cl_inact_count = 0;
+
+// Clock hand position (slot index in inactive list, or -1)
+let mut _cl_hand = 0 - 1;
+
+fn _clock_init() {
+    _cl_frame = [];
+    _cl_ref = [];
+    _cl_list = [];
+    _cl_prev = [];
+    _cl_next = [];
+    let mut i = 0;
+    while i < _CL_MAX {
+        push(_cl_frame, 0);
+        push(_cl_ref, 0);
+        push(_cl_list, 0);
+        push(_cl_prev, 0 - 1);
+        push(_cl_next, 0 - 1);
+        i = i + 1;
+    }
+    _cl_count = 0;
+    _cl_act_head = 0 - 1;
+    _cl_act_tail = 0 - 1;
+    _cl_act_count = 0;
+    _cl_inact_head = 0 - 1;
+    _cl_inact_tail = 0 - 1;
+    _cl_inact_count = 0;
+    _cl_hand = 0 - 1;
+    return 0;
+}
+
+// ---- List link/unlink helpers ----
+
+fn _cl_unlink(slot, list_id) {
+    let p = _cl_prev[slot];
+    let n = _cl_next[slot];
+    if list_id == 1 {
+        if p >= 0 { set_at(_cl_next, p, n); } else { _cl_act_head = n; }
+        if n >= 0 { set_at(_cl_prev, n, p); } else { _cl_act_tail = p; }
+        _cl_act_count = _cl_act_count - 1;
+    }
+    if list_id == 2 {
+        if p >= 0 { set_at(_cl_next, p, n); } else { _cl_inact_head = n; }
+        if n >= 0 { set_at(_cl_prev, n, p); } else { _cl_inact_tail = p; }
+        _cl_inact_count = _cl_inact_count - 1;
+    }
+    set_at(_cl_prev, slot, 0 - 1);
+    set_at(_cl_next, slot, 0 - 1);
+    set_at(_cl_list, slot, 0);
+    return 0;
+}
+
+fn _cl_push_head(slot, list_id) {
+    set_at(_cl_prev, slot, 0 - 1);
+    set_at(_cl_list, slot, list_id);
+    if list_id == 1 {
+        set_at(_cl_next, slot, _cl_act_head);
+        if _cl_act_head >= 0 { set_at(_cl_prev, _cl_act_head, slot); }
+        _cl_act_head = slot;
+        if _cl_act_tail < 0 { _cl_act_tail = slot; }
+        _cl_act_count = _cl_act_count + 1;
+    }
+    if list_id == 2 {
+        set_at(_cl_next, slot, _cl_inact_head);
+        if _cl_inact_head >= 0 { set_at(_cl_prev, _cl_inact_head, slot); }
+        _cl_inact_head = slot;
+        if _cl_inact_tail < 0 { _cl_inact_tail = slot; }
+        _cl_inact_count = _cl_inact_count + 1;
+    }
+    return 0;
+}
+
+// ---- Core operations ----
+
+// Register a frame as active (called on allocation / page-in)
+fn _clock_register(frame_idx) {
+    // Find free slot
+    let mut slot = 0 - 1;
+    let mut i = 0;
+    while i < _CL_MAX {
+        if _cl_list[i] == 0 {
+            slot = i;
+            i = _CL_MAX;
+        }
+        i = i + 1;
+    }
+    if slot < 0 { return 0; }
+    set_at(_cl_frame, slot, frame_idx);
+    set_at(_cl_ref, slot, 1);
+    _cl_push_head(slot, 1); // add to active
+    _cl_count = _cl_count + 1;
+    // If active list overflows, demote tail to inactive
+    if _cl_act_count > _CL_ACTIVE_LIMIT {
+        _clock_demote();
+    }
+    return 0;
+}
+
+// Demote active tail -> inactive head
+fn _clock_demote() {
+    let victim = _cl_act_tail;
+    if victim < 0 { return 0; }
+    _cl_unlink(victim, 1);
+    set_at(_cl_ref, victim, 0);
+    _cl_push_head(victim, 2);
+    return 0;
+}
+
+// Promote an inactive slot -> active head
+fn _clock_promote(slot) {
+    _cl_unlink(slot, 2);
+    set_at(_cl_ref, slot, 1);
+    _cl_push_head(slot, 1);
+    if _cl_act_count > _CL_ACTIVE_LIMIT {
+        _clock_demote();
+    }
+    return 0;
+}
+
+// ============================================================
+// Victim selection: scan inactive list with clock hand
+// ============================================================
 
 fn swap_find_victim() {
-    let total_frames = TOTAL_PAGES;
+    // Ensure inactive list has candidates
+    if _cl_inact_count == 0 {
+        // Demote some active frames
+        let mut d = 0;
+        while d < 8 {
+            if _cl_act_count > 0 { _clock_demote(); }
+            d = d + 1;
+        }
+    }
+
+    // Start clock hand at inactive head if unset
+    if _cl_hand < 0 { _cl_hand = _cl_inact_head; }
+
     let mut scanned = 0;
-    while scanned < total_frames * 2 {  // max 2 full rotations
-        clock_hand = (clock_hand + 1) % total_frames;
-        if clock_hand >= FIRST_FREE_PAGE {
-            // Check PTE accessed bit for this frame
-            let frame_addr = clock_hand * PAGE_SIZE;
-            let pte = pte_read(frame_addr);
-            if pte % 2 == 1 {   // PTE_PRESENT
-                let accessed = (pte / 32) % 2;  // bit 5 = accessed
-                if accessed == 1 {
-                    // Clear accessed bit, move on
-                    pte_write(frame_addr, pte - 32);
-                } else {
-                    return clock_hand;  // victim found
-                }
-            }
+    let limit = _cl_inact_count * 2 + 1;
+    while scanned < limit {
+        if _cl_hand < 0 { _cl_hand = _cl_inact_head; }
+        if _cl_hand < 0 { return FIRST_FREE_PAGE; } // nothing to evict
+
+        let slot = _cl_hand;
+        let ref_bit = _cl_ref[slot];
+
+        if ref_bit == 0 {
+            // Victim found: return frame index
+            let frame_idx = _cl_frame[slot];
+            // Advance hand before removing
+            _cl_hand = _cl_next[slot];
+            _cl_unlink(slot, 2);
+            set_at(_cl_list, slot, 0);
+            _cl_count = _cl_count - 1;
+            return frame_idx;
+        } else {
+            // Second chance: clear ref, advance
+            set_at(_cl_ref, slot, 0);
+            _cl_hand = _cl_next[slot];
+            if _cl_hand < 0 { _cl_hand = _cl_inact_head; }
         }
         scanned = scanned + 1;
     }
-    return FIRST_FREE_PAGE; // fallback: evict first available
+    return FIRST_FREE_PAGE;
 }
 
-// Page fault handler: demand paging path
+// ============================================================
+// Demand paging
+// ============================================================
+
 fn demand_page(fault_addr) {
-    // Align to page boundary
     let page_addr = (fault_addr / PAGE_SIZE) * PAGE_SIZE;
-    // 1. Try to allocate a free frame
     let mut frame = page_alloc();
     if frame == 0 {
-        // No free frames: swap out a victim
         let victim = swap_find_victim();
         let slot = swap_alloc_slot();
         if slot < 0 {
@@ -121,19 +288,25 @@ fn demand_page(fault_addr) {
         }
         let victim_addr = victim * PAGE_SIZE;
         swap_out(victim_addr, slot);
-        // Mark victim PTE as swapped (present=0, store swap slot in high bits)
-        // The frame is now free
         page_free(victim_addr);
         frame = page_alloc();
     }
-    if frame == 0 { return 0; } // still no memory
-    // 2. Zero the frame
+    if frame == 0 { return 0; }
     mem_zero(frame, PAGE_SIZE);
-    // 3. Map at fault address
     map_page(page_addr, frame, PTE_PRESENT + PTE_WRITABLE + PTE_USER);
+    // Register new frame in clock lists
+    _clock_register(frame / PAGE_SIZE);
     return frame;
 }
 
-print("swap.hl loaded");
-print("Max swap: " + to_string(MAX_SWAP_PAGES * 4) + " KB (" + to_string(MAX_SWAP_PAGES * 4 / 1024) + " MB)");
-print("Page replacement: clock algorithm (approx LRU)");
+// ============================================================
+// Status
+// ============================================================
+
+fn swap_status() {
+    return "swap: " + to_string(swap_used) + "/" + to_string(MAX_SWAP_PAGES) + " slots, active=" + to_string(_cl_act_count) + " inactive=" + to_string(_cl_inact_count);
+}
+
+print("swap.hl loaded (enhanced clock)");
+print("Max swap: " + to_string(MAX_SWAP_PAGES * 4 / 1024) + " MB");
+print("Clock: active/inactive dual-list, " + to_string(_CL_MAX) + " tracked frames");

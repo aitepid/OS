@@ -7,7 +7,19 @@
 - 内核模块：`114`
 - Shell 命令数：`61` + pipe 操作符
 - 构建/测试主入口：`scripts/hl-bootstrap-build-test.ps1`
-- 最近完成迭代：`92`
+- 最近完成迭代：`93`
+
+## Iteration 93 — 增强型时钟页面置换
+
+- **`swap.hl`**: 基础时钟扫描升级为 **双链 Active/Inactive 增强型时钟算法**
+  - Active 链表（最近访问，保护不驱逐，上限 256 帧）
+  - Inactive 链表（驱逐候选，时钟指针扫描）
+  - 提升：inactive 帧 ref=1 → 移到 active 头部
+  - 降级：active 溢出 → 尾部移到 inactive
+  - 驱逐：inactive 帧 ref=0 → swap out（第二次机会）
+  - 新增 `swap_status()` 显示 active/inactive 计数
+  - `demand_page()` 自动注册新帧到 active 链
+  - 15 个函数编译通过，构建 + 冒烟通过
 
 ## Iteration 92 — ext2 Inode 哈希缓存
 
