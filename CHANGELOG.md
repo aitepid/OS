@@ -7,7 +7,18 @@
 - 内核模块：`114`
 - Shell 命令数：`61` + pipe 操作符
 - 构建/测试主入口：`scripts/hl-bootstrap-build-test.ps1`
-- 最近完成迭代：`97`
+- 最近完成迭代：`98`
+
+## Iteration 98 — mmap 按需映射 + COW
+
+- **`mmap.hl`**: 立即分配全部物理页升级为 **按需分页 + Copy-on-Write**
+  - `sys_mmap()`: 仅记录区域，不分配物理页（懒惰）
+  - `mmap_fault()`: 首次访问时按需分配单页，匿名置零 / 文件回填
+  - `mmap_cow_fork()`: fork 后父子共享物理页（只读），写时复制
+  - COW 引用计数数组（512 页）：引用>1 时复制，=1 时直接变可写
+  - `sys_munmap()` 感知 COW：引用计数到 0 才释放物理页
+  - `mmap_status()` 显示活跃/COW/跟踪页统计
+  - 13 个函数编译通过，构建 + 冒烟通过
 
 ## Iteration 97 — 多级反馈队列调度器 (MLFQ)
 

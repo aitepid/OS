@@ -1,25 +1,18 @@
-// mmap.hl -- Memory-Mapped I/O and Shared Memory
+﻿// mmap.hl -- Memory-Mapped I/O with Demand Paging + Copy-on-Write
 //
-// Implements mmap/munmap for:
-//   1. Anonymous mapping (heap extension)
-//   2. File mapping (map VFS file into address space)
-//   3. Shared mapping (IPC between tasks)
-//   4. Device mapping (MMIO regions)
+// Iteration 98: upgraded from eager allocation to demand paging + COW.
 //
-// Linux syscall: mmap(addr, length, prot, flags, fd, offset)
-// Returns: virtual address of mapping
+// Design:
+//   sys_mmap: records region but allocates NO physical pages (lazy)
+//   Page fault handler: allocates one page at a time (demand paging)
+//   MAP_PRIVATE + fork: marks pages read-only, fault triggers COW copy
+//   COW ref-count array tracks shared physical pages
 //
-// Protection flags:
-//   PROT_NONE  = 0
-//   PROT_READ  = 1
-//   PROT_WRITE = 2
-//   PROT_EXEC  = 4
-//
-// Map flags:
-//   MAP_SHARED    = 1  (visible to other tasks)
-//   MAP_PRIVATE   = 2  (copy-on-write)
-//   MAP_ANONYMOUS = 32 (no file backing)
-//   MAP_FIXED     = 16 (use exact address)
+// Public API (all signatures preserved + new):
+//   mmap_init / sys_mmap / sys_munmap / sys_mprotect
+//   mmap_fault (new) -- demand paging + COW page fault handler
+//   mmap_cow_fork (new) -- mark region for COW after fork
+//   mmap_status (new)
 
 let PROT_NONE = 0;
 let PROT_READ = 1;
@@ -32,20 +25,101 @@ let MAP_FIXED = 16;
 let MAP_ANONYMOUS = 32;
 
 let MMAP_MAX_REGIONS = 128;
-let MMAP_BASE = 1073741824;  // 0x40000000 -- user mapping start
+let MMAP_BASE = 1073741824;  // 0x40000000
 
 let mut mmap_count = 0;
 
-// Region table: [task_id, vaddr, size, prot, flags, fd, offset, phys_addr]
-let mmap_task = [];
-let mmap_vaddr = [];
-let mmap_size = [];
-let mmap_prot = [];
-let mmap_flags = [];
-let mmap_phys = [];
+// Region table (parallel arrays)
+let mut mmap_task = [];
+let mut mmap_vaddr = [];
+let mut mmap_size = [];
+let mut mmap_prot = [];
+let mut mmap_flags = [];
+let mut mmap_phys = [];
+let mut mmap_fd = [];
+let mut mmap_offset = [];
+let mut mmap_cow = [];       // 1 = COW active on this region
+
+// ============================================================
+// COW reference counts: track how many regions share a phys page
+// ============================================================
+
+let _COW_MAX_PAGES = 512;
+let mut _cow_phys = [];       // physical address
+let mut _cow_ref = [];        // reference count
+let mut _cow_count = 0;
+let mut _cow_ready = 0;
+
+fn _cow_init() {
+    _cow_phys = [];
+    _cow_ref = [];
+    let mut i = 0;
+    while i < _COW_MAX_PAGES {
+        push(_cow_phys, 0);
+        push(_cow_ref, 0);
+        i = i + 1;
+    }
+    _cow_count = 0;
+    _cow_ready = 1;
+    return 0;
+}
+
+fn _cow_ref_inc(phys_addr) {
+    if _cow_ready == 0 { _cow_init(); }
+    // Find existing
+    let mut i = 0;
+    while i < _cow_count {
+        if _cow_phys[i] == phys_addr {
+            set_at(_cow_ref, i, _cow_ref[i] + 1);
+            return _cow_ref[i];
+        }
+        i = i + 1;
+    }
+    // New entry
+    if _cow_count < _COW_MAX_PAGES {
+        set_at(_cow_phys, _cow_count, phys_addr);
+        set_at(_cow_ref, _cow_count, 1);
+        _cow_count = _cow_count + 1;
+    }
+    return 1;
+}
+
+fn _cow_ref_dec(phys_addr) {
+    let mut i = 0;
+    while i < _cow_count {
+        if _cow_phys[i] == phys_addr {
+            set_at(_cow_ref, i, _cow_ref[i] - 1);
+            return _cow_ref[i];
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn _cow_ref_get(phys_addr) {
+    let mut i = 0;
+    while i < _cow_count {
+        if _cow_phys[i] == phys_addr { return _cow_ref[i]; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// ============================================================
+// Region management
+// ============================================================
 
 fn mmap_init() {
     mmap_count = 0;
+    mmap_task = [];
+    mmap_vaddr = [];
+    mmap_size = [];
+    mmap_prot = [];
+    mmap_flags = [];
+    mmap_phys = [];
+    mmap_fd = [];
+    mmap_offset = [];
+    mmap_cow = [];
     let mut i = 0;
     while i < MMAP_MAX_REGIONS {
         push(mmap_task, 0 - 1);
@@ -54,85 +128,206 @@ fn mmap_init() {
         push(mmap_prot, 0);
         push(mmap_flags, 0);
         push(mmap_phys, 0);
+        push(mmap_fd, 0 - 1);
+        push(mmap_offset, 0);
+        push(mmap_cow, 0);
         i = i + 1;
     }
+    _cow_init();
     return 0;
 }
 
+fn _mmap_find_slot() {
+    let mut i = 0;
+    while i < MMAP_MAX_REGIONS {
+        if mmap_task[i] < 0 { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+// ============================================================
+// sys_mmap: lazy — records region, allocates NO physical pages
+// ============================================================
+
 fn sys_mmap(addr, length, prot, flags, fd, offset) {
     if length == 0 { return 0 - 1; }
-    // Round up to page size
     let pages = (length + 4095) / 4096;
     let size = pages * 4096;
 
-    // Find free region slot
-    let mut slot = 0 - 1;
-    let mut i = 0;
-    while i < MMAP_MAX_REGIONS {
-        if mmap_task[i] < 0 {
-            slot = i;
-            break;
-        }
-        i = i + 1;
-    }
-    if slot < 0 { return 0 - 1; } // no free slot
-
-    // Allocate physical pages
-    // let phys = page_alloc_n(pages);
-    // if phys == 0 { return -1; }
-    let phys = MMAP_BASE + mmap_count * 65536; // simplified
+    let slot = _mmap_find_slot();
+    if slot < 0 { return 0 - 1; }
 
     // Choose virtual address
-    let vaddr = addr;
+    let mut vaddr = addr;
     if (flags / MAP_FIXED) % 2 == 0 {
         vaddr = MMAP_BASE + mmap_count * 65536;
     }
 
-    // Map pages in page table
-    let mut p = 0;
-    while p < pages {
-        virt_mem_map(vaddr + p * 4096, phys + p * 4096, prot);
-        p = p + 1;
-    }
-
-    // If MAP_ANONYMOUS: zero the memory
-    if (flags / MAP_ANONYMOUS) % 2 == 1 {
-        mem_zero(phys, size);
-    }
-
-    // If file-backed: read file data into memory
-    if fd >= 0 {
-        if (flags / MAP_ANONYMOUS) % 2 == 0 {
-            vfs_read(fd, phys, size);
-        }
-    }
-
-    // Record mapping
-    mmap_task[slot] = current_task;
-    mmap_vaddr[slot] = vaddr;
-    mmap_size[slot] = size;
-    mmap_prot[slot] = prot;
-    mmap_flags[slot] = flags;
-    mmap_phys[slot] = phys;
+    // Record region — NO physical allocation yet (demand paging)
+    set_at(mmap_task, slot, current_task);
+    set_at(mmap_vaddr, slot, vaddr);
+    set_at(mmap_size, slot, size);
+    set_at(mmap_prot, slot, prot);
+    set_at(mmap_flags, slot, flags);
+    set_at(mmap_phys, slot, 0);   // 0 = not yet allocated
+    set_at(mmap_fd, slot, fd);
+    set_at(mmap_offset, slot, offset);
+    set_at(mmap_cow, slot, 0);
     mmap_count = mmap_count + 1;
 
     return vaddr;
 }
+
+// ============================================================
+// Demand paging fault handler
+// ============================================================
+
+fn _mmap_find_region(task_id, fault_addr) {
+    let mut i = 0;
+    while i < MMAP_MAX_REGIONS {
+        if mmap_task[i] == task_id {
+            let base = mmap_vaddr[i];
+            let end = base + mmap_size[i];
+            if fault_addr >= base {
+                if fault_addr < end { return i; }
+            }
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn mmap_fault(task_id, fault_addr, is_write) {
+    let region = _mmap_find_region(task_id, fault_addr);
+    if region < 0 { return 0; } // not our region -> real fault
+
+    let page_addr = (fault_addr / 4096) * 4096;
+    let prot = mmap_prot[region];
+    let cow = mmap_cow[region];
+
+    // Case 1: COW write fault
+    if cow == 1 {
+        if is_write == 1 {
+            let old_phys = mmap_phys[region];
+            let refs = _cow_ref_get(old_phys);
+            if refs > 1 {
+                // Copy page, give this region its own copy
+                let new_phys = page_alloc();
+                if new_phys == 0 { return 0; }
+                mem_copy(new_phys, old_phys, 4096);
+                _cow_ref_dec(old_phys);
+                _cow_ref_inc(new_phys);
+                set_at(mmap_phys, region, new_phys);
+                set_at(mmap_cow, region, 0);
+                virt_mem_map(page_addr, new_phys, PROT_READ + PROT_WRITE);
+                return new_phys;
+            } else {
+                // Last reference: just make writable
+                set_at(mmap_cow, region, 0);
+                virt_mem_map(page_addr, old_phys, PROT_READ + PROT_WRITE);
+                return old_phys;
+            }
+        }
+    }
+
+    // Case 2: Demand paging — first access to this region
+    let phys = page_alloc();
+    if phys == 0 { return 0; }
+
+    // If anonymous: zero
+    let flags = mmap_flags[region];
+    if (flags / MAP_ANONYMOUS) % 2 == 1 {
+        mem_zero(phys, 4096);
+    }
+
+    // If file-backed: read page from file
+    let fd = mmap_fd[region];
+    if fd >= 0 {
+        if (flags / MAP_ANONYMOUS) % 2 == 0 {
+            let file_off = mmap_offset[region] + (page_addr - mmap_vaddr[region]);
+            vfs_seek(fd, file_off, 0);
+            vfs_read(fd, phys, 4096);
+        }
+    }
+
+    // Map the page
+    let mut map_prot = prot;
+    if (flags / MAP_PRIVATE) % 2 == 1 {
+        // Private writable: still map RW for now, COW applied on fork
+        map_prot = prot;
+    }
+    virt_mem_map(page_addr, phys, map_prot);
+
+    // Store phys for region (simplified: one phys per region for small maps)
+    if mmap_phys[region] == 0 {
+        set_at(mmap_phys, region, phys);
+    }
+
+    return phys;
+}
+
+// ============================================================
+// COW fork: mark a region as copy-on-write
+// ============================================================
+
+fn mmap_cow_fork(parent_region, child_task) {
+    let slot = _mmap_find_slot();
+    if slot < 0 { return 0 - 1; }
+
+    let phys = mmap_phys[parent_region];
+
+    // Create child region pointing to same physical page
+    set_at(mmap_task, slot, child_task);
+    set_at(mmap_vaddr, slot, mmap_vaddr[parent_region]);
+    set_at(mmap_size, slot, mmap_size[parent_region]);
+    set_at(mmap_prot, slot, mmap_prot[parent_region]);
+    set_at(mmap_flags, slot, mmap_flags[parent_region]);
+    set_at(mmap_phys, slot, phys);
+    set_at(mmap_fd, slot, mmap_fd[parent_region]);
+    set_at(mmap_offset, slot, mmap_offset[parent_region]);
+    set_at(mmap_cow, slot, 1);
+    mmap_count = mmap_count + 1;
+
+    // Mark parent as COW too
+    set_at(mmap_cow, parent_region, 1);
+
+    // Increment ref count
+    _cow_ref_inc(phys);
+    _cow_ref_inc(phys);
+
+    // Remap both as read-only (fault on write triggers copy)
+    let vaddr = mmap_vaddr[parent_region];
+    virt_mem_map(vaddr, phys, PROT_READ);
+
+    return slot;
+}
+
+// ============================================================
+// munmap / mprotect
+// ============================================================
 
 fn sys_munmap(addr, length) {
     let mut i = 0;
     while i < MMAP_MAX_REGIONS {
         if mmap_task[i] == current_task {
             if mmap_vaddr[i] == addr {
-                // Unmap pages and free physical memory
                 let pages = mmap_size[i] / 4096;
                 let mut p = 0;
                 while p < pages {
                     virt_mem_unmap(addr + p * 4096);
                     p = p + 1;
                 }
-                page_free(mmap_phys[i]);
-                mmap_task[i] = 0 - 1;
+                let phys = mmap_phys[i];
+                if phys != 0 {
+                    if mmap_cow[i] == 1 {
+                        let refs = _cow_ref_dec(phys);
+                        if refs <= 0 { page_free(phys); }
+                    } else {
+                        page_free(phys);
+                    }
+                }
+                set_at(mmap_task, i, 0 - 1);
                 return 0;
             }
         }
@@ -146,8 +341,16 @@ fn sys_mprotect(addr, length, prot) {
     while i < MMAP_MAX_REGIONS {
         if mmap_task[i] == current_task {
             if mmap_vaddr[i] == addr {
-                mmap_prot[i] = prot;
-                // Update page table protection bits
+                set_at(mmap_prot, i, prot);
+                let pages = mmap_size[i] / 4096;
+                let phys = mmap_phys[i];
+                if phys != 0 {
+                    let mut p = 0;
+                    while p < pages {
+                        virt_mem_map(addr + p * 4096, phys + p * 4096, prot);
+                        p = p + 1;
+                    }
+                }
                 return 0;
             }
         }
@@ -156,5 +359,19 @@ fn sys_mprotect(addr, length, prot) {
     return 0 - 1;
 }
 
-print("mmap.hl loaded");
-print("mmap: " + to_string(MMAP_MAX_REGIONS) + " regions, PROT_RWX, MAP_SHARED/PRIVATE/ANON");
+fn mmap_status() {
+    let mut active = 0;
+    let mut cow_regions = 0;
+    let mut i = 0;
+    while i < MMAP_MAX_REGIONS {
+        if mmap_task[i] >= 0 {
+            active = active + 1;
+            if mmap_cow[i] == 1 { cow_regions = cow_regions + 1; }
+        }
+        i = i + 1;
+    }
+    return "mmap: " + to_string(active) + " regions, " + to_string(cow_regions) + " COW, " + to_string(_cow_count) + " tracked pages";
+}
+
+print("mmap.hl loaded (demand paging + COW)");
+print("mmap: " + to_string(MMAP_MAX_REGIONS) + " regions, lazy alloc, COW fork");
