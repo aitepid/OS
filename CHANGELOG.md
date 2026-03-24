@@ -2,11 +2,20 @@
 
 ## Current Snapshot
 
-- 活跃 `.hl` 文件：`176`
+- 活跃 `.hl` 文件：`290`
+- H-L 总行数：`68,430`
 - 内核模块：`114`
 - Shell 命令数：`61` + pipe 操作符
 - 构建/测试主入口：`scripts/hl-bootstrap-build-test.ps1`
-- 最近完成迭代：`88`
+- 最近完成迭代：`89`
+
+## Iteration 89 — 阶段 2 收敛
+
+- 全部文档重新采集并同步到仓库实际状态
+- `PROJECT_STATUS.md`：数据全量更新（290 HL / 68K 行 / 22 PS1 / 154KB img / 22KB kernel.bin）
+- `ROADMAP.md`：重写为阶段 0/1/2 已完成 + 阶段 3 规划
+- `PROJECT_ADVANCEMENT_PLAN.hl`：补充迭代 81-89 完成记录 + 阶段 3 路线
+- 门禁全通过（hl-bootstrap + validate + boot + runtime + qemu-smoke）
 
 ## Iteration 88 — VFS Trie 前缀树挂载解析
 
