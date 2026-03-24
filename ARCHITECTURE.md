@@ -8,7 +8,7 @@ HicOS is a three-layer experimental x86_64 OS written entirely in Hilbert-Lang.
 |---|---|---|
 | A | `scripts/rebuild-image.ps1` → `hicos-hl.img` | BIOS image generation chain |
 | B | `hl-bootstrap.hl` (4,301 lines) | Bootstrap compiler/interpreter/toolchain |
-| C | `bare-kernel/hl/*.hl` (114 modules, 30,630 lines) | Kernel source → `kernel.bin` (23,183 bytes) |
+| C | `bare-kernel/hl/*.hl` (115 modules, 31,299 lines) | Kernel source → `kernel.bin` (23,624 bytes) |
 
 ## Boot Chain
 
@@ -29,20 +29,20 @@ stage1 / MBR
 OVMF → GPT + ESP → BOOTX64.EFI → UEFI boot output
 ```
 
-## Codebase Metrics (iteration 101, verified)
+## Codebase Metrics (iteration 107, verified)
 
 | Metric | Value |
 |---|---:|
-| Total `.hl` files | 176 |
+| Total `.hl` files | 177 |
 | Root `.hl` files | 62 |
-| Kernel modules | 114 |
-| Total H-L lines | 40,073 |
-| Kernel lines | 30,630 |
-| Kernel functions | 1,407 |
+| Kernel modules | 115 |
+| Total H-L lines | 40,742 |
+| Kernel lines | 31,299 |
+| Kernel functions | 1,435 |
 | `scripts/*.ps1` | 22 |
 | PS1 lines | 8,646 |
 | Shell commands | 63 + pipe |
-| Total repo files | 308 |
+| Total repo files | 309 |
 
 ## Key Source Locations
 
@@ -55,18 +55,19 @@ OVMF → GPT + ESP → BOOTX64.EFI → UEFI boot output
 - `scripts/rebuild-image.ps1` — BIOS image rebuilder
 - `scripts/build-uefi-image.ps1` — UEFI image builder
 
-## Algorithm Upgrades (iterations 81-101)
+## Algorithm Upgrades (iterations 81-107)
 
-15 kernel modules upgraded across 4 phases:
+19 kernel modules upgraded across 5 phases:
 
 - **Phase 1** (memory): buddy alloc, size-class freelist, hash+LRU cache, merge sort
 - **Phase 2** (network): TCP Reno, DNS TTL cache, VFS trie
 - **Phase 3** (multicore): ARP hash, inode cache, enhanced clock, per-CPU runqueue
 - **Phase 4** (scheduling): MLFQ, demand paging+COW, SPSC pipe, TLS 1.3 state machine
+- **Phase 5** (isolation): futex hash queue, edge-trigger epoll, cgroup enforcement, eBPF VM
 
 ## Verification
 
-All gates pass as of iteration 101:
+All gates pass as of iteration 107:
 - `hl-bootstrap-build-test.ps1` ✅
 - `boot-readiness.ps1` ✅
 - `runtime-path-readiness.ps1` ✅

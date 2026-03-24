@@ -2,13 +2,23 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`176`（62 根目录 + 114 内核模块）
-- H-L 总行数：`40,073`（根 9,443 + 内核 30,630）
-- 内核模块：`114`（函数 1,407 个）
+- `.hl` 文件：`177`（62 根目录 + 115 内核模块）
+- H-L 总行数：`40,742`（根 9,443 + 内核 31,299）
+- 内核模块：`115`（函数 1,435 个）
 - Shell 命令数：`63` + pipe 操作符
 - `scripts/*.ps1`：`22`（8,646 行）
 - 构建/测试主入口：`scripts/hl-bootstrap-build-test.ps1`
-- 最近完成迭代：`106`
+- 最近完成迭代：`107`
+
+## Iteration 107 — 阶段 5 收敛
+
+- 全部文档重新采集并同步到仓库实际状态
+- `manifest.hl` 修正：`SHELL_COMMANDS` 87→63，`BOOT_IMAGE_BYTES` 152064→156160
+- `PROJECT_STATUS.md`：全量更新（177 HL / 40,742 行 / 115 模块 / 1,435 函数）
+- `ROADMAP.md`：阶段 5 全部标记已完成
+- `PROJECT_ADVANCEMENT_PLAN.hl`：阶段 5 完成记录 + 阶段 6 路线
+- 五阶段共 19 个内核模块算法升级全部入账
+- 门禁全通过（hl-bootstrap + validate + boot + image + runtime + smoke）
 
 ## Iteration 106 — BPF 内核可编程过滤
 
