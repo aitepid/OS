@@ -7,7 +7,16 @@
 - 内核模块：`114`
 - Shell 命令数：`61` + pipe 操作符
 - 构建/测试主入口：`scripts/hl-bootstrap-build-test.ps1`
-- 最近完成迭代：`91`
+- 最近完成迭代：`92`
+
+## Iteration 92 — ext2 Inode 哈希缓存
+
+- **`ext2.hl`**: 每次磁盘读取 inode 升级为 **O(1) 哈希缓存 + 按需磁盘回填**
+  - 64 条目缓存 + 16 桶分离链哈希（inode_num % 16）
+  - `ext2_read_inode()`: 先查缓存 O(1)，命中直返；未命中读盘并插入缓存
+  - 新增 `ext2_icache_status()` 显示命中/未命中统计
+  - `ext2_init()` 时自动初始化缓存
+  - 22 个函数编译通过，构建 + 冒烟通过
 
 ## Iteration 91 — ARP 哈希表缓存
 
