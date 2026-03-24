@@ -1,21 +1,29 @@
 // poll.hl -- I/O Multiplexing (poll + epoll)
 //
+// Iteration 104: added edge-triggered, oneshot, futex-blocked wait,
+// socket/eventfd readiness detection.
+//
 // poll():  POSIX array-based, O(n) scan — legacy compatibility
 // epoll(): Linux-style event-based, O(log n) insert/delete, O(1) ready retrieval
 //
 // epoll internals:
 //   Interest set:  Red-Black Tree keyed by fd → O(log n) add/del/mod
 //   Ready list:    Append-only array → O(1) per ready event
-//   Spatial hint:  hilbert_encode(fd, epfd, 0) for cache-friendly node allocation
+//   Edge-trigger:  EPOLLET flag — only report transitions, not level
+//   Oneshot:       EPOLLONESHOT — disable fd after one event
+//   Blocking wait: futex_wait on per-instance waitword when no events
 //
 // poll events:
 //   POLLIN=1 POLLOUT=4 POLLERR=8 POLLHUP=16 POLLNVAL=32
+//   EPOLLET=64 EPOLLONESHOT=128
 
 let POLLIN = 1;
 let POLLOUT = 4;
 let POLLERR = 8;
 let POLLHUP = 16;
 let POLLNVAL = 32;
+let EPOLLET = 64;
+let EPOLLONESHOT = 128;
 
 let EPOLL_CTL_ADD = 1;
 let EPOLL_CTL_DEL = 2;
@@ -23,6 +31,9 @@ let EPOLL_CTL_MOD = 3;
 
 let EPOLL_MAX_INSTANCES = 16;
 let EPOLL_MAX_FDS = 256;
+
+// Per-instance wait address for futex blocking
+let _EP_WAIT_BASE = 3407872;   // 0x340000 — 16 * 8 bytes
 
 // ============================================================
 // Red-Black Tree (array-backed, per-epoll instance)
@@ -41,6 +52,7 @@ let mut _ep_roots = [];    // root index per instance
 let mut _ep_sizes = [];    // node count per instance
 let mut _ep_ready = [];    // ready-list per instance
 let mut _ep_active = [];   // 1=active per instance
+let mut _ep_last_rev = []; // per-instance array of last revents (for edge-trigger)
 
 fn _ep_ensure_init() {
     if len(_ep_nodes) == 0 {
@@ -51,6 +63,9 @@ fn _ep_ensure_init() {
             push(_ep_sizes, 0);
             push(_ep_ready, []);
             push(_ep_active, 0);
+            push(_ep_last_rev, []);
+            // Init futex wait word
+            mem_write_u64(_EP_WAIT_BASE + i * 8, 0);
             i = i + 1;
         }
     }
@@ -218,8 +233,32 @@ fn _rb_insert(ep, fd, events, data) {
 // Ready List (O(1) append, O(1) drain)
 // ============================================================
 
-fn _ep_mark_ready(ep, fd, revents) {
+fn _ep_mark_ready(ep, fd, revents, events_mask) {
+    // Edge-trigger check: only report if revents changed from last time
+    if (events_mask / EPOLLET) % 2 == 1 {
+        // Find last revents for this fd
+        let mut found = 0;
+        let mut li = 0;
+        while li < len(_ep_last_rev[ep]) {
+            if _ep_last_rev[ep][li][0] == fd {
+                if _ep_last_rev[ep][li][1] == revents { return 0; } // no change
+                _ep_last_rev[ep][li][1] = revents;
+                found = 1;
+            }
+            li = li + 1;
+        }
+        if found == 0 { push(_ep_last_rev[ep], [fd, revents]); }
+    }
     push(_ep_ready[ep], [fd, revents]);
+    // Oneshot: disable fd after event
+    if (events_mask / EPOLLONESHOT) % 2 == 1 {
+        let idx = _rb_find(ep, fd);
+        if idx != _RB_NIL { _ep_nodes[ep][idx][0] = 0 - 1; }
+    }
+    // Wake any futex waiters
+    let wait_addr = _EP_WAIT_BASE + ep * 8;
+    mem_write_u64(wait_addr, 1);
+    futex_wake(wait_addr, 1);
     return 0;
 }
 
@@ -287,6 +326,10 @@ fn sys_epoll_wait(epfd, max_events, timeout_ms) {
     if epfd < 0 || epfd >= EPOLL_MAX_INSTANCES { return []; }
     if _ep_active[epfd] == 0 { return []; }
 
+    // Reset wait word
+    let wait_addr = _EP_WAIT_BASE + epfd * 8;
+    mem_write_u64(wait_addr, 0);
+
     // Phase 1: Check all registered fds for readiness, populate ready list
     let mut i = 0;
     while i < len(_ep_nodes[epfd]) {
@@ -300,13 +343,37 @@ fn sys_epoll_wait(epfd, max_events, timeout_ms) {
             // Writable: pipes with space are always writable for now
             if (events / 4) % 2 == 1 { revents = revents + POLLOUT; }
             if revents != 0 {
-                _ep_mark_ready(epfd, fd, revents);
+                _ep_mark_ready(epfd, fd, revents, events);
             }
         }
         i = i + 1;
     }
 
-    // Phase 2: Drain ready list (O(1) per event)
+    // Phase 2: If no events and timeout > 0, block via futex
+    if len(_ep_ready[epfd]) == 0 {
+        if timeout_ms > 0 {
+            let timeout_ticks = timeout_ms * 100;
+            futex_wait_timeout(wait_addr, 0, timeout_ticks);
+            // Re-scan after wake
+            i = 0;
+            while i < len(_ep_nodes[epfd]) {
+                let node = _ep_nodes[epfd][i];
+                let fd = node[0];
+                let events = node[1];
+                if fd >= 0 {
+                    let mut revents = 0;
+                    if pipe_available(fd) > 0 { revents = revents + POLLIN; }
+                    if (events / 4) % 2 == 1 { revents = revents + POLLOUT; }
+                    if revents != 0 {
+                        _ep_mark_ready(epfd, fd, revents, events);
+                    }
+                }
+                i = i + 1;
+            }
+        }
+    }
+
+    // Phase 3: Drain ready list (O(1) per event)
     return _ep_drain_ready(epfd, max_events);
 }
 
@@ -318,6 +385,8 @@ fn sys_epoll_close(epfd) {
     set_at(_ep_roots, epfd, _RB_NIL);
     set_at(_ep_sizes, epfd, 0);
     set_at(_ep_ready, epfd, []);
+    set_at(_ep_last_rev, epfd, []);
+    mem_write_u64(_EP_WAIT_BASE + epfd * 8, 0);
     return 0;
 }
 

@@ -1,0 +1,331 @@
+﻿// bpf.hl -- Kernel Programmable Filter (eBPF-like VM)
+//
+// Iteration 106: new module — simplified eBPF virtual machine.
+//
+// Design:
+//   Register-based VM with 10 registers (R0-R9) + PC
+//   Instruction set (simplified):
+//     0x00 = NOP
+//     0x01 = MOV  Rd, imm       (Rd = imm)
+//     0x02 = MOV  Rd, Rs        (Rd = Rs)
+//     0x03 = ADD  Rd, Rs        (Rd += Rs)
+//     0x04 = SUB  Rd, Rs        (Rd -= Rs)
+//     0x05 = MUL  Rd, Rs        (Rd *= Rs)
+//     0x06 = DIV  Rd, Rs        (Rd /= Rs, Rs != 0)
+//     0x07 = AND  Rd, Rs        (Rd &= Rs)
+//     0x08 = OR   Rd, Rs        (Rd |= Rs)
+//     0x09 = XOR  Rd, Rs        (Rd ^= Rs)
+//     0x0A = LSH  Rd, Rs        (Rd <<= Rs)
+//     0x0B = RSH  Rd, Rs        (Rd >>= Rs)
+//     0x10 = JEQ  Rd, Rs, off   (if Rd==Rs: PC += off)
+//     0x11 = JNE  Rd, Rs, off   (if Rd!=Rs: PC += off)
+//     0x12 = JGT  Rd, Rs, off   (if Rd>Rs: PC += off)
+//     0x13 = JGE  Rd, Rs, off   (if Rd>=Rs: PC += off)
+//     0x20 = LDX  Rd, [Rs+off]  (load from context)
+//     0x21 = STX  [Rd+off], Rs  (store to context)
+//     0xFF = EXIT               (return R0)
+//
+//   Programs: up to 64 instructions, max 10000 steps (prevents infinite loops)
+//   Attach points: SYSCALL_ENTER, SYSCALL_EXIT, NET_RX, NET_TX, SCHED
+//
+// Public API:
+//   bpf_init / bpf_load / bpf_unload
+//   bpf_run / bpf_attach / bpf_detach
+//   bpf_map_create / bpf_map_get / bpf_map_set (per-program key-value store)
+//   bpf_status
+
+let BPF_MAX_PROGS = 16;
+let BPF_MAX_INSNS = 64;
+let BPF_MAX_STEPS = 10000;
+let BPF_NUM_REGS = 10;
+
+// Opcodes
+let BPF_NOP  = 0;
+let BPF_MOVI = 1;
+let BPF_MOV  = 2;
+let BPF_ADD  = 3;
+let BPF_SUB  = 4;
+let BPF_MUL  = 5;
+let BPF_DIV  = 6;
+let BPF_AND  = 7;
+let BPF_OR   = 8;
+let BPF_XOR  = 9;
+let BPF_LSH  = 10;
+let BPF_RSH  = 11;
+let BPF_JEQ  = 16;
+let BPF_JNE  = 17;
+let BPF_JGT  = 18;
+let BPF_JGE  = 19;
+let BPF_LDX  = 32;
+let BPF_STX  = 33;
+let BPF_EXIT = 255;
+
+// Attach points
+let BPF_ATTACH_SYSCALL_ENTER = 0;
+let BPF_ATTACH_SYSCALL_EXIT = 1;
+let BPF_ATTACH_NET_RX = 2;
+let BPF_ATTACH_NET_TX = 3;
+let BPF_ATTACH_SCHED = 4;
+let BPF_MAX_ATTACH_POINTS = 5;
+
+// Program table
+let mut _bpf_active = [];
+let mut _bpf_insns = [];        // array of arrays
+let mut _bpf_insn_count = [];
+let mut _bpf_run_count = [];
+
+// Attach table: attach_point -> program id (-1 = none)
+let mut _bpf_attach = [];
+
+// Per-program map: 16 key-value pairs
+let BPF_MAP_SIZE = 16;
+let mut _bpf_maps = [];
+
+let mut _bpf_ready = 0;
+
+fn bpf_init() {
+    _bpf_active = [];
+    _bpf_insns = [];
+    _bpf_insn_count = [];
+    _bpf_run_count = [];
+    _bpf_maps = [];
+    let mut i = 0;
+    while i < BPF_MAX_PROGS {
+        push(_bpf_active, 0);
+        push(_bpf_insns, []);
+        push(_bpf_insn_count, 0);
+        push(_bpf_run_count, 0);
+        // Map: [key0, val0, key1, val1, ...]
+        let mut m = [];
+        let mut j = 0;
+        while j < BPF_MAP_SIZE * 2 {
+            push(m, 0);
+            j = j + 1;
+        }
+        push(_bpf_maps, m);
+        i = i + 1;
+    }
+    _bpf_attach = [];
+    i = 0;
+    while i < BPF_MAX_ATTACH_POINTS {
+        push(_bpf_attach, 0 - 1);
+        i = i + 1;
+    }
+    _bpf_ready = 1;
+    return 0;
+}
+
+// Load a program: insns = flat array [op, dst, src, imm, op, dst, src, imm, ...]
+fn bpf_load(insns) {
+    if _bpf_ready == 0 { bpf_init(); }
+    let n_insns = len(insns) / 4;
+    if n_insns > BPF_MAX_INSNS { return 0 - 1; }
+    // Verify: must end with EXIT
+    if n_insns == 0 { return 0 - 1; }
+    if insns[(n_insns - 1) * 4] != BPF_EXIT { return 0 - 1; }
+    // Find free slot
+    let mut i = 0;
+    while i < BPF_MAX_PROGS {
+        if _bpf_active[i] == 0 {
+            set_at(_bpf_active, i, 1);
+            set_at(_bpf_insns, i, insns);
+            set_at(_bpf_insn_count, i, n_insns);
+            set_at(_bpf_run_count, i, 0);
+            return i;
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn bpf_unload(prog_id) {
+    if prog_id < 0 { return 0 - 1; }
+    if prog_id >= BPF_MAX_PROGS { return 0 - 1; }
+    set_at(_bpf_active, prog_id, 0);
+    // Detach from any attach points
+    let mut i = 0;
+    while i < BPF_MAX_ATTACH_POINTS {
+        if _bpf_attach[i] == prog_id {
+            set_at(_bpf_attach, i, 0 - 1);
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn bpf_attach(prog_id, attach_point) {
+    if attach_point < 0 { return 0 - 1; }
+    if attach_point >= BPF_MAX_ATTACH_POINTS { return 0 - 1; }
+    if prog_id < 0 { return 0 - 1; }
+    if _bpf_active[prog_id] == 0 { return 0 - 1; }
+    set_at(_bpf_attach, attach_point, prog_id);
+    return 0;
+}
+
+fn bpf_detach(attach_point) {
+    if attach_point < 0 { return 0 - 1; }
+    if attach_point >= BPF_MAX_ATTACH_POINTS { return 0 - 1; }
+    set_at(_bpf_attach, attach_point, 0 - 1);
+    return 0;
+}
+
+// ============================================================
+// VM execution
+// ============================================================
+
+fn bpf_run(prog_id, ctx) {
+    if _bpf_ready == 0 { bpf_init(); }
+    if prog_id < 0 { return 0; }
+    if prog_id >= BPF_MAX_PROGS { return 0; }
+    if _bpf_active[prog_id] == 0 { return 0; }
+
+    let insns = _bpf_insns[prog_id];
+    let n_insns = _bpf_insn_count[prog_id];
+    set_at(_bpf_run_count, prog_id, _bpf_run_count[prog_id] + 1);
+
+    // Registers
+    let mut regs = [];
+    let mut ri = 0;
+    while ri < BPF_NUM_REGS { push(regs, 0); ri = ri + 1; }
+    // R1 = context pointer (index into ctx array)
+    set_at(regs, 1, 0);
+
+    let mut pc = 0;
+    let mut steps = 0;
+
+    while pc < n_insns {
+        if steps >= BPF_MAX_STEPS { return 0; } // safety limit
+        let base = pc * 4;
+        let op = insns[base];
+        let dst = insns[base + 1];
+        let src = insns[base + 2];
+        let imm = insns[base + 3];
+
+        if op == BPF_NOP { pc = pc + 1; }
+        else if op == BPF_MOVI { set_at(regs, dst, imm); pc = pc + 1; }
+        else if op == BPF_MOV { set_at(regs, dst, regs[src]); pc = pc + 1; }
+        else if op == BPF_ADD { set_at(regs, dst, regs[dst] + regs[src]); pc = pc + 1; }
+        else if op == BPF_SUB { set_at(regs, dst, regs[dst] - regs[src]); pc = pc + 1; }
+        else if op == BPF_MUL { set_at(regs, dst, regs[dst] * regs[src]); pc = pc + 1; }
+        else if op == BPF_DIV {
+            if regs[src] != 0 { set_at(regs, dst, regs[dst] / regs[src]); }
+            pc = pc + 1;
+        }
+        else if op == BPF_AND { set_at(regs, dst, regs[dst] & regs[src]); pc = pc + 1; }
+        else if op == BPF_OR  { set_at(regs, dst, regs[dst] | regs[src]); pc = pc + 1; }
+        else if op == BPF_XOR { set_at(regs, dst, regs[dst] ^ regs[src]); pc = pc + 1; }
+        else if op == BPF_LSH { set_at(regs, dst, regs[dst] * _pow2(regs[src])); pc = pc + 1; }
+        else if op == BPF_RSH { set_at(regs, dst, regs[dst] / _pow2(regs[src])); pc = pc + 1; }
+        else if op == BPF_JEQ { if regs[dst] == regs[src] { pc = pc + imm; } else { pc = pc + 1; } }
+        else if op == BPF_JNE { if regs[dst] != regs[src] { pc = pc + imm; } else { pc = pc + 1; } }
+        else if op == BPF_JGT { if regs[dst] > regs[src]  { pc = pc + imm; } else { pc = pc + 1; } }
+        else if op == BPF_JGE { if regs[dst] >= regs[src] { pc = pc + imm; } else { pc = pc + 1; } }
+        else if op == BPF_LDX {
+            let addr = regs[src] + imm;
+            if addr >= 0 { if addr < len(ctx) { set_at(regs, dst, ctx[addr]); } }
+            pc = pc + 1;
+        }
+        else if op == BPF_STX {
+            let addr = regs[dst] + imm;
+            if addr >= 0 { if addr < len(ctx) { set_at(ctx, addr, regs[src]); } }
+            pc = pc + 1;
+        }
+        else if op == BPF_EXIT { return regs[0]; }
+        else { pc = pc + 1; } // unknown: skip
+
+        steps = steps + 1;
+    }
+    return regs[0];
+}
+
+// Run attached program at an attach point
+fn bpf_run_hook(attach_point, ctx) {
+    if _bpf_ready == 0 { return 0; }
+    if attach_point < 0 { return 0; }
+    if attach_point >= BPF_MAX_ATTACH_POINTS { return 0; }
+    let prog = _bpf_attach[attach_point];
+    if prog < 0 { return 0; }
+    return bpf_run(prog, ctx);
+}
+
+// ============================================================
+// Per-program map (simple key-value)
+// ============================================================
+
+fn bpf_map_set(prog_id, key, value) {
+    if prog_id < 0 { return 0 - 1; }
+    if prog_id >= BPF_MAX_PROGS { return 0 - 1; }
+    let m = _bpf_maps[prog_id];
+    // Find existing key or empty slot
+    let mut i = 0;
+    while i < BPF_MAP_SIZE {
+        if m[i * 2] == key {
+            m[i * 2 + 1] = value;
+            return 0;
+        }
+        i = i + 1;
+    }
+    // Insert in first zero-key slot
+    i = 0;
+    while i < BPF_MAP_SIZE {
+        if m[i * 2] == 0 {
+            m[i * 2] = key;
+            m[i * 2 + 1] = value;
+            return 0;
+        }
+        i = i + 1;
+    }
+    return 0 - 1; // full
+}
+
+fn bpf_map_get(prog_id, key) {
+    if prog_id < 0 { return 0; }
+    if prog_id >= BPF_MAX_PROGS { return 0; }
+    let m = _bpf_maps[prog_id];
+    let mut i = 0;
+    while i < BPF_MAP_SIZE {
+        if m[i * 2] == key { return m[i * 2 + 1]; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn bpf_map_create(prog_id) {
+    if prog_id < 0 { return 0 - 1; }
+    if prog_id >= BPF_MAX_PROGS { return 0 - 1; }
+    let mut m = [];
+    let mut j = 0;
+    while j < BPF_MAP_SIZE * 2 { push(m, 0); j = j + 1; }
+    set_at(_bpf_maps, prog_id, m);
+    return 0;
+}
+
+fn bpf_status() {
+    let mut loaded = 0;
+    let mut attached = 0;
+    let mut total_runs = 0;
+    let mut i = 0;
+    while i < BPF_MAX_PROGS {
+        if _bpf_active[i] == 1 {
+            loaded = loaded + 1;
+            total_runs = total_runs + _bpf_run_count[i];
+        }
+        i = i + 1;
+    }
+    i = 0;
+    while i < BPF_MAX_ATTACH_POINTS {
+        if _bpf_attach[i] >= 0 { attached = attached + 1; }
+        i = i + 1;
+    }
+    return "bpf: " + to_string(loaded) + " progs, " + to_string(attached) + " attached, " + to_string(total_runs) + " runs";
+}
+
+fn _pow2(n) {
+    let mut r = 1;
+    let mut i = 0;
+    while i < n { r = r * 2; i = i + 1; }
+    return r;
+}
+
+print("bpf.hl loaded (eBPF VM)");
+print("BPF: " + to_string(BPF_MAX_PROGS) + " progs, " + to_string(BPF_MAX_INSNS) + " insns/prog, " + to_string(BPF_NUM_REGS) + " regs");

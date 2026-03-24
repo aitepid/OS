@@ -8,7 +8,36 @@
 - Shell 命令数：`63` + pipe 操作符
 - `scripts/*.ps1`：`22`（8,646 行）
 - 构建/测试主入口：`scripts/hl-bootstrap-build-test.ps1`
-- 最近完成迭代：`103`
+- 最近完成迭代：`106`
+
+## Iteration 106 — BPF 内核可编程过滤
+
+- **`bpf.hl`**: 新建 — **eBPF 风格寄存器虚拟机**
+  - 10 寄存器 + PC，16 种指令（算术/逻辑/跳转/内存/EXIT）
+  - 程序加载（验证 EXIT 结尾）、卸载、附加到 5 个钩子点
+  - `bpf_run`: 安全沙箱执行（10000 步上限）
+  - `bpf_run_hook`: 在 SYSCALL/NET_RX/NET_TX/SCHED 钩子运行
+  - Per-program key-value map（16 对）
+  - manifest 更新：115 内核模块 / 177 HL 文件
+
+## Iteration 105 — Cgroup v2 资源强制执行
+
+- **`cgroup.hl`**: 被动记账升级为 **主动强制执行**
+  - CPU: 每周期配额（ticks），`cgroup_tick()` 计费，超限节流
+  - Memory: 硬限制 + OOM killer 钩子（杀最年轻进程）
+  - I/O: 带宽限制（字节/周期），`cgroup_check_io()` 节流
+  - PIDs: 最大任务数限制
+  - `cgroup_period_reset()` 周期性重置计费（由 timer 调用）
+  - `cgroup_detach()` / `cgroup_list()` / 增强 `cgroup_status()`
+
+## Iteration 104 — Epoll 边缘触发 + Futex 阻塞
+
+- **`poll.hl`**: 升级为 **边缘触发 + oneshot + futex 阻塞等待**
+  - `EPOLLET`: 仅在状态变化时报告事件（vs 水平触发每次都报告）
+  - `EPOLLONESHOT`: 事件后自动禁用 fd
+  - `sys_epoll_wait` 无事件时用 `futex_wait_timeout` 阻塞
+  - 唤醒后重新扫描就绪 fd
+  - 每实例 edge-trigger 历史记录数组
 
 ## Iteration 103 — Futex 哈希桶等待队列
 
