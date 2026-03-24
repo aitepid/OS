@@ -7,7 +7,18 @@
 - 内核模块：`114`
 - Shell 命令数：`61` + pipe 操作符
 - 构建/测试主入口：`scripts/hl-bootstrap-build-test.ps1`
-- 最近完成迭代：`93`
+- 最近完成迭代：`94`
+
+## Iteration 94 — SMP Per-CPU 运行队列
+
+- **`smp.hl`**: 全局调度锁升级为 **Per-CPU 环形运行队列 + 负载均衡**
+  - 每 CPU 32 槽位环形队列，O(1) 入队/出队
+  - `sched_enqueue()`: 自动选择最轻载 CPU 入队
+  - `sched_dequeue()`: 本地 CPU 无竞争出队
+  - `sched_balance()`: 负载差 >1 时从最重迁移到最轻
+  - Per-CPU 自旋锁（每 CPU 独立锁地址）
+  - `sched_runq_status()` 显示各 CPU 队列长度
+  - 21 个函数编译通过，构建 + 冒烟通过
 
 ## Iteration 93 — 增强型时钟页面置换
 

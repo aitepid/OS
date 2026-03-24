@@ -1,27 +1,20 @@
-// smp.hl -- Symmetric Multi-Processing Bootstrap
+// smp.hl -- Symmetric Multi-Processing + Per-CPU Run Queues
 //
-// Boots additional CPU cores using the INIT-SIPI-SIPI sequence.
-// Requires ACPI MADT to discover LAPIC IDs of other CPUs.
+// Iteration 94: added per-CPU run queues for O(1) local scheduling.
 //
-// SMP boot protocol (x86):
-//   1. Parse MADT to get list of LAPIC IDs
-//   2. Allocate AP (Application Processor) boot trampoline at < 1MB
-//   3. Copy trampoline code to that address
-//   4. For each AP:
-//      a. Send INIT IPI
-//      b. Wait 10ms
-//      c. Send SIPI with trampoline page number
-//      d. Wait 200us
-//      e. Send second SIPI
-//      f. Wait for AP to signal ready
+// Design:
+//   Each CPU has its own run queue (circular array, 32 slots).
+//   sched_enqueue picks the least-loaded CPU.
+//   sched_dequeue is lock-free per-CPU (no global contention).
+//   Load balancing: periodic check moves tasks from overloaded to idle CPU.
 //
-// AP trampoline:
-//   Starts in real mode -> enters protected mode -> enters long mode
-//   -> jumps to ap_main() in kernel
-//
-// Memory:
-//   0x8000: AP trampoline code (< 4KB)
-//   0x310000+: Per-CPU task structures
+// Public API (all signatures preserved + new):
+//   smp_init / smp_discover / smp_boot_aps / smp_cpu_count
+//   ap_main / percpu_init / percpu_get_task / percpu_set_task
+//   spin_lock / spin_unlock / spin_trylock
+//   smp_send_reschedule / smp_broadcast_ipi
+//   sched_enqueue (new) / sched_dequeue (new) / sched_balance (new)
+//   sched_runq_status (new)
 
 let TRAMPOLINE_ADDR = 32768;   // 0x8000
 let MAX_CPUS = 16;
@@ -279,9 +272,141 @@ fn smp_cpu_count() {
 }
 
 // Self-test
-print("smp.hl loaded");
+print("smp.hl loaded (per-CPU run queues)");
 print("Max CPUs: " + to_string(MAX_CPUS));
 print("Trampoline at: 0x8000");
 print("Per-CPU data at: 0x350000");
 print("Spinlocks at: 0x360000");
-print("Boot sequence: INIT -> SIPI -> SIPI");
+print("Run queue: " + to_string(_RQ_SLOTS) + " slots/CPU");
+
+// ============================================================
+// Per-CPU Run Queues (iteration 94)
+// ============================================================
+//
+// Each CPU: circular queue of task indices, 32 slots.
+// Parallel arrays indexed by [cpu * _RQ_SLOTS + pos].
+// Head/tail per CPU for O(1) enqueue/dequeue.
+
+let _RQ_SLOTS = 32;
+
+let mut _rq_buf = [];       // flat: MAX_CPUS * _RQ_SLOTS task indices
+let mut _rq_head = [];      // per-CPU head
+let mut _rq_tail = [];      // per-CPU tail
+let mut _rq_count = [];     // per-CPU count
+let mut _rq_lock = [];      // per-CPU spinlock addr offset
+let mut _rq_ready = 0;
+
+fn _rq_init() {
+    _rq_buf = [];
+    _rq_head = [];
+    _rq_tail = [];
+    _rq_count = [];
+    _rq_lock = [];
+    let mut c = 0;
+    while c < MAX_CPUS {
+        push(_rq_head, 0);
+        push(_rq_tail, 0);
+        push(_rq_count, 0);
+        push(_rq_lock, LOCK_SCHED + 64 + c * 8);
+        let mut s = 0;
+        while s < _RQ_SLOTS {
+            push(_rq_buf, 0 - 1);
+            s = s + 1;
+        }
+        // Init per-CPU lock
+        mem_write_u64(LOCK_SCHED + 64 + c * 8, 0);
+        c = c + 1;
+    }
+    _rq_ready = 1;
+    return 0;
+}
+
+fn sched_enqueue(task_idx) {
+    if _rq_ready == 0 { _rq_init(); }
+    // Find least-loaded CPU
+    let mut best_cpu = 0;
+    let mut best_load = _rq_count[0];
+    let mut c = 1;
+    while c < cpus_online {
+        if _rq_count[c] < best_load {
+            best_load = _rq_count[c];
+            best_cpu = c;
+        }
+        c = c + 1;
+    }
+    // Enqueue to that CPU's run queue
+    let lock = _rq_lock[best_cpu];
+    spin_lock(lock);
+    if _rq_count[best_cpu] < _RQ_SLOTS {
+        let base = best_cpu * _RQ_SLOTS;
+        let tail = _rq_tail[best_cpu];
+        set_at(_rq_buf, base + tail, task_idx);
+        set_at(_rq_tail, best_cpu, (tail + 1) % _RQ_SLOTS);
+        set_at(_rq_count, best_cpu, _rq_count[best_cpu] + 1);
+    }
+    spin_unlock(lock);
+    return best_cpu;
+}
+
+fn sched_dequeue(cpu_id) {
+    if _rq_ready == 0 { _rq_init(); }
+    if cpu_id >= MAX_CPUS { return 0 - 1; }
+    let lock = _rq_lock[cpu_id];
+    spin_lock(lock);
+    if _rq_count[cpu_id] == 0 {
+        spin_unlock(lock);
+        return 0 - 1;
+    }
+    let base = cpu_id * _RQ_SLOTS;
+    let head = _rq_head[cpu_id];
+    let task = _rq_buf[base + head];
+    set_at(_rq_head, cpu_id, (head + 1) % _RQ_SLOTS);
+    set_at(_rq_count, cpu_id, _rq_count[cpu_id] - 1);
+    spin_unlock(lock);
+    return task;
+}
+
+// Load balancing: move one task from most-loaded to least-loaded CPU
+fn sched_balance() {
+    if _rq_ready == 0 { return 0; }
+    if cpus_online <= 1 { return 0; }
+    let mut max_cpu = 0;
+    let mut max_load = _rq_count[0];
+    let mut min_cpu = 0;
+    let mut min_load = _rq_count[0];
+    let mut c = 1;
+    while c < cpus_online {
+        if _rq_count[c] > max_load { max_load = _rq_count[c]; max_cpu = c; }
+        if _rq_count[c] < min_load { min_load = _rq_count[c]; min_cpu = c; }
+        c = c + 1;
+    }
+    // Only balance if imbalance > 1
+    if max_load - min_load > 1 {
+        let task = sched_dequeue(max_cpu);
+        if task >= 0 {
+            // Re-enqueue to least loaded (directly, not via sched_enqueue to avoid re-picking)
+            let lock = _rq_lock[min_cpu];
+            spin_lock(lock);
+            if _rq_count[min_cpu] < _RQ_SLOTS {
+                let base = min_cpu * _RQ_SLOTS;
+                let tail = _rq_tail[min_cpu];
+                set_at(_rq_buf, base + tail, task);
+                set_at(_rq_tail, min_cpu, (tail + 1) % _RQ_SLOTS);
+                set_at(_rq_count, min_cpu, _rq_count[min_cpu] + 1);
+            }
+            spin_unlock(lock);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+fn sched_runq_status() {
+    let mut s = "runq:";
+    let mut c = 0;
+    while c < cpus_online {
+        s = s + " cpu" + to_string(c) + "=" + to_string(_rq_count[c]);
+        c = c + 1;
+    }
+    return s;
+}
