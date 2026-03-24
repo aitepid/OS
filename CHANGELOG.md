@@ -6,7 +6,21 @@
 - 内核模块：`114`
 - Shell 命令数：`61` + pipe 操作符
 - 构建/测试主入口：`scripts/hl-bootstrap-build-test.ps1`
-- 最近完成迭代：`84`
+- 最近完成迭代：`86`
+
+## Iteration 86 — TCP Reno 拥塞控制
+
+- **`tcp.hl`**: 无流控 TCP 升级为 **TCP Reno 拥塞控制 + Jacobson/Karels RTT 估算**
+  - 慢启动：cwnd < ssthresh 时 cwnd += MSS per ACK（指数增长）
+  - 拥塞避免：cwnd >= ssthresh 时 cwnd += MSS²/cwnd per ACK（线性增长）
+  - 快速重传：3 个重复 ACK → ssthresh = cwnd/2, cwnd = ssthresh + 3*MSS
+  - 快速恢复：后续重复 ACK cwnd += MSS
+  - 超时处理：cwnd = 1*MSS, RTO 指数退避
+  - Jacobson/Karels RTT：SRTT/RTTVAR 定点数估算，RTO = SRTT/8 + 4*RTTVAR
+  - 滑动窗口：tcp_send 按 min(cwnd, rwnd) 限制发送
+  - TCB 布局 +128~+191 填充拥塞控制状态（利用原 reserved 空间）
+  - 新增 `tcp_cc_info()` 供 netstat 显示拥塞状态
+  - 17 个函数编译通过，QEMU 冒烟通过
 
 ## Iteration 84 — Hilbert 空间分配器归并排序
 

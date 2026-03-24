@@ -1,15 +1,47 @@
-// tcp.hl -- TCP/IP State Machine
+﻿// tcp.hl -- TCP/IP State Machine with Reno Congestion Control
 //
-// Implements TCP over IPv4 with basic connection management.
-// States follow RFC 793: CLOSED->SYN_SENT->ESTABLISHED->FIN_WAIT->CLOSED
+// Iteration 86: added TCP Reno congestion control + RTT estimation.
 //
-// Each TCP connection (TCB) is a 256-byte structure.
-// Max 64 simultaneous connections.
-// Connection table at 0x800000 (8MB).
+// Implements TCP over IPv4 with:
+//   - RFC 793 state machine (CLOSED->SYN_SENT->ESTABLISHED->FIN_WAIT->CLOSED)
+//   - Reno congestion control: slow start + congestion avoidance + fast retransmit
+//   - Jacobson/Karels RTT estimation for adaptive RTO
+//   - Sliding window: send limited by min(cwnd, receiver window)
+//
+// TCB layout (256 bytes):
+//   +0   state(8)
+//   +8   local_ip(4) local_port(4)
+//   +16  remote_ip(4) remote_port(4)
+//   +24  seq_num(8)
+//   +32  ack_num(8)
+//   +40  window(8)            -- receiver advertised window
+//   +48  rx_buf_addr(8)
+//   +56  rx_buf_len(8)
+//   +64  rx_buf_head(8)
+//   +72  rx_buf_tail(8)
+//   +80  tx_buf_addr(8)
+//   +88  tx_buf_len(8)
+//   +96  tx_buf_head(8)
+//   +104 tx_buf_tail(8)
+//   +112 retransmit_tick(8)
+//   +120 rtt_estimate(8)
+//   --- Congestion control (iteration 86) ---
+//   +128 cwnd(8)              -- congestion window (bytes)
+//   +136 ssthresh(8)          -- slow-start threshold (bytes)
+//   +144 dup_ack_count(8)     -- duplicate ACK counter
+//   +152 rtt_srtt(8)          -- smoothed RTT (ms * 8, fixed-point)
+//   +160 rtt_rttvar(8)        -- RTT variance (ms * 4, fixed-point)
+//   +168 rto(8)               -- retransmission timeout (ms)
+//   +176 last_ack_seq(8)      -- last ACK'd sequence (for dup detection)
+//   +184 send_tick(8)         -- tick when last segment sent (for RTT sample)
+//   +192 reserved(64)
 
 let TCP_TABLE = 8388608;       // 0x800000
 let TCB_SIZE = 256;
 let MAX_TCP = 64;
+
+// TCP MSS (Maximum Segment Size)
+let TCP_MSS = 1460;
 
 // TCP states
 let TCP_CLOSED      = 0;
@@ -31,24 +63,13 @@ let TCP_RST = 4;
 let TCP_PSH = 8;
 let TCP_ACK = 16;
 
-// TCB layout (256 bytes):
-//   +0   state(8)
-//   +8   local_ip(4) local_port(4)
-//   +16  remote_ip(4) remote_port(4)
-//   +24  seq_num(8)
-//   +32  ack_num(8)
-//   +40  window(8)
-//   +48  rx_buf_addr(8)
-//   +56  rx_buf_len(8)
-//   +64  rx_buf_head(8)
-//   +72  rx_buf_tail(8)
-//   +80  tx_buf_addr(8)
-//   +88  tx_buf_len(8)
-//   +96  tx_buf_head(8)
-//   +104 tx_buf_tail(8)
-//   +112 retransmit_tick(8)
-//   +120 rtt_estimate(8)
-//   +128 reserved(128)
+// Congestion control constants
+let TCP_INIT_CWND = 14600;     // 10 * MSS (RFC 6928)
+let TCP_INIT_SSTHRESH = 65535;
+let TCP_DUP_ACK_THRESHOLD = 3;
+let TCP_INIT_RTO = 1000;       // 1 second initial RTO (ms)
+let TCP_MIN_RTO = 200;         // 200ms minimum
+let TCP_MAX_RTO = 60000;       // 60s maximum
 
 let mut next_ephemeral_port = 49152;
 
@@ -59,7 +80,6 @@ fn tcp_alloc_port() {
     return p;
 }
 
-// Find free TCB slot
 fn tcp_alloc_tcb() {
     let mut i = 0;
     while i < MAX_TCP {
@@ -70,58 +90,178 @@ fn tcp_alloc_tcb() {
     return 0 - 1;
 }
 
-// Build TCP segment header (20 bytes, no options)
+// ============================================================
+// Congestion control helpers
+// ============================================================
+
+fn _tcp_cc_init(addr) {
+    mem_write_u64(addr + 128, TCP_INIT_CWND);
+    mem_write_u64(addr + 136, TCP_INIT_SSTHRESH);
+    mem_write_u64(addr + 144, 0);     // dup_ack_count
+    mem_write_u64(addr + 152, 0);     // srtt (not yet measured)
+    mem_write_u64(addr + 160, 0);     // rttvar
+    mem_write_u64(addr + 168, TCP_INIT_RTO);
+    mem_write_u64(addr + 176, 0);     // last_ack_seq
+    mem_write_u64(addr + 184, 0);     // send_tick
+    return 0;
+}
+
+// Effective send window = min(cwnd, receiver_window)
+fn _tcp_send_window(addr) {
+    let cwnd = mem_read_u64(addr + 128);
+    let rwnd = mem_read_u64(addr + 40);
+    if cwnd < rwnd { return cwnd; }
+    return rwnd;
+}
+
+// Called when new ACK received (not duplicate)
+fn _tcp_cc_on_ack(addr, acked_bytes) {
+    let cwnd = mem_read_u64(addr + 128);
+    let ssthresh = mem_read_u64(addr + 136);
+    let mut new_cwnd = cwnd;
+
+    if cwnd < ssthresh {
+        // Slow start: cwnd += min(acked_bytes, MSS) per ACK
+        let inc = acked_bytes;
+        if inc > TCP_MSS { inc = TCP_MSS; }
+        new_cwnd = cwnd + inc;
+    } else {
+        // Congestion avoidance: cwnd += MSS * MSS / cwnd per ACK
+        let inc = TCP_MSS * TCP_MSS / cwnd;
+        if inc < 1 { inc = 1; }
+        new_cwnd = cwnd + inc;
+    }
+
+    mem_write_u64(addr + 128, new_cwnd);
+    mem_write_u64(addr + 144, 0);  // reset dup_ack counter
+    return 0;
+}
+
+// Called on duplicate ACK
+fn _tcp_cc_on_dup_ack(addr) {
+    let dup = mem_read_u64(addr + 144) + 1;
+    mem_write_u64(addr + 144, dup);
+
+    if dup == TCP_DUP_ACK_THRESHOLD {
+        // Fast retransmit: ssthresh = cwnd / 2, cwnd = ssthresh + 3*MSS
+        let cwnd = mem_read_u64(addr + 128);
+        let mut new_ss = cwnd / 2;
+        if new_ss < 2 * TCP_MSS { new_ss = 2 * TCP_MSS; }
+        mem_write_u64(addr + 136, new_ss);
+        mem_write_u64(addr + 128, new_ss + 3 * TCP_MSS);
+        return 1; // signal: retransmit needed
+    }
+
+    if dup > TCP_DUP_ACK_THRESHOLD {
+        // Fast recovery: cwnd += MSS for each additional dup ACK
+        let cwnd = mem_read_u64(addr + 128);
+        mem_write_u64(addr + 128, cwnd + TCP_MSS);
+    }
+
+    return 0;
+}
+
+// Called on timeout
+fn _tcp_cc_on_timeout(addr) {
+    let cwnd = mem_read_u64(addr + 128);
+    let mut new_ss = cwnd / 2;
+    if new_ss < 2 * TCP_MSS { new_ss = 2 * TCP_MSS; }
+    mem_write_u64(addr + 136, new_ss);
+    mem_write_u64(addr + 128, TCP_MSS); // cwnd = 1 MSS
+    mem_write_u64(addr + 144, 0);       // reset dup counter
+    // Double RTO (exponential backoff)
+    let rto = mem_read_u64(addr + 168);
+    let new_rto = rto * 2;
+    if new_rto > TCP_MAX_RTO { new_rto = TCP_MAX_RTO; }
+    mem_write_u64(addr + 168, new_rto);
+    return 0;
+}
+
+// Jacobson/Karels RTT estimation
+fn _tcp_update_rtt(addr, sample_ms) {
+    let srtt = mem_read_u64(addr + 152);
+    let rttvar = mem_read_u64(addr + 160);
+
+    if srtt == 0 {
+        // First measurement
+        mem_write_u64(addr + 152, sample_ms * 8);
+        mem_write_u64(addr + 160, sample_ms * 2);
+    } else {
+        // SRTT = 7/8 * SRTT + 1/8 * sample (fixed-point *8)
+        let mut err = sample_ms * 8 - srtt;
+        if err < 0 { err = 0 - err; }
+        // RTTVAR = 3/4 * RTTVAR + 1/4 * |err/8|
+        let new_var = rttvar * 3 / 4 + err / 8 / 4;
+        let new_srtt = srtt * 7 / 8 + sample_ms;
+        mem_write_u64(addr + 152, new_srtt);
+        mem_write_u64(addr + 160, new_var);
+    }
+
+    // RTO = SRTT/8 + 4 * RTTVAR
+    let new_srtt = mem_read_u64(addr + 152);
+    let new_var = mem_read_u64(addr + 160);
+    let mut rto = new_srtt / 8 + 4 * new_var;
+    if rto < TCP_MIN_RTO { rto = TCP_MIN_RTO; }
+    if rto > TCP_MAX_RTO { rto = TCP_MAX_RTO; }
+    mem_write_u64(addr + 168, rto);
+    return 0;
+}
+
+// ============================================================
+// TCP header builder
+// ============================================================
+
 fn tcp_build_header(src_port, dst_port, seq, ack, flags, window) {
     let mut hdr = [];
     push(hdr, (src_port / 256) % 256); push(hdr, src_port % 256);
     push(hdr, (dst_port / 256) % 256); push(hdr, dst_port % 256);
-    // seq (4 bytes big-endian)
     push(hdr, (seq / 16777216) % 256); push(hdr, (seq / 65536) % 256);
     push(hdr, (seq / 256) % 256); push(hdr, seq % 256);
-    // ack (4 bytes)
     push(hdr, (ack / 16777216) % 256); push(hdr, (ack / 65536) % 256);
     push(hdr, (ack / 256) % 256); push(hdr, ack % 256);
-    // data offset (5 << 4) + reserved
-    push(hdr, 80); // 0x50 = 5 dwords
-    // flags
+    push(hdr, 80); // data offset: 5 dwords
     push(hdr, flags);
-    // window (2 bytes)
     push(hdr, (window / 256) % 256); push(hdr, window % 256);
-    // checksum field
-    push(hdr, 0); push(hdr, 0);
-    // urgent pointer
-    push(hdr, 0); push(hdr, 0);
+    push(hdr, 0); push(hdr, 0); // checksum
+    push(hdr, 0); push(hdr, 0); // urgent
     return hdr;
 }
 
-// Connect to remote host (active open)
+// ============================================================
+// Connection management
+// ============================================================
+
 fn tcp_connect(remote_ip, remote_port) {
     let idx = tcp_alloc_tcb();
     if idx < 0 { return 0 - 1; }
     let local_port = tcp_alloc_port();
-    // Initialize TCB
-    mem_write_u64(TCP_TABLE + idx*TCB_SIZE + 0, TCP_SYN_SENT);
-    mem_write_u32(TCP_TABLE + idx*TCB_SIZE + 8, ip_pack(my_ip[0],my_ip[1],my_ip[2],my_ip[3]));
-    mem_write_u32(TCP_TABLE + idx*TCB_SIZE + 12, local_port);
-    mem_write_u32(TCP_TABLE + idx*TCB_SIZE + 16, remote_ip);
-    mem_write_u32(TCP_TABLE + idx*TCB_SIZE + 20, remote_port);
-    // Send SYN
-    let seq = 1000; // initial seq (should be random)
+    let addr = TCP_TABLE + idx * TCB_SIZE;
+    mem_write_u64(addr + 0, TCP_SYN_SENT);
+    mem_write_u32(addr + 8, ip_pack(my_ip[0],my_ip[1],my_ip[2],my_ip[3]));
+    mem_write_u32(addr + 12, local_port);
+    mem_write_u32(addr + 16, remote_ip);
+    mem_write_u32(addr + 20, remote_port);
+    mem_write_u64(addr + 40, 65535);
+    _tcp_cc_init(addr);
+    let seq = 1000;
     let hdr = tcp_build_header(local_port, remote_port, seq, 0, TCP_SYN, 65535);
-    // wrap in IP packet, send via virtio_net_send
     return idx;
 }
 
-// Listen on a port (passive open)
 fn tcp_listen(local_port) {
     let idx = tcp_alloc_tcb();
     if idx < 0 { return 0 - 1; }
-    mem_write_u64(TCP_TABLE + idx*TCB_SIZE, TCP_LISTEN);
-    mem_write_u32(TCP_TABLE + idx*TCB_SIZE + 12, local_port);
+    let addr = TCP_TABLE + idx * TCB_SIZE;
+    mem_write_u64(addr, TCP_LISTEN);
+    mem_write_u32(addr + 12, local_port);
+    _tcp_cc_init(addr);
     return idx;
 }
 
-// Process incoming TCP segment
+// ============================================================
+// Segment processing (state machine + congestion control)
+// ============================================================
+
 fn tcp_input(src_ip, seg_data) {
     if len(seg_data) < 20 { return 0; }
     let src_port = seg_data[0] * 256 + seg_data[1];
@@ -130,56 +270,86 @@ fn tcp_input(src_ip, seg_data) {
     let ack = seg_data[8]*16777216 + seg_data[9]*65536 + seg_data[10]*256 + seg_data[11];
     let flags = seg_data[13];
     let data_off = (seg_data[12] / 16) * 4;
+    let rwnd = seg_data[14] * 256 + seg_data[15];
 
-    // Find matching TCB
     let mut i = 0;
     while i < MAX_TCP {
         let state = mem_read_u64(TCP_TABLE + i * TCB_SIZE);
         let lport = mem_read_u32(TCP_TABLE + i * TCB_SIZE + 12);
-        if lport == dst_port && state != TCP_CLOSED {
-            tcp_process_segment(i, src_ip, src_port, seq, ack, flags, seg_data, data_off);
-            return 1;
+        if lport == dst_port {
+            if state != TCP_CLOSED {
+                tcp_process_segment(i, src_ip, src_port, seq, ack, flags, seg_data, data_off, rwnd);
+                return 1;
+            }
         }
         i = i + 1;
-    }
-    return 0; // no matching connection
-}
-
-// State machine transition
-fn tcp_process_segment(tcb_idx, src_ip, src_port, seq, ack, flags, data, data_off) {
-    let addr = TCP_TABLE + tcb_idx * TCB_SIZE;
-    let state = mem_read_u64(addr);
-
-    // SYN = 0x02, ACK = 0x10, FIN = 0x01
-    let is_syn = (flags / 2) % 2;
-    let is_ack = (flags / 16) % 2;
-    let is_fin = flags % 2;
-
-    if state == TCP_LISTEN && is_syn == 1 {
-        // SYN received: transition to SYN_RCVD, send SYN+ACK
-        mem_write_u64(addr, TCP_SYN_RCVD);
-        mem_write_u32(addr + 16, src_ip);   // remote IP
-        mem_write_u32(addr + 20, src_port); // remote port
-        mem_write_u64(addr + 24, seq + 1);  // expected next seq
-        return 0;
-    }
-    if state == TCP_SYN_RCVD && is_ack == 1 {
-        mem_write_u64(addr, TCP_ESTABLISHED);
-        return 0;
-    }
-    if state == TCP_ESTABLISHED && is_fin == 1 {
-        mem_write_u64(addr, TCP_CLOSE_WAIT);
-        return 0;
-    }
-    // ESTABLISHED + data: buffer payload (simplified)
-    if state == TCP_ESTABLISHED && len(data) > data_off {
-        // Data available at data[data_off..]
-        return len(data) - data_off;
     }
     return 0;
 }
 
-// Send data on established connection
+fn tcp_process_segment(tcb_idx, src_ip, src_port, seq, ack, flags, data, data_off, rwnd) {
+    let addr = TCP_TABLE + tcb_idx * TCB_SIZE;
+    let state = mem_read_u64(addr);
+
+    let is_syn = (flags / 2) % 2;
+    let is_ack = (flags / 16) % 2;
+    let is_fin = flags % 2;
+
+    // Update receiver window
+    if rwnd > 0 { mem_write_u64(addr + 40, rwnd); }
+
+    if state == TCP_LISTEN {
+        if is_syn == 1 {
+            mem_write_u64(addr, TCP_SYN_RCVD);
+            mem_write_u32(addr + 16, src_ip);
+            mem_write_u32(addr + 20, src_port);
+            mem_write_u64(addr + 24, seq + 1);
+            _tcp_cc_init(addr);
+            return 0;
+        }
+    }
+    if state == TCP_SYN_RCVD {
+        if is_ack == 1 {
+            mem_write_u64(addr, TCP_ESTABLISHED);
+            return 0;
+        }
+    }
+    if state == TCP_ESTABLISHED {
+        if is_ack == 1 {
+            let last_ack = mem_read_u64(addr + 176);
+            if ack > last_ack {
+                // New ACK: advance, update congestion
+                let acked = ack - last_ack;
+                mem_write_u64(addr + 176, ack);
+                _tcp_cc_on_ack(addr, acked);
+                // RTT sample
+                let send_t = mem_read_u64(addr + 184);
+                if send_t > 0 {
+                    let now = mem_read_u64(3145728); // tick @ 0x300000
+                    let sample = (now - send_t) * 10; // ticks -> ms (100Hz)
+                    if sample > 0 { _tcp_update_rtt(addr, sample); }
+                    mem_write_u64(addr + 184, 0);
+                }
+            } else {
+                // Duplicate ACK
+                _tcp_cc_on_dup_ack(addr);
+            }
+        }
+        if is_fin == 1 {
+            mem_write_u64(addr, TCP_CLOSE_WAIT);
+            return 0;
+        }
+        if len(data) > data_off {
+            return len(data) - data_off;
+        }
+    }
+    return 0;
+}
+
+// ============================================================
+// Send (congestion-window limited)
+// ============================================================
+
 fn tcp_send(tcb_idx, payload) {
     let addr = TCP_TABLE + tcb_idx * TCB_SIZE;
     let state = mem_read_u64(addr);
@@ -190,47 +360,59 @@ fn tcp_send(tcb_idx, payload) {
     let remote_port = mem_read_u32(addr + 20);
     let seq = mem_read_u64(addr + 24);
     let ack_num = mem_read_u64(addr + 32);
-    let window = mem_read_u64(addr + 40);
 
-    // Build TCP header with PSH+ACK
-    let hdr = tcp_build_header(local_port, remote_port, seq, ack_num, TCP_PSH + TCP_ACK, window);
+    // Limit by effective window
+    let snd_wnd = _tcp_send_window(addr);
+    let mut send_len = len(payload);
+    if send_len > snd_wnd { send_len = snd_wnd; }
+    if send_len > TCP_MSS { send_len = TCP_MSS; }
+    if send_len <= 0 { return 0; }
 
-    // Combine TCP header + payload
+    let hdr = tcp_build_header(local_port, remote_port, seq, ack_num, TCP_PSH + TCP_ACK, 65535);
+
     let mut tcp_pkt = [];
     let mut i = 0;
     while i < len(hdr) { push(tcp_pkt, hdr[i]); i = i + 1; }
     i = 0;
-    while i < len(payload) { push(tcp_pkt, payload[i]); i = i + 1; }
+    while i < send_len { push(tcp_pkt, payload[i]); i = i + 1; }
 
-    // Wrap in IPv4 packet
     let dst_ip = ip_unpack(remote_ip);
     let ip_pkt = build_ip_tcp_packet(dst_ip, tcp_pkt);
     virtio_net_send_pkt(ip_pkt);
 
-    // Update seq number
-    mem_write_u64(addr + 24, seq + len(payload));
-    return len(payload);
+    mem_write_u64(addr + 24, seq + send_len);
+    // Record send tick for RTT
+    let now = mem_read_u64(3145728); // 0x300000
+    if mem_read_u64(addr + 184) == 0 {
+        mem_write_u64(addr + 184, now);
+    }
+    mem_write_u64(addr + 112, now); // retransmit_tick
+
+    return send_len;
 }
 
-// Close connection (active close)
+// ============================================================
+// Close + packet builder (unchanged)
+// ============================================================
+
 fn tcp_close(tcb_idx) {
     let addr = TCP_TABLE + tcb_idx * TCB_SIZE;
     let state = mem_read_u64(addr);
-    if state != TCP_ESTABLISHED && state != TCP_CLOSE_WAIT { return 0; }
+    if state != TCP_ESTABLISHED {
+        if state != TCP_CLOSE_WAIT { return 0; }
+    }
 
     let local_port = mem_read_u32(addr + 12);
     let remote_port = mem_read_u32(addr + 20);
     let seq = mem_read_u64(addr + 24);
     let ack_num = mem_read_u64(addr + 32);
 
-    // Send FIN+ACK
     let hdr = tcp_build_header(local_port, remote_port, seq, ack_num, TCP_FIN + TCP_ACK, 0);
     let remote_ip = mem_read_u32(addr + 16);
     let dst_ip = ip_unpack(remote_ip);
     let ip_pkt = build_ip_tcp_packet(dst_ip, hdr);
     virtio_net_send_pkt(ip_pkt);
 
-    // Transition state
     if state == TCP_ESTABLISHED {
         mem_write_u64(addr, TCP_FIN_WAIT1);
     }
@@ -240,33 +422,27 @@ fn tcp_close(tcb_idx) {
     return 1;
 }
 
-// Build Ethernet + IPv4 packet containing TCP segment
 fn build_ip_tcp_packet(dst_ip, tcp_data) {
     let mut pkt = [];
-    // Ethernet header (14 bytes) -- use gateway MAC
     let mut i = 0;
     while i < 6 { push(pkt, gw_mac[i]); i = i + 1; }
     i = 0;
     while i < 6 { push(pkt, my_mac[i]); i = i + 1; }
-    push(pkt, 8); push(pkt, 0); // IPv4
+    push(pkt, 8); push(pkt, 0);
 
-    // IPv4 header (20 bytes)
     let ip_total = 20 + len(tcp_data);
-    push(pkt, 69);  // ver=4, ihl=5
-    push(pkt, 0);   // TOS
+    push(pkt, 69); push(pkt, 0);
     push(pkt, (ip_total / 256) % 256);
     push(pkt, ip_total % 256);
-    push(pkt, 0); push(pkt, 0); // ID
-    push(pkt, 64); push(pkt, 0); // DF
-    push(pkt, 64);  // TTL
-    push(pkt, 6);   // TCP
-    push(pkt, 0); push(pkt, 0); // checksum (zero-fill, computed later)
+    push(pkt, 0); push(pkt, 0);
+    push(pkt, 64); push(pkt, 0);
+    push(pkt, 64); push(pkt, 6);
+    push(pkt, 0); push(pkt, 0);
     i = 0;
     while i < 4 { push(pkt, my_ip[i]); i = i + 1; }
     i = 0;
     while i < 4 { push(pkt, dst_ip[i]); i = i + 1; }
 
-    // IP checksum
     let mut ip_hdr = [];
     i = 14;
     while i < 34 { push(ip_hdr, pkt[i]); i = i + 1; }
@@ -274,12 +450,26 @@ fn build_ip_tcp_packet(dst_ip, tcp_data) {
     set_at(pkt, 24, (cksum / 256) % 256);
     set_at(pkt, 25, cksum % 256);
 
-    // TCP data
     i = 0;
     while i < len(tcp_data) { push(pkt, tcp_data[i]); i = i + 1; }
     return pkt;
 }
 
-print("tcp.hl loaded");
+// ============================================================
+// Congestion status (for netstat command)
+// ============================================================
+
+fn tcp_cc_info(tcb_idx) {
+    let addr = TCP_TABLE + tcb_idx * TCB_SIZE;
+    let cwnd = mem_read_u64(addr + 128);
+    let ssthresh = mem_read_u64(addr + 136);
+    let rto = mem_read_u64(addr + 168);
+    let srtt = mem_read_u64(addr + 152) / 8;
+    let mut phase = "slow-start";
+    if cwnd >= ssthresh { phase = "cong-avoid"; }
+    return "cwnd=" + to_string(cwnd) + " ss=" + to_string(ssthresh) + " rto=" + to_string(rto) + "ms srtt=" + to_string(srtt) + "ms [" + phase + "]";
+}
+
+print("tcp.hl loaded (Reno congestion control)");
 print("Max connections: " + to_string(MAX_TCP));
-print("Ephemeral ports: 49152-65535");
+print("MSS: " + to_string(TCP_MSS) + " Init cwnd: " + to_string(TCP_INIT_CWND));
