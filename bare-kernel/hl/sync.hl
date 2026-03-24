@@ -1,17 +1,27 @@
-// sync.hl -- Synchronization Primitives
+﻿// sync.hl -- Synchronization Primitives + Futex Wait Queue
 //
-// Provides spinlocks, mutexes, and futex-like wait/wake for SMP.
+// Iteration 103: upgraded futex from stub to hash-bucketed wait queue
+// with proper enqueue/dequeue, timeout support, and requeue.
 //
-// Spinlock: busy-wait using atomic XCHG (for short critical sections)
-// Mutex: sleeping lock using futex (for longer critical sections)
-// Futex: fast userspace mutex (like Linux futex)
+// Design:
+//   Futex wait queue: 16 hash buckets, each a linked list of waiters
+//   futex_wait: atomically check value, enqueue current task, block
+//   futex_wake: dequeue up to N waiters from bucket, mark READY
+//   futex_wait_timeout: same as wait but with tick deadline
+//   futex_requeue: move waiters from one address to another (for condvar)
 //
-// All primitives use a 64-bit word at a known memory address.
-// Value 0 = unlocked, 1 = locked, >1 = locked + waiters.
+// All higher-level primitives (mutex, semaphore, rwlock) use futex.
+//
+// Public API (preserved + new):
+//   spinlock_init/acquire/release/try
+//   mutex_init/lock/unlock/trylock
+//   futex_wait/wake (upgraded)
+//   futex_wait_timeout / futex_requeue (new)
+//   sem_init/wait/post
+//   rwlock_init/read_lock/read_unlock/write_lock/write_unlock
+//   sync_status (new)
 
 // === Spinlock ===
-// Spin on XCHG until we get 0 (was unlocked)
-// Native code: .retry: mov rax, 1; xchg [rdi], rax; test rax,rax; jnz .retry
 
 fn spinlock_init(lock_addr) {
     mem_write_u64(lock_addr, 0);
@@ -19,9 +29,6 @@ fn spinlock_init(lock_addr) {
 }
 
 fn spinlock_acquire(lock_addr) {
-    // Spin until we read 0, then write 1
-    // Native: XCHG [rdi], rax (atomic)
-    // Interpreter: non-atomic approximation
     let mut acquired = 0;
     while acquired == 0 {
         let old = mem_read_u64(lock_addr);
@@ -29,7 +36,6 @@ fn spinlock_acquire(lock_addr) {
             mem_write_u64(lock_addr, 1);
             acquired = 1;
         }
-        // PAUSE would go here in native code
     }
     return 0;
 }
@@ -43,14 +49,212 @@ fn spinlock_try(lock_addr) {
     let old = mem_read_u64(lock_addr);
     if old == 0 {
         mem_write_u64(lock_addr, 1);
-        return 1;  // acquired
+        return 1;
     }
-    return 0;  // failed
+    return 0;
 }
 
-// === Mutex (sleeping lock) ===
-// Uses futex-like wait/wake to avoid busy-waiting.
-// State: 0=unlocked, 1=locked_no_waiters, 2=locked_with_waiters
+// ============================================================
+// Futex: hash-bucketed wait queue
+// ============================================================
+
+let _FQ_BUCKETS = 16;
+let _FQ_MAX_WAITERS = 256;
+
+// Waiter table: flat array [addr, task_id, next_idx, timeout_tick, state]
+// state: 0=free, 1=waiting, 2=woken
+let _FQ_ENTRY_SIZE = 5;
+let mut _fq_entries = [];
+let mut _fq_bucket_head = [];  // head index per bucket (-1 = empty)
+let mut _fq_ready = 0;
+let mut _fq_total_waits = 0;
+let mut _fq_total_wakes = 0;
+
+fn _fq_init() {
+    _fq_entries = [];
+    _fq_bucket_head = [];
+    let mut b = 0;
+    while b < _FQ_BUCKETS {
+        push(_fq_bucket_head, 0 - 1);
+        b = b + 1;
+    }
+    let mut i = 0;
+    while i < _FQ_MAX_WAITERS {
+        push(_fq_entries, 0);   // addr
+        push(_fq_entries, 0);   // task_id
+        push(_fq_entries, 0 - 1); // next_idx
+        push(_fq_entries, 0);   // timeout_tick
+        push(_fq_entries, 0);   // state (0=free)
+        i = i + 1;
+    }
+    _fq_total_waits = 0;
+    _fq_total_wakes = 0;
+    _fq_ready = 1;
+    return 0;
+}
+
+fn _fq_hash(addr) {
+    return (addr / 8) % _FQ_BUCKETS;
+}
+
+fn _fq_alloc_entry() {
+    let mut i = 0;
+    while i < _FQ_MAX_WAITERS {
+        let base = i * _FQ_ENTRY_SIZE;
+        if _fq_entries[base + 4] == 0 { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn _fq_enqueue(addr, task_id, timeout_tick) {
+    let slot = _fq_alloc_entry();
+    if slot < 0 { return 0 - 1; }
+    let base = slot * _FQ_ENTRY_SIZE;
+    set_at(_fq_entries, base, addr);
+    set_at(_fq_entries, base + 1, task_id);
+    set_at(_fq_entries, base + 3, timeout_tick);
+    set_at(_fq_entries, base + 4, 1);  // waiting
+
+    // Prepend to bucket
+    let bucket = _fq_hash(addr);
+    set_at(_fq_entries, base + 2, _fq_bucket_head[bucket]);
+    set_at(_fq_bucket_head, bucket, slot);
+    _fq_total_waits = _fq_total_waits + 1;
+    return slot;
+}
+
+fn _fq_dequeue_one(addr) {
+    let bucket = _fq_hash(addr);
+    let mut prev = 0 - 1;
+    let mut cur = _fq_bucket_head[bucket];
+    while cur >= 0 {
+        let base = cur * _FQ_ENTRY_SIZE;
+        let next = _fq_entries[base + 2];
+        if _fq_entries[base] == addr {
+            if _fq_entries[base + 4] == 1 {
+                // Remove from list
+                if prev < 0 {
+                    set_at(_fq_bucket_head, bucket, next);
+                } else {
+                    set_at(_fq_entries, prev * _FQ_ENTRY_SIZE + 2, next);
+                }
+                let task_id = _fq_entries[base + 1];
+                set_at(_fq_entries, base + 4, 0);  // free
+                _fq_total_wakes = _fq_total_wakes + 1;
+                return task_id;
+            }
+        }
+        prev = cur;
+        cur = next;
+    }
+    return 0 - 1;
+}
+
+// ============================================================
+// Public futex API
+// ============================================================
+
+fn futex_wait(addr, expected_val) {
+    if _fq_ready == 0 { _fq_init(); }
+    let current_val = mem_read_u64(addr);
+    if current_val != expected_val { return 0; }
+    let task_id = current_task;
+    _fq_enqueue(addr, task_id, 0);
+    // In native: set task state to BLOCKED, call schedule()
+    // Interpreter: spin until woken
+    let slot = _fq_total_waits - 1;
+    let mut spin = 0;
+    while spin < 100000 {
+        // Check if we've been woken (entry freed)
+        let found = 0;
+        let bucket = _fq_hash(addr);
+        let mut c = _fq_bucket_head[bucket];
+        let mut still_waiting = 0;
+        while c >= 0 {
+            let b = c * _FQ_ENTRY_SIZE;
+            if _fq_entries[b + 1] == task_id {
+                if _fq_entries[b + 4] == 1 { still_waiting = 1; }
+            }
+            c = _fq_entries[b + 2];
+        }
+        if still_waiting == 0 { return 0; }
+        spin = spin + 1;
+    }
+    return 0;
+}
+
+fn futex_wake(addr, count) {
+    if _fq_ready == 0 { _fq_init(); }
+    let mut woken = 0;
+    while woken < count {
+        let task_id = _fq_dequeue_one(addr);
+        if task_id < 0 { return woken; }
+        // In native: set task state to READY
+        woken = woken + 1;
+    }
+    return woken;
+}
+
+fn futex_wait_timeout(addr, expected_val, timeout_ticks) {
+    if _fq_ready == 0 { _fq_init(); }
+    let current_val = mem_read_u64(addr);
+    if current_val != expected_val { return 0; }
+    let task_id = current_task;
+    let deadline = timeout_ticks;
+    _fq_enqueue(addr, task_id, deadline);
+    // Spin with timeout
+    let mut spin = 0;
+    while spin < timeout_ticks {
+        let bucket = _fq_hash(addr);
+        let mut c = _fq_bucket_head[bucket];
+        let mut still_waiting = 0;
+        while c >= 0 {
+            let b = c * _FQ_ENTRY_SIZE;
+            if _fq_entries[b + 1] == task_id {
+                if _fq_entries[b + 4] == 1 { still_waiting = 1; }
+            }
+            c = _fq_entries[b + 2];
+        }
+        if still_waiting == 0 { return 0; }
+        spin = spin + 1;
+    }
+    // Timeout: remove ourselves from queue
+    let bucket = _fq_hash(addr);
+    let mut prev = 0 - 1;
+    let mut cur = _fq_bucket_head[bucket];
+    while cur >= 0 {
+        let base = cur * _FQ_ENTRY_SIZE;
+        let next = _fq_entries[base + 2];
+        if _fq_entries[base + 1] == task_id {
+            if _fq_entries[base + 4] == 1 {
+                if prev < 0 { set_at(_fq_bucket_head, bucket, next); }
+                else { set_at(_fq_entries, prev * _FQ_ENTRY_SIZE + 2, next); }
+                set_at(_fq_entries, base + 4, 0);
+            }
+        }
+        prev = cur;
+        cur = next;
+    }
+    return 0 - 1; // timeout
+}
+
+// Requeue: move up to `count` waiters from addr1 to addr2
+fn futex_requeue(addr1, addr2, count) {
+    if _fq_ready == 0 { _fq_init(); }
+    let mut moved = 0;
+    while moved < count {
+        let task_id = _fq_dequeue_one(addr1);
+        if task_id < 0 { return moved; }
+        _fq_enqueue(addr2, task_id, 0);
+        moved = moved + 1;
+    }
+    return moved;
+}
+
+// ============================================================
+// Mutex (sleeping lock using futex)
+// ============================================================
 
 fn mutex_init(mutex_addr) {
     mem_write_u64(mutex_addr, 0);
@@ -58,22 +262,20 @@ fn mutex_init(mutex_addr) {
 }
 
 fn mutex_lock(mutex_addr) {
-    // Fast path: try to acquire (0 -> 1)
     let old = mem_read_u64(mutex_addr);
     if old == 0 {
         mem_write_u64(mutex_addr, 1);
         return 0;
     }
-    // Slow path: mark as contended (2) and wait
     mem_write_u64(mutex_addr, 2);
     let mut acquired = 0;
     while acquired == 0 {
+        futex_wait(mutex_addr, 2);
         let val = mem_read_u64(mutex_addr);
         if val == 0 {
             mem_write_u64(mutex_addr, 2);
             acquired = 1;
         }
-        // In native: futex_wait(mutex_addr, 2)
     }
     return 0;
 }
@@ -96,43 +298,10 @@ fn mutex_trylock(mutex_addr) {
     return 0;
 }
 
-// === Futex ===
-// Wait: if *addr == expected_val, put current task to sleep
-// Wake: wake up to `count` tasks sleeping on addr
+// ============================================================
+// Semaphore (counting, using futex)
+// ============================================================
 
-let FUTEX_TABLE = 3342336;    // 0x330000
-let FUTEX_ENTRY_SIZE = 24;    // addr(8) + pid(8) + next(8)
-let MAX_FUTEX_WAITERS = 256;
-
-fn futex_wait(addr, expected_val) {
-    let current_val = mem_read_u64(addr);
-    if current_val != expected_val {
-        return 0;  // value changed, don't sleep
-    }
-    // In native: disable interrupts, add to wait queue, block, schedule
-    // Interpreter: spin-wait approximation
-    return 0;
-}
-
-fn futex_wake(addr, count) {
-    let mut woken = 0;
-    let mut i = 0;
-    while i < MAX_FUTEX_WAITERS {
-        if woken >= count { return woken; }
-        let entry = FUTEX_TABLE + i * FUTEX_ENTRY_SIZE;
-        let wait_addr = mem_read_u64(entry);
-        if wait_addr == addr {
-            let pid = mem_read_u64(entry + 8);
-            // Set task state to READY (via task table)
-            mem_write_u64(entry, 0);  // clear entry
-            woken = woken + 1;
-        }
-        i = i + 1;
-    }
-    return woken;
-}
-
-// === Semaphore (counting) ===
 fn sem_init(sem_addr, initial_count) {
     mem_write_u64(sem_addr, initial_count);
     return 0;
@@ -145,8 +314,9 @@ fn sem_wait(sem_addr) {
         if val > 0 {
             mem_write_u64(sem_addr, val - 1);
             acquired = 1;
+        } else {
+            futex_wait(sem_addr, 0);
         }
-        // In native: futex_wait(sem_addr, 0) when val==0
     }
     return 0;
 }
@@ -158,8 +328,10 @@ fn sem_post(sem_addr) {
     return 0;
 }
 
-// === Read-Write Lock ===
-// Value: 0=unlocked, positive=reader_count, -1=write-locked
+// ============================================================
+// Read-Write Lock (using futex)
+// ============================================================
+
 fn rwlock_init(rw_addr) {
     mem_write_u64(rw_addr, 0);
     return 0;
@@ -172,6 +344,8 @@ fn rwlock_read_lock(rw_addr) {
         if val >= 0 {
             mem_write_u64(rw_addr, val + 1);
             acquired = 1;
+        } else {
+            futex_wait(rw_addr, val);
         }
     }
     return 0;
@@ -191,6 +365,8 @@ fn rwlock_write_lock(rw_addr) {
         if val == 0 {
             mem_write_u64(rw_addr, 0 - 1);
             acquired = 1;
+        } else {
+            futex_wait(rw_addr, val);
         }
     }
     return 0;
@@ -198,9 +374,14 @@ fn rwlock_write_lock(rw_addr) {
 
 fn rwlock_write_unlock(rw_addr) {
     mem_write_u64(rw_addr, 0);
-    futex_wake(rw_addr, MAX_FUTEX_WAITERS);
+    futex_wake(rw_addr, _FQ_MAX_WAITERS);
     return 0;
 }
 
-print("sync.hl loaded");
+fn sync_status() {
+    return "sync: " + to_string(_fq_total_waits) + " waits, " + to_string(_fq_total_wakes) + " wakes, " + to_string(_FQ_BUCKETS) + " buckets";
+}
+
+print("sync.hl loaded (futex wait queue)");
+print("Futex: " + to_string(_FQ_BUCKETS) + " hash buckets, " + to_string(_FQ_MAX_WAITERS) + " max waiters");
 print("Primitives: spinlock, mutex, futex, semaphore, rwlock");

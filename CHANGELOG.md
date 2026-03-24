@@ -8,7 +8,19 @@
 - Shell 命令数：`63` + pipe 操作符
 - `scripts/*.ps1`：`22`（8,646 行）
 - 构建/测试主入口：`scripts/hl-bootstrap-build-test.ps1`
-- 最近完成迭代：`101`
+- 最近完成迭代：`103`
+
+## Iteration 103 — Futex 哈希桶等待队列
+
+- **`sync.hl`**: 空壳 futex 升级为 **16 桶哈希等待队列**
+  - `futex_wait`: 原子检查值 + 入队当前任务 + 阻塞（spin 模拟）
+  - `futex_wake`: 从桶中出队最多 N 个等待者，标记 READY
+  - `futex_wait_timeout`: 带超时的等待，超时后自动移除
+  - `futex_requeue`: 将等待者从 addr1 迁移到 addr2（condvar 优化）
+  - 16 个哈希桶 × 256 最大等待者，链表管理
+  - mutex/semaphore/rwlock 全部改用真正的 futex_wait 阻塞
+  - `sync_status()` 统计等待/唤醒次数
+  - 26 个函数编译通过，构建 + 冒烟通过
 
 ## Iteration 101 — 阶段 4 收敛（数据修正版）
 
