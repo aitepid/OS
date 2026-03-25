@@ -3,13 +3,23 @@
 ## Current Snapshot
 
 - `.hl` 文件：`179`（63 根目录 + 116 内核模块）
-- H-L 总行数：`47,655`
-- 内核模块：`116`（函数 1,503 个，源码计数）
+- H-L 总行数：`47,827`
+- 内核模块：`116`（函数 1,507 个，源码计数）
 - Shell 命令数：`63` + pipe 操作符
 - `scripts/*.ps1`：`22`（8,646 行）
-- 编译：`118/118` 模块 | 0 parse warning | 1 unresolved reloc | 1,797 符号
+- 编译：`118/118` 模块 | 0 parse warning | 1 unresolved reloc | 1,801 符号
 - 构建/测试主入口：`scripts/hl-bootstrap-build-test.ps1`
-- 最近完成迭代：`117`
+- 最近完成迭代：`118`
+
+## Iteration 118 — DNS 回环自测
+
+- **`dns.hl`**: 新增 DNS loopback 自测框架
+  - `dns_loopback_test()`: 完整回环：构建查询→mock响应→解析IP+TTL→缓存→命中→强制过期→未命中→static(localhost)
+  - `_dns_build_mock_response()`: RFC 1035 格式 mock A 记录响应构建
+  - `dns_loopback_status()`: 状态摘要输出
+- **`kernel_entry.hl`**: 新增 `_ke_cmd_dnstest` + 命令分发 + 帮助文本
+- **`shell.hl`**: 新增 `dnstest` 命令
+- **编译结果**: 118/118 模块 | 1,801 符号 | 1,496 functions found | 0 warning
 
 ## Iteration 117 — TCP 回环自测
 

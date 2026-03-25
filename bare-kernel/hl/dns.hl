@@ -317,5 +317,122 @@ fn dns_cache_status() {
     return to_string(_dns_c_count) + " entries, " + to_string(_dns_c_hits) + " hits, " + to_string(_dns_c_misses) + " misses";
 }
 
+// ============================================================
+// DNS loopback self-test (iteration 118)
+// ============================================================
+// Full round-trip: build query → mock response → parse → cache → verify hit → expire → verify miss
+
+fn _dns_build_mock_response(query_id, name_parts, ip, ttl_sec) {
+    let mut pkt = [];
+    // Header: ID
+    push(pkt, (query_id / 256) % 256);
+    push(pkt, query_id % 256);
+    // Flags: QR=1 RD=1 RA=1 = 0x8180
+    push(pkt, 129); push(pkt, 128);
+    // QDCOUNT=1
+    push(pkt, 0); push(pkt, 1);
+    // ANCOUNT=1
+    push(pkt, 0); push(pkt, 1);
+    // NSCOUNT=0 ARCOUNT=0
+    push(pkt, 0); push(pkt, 0);
+    push(pkt, 0); push(pkt, 0);
+
+    // Question section: QNAME + QTYPE + QCLASS
+    let encoded = dns_encode_name(name_parts);
+    let mut i = 0;
+    while i < len(encoded) { push(pkt, encoded[i]); i = i + 1; }
+    // QTYPE = A (1)
+    push(pkt, 0); push(pkt, 1);
+    // QCLASS = IN (1)
+    push(pkt, 0); push(pkt, 1);
+
+    // Answer section: name pointer + TYPE + CLASS + TTL + RDLENGTH + RDATA
+    // Name pointer: 0xC00C (points to offset 12 where QNAME starts)
+    push(pkt, 192); push(pkt, 12);
+    // TYPE = A (1)
+    push(pkt, 0); push(pkt, 1);
+    // CLASS = IN (1)
+    push(pkt, 0); push(pkt, 1);
+    // TTL (4 bytes big-endian)
+    push(pkt, (ttl_sec / 16777216) % 256);
+    push(pkt, (ttl_sec / 65536) % 256);
+    push(pkt, (ttl_sec / 256) % 256);
+    push(pkt, ttl_sec % 256);
+    // RDLENGTH = 4
+    push(pkt, 0); push(pkt, 4);
+    // RDATA = IP
+    push(pkt, ip[0]); push(pkt, ip[1]); push(pkt, ip[2]); push(pkt, ip[3]);
+
+    return pkt;
+}
+
+fn dns_loopback_test() {
+    // Ensure cache is initialized
+    _dns_cache_init();
+    let mut ok = 1;
+
+    let name = ["example", "com"];
+    let test_ip = [93, 184, 216, 34];
+    let ttl_sec = 300;
+
+    // Step 1: Build query
+    let query = dns_build_query(name);
+    if len(query) < 12 { ok = 0; }
+
+    // Step 2: Extract query ID
+    let qid = query[0] * 256 + query[1];
+
+    // Step 3: Build mock DNS response
+    let response = _dns_build_mock_response(qid, name, test_ip, ttl_sec);
+
+    // Step 4: Parse response → extract IP
+    let parsed_ip = dns_parse_response(response);
+    if parsed_ip[0] != 93 { ok = 0; }
+    if parsed_ip[1] != 184 { ok = 0; }
+    if parsed_ip[2] != 216 { ok = 0; }
+    if parsed_ip[3] != 34 { ok = 0; }
+
+    // Step 5: Cache the result
+    dns_cache_result(name, parsed_ip, ttl_sec);
+
+    // Step 6: Resolve again → should hit cache
+    let hits_before = _dns_c_hits;
+    let resolved = dns_resolve(name);
+    if resolved[0] != 93 { ok = 0; }
+    if resolved[1] != 184 { ok = 0; }
+    if resolved[2] != 216 { ok = 0; }
+    if resolved[3] != 34 { ok = 0; }
+    if _dns_c_hits <= hits_before { ok = 0; }
+
+    // Step 7: Force-expire the entry, resolve → should miss
+    let mut ei = 0;
+    while ei < DNS_CACHE_SIZE {
+        if _dns_c_valid[ei] == 1 {
+            set_at(_dns_c_expire, ei, 0);  // expire immediately
+        }
+        ei = ei + 1;
+    }
+    let misses_before = _dns_c_misses;
+    let expired_result = dns_resolve(name);
+    // After expiration, should return either [0,0,0,0] or re-resolve
+    // but miss counter should increment
+    if _dns_c_misses <= misses_before { ok = 0; }
+
+    // Step 8: Verify static entry (localhost)
+    let lo = dns_resolve(["localhost"]);
+    if lo[0] != 127 { ok = 0; }
+    if lo[3] != 1 { ok = 0; }
+
+    return ok;
+}
+
+fn dns_loopback_status() {
+    let result = dns_loopback_test();
+    if result == 1 {
+        return "DNS loopback: query>response>parse>cache>hit>expire>miss>static OK";
+    }
+    return "DNS loopback: FAIL";
+}
+
 print("dns.hl loaded (TTL hash cache)");
 print("DNS cache: " + to_string(DNS_CACHE_SIZE) + " entries, " + to_string(DNS_CACHE_BUCKETS) + " buckets");
