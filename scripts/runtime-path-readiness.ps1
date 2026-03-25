@@ -79,6 +79,34 @@ Require-Match -Path 'bare-kernel/hl/tls.hl' -Label 'tls' -Patterns @(
     'fn tls_recv('
 )
 
+Require-Match -Path 'bare-kernel/hl/bpf.hl' -Label 'bpf' -Patterns @(
+    'fn bpf_load(',
+    'fn bpf_run(',
+    'fn bpf_attach(',
+    'fn bpf_run_hook('
+)
+
+Require-Match -Path 'bare-kernel/hl/quic.hl' -Label 'quic' -Patterns @(
+    'fn quic_connect(',
+    'fn quic_send_initial(',
+    'fn quic_conn_addr(',
+    'fn quic_stream_addr('
+)
+
+Require-Match -Path 'bare-kernel/hl/advanced_verify.hl' -Label 'advanced_verify' -Patterns @(
+    'fn advanced_feature_selftest(',
+    'fn advanced_feature_summary(',
+    'eBPF',
+    'TLS1.3',
+    'QUIC'
+)
+
+Require-Match -Path 'bare-kernel/hl/shell.hl' -Label 'shell' -Patterns @(
+    'if cmd == "advtest"',
+    'if cmd == "dnstest"',
+    'if cmd == "tcploop"'
+)
+
 if ($errors.Count -gt 0) {
     Write-Host 'Runtime path readiness check failed:' -ForegroundColor Red
     $errors | ForEach-Object { Write-Host "- $_" -ForegroundColor Red }
@@ -88,4 +116,5 @@ if ($errors.Count -gt 0) {
 Write-Host 'Runtime path readiness check passed.' -ForegroundColor Green
 Write-Host '- interrupt path (IDT/PIT/KBD): OK'
 Write-Host '- syscall path (SYSCALL/SYSRET): OK'
-Write-Host '- network path (ARP/UDP/TCP/TLS): OK'
+Write-Host '- network path (ARP/UDP/TCP/TLS/QUIC): OK'
+Write-Host '- advanced feature path (eBPF/TLS1.3/QUIC): OK'

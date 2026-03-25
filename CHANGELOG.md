@@ -2,14 +2,28 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`179`（63 根目录 + 116 内核模块）
-- H-L 总行数：`47,827`
-- 内核模块：`116`（函数 1,507 个，源码计数）
-- Shell 命令数：`63` + pipe 操作符
-- `scripts/*.ps1`：`22`（8,646 行）
-- 编译：`118/118` 模块 | 0 parse warning | 1 unresolved reloc | 1,801 符号
+- `.hl` 文件：`180`（63 根目录 + 117 内核模块）
+- H-L 总行数：`47,950`（根 10,906 + 内核 37,044）
+- 内核模块：`117`（函数 1,499 个，源码计数）
+- `kernel_entry.hl`：`10,575` 行，`305` 函数，`70` 命令
+- `hl-bootstrap.hl`：`4,567` 行，`208` 函数
+- `stdlib.hl`：`1,545` 行，`143` 函数
+- Shell + 内核命令（去重）：`112`
+- `scripts/*.ps1`：`22`（9,866 行）
+- 编译：`119/119` 模块 | 0 parse warning | 1 unresolved reloc | 1,804 符号
 - 构建/测试主入口：`scripts/hl-bootstrap-build-test.ps1`
-- 最近完成迭代：`118`
+- 最近完成迭代：`119`
+
+## Iteration 119 — 高级特性验证接入基线
+
+- **`advanced_verify.hl`**: 新建 — 统一高级特性验证接入模块
+  - `advanced_feature_selftest()`: 覆盖 eBPF / TLS 1.3 / QUIC 三类高级特性
+  - `advanced_feature_summary()`: 输出统一摘要
+- **`shell.hl`**: 新增 `advtest`
+- **`kernel_entry.hl`**: 新增 `_ke_cmd_advtest` + 命令分发 + 帮助文本
+- **`runtime-path-readiness.ps1`**: 新增 `eBPF / QUIC / advanced_verify / advtest` 路径检查
+- **结果**: `eBPF`、`TLS 1.3`、`QUIC` 从“源码存在”提升到“已验证接入”口径
+- **编译结果**: 119/119 模块 | 1,804 符号 | 1,499 functions found | 0 warning
 
 ## Iteration 118 — DNS 回环自测
 

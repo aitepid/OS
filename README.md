@@ -4,14 +4,15 @@
 
 ## 当前状态
 
-- 代码仓库包含 `179` 个 `.hl` 文件（共 `47,827` 行）
+- 代码仓库包含 `180` 个 `.hl` 文件（共 `47,950` 行）
   - 根目录：`63` 个（含自举编译器、标准库、子系统模块、测试）
-  - `bare-kernel/hl/`：`116` 个内核模块（`36,944` 行，源码定义 `1,507` 个函数）
-- `kernel_entry.hl`：`10,557` 行，`306` 个函数
-- `hl-bootstrap.hl`：`4,301` 行（自举编译器/工具链）
-- `scripts/` 下有 `22` 个 PowerShell 构建/验证脚本（共 `8,646` 行）
-- Shell 命令数：`63` + pipe 操作符（`cmd1 | cmd2`）+ `grep` 过滤
-- 最新完成迭代：`118`（DNS 回环验证 — 查询→响应→解析→缓存→命中→过期→未命中）
+  - `bare-kernel/hl/`：`117` 个内核模块（`37,044` 行，源码定义 `1,499` 个函数）
+- `kernel_entry.hl`：`10,575` 行，`305` 个函数
+- `hl-bootstrap.hl`：`4,567` 行（自举编译器/工具链）
+- `stdlib.hl`：`1,545` 行（标准库）
+- `scripts/` 下有 `22` 个 PowerShell 构建/验证脚本（共 `9,866` 行）
+- Shell + 内核命令总数：`112`（shell.hl `64` + kernel_entry.hl `70`，去重后 `112`）
+- 最新完成迭代：`119`（高级特性验证接入基线：eBPF / TLS 1.3 / QUIC）
 - 当前主构建/测试入口：`scripts/hl-bootstrap-build-test.ps1`
 - 三层架构：
   - `Layer A`：`scripts/rebuild-image.ps1` → 可引导 BIOS 镜像
@@ -24,9 +25,9 @@
 |---|---:|
 | `hicos-hl.img`（BIOS） | 160,256 字节 |
 | `hicos-uefi.img`（UEFI） | 34,603,008 字节 |
-| `kernel.bin` | 27,913 字节 |
+| `kernel.bin` | 27,970 字节 |
 
-## 迭代 81-118：六阶段完成 + TCP/DNS 回环验证
+## 迭代 81-119：六阶段完成 + 高级特性验证接入
 
 | 阶段 | 模块 | 升级 |
 |---|---|---|
@@ -46,6 +47,7 @@
 - `kernel_entry.hl`：`heval` 命令 — 内核 lex→parse→eval 自举原型
 - `tcp.hl`：TCP 回环自测 — 127.0.0.1 SYN→SYN_RCVD→ESTABLISHED→DATA→FIN→CLOSE_WAIT
 - `dns.hl`：DNS 回环自测 — 查询→mock响应→解析→缓存→命中→过期→未命中→static
+- `advanced_verify.hl`：eBPF / TLS 1.3 / QUIC 统一验证接入基线 + `advtest` 命令
 
 ## 当前功能
 
@@ -58,13 +60,15 @@
 - Futex 哈希等待队列、epoll 边缘触发、cgroup 资源隔离
 - eBPF 寄存器虚拟机（16 指令，5 钩子点）
 - FAT16/ext2/NTFS/VFS（Trie挂载）
-- TCP（Reno拥塞 + 回环自测）、UDP、DNS（TTL缓存 + 回环自测）、DHCP、TLS 1.3
+- TCP（Reno拥塞 + 回环自测）、UDP、DNS（TTL缓存 + 回环自测）、DHCP、TLS 1.3（验证接入）
 - QUIC v1（16 连接 × 16 流，1-RTT 握手，NewReno）
+- eBPF VM（验证接入：程序装载 / hook attach / 运行）
 - Block cache（哈希LRU）、swap（增强时钟）
 
-### Shell（63 命令 + pipe）
+### Shell + 内核命令（112 唯一命令 + pipe）
 - 环境变量、信号处理、命令历史、方向键导航
-- hostname / uname / date / netstat / arp / grep / heval / tcploop / dnstest
+- shell.hl（64 命令）：hostname / uname / date / netstat / arp / grep / heval / tcploop / dnstest / advtest / ...
+- kernel_entry.hl（70 命令）：compile / lex / parse / malloc / palloc / sha256 / tls / wget / browse / ...
 
 ## 推荐构建方式
 
@@ -85,13 +89,13 @@ powershell -ExecutionPolicy Bypass -File .\scripts\qemu-smoke.ps1
 ```text
 HicOS/
 ├─ bare-kernel/
-│  ├─ hl/                      # 116 个内核模块（36,944 行）
-│  └─ kernel.bin              # 编译产物（27,913 字节）
-├─ scripts/                   # 22 个构建/验证脚本（8,646 行）
-├─ hl-bootstrap.hl            # 自举编译器（4,301 行）
-├─ stdlib.hl                  # 标准库（1,371 行）
+│  ├─ hl/                      # 117 个内核模块（37,044 行）
+│  └─ kernel.bin              # 编译产物（27,970 字节）
+├─ scripts/                   # 22 个构建/验证脚本（9,866 行）
+├─ hl-bootstrap.hl            # 自举编译器（4,567 行）
+├─ stdlib.hl                  # 标准库（1,545 行）
 ├─ HicOS_*.hl                 # 27 个子系统模块
-├─ test_*.hl                  # 28 个测试文件
+├─ test_*.hl / test-*.hl      # 13 个测试文件
 ├─ hicos-hl.img               # BIOS 镜像
 ├─ hicos-uefi.img             # UEFI 镜像
 └─ *.md                       # 8 个文档

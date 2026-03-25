@@ -2,34 +2,36 @@
 
 ## 版本定位
 
-当前仓库处于 `v6.0` 发布线，迭代 118（DNS 回环自测）里程碑。
+当前仓库处于 `v6.0` 发布线，迭代 119（高级特性验证接入基线）里程碑。
 
-## 本轮已核实状态（迭代 118 全量复核）
+## 本轮已核实状态（迭代 119 全量复核）
 
 ### 仓库规模（精确计数）
 
 | 指标 | 当前值 | 说明 |
 |---|---:|---|
-| 全部 `.hl` 文件 | 179 | 63 根目录 + 116 内核模块 |
-| H-L 总行数 | 47,827 | 根 10,883 + 内核 36,944 |
-| `bare-kernel/hl/` 内核模块 | 116 | 编译进 `kernel.bin` |
-| `kernel_entry.hl` 行数 | 10,557 | |
-| `kernel_entry.hl` 函数数 | 306 | |
-| 内核模块总函数数 | 1,507 | 源码定义计数 |
-| `hl-bootstrap.hl` 行数 | 4,301 | 自举编译器 |
-| `stdlib.hl` 行数 | 1,371 | 标准库 |
+| 全部 `.hl` 文件 | 180 | 63 根目录 + 117 内核模块 |
+| H-L 总行数 | 47,950 | 根 10,906 + 内核 37,044 |
+| `bare-kernel/hl/` 内核模块 | 117 | 编译进 `kernel.bin` |
+| `kernel_entry.hl` 行数 / 函数数 | 10,575 / 305 | 含 70 个命令处理函数 |
+| 内核模块总函数数 | 1,499 | 源码定义计数 |
+| `hl-bootstrap.hl` 行数 | 4,567 | 自举编译器（208 函数） |
+| `stdlib.hl` 行数 | 1,545 | 标准库（143 函数） |
+| `kinterp.hl` 行数 | 1,341 | 内核解释器（46 函数） |
 | `scripts/*.ps1` | 22 | 构建/验证/诊断 |
-| PS1 总行数 | 8,646 | |
-| `shell.hl` 命令数 | 63 + pipe | |
+| PS1 总行数 | 9,866 | |
+| Shell + 内核命令（去重） | 112 | shell.hl 64 + kernel_entry.hl 70 |
+| `HicOS_*.hl` 子系统模块 | 27 | |
+| `test_*.hl` / `test-*.hl` | 13 | |
 | `.md` 文档 | 8 | |
-| 仓库总文件数 | 311 | 含日志/文本 |
+| 仓库总文件数 | 312 | 含日志/文本 |
 
 ### 门禁结果
 
 | 验证项 | 结果 |
 |---|---|
-| `hl-bootstrap build` | ✅ 118 模块编译 + 镜像重建 |
-| `validate-workspace` | ✅ 179 HL / 116 模块 |
+| `hl-bootstrap build` | ✅ 119 模块编译 + 镜像重建 |
+| `validate-workspace` | ✅ 180 HL / 117 模块 |
 | `boot-readiness` | ✅ 启动链 + 内核初始化 |
 | `image-layout-readiness` | ✅ MBR 签名 + 扇区布局 |
 | `runtime-path-readiness` | ✅ IDT/PIT/KBD + SYSCALL + 网络 |
@@ -41,7 +43,7 @@
 |---|---:|
 | `hicos-hl.img`（BIOS） | 160,256 字节 |
 | `hicos-uefi.img`（UEFI） | 34,603,008 字节 |
-| `kernel.bin` | 27,913 字节 |
+| `kernel.bin` | 27,970 字节 |
 
 ## 迭代 81-107 算法升级总汇（阶段 1-5）
 
@@ -67,7 +69,7 @@
 | 5 | 105 | `cgroup.hl` | 被动记账 → CPU/内存/IO 强制执行 | 新增 |
 | 5 | 106 | `bpf.hl` | 新建 — eBPF 寄存器 VM | 新增 |
 
-## 阶段 6 推进结果（迭代 109-118）
+## 阶段 6 推进结果（迭代 109-119）
 
 | 迭代 | 结果 |
 |---|---|
@@ -81,16 +83,17 @@
 | 116 | `kernel_entry.hl`：`heval` 命令 — 内核 lex→parse→eval 自举原型 |
 | 117 | `tcp.hl`：TCP 回环自测 — 127.0.0.1 SYN→ESTABLISHED→DATA(5B)→FIN→CLOSE_WAIT |
 | 118 | `dns.hl`：DNS 回环自测 — 查询→mock响应→解析→缓存命中→TTL过期→未命中→static |
+| 119 | `advanced_verify.hl`：eBPF / TLS1.3 / QUIC 统一自测 + `advtest` 命令 + 门禁接入 |
 
 ## 三层架构现状
 
 | 层级 | 载体 | 说明 |
 |---|---|---|
 | A | `scripts/rebuild-image.ps1` → `hicos-hl.img` | BIOS 镜像生成链 |
-| B | `hl-bootstrap.hl`（4,301 行） | 自举编译器/解释器/工具链 |
-| C | `bare-kernel/hl/*.hl`（116 模块，36,944 行） | 内核模块 → `kernel.bin` |
+| B | `hl-bootstrap.hl`（4,567 行，208 函数） | 自举编译器/解释器/工具链 |
+| C | `bare-kernel/hl/*.hl`（117 模块，37,044 行，1,499 函数） | 内核模块 → `kernel.bin` |
 
-## 下一阶段建议（迭代 119+）
+## 下一阶段建议（迭代 120+）
 
 - `kmod.hl` 内核热补丁
 - 音频管道 / GPU 2D 加速
