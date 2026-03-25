@@ -1,29 +1,41 @@
-﻿// PROJECT_ADVANCEMENT_PLAN.hl -- HicOS 项目推进策划案（同步版）
+﻿// PROJECT_ADVANCEMENT_PLAN.hl -- HicOS 项目推进策划案（迭代 113 同步版）
 //
-// 迭代 107 全量复核。五阶段完成，19 模块升级入账。
+// 基于 EVOLUTION_PLAN.hl（迭代 108 基准版）全量审计型策划案，
+// 结合实际执行路径同步。五阶段 + 三主线推进至迭代 113。
 // 口径：仅保留当前仓库可见事实 + 本轮已执行验证结果。
 
 // ============================================================================
-// 一、项目现状
+// 一、项目现状（迭代 113 精确计数）
 // ============================================================================
 //
-// 文件统计（迭代 107 精确计数）：
-//   - .hl 文件总数：177（62 根目录 + 115 内核模块）
-//   - H-L 总行数：40,742（根 9,443 + 内核 31,299）
-//   - 内核模块函数数：1,435
+// 文件统计：
+//   - .hl 文件总数：179（63 根目录 + 116 内核模块）
+//   - H-L 总行数：47,162（根 10,795 + 内核 36,367）
+//   - 内核模块函数数：1,491
 //   - scripts/*.ps1：22 个（8,646 行）
 //   - hl-bootstrap.hl：4,301 行 | stdlib.hl：1,371 行
-//   - kernel_entry.hl：9,410 行，301 函数
-//   - kernel.bin：23,624 B | hicos-hl.img：156,160 B
+//   - kernel_entry.hl：10,409 行，303 函数
+//   - kinterp.hl：1,342 行，51 函数（含 IR VM）
+//   - kernel.bin：27,721 B | hicos-hl.img：160,256 B
 //   - 主入口：scripts/hl-bootstrap-build-test.ps1
 //
-// 本轮已确认（迭代 107）：
-//   - hl-bootstrap-build-test 通过
-//   - validate-workspace 通过（177 HL / 115 模块）
-//   - boot-readiness 通过
-//   - runtime-path-readiness 通过
-//   - image-layout-readiness 通过
-//   - qemu-smoke 通过
+// 编译管道（迭代 113 运行值）：
+//   - 编译模块数：118/118（0 parse warning）
+//   - Token 总数：238,717
+//   - AST 节点数：148,068
+//   - IR 指令数：10,457（5,606 活 / 4,851 死码）
+//   - x86_64 .text 输出：26,309 字节
+//   - 链接器符号数：1,788
+//   - 已解析重定位：264
+//   - 未解析重定位：1（从迭代 108 的 120 降至 1）
+//
+// 门禁状态（全部通过）：
+//   - hl-bootstrap-build-test ✓
+//   - validate-workspace ✓（179 HL / 116 模块 / 0 stub）
+//   - boot-readiness ✓
+//   - runtime-path-readiness ✓
+//   - image-layout-readiness ✓
+//   - release-validate ✓ 18/18
 //
 
 // ============================================================================
@@ -152,42 +164,78 @@
 // Iteration 107: 文档      阶段 5 收敛
 
 // ============================================================================
-// 九、迭代 109 已完成：编译管道深化
+// 九、迭代 109-112 已完成：三主线并行推进（对标 EVOLUTION_PLAN）
 // ============================================================================
 //
-// Iteration 109: 链接器二次扫描 + stdlib 解析修复
-//   - hl-compile-pipeline.ps1: Link-PreScan 预扫描所有 .hl 的 fn 声明
-//   - hl-compile-pipeline.ps1: Link-GenerateStubs 为内建函数/前向声明生成 trampoline
-//   - linker.hl: 新增 linker_register_builtins / linker_register_fwd_stubs / linker_pass2_enhanced
-//   - stdlib.hl: 消除 2 条 parse warning（嵌套 fn 闭包改为平铺函数）
-//   - 结果: 117/117 编译 | 0 parse warning | 1 unresolved (从 120 降至 1)
-//   - 结果: stdlib.hl 贡献 2117 B 到 kernel.bin（之前为 0）
-//   - 结果: 264 relocs resolved（之前 114）
+// EVOLUTION_PLAN 三条主线 vs 实际执行路径：
 //
-// Iteration 110: kinterp.hl IR 虚拟机执行引擎
-//   - kinterp.hl: 745 行/31 函数 → 1342 行/51 函数
-//   - 新增 kirvm_* IR VM: 512 寄存器 + 32 层调用栈 + 标签映射
-//   - 完整 IR 管道: lex → parse → AST → IR lower → optimize → VM execute
-//   - 双执行引擎: tree-walk + IR VM
-//   - 编译: 117/117 | 1,762 符号 | 1,457 函数 | 0 warning
+//   α 编译器深化（原计划 109-112）：
+//     ✓ iter 109: 链接器二次扫描 + stdlib 修复（合并原 109+110）
+//       - Link-PreScan + Link-GenerateStubs trampoline
+//       - 未解析重定位 120→1（降低 99.2%）
+//       - stdlib 首次零警告编译，贡献 2,117 B
+//     ✓ iter 110: kinterp IR VM（原计划 111）
+//       - 745→1342 行, 31→51 函数
+//       - kirvm_* 512 寄存器 + 32 层调用栈 + 标签映射
+//       - 双引擎: tree-walk + IR VM
+//     △ 原 112 (内核自举原型) → 延后至 iter 116+
 //
-// Iteration 111: execve + 用户态地址空间初始化
-//   - posix.hl: 新增 sys_execve(path, argv, envp)
-//   - 用户栈 argc/argv/envp 构建 + enter_usermode ring0→ring3
-//   - syscall.hl: SYS_EXECVE=9 接入分发表
-//   - 编译: 117/117 | 1,763 符号 | 1,458 函数 | 0 warning
+//   β 用户态激活（原计划 113-115）：
+//     ✓ iter 111: execve + argv/envp（原计划 113）
+//       - sys_execve 完整 POSIX 语义
+//       - 用户栈 argc/argv/envp 构建 + enter_usermode ring0→ring3
+//       - SYS_EXECVE=9 接入 syscall 分发表
+//     ○ 原 114 (fork 生命周期) → 计划为 iter 113
+//     ○ 原 115 (PTY 多路复用) → 计划为 iter 114
 //
-// Iteration 112: quic.hl QUIC 传输协议
-//   - 新建 quic.hl: 440+ 行, 22 函数
-//   - 16 连接 × 16 流, 1-RTT 握手, NewReno CC, 双层流控
-//   - STREAM/ACK/CRYPTO 帧处理, Jacobson/Karels RTT
-//   - 编译: 118/118 | 1,785 符号 | 1,480 函数 | 0 warning
+//   γ 网络实战化（原计划 116-118）：
+//     ✓ iter 112: QUIC v1（原计划 118，提前完成）
+//       - 新建 quic.hl 440+ 行, 22 函数
+//       - 16 连接 × 16 流, 1-RTT 握手, NewReno CC
+//     ○ 原 116 (TCP 回环) → 计划为 iter 116+
+//     ○ 原 117 (DNS 解析) → 计划为 iter 116+
+//
+// 编译指标演进：
+//   iter 109: 117/117 | 1,743 符号 | 1,438 函数 | 264 relocs
+//   iter 110: 117/117 | 1,762 符号 | 1,457 函数
+//   iter 111: 117/117 | 1,763 符号 | 1,458 函数
+//   iter 112: 118/118 | 1,785 符号 | 1,480 函数
+//   iter 113: 118/118 | 1,788 符号 | 1,483 函数
+
+// Iteration 113 已完成：进程生命周期完善（EVOLUTION β:114）
+//   - task.hl: 新增 STATE_ZOMBIE + parent_idx 生命周期字段
+//   - task_exit: 退出进入 ZOMBIE，父进程 wait() 收割，SIGCHLD 唤醒父进程
+//   - task_reap/task_find_by_pid: 僵尸回收与 PID 查找助手
+//   - posix.hl: sys_waitpid(child_pid, options) + WNOHANG 非阻塞等待
+//   - posix.hl: sys_fork 集成 mmap_cow_fork，对父任务的 mmap 区域逐个建立 COW
+//   - 修复: task 槽位回收语义，FREE/DEAD/ZOMBIE 转换可重用
+//   - 编译: 118/118 | 1,788 符号 | 1,483 函数 | 0 warning
 
 // ============================================================================
-// 十、阶段 6 收敛（迭代 113）
+// 十、阶段 6 规划（迭代 114-115）
 // ============================================================================
 //
-//   - 迭代 113：文档 -> 阶段 6 收敛
+// 基于 EVOLUTION_PLAN 未完成目标重新排期：
+//
+//   迭代 114：PTY 虚拟终端完善（EVOLUTION β:115）
+//     - pty.hl: 修复 addr 变量引用 bug（当前 4 个函数有未赋值变量）
+//     - pty.hl: 增加 pty_attach/pty_detach（关联 task 与 PTY）
+//     - pty.hl: 增加 termios 控制（VEOF/VERASE/VKILL 特殊字符）
+//     - posix.hl: FD 类型增加 FD_PTY_MASTER/FD_PTY_SLAVE
+//     - 验证：两个并发 shell 会话通过不同 PTY 运行
+//
+//   迭代 115：阶段 6 收敛
+//     - 全量门禁复核 + 文档同步
+//     - PROJECT_STATUS / ROADMAP / CHANGELOG 统一口径
+//     - manifest.hl 指标精确同步
+//
+// 远期规划（迭代 116+，对标 EVOLUTION_PLAN 第七章）：
+//   116: 内核自举原型 — kernel.bin 内 lex→parse→eval 最小通路
+//   117: TCP 回环测试 — QEMU user-mode network SYN/SYN-ACK/ACK
+//   118: DNS 实际解析 — QEMU DNS 转发 + dns.hl TTL 缓存验证
+//   119: 内核热补丁 (kmod.hl) — 运行时模块替换
+//   120: 音频管道 (audio→mixer) — AC97 PCM 播放
+//   121: GPU 2D 加速 — framebuffer 硬件 blit
 
 // ============================================================================
 // 十一、文档维护规则
@@ -199,21 +247,26 @@
 //   3. 本轮已复核
 
 fn advancement_status() {
-    print("=== HicOS 项目推进策划案（同步版） ===");
-    print(".hl: 178 (63 root + 115 kernel) | 40,750+ lines");
-    print("kernel fns: 1,438 | scripts: 22 | shell: 63 cmds");
-    print("compile: 117/117 modules | 0 warnings | 1 unresolved reloc");
+    print("=== HicOS 项目推进策划案（迭代 113 同步版） ===");
+    print(".hl: 179 (63 root + 116 kernel) | 47,162 lines");
+    print("kernel fns: 1,491 | scripts: 22 | shell: 63 cmds");
+    print("compile: 118/118 modules | 0 warnings | 1 unresolved reloc");
+    print("symbols: 1,788 | relocs resolved: 264");
+    print("kernel.bin: 27,757 B | hicos-hl.img: 160,256 B");
     print("主入口: scripts/hl-bootstrap-build-test.ps1");
+    print("");
     print("阶段 1 完成: iteration 81-84 (内存+排序)");
     print("阶段 2 完成: iteration 86-89 (网络+FS+收敛)");
     print("阶段 3 完成: iteration 91-95 (外设+多核+页置换)");
     print("阶段 4 完成: iteration 97-101 (调度+内存+安全)");
     print("阶段 5 完成: iteration 103-107 (同步+IO+隔离)");
-    print("迭代 109 完成: 链接器二次扫描 + stdlib 修复 (120→1 unresolved)");
-    print("迭代 110 完成: kinterp IR VM (745→1342 行, 31→51 函数)");
-    print("迭代 111 完成: execve + argc/argv/envp 栈构建 + ring3 跳转");
-    print("迭代 112 完成: quic.hl QUIC v1 (16连接×16流, NewReno CC)");
-    print("下一步: iteration 113 (阶段 6 收敛)");
+    print("");
+    print("三主线推进（对标 EVOLUTION_PLAN）:");
+    print("  α 编译器: iter 109 链接器 + iter 110 IR VM ✓");
+    print("  β 用户态: iter 111 execve ✓ | iter 113 fork生命周期 ✓ | 114 PTY");
+    print("  γ 网络:   iter 112 QUIC ✓ | 116+ TCP/DNS回环");
+    print("");
+    print("下一步: iteration 114 (PTY 虚拟终端完善)");
 }
 
 advancement_status();

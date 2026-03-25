@@ -31,7 +31,8 @@
 //     +216 : handler_table_ptr (u64) -- signal handler table (signal.hl)
 //     +224 : wake_tick (u64) -- wakeup deadline for sleep (timer.hl)
 //     +232 : exit_code (u64) -- exit status (posix.hl)
-//     +240 : reserved (16 bytes)
+//     +240 : parent_idx (u64) -- parent task index (for wait/SIGCHLD)
+//     +248 : reserved (8 bytes)
 
 let TASK_TABLE = 3211264;  // 0x310000
 let TASK_SIZE = 256;
@@ -42,6 +43,7 @@ let STATE_READY   = 1;
 let STATE_RUNNING = 2;
 let STATE_BLOCKED = 3;
 let STATE_DEAD    = 4;
+let STATE_ZOMBIE  = 5;  // exited but not yet waited by parent
 
 let mut next_pid = 1;
 let mut current_task = 0;   // index into task table
@@ -80,7 +82,7 @@ fn task_create(entry_point, stack_top) {
     while i < MAX_TASKS {
         let addr = task_addr(i);
         let state = mem_read_u64(addr + 0);
-        if state == STATE_FREE {
+        if state == STATE_FREE || state == STATE_DEAD {
             let pid = next_pid;
             next_pid = next_pid + 1;
 
@@ -93,6 +95,7 @@ fn task_create(entry_point, stack_top) {
             mem_write_u64(addr + 160, 4096);  // cr3 (kernel page table)
             mem_write_u64(addr + 168, 0);     // vruntime
             mem_write_u64(addr + 176, 0);     // nice (default)
+            mem_write_u64(addr + 240, current_task); // parent_idx
 
             _tc = _tc + 1;
             // Insert into run-queue heap
@@ -111,7 +114,7 @@ fn task_kill(pid) {
         let addr = task_addr(i);
         let task_pid = mem_read_u64(addr + 8);
         if task_pid == pid {
-            mem_write_u64(addr + 0, STATE_DEAD);
+            mem_write_u64(addr + 0, STATE_FREE);
             rq_remove(i);  // remove from run queue
             _tc = _tc - 1;
             return 1;
@@ -352,18 +355,70 @@ fn task_unblock(task_idx) {
 }
 
 // Exit: terminate current task
+// Process enters ZOMBIE state until parent calls wait()
 fn task_exit(exit_code) {
     let addr = task_addr(current_task);
-    mem_write_u64(addr + 0, STATE_DEAD);
-    // Store exit code at +232 (avoiding signal fields at +200/+208/+216, wake_tick at +224)
     mem_write_u64(addr + 232, exit_code);
-    _tc = _tc - 1;
-    // Wake parent if waiting (send SIGCHLD)
-    let pid = mem_read_u64(addr + 8);
-    signal_send(0, SIGCHLD);  // pid 0 = notify parent (simplified)
-    // Must schedule away — this task is dead
+
+    // Reparent orphan children to task 0 (init)
+    let mut ci = 0;
+    while ci < MAX_TASKS {
+        let caddr = task_addr(ci);
+        let cstate = mem_read_u64(caddr);
+        if cstate != STATE_FREE && mem_read_u64(caddr + 240) == current_task {
+            mem_write_u64(caddr + 240, 0);  // reparent to init
+            // If child is already ZOMBIE, let init reap it
+            if cstate == STATE_ZOMBIE {
+                mem_write_u64(caddr, STATE_FREE);
+            }
+        }
+        ci = ci + 1;
+    }
+
+    // Enter ZOMBIE: parent must call wait() to collect exit_code
+    let parent_idx = mem_read_u64(addr + 240);
+    mem_write_u64(addr, STATE_ZOMBIE);
+
+    // Send SIGCHLD to parent
+    if parent_idx >= 0 && parent_idx < MAX_TASKS {
+        let parent_addr = task_addr(parent_idx);
+        let parent_pid = mem_read_u64(parent_addr + 8);
+        signal_send(parent_pid, SIGCHLD);
+        // If parent is blocked in wait(), unblock it
+        let parent_state = mem_read_u64(parent_addr);
+        if parent_state == STATE_BLOCKED {
+            task_unblock(parent_idx);
+        }
+    }
+
+    // Must schedule away — this task is zombie
     schedule();
     return 0;  // never reached in native kernel
+}
+
+// Find task index by PID, return -1 if not found
+fn task_find_by_pid(pid) {
+    let mut i = 0;
+    while i < MAX_TASKS {
+        let addr = task_addr(i);
+        let state = mem_read_u64(addr);
+        if state != STATE_FREE && mem_read_u64(addr + 8) == pid {
+            return i;
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+// Reap a ZOMBIE task: collect exit code and free slot
+fn task_reap(task_idx) {
+    let addr = task_addr(task_idx);
+    let state = mem_read_u64(addr);
+    if state != STATE_ZOMBIE { return 0 - 1; }
+    let exit_code = mem_read_u64(addr + 232);
+    mem_write_u64(addr, STATE_FREE);
+    _tc = _tc - 1;
+    return exit_code;
 }
 
 // Get task info for debugging
@@ -373,9 +428,9 @@ fn task_info(task_idx) {
     let pid = mem_read_u64(addr + 8);
     let vrt = mem_read_u64(addr + 168);
     let ticks = mem_read_u64(addr + 192);
-    let state_names = ["FREE", "READY", "RUNNING", "BLOCKED", "DEAD"];
+    let state_names = ["FREE", "READY", "RUNNING", "BLOCKED", "DEAD", "ZOMBIE"];
     let mut sname = "UNKNOWN";
-    if state >= 0 && state <= 4 { sname = state_names[state]; }
+    if state >= 0 && state <= 5 { sname = state_names[state]; }
     return "[" + to_string(task_idx) + "] pid=" + to_string(pid) + " " + sname + " vrt=" + to_string(vrt) + " ticks=" + to_string(ticks);
 }
 
@@ -422,7 +477,7 @@ print("task.hl loaded");
 print("Task table at: 0x" + to_string(TASK_TABLE));
 print("Max tasks: " + to_string(MAX_TASKS));
 print("Task size: " + to_string(TASK_SIZE) + " bytes");
-print("Scheduler: CFS min-heap O(log n)");
+print("Scheduler: CFS min-heap O(log n) + ZOMBIE lifecycle");
 
 // --- Min-heap verification ---
 _rq_heap = [];
