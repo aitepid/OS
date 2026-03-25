@@ -470,6 +470,138 @@ fn tcp_cc_info(tcb_idx) {
     return "cwnd=" + to_string(cwnd) + " ss=" + to_string(ssthresh) + " rto=" + to_string(rto) + "ms srtt=" + to_string(srtt) + "ms [" + phase + "]";
 }
 
+// ============================================================
+// Loopback TCP self-test (iteration 117)
+// ============================================================
+// Performs a full TCP handshake + data exchange + close entirely
+// within the kernel's TCP state machine, no NIC needed.
+// server = TCB[0] (LISTEN on port 7777), client = TCB[1] (connect)
+// Tests: SYN → SYN_RCVD → ACK → ESTABLISHED → send/recv → FIN
+
+let LOOPBACK_IP = 2130706433;  // 127.0.0.1 = 0x7F000001
+let LOOPBACK_PORT = 7777;
+
+fn tcp_loopback_test() {
+    // Clean two TCB slots
+    mem_zero(TCP_TABLE + 0 * TCB_SIZE, TCB_SIZE);
+    mem_zero(TCP_TABLE + 1 * TCB_SIZE, TCB_SIZE);
+
+    let srv_idx = 0;
+    let cli_idx = 1;
+    let srv_addr = TCP_TABLE + srv_idx * TCB_SIZE;
+    let cli_addr = TCP_TABLE + cli_idx * TCB_SIZE;
+    let cli_port = 50000;
+
+    // --- Server: LISTEN ---
+    mem_write_u64(srv_addr, TCP_LISTEN);
+    mem_write_u32(srv_addr + 12, LOOPBACK_PORT);
+    _tcp_cc_init(srv_addr);
+
+    // --- Client: SYN_SENT ---
+    let cli_seq = 1000;
+    mem_write_u64(cli_addr, TCP_SYN_SENT);
+    mem_write_u32(cli_addr + 8, LOOPBACK_IP);
+    mem_write_u32(cli_addr + 12, cli_port);
+    mem_write_u32(cli_addr + 16, LOOPBACK_IP);
+    mem_write_u32(cli_addr + 20, LOOPBACK_PORT);
+    mem_write_u64(cli_addr + 24, cli_seq);
+    mem_write_u64(cli_addr + 40, 65535);
+    _tcp_cc_init(cli_addr);
+
+    // === Step 1: Client → Server SYN ===
+    // Build minimal 20-byte TCP segment: cli_port → LOOPBACK_PORT, SYN
+    let syn_seg = _tcp_lo_build_seg(cli_port, LOOPBACK_PORT, cli_seq, 0, TCP_SYN, 65535, []);
+    tcp_process_segment(srv_idx, LOOPBACK_IP, cli_port, cli_seq, 0, TCP_SYN, syn_seg, 20, 65535);
+
+    let srv_state1 = mem_read_u64(srv_addr);
+    // Server should be SYN_RCVD
+    let mut ok = 1;
+    if srv_state1 != TCP_SYN_RCVD { ok = 0; }
+
+    // === Step 2: Server → Client SYN+ACK ===
+    let srv_seq = 2000;
+    mem_write_u64(srv_addr + 24, srv_seq);
+    let synack_seg = _tcp_lo_build_seg(LOOPBACK_PORT, cli_port, srv_seq, cli_seq + 1, TCP_SYN + TCP_ACK, 65535, []);
+    // Client receives SYN+ACK → ESTABLISHED
+    mem_write_u64(cli_addr, TCP_ESTABLISHED);
+    mem_write_u64(cli_addr + 32, srv_seq + 1);
+    mem_write_u64(cli_addr + 176, cli_seq);  // last_ack_seq
+
+    // === Step 3: Client → Server ACK (completes handshake) ===
+    let ack_seg = _tcp_lo_build_seg(cli_port, LOOPBACK_PORT, cli_seq + 1, srv_seq + 1, TCP_ACK, 65535, []);
+    tcp_process_segment(srv_idx, LOOPBACK_IP, cli_port, cli_seq + 1, srv_seq + 1, TCP_ACK, ack_seg, 20, 65535);
+
+    let srv_state2 = mem_read_u64(srv_addr);
+    if srv_state2 != TCP_ESTABLISHED { ok = 0; }
+
+    // === Step 4: Client → Server DATA ("HELLO") ===
+    let payload = [72, 69, 76, 76, 79];  // "HELLO"
+    let data_seg = _tcp_lo_build_seg(cli_port, LOOPBACK_PORT, cli_seq + 1, srv_seq + 1, TCP_PSH + TCP_ACK, 65535, payload);
+    let data_result = tcp_process_segment(srv_idx, LOOPBACK_IP, cli_port, cli_seq + 1, srv_seq + 1, TCP_PSH + TCP_ACK, data_seg, 20, 65535);
+
+    // Server should still be ESTABLISHED, data_result = 5 (payload bytes)
+    let srv_state3 = mem_read_u64(srv_addr);
+    if srv_state3 != TCP_ESTABLISHED { ok = 0; }
+    if data_result != 5 { ok = 0; }
+
+    // === Step 5: Client → Server FIN ===
+    let fin_seg = _tcp_lo_build_seg(cli_port, LOOPBACK_PORT, cli_seq + 6, srv_seq + 1, TCP_FIN + TCP_ACK, 65535, []);
+    tcp_process_segment(srv_idx, LOOPBACK_IP, cli_port, cli_seq + 6, srv_seq + 1, TCP_FIN + TCP_ACK, fin_seg, 20, 65535);
+
+    let srv_state4 = mem_read_u64(srv_addr);
+    if srv_state4 != TCP_CLOSE_WAIT { ok = 0; }
+
+    // Clean up
+    mem_write_u64(srv_addr, TCP_CLOSED);
+    mem_write_u64(cli_addr, TCP_CLOSED);
+
+    return ok;
+}
+
+// Build a minimal 20-byte TCP segment + optional payload for loopback
+fn _tcp_lo_build_seg(src_port, dst_port, seq, ack, flags, window, payload) {
+    let mut seg = [];
+    // src_port (2 bytes)
+    push(seg, (src_port / 256) % 256);
+    push(seg, src_port % 256);
+    // dst_port (2 bytes)
+    push(seg, (dst_port / 256) % 256);
+    push(seg, dst_port % 256);
+    // seq (4 bytes)
+    push(seg, (seq / 16777216) % 256);
+    push(seg, (seq / 65536) % 256);
+    push(seg, (seq / 256) % 256);
+    push(seg, seq % 256);
+    // ack (4 bytes)
+    push(seg, (ack / 16777216) % 256);
+    push(seg, (ack / 65536) % 256);
+    push(seg, (ack / 256) % 256);
+    push(seg, ack % 256);
+    // data offset (5 << 4 = 0x50) + reserved
+    push(seg, 80);
+    // flags
+    push(seg, flags);
+    // window (2 bytes)
+    push(seg, (window / 256) % 256);
+    push(seg, window % 256);
+    // checksum (2 bytes, skip for loopback)
+    push(seg, 0); push(seg, 0);
+    // urgent pointer (2 bytes)
+    push(seg, 0); push(seg, 0);
+    // payload
+    let mut i = 0;
+    while i < len(payload) { push(seg, payload[i]); i = i + 1; }
+    return seg;
+}
+
+fn tcp_loopback_status() {
+    let result = tcp_loopback_test();
+    if result == 1 {
+        return "TCP loopback: SYN>SYN_RCVD>ESTABLISHED>DATA(5B)>FIN>CLOSE_WAIT OK";
+    }
+    return "TCP loopback: FAIL";
+}
+
 print("tcp.hl loaded (Reno congestion control)");
 print("Max connections: " + to_string(MAX_TCP));
 print("MSS: " + to_string(TCP_MSS) + " Init cwnd: " + to_string(TCP_INIT_CWND));

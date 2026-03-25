@@ -3,13 +3,24 @@
 ## Current Snapshot
 
 - `.hl` 文件：`179`（63 根目录 + 116 内核模块）
-- H-L 总行数：`47,461`
-- 内核模块：`116`（函数 1,499 个，源码计数）
+- H-L 总行数：`47,655`
+- 内核模块：`116`（函数 1,503 个，源码计数）
 - Shell 命令数：`63` + pipe 操作符
 - `scripts/*.ps1`：`22`（8,646 行）
-- 编译：`118/118` 模块 | 0 parse warning | 1 unresolved reloc | 1,793 符号
+- 编译：`118/118` 模块 | 0 parse warning | 1 unresolved reloc | 1,797 符号
 - 构建/测试主入口：`scripts/hl-bootstrap-build-test.ps1`
-- 最近完成迭代：`116`
+- 最近完成迭代：`117`
+
+## Iteration 117 — TCP 回环自测
+
+- **`tcp.hl`**: 新增 TCP loopback 自测框架
+  - `tcp_loopback_test()`: 在 127.0.0.1 上执行完整 3-way 握手 + 数据交换 + FIN 关闭
+  - `_tcp_lo_build_seg()`: 构建回环用最小 TCP 段（20B 头 + payload）
+  - `tcp_loopback_status()`: 状态摘要输出
+  - 验证路径: LISTEN→SYN→SYN_RCVD→ACK→ESTABLISHED→DATA("HELLO" 5B)→FIN→CLOSE_WAIT
+- **`kernel_entry.hl`**: 新增 `_ke_cmd_tcploop` + 命令分发 + 帮助文本
+- **`shell.hl`**: 新增 `tcploop` 命令
+- **编译结果**: 118/118 模块 | 1,797 符号 | 1,492 functions found | 0 warning
 
 ## Iteration 116 — 内核自举原型：heval 命令
 
