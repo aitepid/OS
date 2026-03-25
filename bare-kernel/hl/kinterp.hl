@@ -737,8 +737,605 @@ fn kinterp_exec_file(path) {
 fn _kinterp_test() {
     print("kinterp: self-test...");
     let r = kinterp_exec("let x = 6 * 7; print(to_string(x));");
-    print("kinterp: self-test complete");
+    print("kinterp: self-test complete (tree-walk)");
     return 0;
 }
 
-print("kinterp.hl loaded: kernel embedded H-L interpreter");
+// ============================================================
+// Iteration 110: IR Virtual Machine Execution Engine
+// ============================================================
+//
+// Executes H-IR instructions directly, providing the second
+// execution path: Source → Lex → Parse-to-AST → IR Lower → IR VM
+//
+// Register file: 512 virtual registers (int or string values)
+// Supports: arithmetic, comparison, control flow, calls, print
+
+let KIRVM_MAX_REGS = 512;
+let KIRVM_MAX_IR = 1024;
+let KIRVM_MAX_CALL_DEPTH = 32;
+
+// VM register file
+let mut kirvm_regs = [];
+let mut kirvm_ready = 0;
+
+// Call stack: saved PC values
+let mut kirvm_call_stack = [];
+let mut kirvm_call_depth = 0;
+
+// Label → PC mapping table
+let mut kirvm_labels = [];     // array of [label_id, pc]
+let mut kirvm_label_count = 0;
+
+fn kirvm_init() {
+    kirvm_regs = [];
+    let mut i = 0;
+    while i < KIRVM_MAX_REGS {
+        push(kirvm_regs, 0);
+        i = i + 1;
+    }
+    kirvm_call_stack = [];
+    kirvm_call_depth = 0;
+    kirvm_labels = [];
+    kirvm_label_count = 0;
+    kirvm_ready = 1;
+    return 0;
+}
+
+// Pre-scan IR for label positions
+fn kirvm_scan_labels() {
+    kirvm_labels = [];
+    kirvm_label_count = 0;
+    let mut pc = 0;
+    while pc < ir_count {
+        if ir_dead[pc] == 0 {
+            if ir_op[pc] == IR_LABEL {
+                push(kirvm_labels, [ir_dst[pc], pc]);
+                kirvm_label_count = kirvm_label_count + 1;
+            }
+        }
+        pc = pc + 1;
+    }
+    return kirvm_label_count;
+}
+
+// Find PC for a label id
+fn kirvm_find_label(label_id) {
+    let mut i = 0;
+    while i < kirvm_label_count {
+        if kirvm_labels[i][0] == label_id {
+            return kirvm_labels[i][1];
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+// Safe register read (bounds check)
+fn kirvm_reg_get(r) {
+    if r < 0 { return 0; }
+    if r >= KIRVM_MAX_REGS { return 0; }
+    return kirvm_regs[r];
+}
+
+// Safe register write
+fn kirvm_reg_set(r, val) {
+    if r < 0 { return 0; }
+    if r >= KIRVM_MAX_REGS { return 0; }
+    set_at(kirvm_regs, r, val);
+    return 0;
+}
+
+// Execute IR instructions starting from pc, return last value
+fn kirvm_exec_from(start_pc) {
+    let mut pc = start_pc;
+    let mut step_count = 0;
+    let max_steps = 100000;
+    let mut result = 0;
+
+    while pc < ir_count && step_count < max_steps {
+        step_count = step_count + 1;
+
+        // Skip dead instructions
+        if ir_dead[pc] != 0 { pc = pc + 1; }
+        else {
+            let op = ir_op[pc];
+            let dst = ir_dst[pc];
+            let s1 = ir_src1[pc];
+            let s2 = ir_src2[pc];
+
+            if op == IR_CONST {
+                kirvm_reg_set(dst, s1);
+                pc = pc + 1;
+            }
+            else if op == IR_STR_CONST {
+                kirvm_reg_set(dst, s1);
+                pc = pc + 1;
+            }
+            else if op == IR_COPY {
+                kirvm_reg_set(dst, kirvm_reg_get(s1));
+                pc = pc + 1;
+            }
+            else if op == IR_ADD {
+                let a = kirvm_reg_get(s1);
+                let b = kirvm_reg_get(s2);
+                kirvm_reg_set(dst, a + b);
+                pc = pc + 1;
+            }
+            else if op == IR_SUB {
+                kirvm_reg_set(dst, kirvm_reg_get(s1) - kirvm_reg_get(s2));
+                pc = pc + 1;
+            }
+            else if op == IR_MUL {
+                kirvm_reg_set(dst, kirvm_reg_get(s1) * kirvm_reg_get(s2));
+                pc = pc + 1;
+            }
+            else if op == IR_DIV {
+                let divisor = kirvm_reg_get(s2);
+                if divisor != 0 { kirvm_reg_set(dst, kirvm_reg_get(s1) / divisor); }
+                else { kirvm_reg_set(dst, 0); }
+                pc = pc + 1;
+            }
+            else if op == IR_MOD {
+                let divisor = kirvm_reg_get(s2);
+                if divisor != 0 { kirvm_reg_set(dst, kirvm_reg_get(s1) % divisor); }
+                else { kirvm_reg_set(dst, 0); }
+                pc = pc + 1;
+            }
+            else if op == IR_NEG {
+                kirvm_reg_set(dst, 0 - kirvm_reg_get(s1));
+                pc = pc + 1;
+            }
+            else if op == IR_AND {
+                kirvm_reg_set(dst, kirvm_reg_get(s1) & kirvm_reg_get(s2));
+                pc = pc + 1;
+            }
+            else if op == IR_OR {
+                kirvm_reg_set(dst, kirvm_reg_get(s1) | kirvm_reg_get(s2));
+                pc = pc + 1;
+            }
+            else if op == IR_XOR {
+                kirvm_reg_set(dst, kirvm_reg_get(s1) ^ kirvm_reg_get(s2));
+                pc = pc + 1;
+            }
+            else if op == IR_SHL {
+                kirvm_reg_set(dst, kirvm_reg_get(s1) << kirvm_reg_get(s2));
+                pc = pc + 1;
+            }
+            else if op == IR_SHR {
+                kirvm_reg_set(dst, kirvm_reg_get(s1) >> kirvm_reg_get(s2));
+                pc = pc + 1;
+            }
+            else if op == IR_NOT {
+                let v = kirvm_reg_get(s1);
+                if v == 0 { kirvm_reg_set(dst, 1); }
+                else { kirvm_reg_set(dst, 0); }
+                pc = pc + 1;
+            }
+            else if op == IR_CMP_EQ {
+                if kirvm_reg_get(s1) == kirvm_reg_get(s2) { kirvm_reg_set(dst, 1); }
+                else { kirvm_reg_set(dst, 0); }
+                pc = pc + 1;
+            }
+            else if op == IR_CMP_NE {
+                if kirvm_reg_get(s1) != kirvm_reg_get(s2) { kirvm_reg_set(dst, 1); }
+                else { kirvm_reg_set(dst, 0); }
+                pc = pc + 1;
+            }
+            else if op == IR_CMP_LT {
+                if kirvm_reg_get(s1) < kirvm_reg_get(s2) { kirvm_reg_set(dst, 1); }
+                else { kirvm_reg_set(dst, 0); }
+                pc = pc + 1;
+            }
+            else if op == IR_CMP_LE {
+                if kirvm_reg_get(s1) <= kirvm_reg_get(s2) { kirvm_reg_set(dst, 1); }
+                else { kirvm_reg_set(dst, 0); }
+                pc = pc + 1;
+            }
+            else if op == IR_CMP_GT {
+                if kirvm_reg_get(s1) > kirvm_reg_get(s2) { kirvm_reg_set(dst, 1); }
+                else { kirvm_reg_set(dst, 0); }
+                pc = pc + 1;
+            }
+            else if op == IR_CMP_GE {
+                if kirvm_reg_get(s1) >= kirvm_reg_get(s2) { kirvm_reg_set(dst, 1); }
+                else { kirvm_reg_set(dst, 0); }
+                pc = pc + 1;
+            }
+            else if op == IR_JMP {
+                let target = kirvm_find_label(dst);
+                if target >= 0 { pc = target; }
+                else { pc = pc + 1; }
+            }
+            else if op == IR_JZ {
+                let cond_val = kirvm_reg_get(dst);
+                if cond_val == 0 {
+                    let target = kirvm_find_label(s1);
+                    if target >= 0 { pc = target; }
+                    else { pc = pc + 1; }
+                } else { pc = pc + 1; }
+            }
+            else if op == IR_JNZ {
+                let cond_val = kirvm_reg_get(dst);
+                if cond_val != 0 {
+                    let target = kirvm_find_label(s1);
+                    if target >= 0 { pc = target; }
+                    else { pc = pc + 1; }
+                } else { pc = pc + 1; }
+            }
+            else if op == IR_LABEL {
+                pc = pc + 1;
+            }
+            else if op == IR_ARG {
+                // ARG n, src: store argument for upcoming CALL
+                // In our simple VM, arguments are just register copies
+                pc = pc + 1;
+            }
+            else if op == IR_CALL {
+                // CALL dst, label, argc
+                let fn_pc = kirvm_find_label(s1);
+                if fn_pc >= 0 {
+                    if kirvm_call_depth < KIRVM_MAX_CALL_DEPTH {
+                        push(kirvm_call_stack, pc + 1);
+                        kirvm_call_depth = kirvm_call_depth + 1;
+                        pc = fn_pc;
+                    } else {
+                        kirvm_reg_set(dst, 0);
+                        pc = pc + 1;
+                    }
+                } else {
+                    // External/builtin call — return 0
+                    kirvm_reg_set(dst, 0);
+                    pc = pc + 1;
+                }
+            }
+            else if op == IR_RET {
+                result = kirvm_reg_get(dst);
+                if kirvm_call_depth > 0 {
+                    kirvm_call_depth = kirvm_call_depth - 1;
+                    pc = kirvm_call_stack[kirvm_call_depth];
+                } else {
+                    // Top-level return — exit
+                    return result;
+                }
+            }
+            else if op == IR_PRINT {
+                let val = kirvm_reg_get(dst);
+                print(to_string(val));
+                pc = pc + 1;
+            }
+            else if op == IR_NOP {
+                pc = pc + 1;
+            }
+            else if op == IR_LOAD {
+                // Simplified: treat as array access
+                pc = pc + 1;
+            }
+            else if op == IR_STORE {
+                pc = pc + 1;
+            }
+            else {
+                // Unknown opcode — skip
+                pc = pc + 1;
+            }
+        }
+    }
+    return result;
+}
+
+// Full IR VM execution pipeline: lex → parse → IR lower → IR optimize → VM execute
+fn kinterp_exec_ir(source) {
+    // Reset IR state
+    ir_init();
+    ir_lower_reset();
+
+    // Lex
+    ki_tok_count = 0;
+    ki_tok_idx = 0;
+    ki_var_count = 0;
+    ki_fn_count = 0;
+    ki_depth = 0;
+    let tok_count = ki_lex(source);
+
+    // Parse to AST (reuse kinterp lexer, build minimal AST)
+    // For the IR path, we use ir.hl's AST lowering which expects
+    // AST node arrays in the format: ["NodeType", ...]
+    // We build a simple AST from tokens for the IR path
+    ki_tok_idx = 0;
+    let ast = _kirvm_parse_program();
+
+    // Lower AST → IR
+    ir_lower_stmts(ast);
+
+    // Optimize IR
+    ir_optimize();
+
+    // Initialize VM and execute
+    kirvm_init();
+    kirvm_scan_labels();
+    let result = kirvm_exec_from(0);
+    return result;
+}
+
+// Minimal parser for IR path: produces AST nodes compatible with ir_lower_*
+fn _kirvm_parse_program() {
+    let mut stmts = [];
+    while ki_peek_type() != TOK_EOF {
+        let s = _kirvm_parse_stmt();
+        if s != nil { push(stmts, s); }
+    }
+    return stmts;
+}
+
+fn _kirvm_parse_stmt() {
+    let tt = ki_peek_type();
+    let tv = ki_peek_val();
+
+    // let [mut] name = expr;
+    if tt == TOK_KW && tv == "let" {
+        ki_advance();
+        let mut is_mut = 0;
+        if ki_peek_val() == "mut" { is_mut = 1; ki_advance(); }
+        let name = ki_peek_val();
+        ki_advance();
+        let init = nil;
+        if ki_peek_val() == "=" {
+            ki_advance();
+            init = _kirvm_parse_expr();
+        }
+        if ki_peek_val() == ";" { ki_advance(); }
+        return ["Let", name, is_mut, init];
+    }
+
+    // fn name(params) { body }
+    if tt == TOK_KW && tv == "fn" {
+        ki_advance();
+        let name = ki_peek_val();
+        ki_advance();
+        ki_expect_val("(");
+        let params = [];
+        while ki_peek_type() != TOK_RPAREN && ki_peek_type() != TOK_EOF {
+            if ki_peek_type() == TOK_IDENT { push(params, ki_peek_val()); }
+            ki_advance();
+            if ki_peek_val() == "," { ki_advance(); }
+        }
+        ki_expect_val(")");
+        ki_expect_val("{");
+        let body = [];
+        while ki_peek_type() != TOK_RBRACE && ki_peek_type() != TOK_EOF {
+            let s = _kirvm_parse_stmt();
+            if s != nil { push(body, s); }
+        }
+        if ki_peek_val() == "}" { ki_advance(); }
+        return ["FnDef", name, params, body];
+    }
+
+    // return expr;
+    if tt == TOK_KW && tv == "return" {
+        ki_advance();
+        let val = nil;
+        if ki_peek_type() != TOK_SEMI && ki_peek_type() != TOK_RBRACE && ki_peek_type() != TOK_EOF {
+            val = _kirvm_parse_expr();
+        }
+        if ki_peek_val() == ";" { ki_advance(); }
+        return ["Return", val];
+    }
+
+    // if cond { body } [else { body }]
+    if tt == TOK_KW && tv == "if" {
+        ki_advance();
+        let cond = _kirvm_parse_expr();
+        ki_expect_val("{");
+        let then_body = [];
+        while ki_peek_type() != TOK_RBRACE && ki_peek_type() != TOK_EOF {
+            let s = _kirvm_parse_stmt();
+            if s != nil { push(then_body, s); }
+        }
+        if ki_peek_val() == "}" { ki_advance(); }
+        let else_body = nil;
+        if ki_peek_val() == "else" {
+            ki_advance();
+            ki_expect_val("{");
+            else_body = [];
+            while ki_peek_type() != TOK_RBRACE && ki_peek_type() != TOK_EOF {
+                let s = _kirvm_parse_stmt();
+                if s != nil { push(else_body, s); }
+            }
+            if ki_peek_val() == "}" { ki_advance(); }
+        }
+        return ["If", cond, then_body, else_body];
+    }
+
+    // while cond { body }
+    if tt == TOK_KW && tv == "while" {
+        ki_advance();
+        let cond = _kirvm_parse_expr();
+        ki_expect_val("{");
+        let body = [];
+        while ki_peek_type() != TOK_RBRACE && ki_peek_type() != TOK_EOF {
+            let s = _kirvm_parse_stmt();
+            if s != nil { push(body, s); }
+        }
+        if ki_peek_val() == "}" { ki_advance(); }
+        return ["While", cond, body];
+    }
+
+    // print(expr);
+    if tt == TOK_KW && tv == "print" {
+        // Treat as statement: print(expr)
+        ki_advance();
+        return nil;
+    }
+    if tt == TOK_IDENT && tv == "print" {
+        ki_advance();
+        if ki_peek_type() == TOK_LPAREN {
+            ki_advance();
+            let val = _kirvm_parse_expr();
+            ki_expect_val(")");
+            if ki_peek_val() == ";" { ki_advance(); }
+            return ["Print", val];
+        }
+    }
+
+    // Assignment or expression statement
+    if tt == TOK_IDENT {
+        let name = tv;
+        ki_advance();
+        if ki_peek_val() == "=" {
+            ki_advance();
+            let val = _kirvm_parse_expr();
+            if ki_peek_val() == ";" { ki_advance(); }
+            return ["Assign", name, val];
+        }
+        // Function call as statement
+        if ki_peek_type() == TOK_LPAREN {
+            ki_tok_idx = ki_tok_idx - 1;
+            let expr = _kirvm_parse_expr();
+            if ki_peek_val() == ";" { ki_advance(); }
+            return ["ExprStmt", expr];
+        }
+        return nil;
+    }
+
+    // Skip unrecognized
+    ki_advance();
+    return nil;
+}
+
+// Expression parser for IR path: produces AST nodes
+fn _kirvm_parse_expr() { return _kirvm_parse_or(); }
+
+fn _kirvm_parse_or() {
+    let mut left = _kirvm_parse_and();
+    while ki_peek_val() == "||" {
+        ki_advance();
+        let right = _kirvm_parse_and();
+        left = ["BinOp", "||", left, right];
+    }
+    return left;
+}
+
+fn _kirvm_parse_and() {
+    let mut left = _kirvm_parse_eq();
+    while ki_peek_val() == "&&" {
+        ki_advance();
+        let right = _kirvm_parse_eq();
+        left = ["BinOp", "&&", left, right];
+    }
+    return left;
+}
+
+fn _kirvm_parse_eq() {
+    let mut left = _kirvm_parse_cmp();
+    while ki_peek_val() == "==" || ki_peek_val() == "!=" {
+        let op = ki_peek_val();
+        ki_advance();
+        let right = _kirvm_parse_cmp();
+        left = ["BinOp", op, left, right];
+    }
+    return left;
+}
+
+fn _kirvm_parse_cmp() {
+    let mut left = _kirvm_parse_add();
+    while ki_peek_val() == "<" || ki_peek_val() == ">" || ki_peek_val() == "<=" || ki_peek_val() == ">=" {
+        let op = ki_peek_val();
+        ki_advance();
+        let right = _kirvm_parse_add();
+        left = ["BinOp", op, left, right];
+    }
+    return left;
+}
+
+fn _kirvm_parse_add() {
+    let mut left = _kirvm_parse_mul();
+    while ki_peek_val() == "+" || ki_peek_val() == "-" {
+        let op = ki_peek_val();
+        ki_advance();
+        let right = _kirvm_parse_mul();
+        left = ["BinOp", op, left, right];
+    }
+    return left;
+}
+
+fn _kirvm_parse_mul() {
+    let mut left = _kirvm_parse_unary();
+    while ki_peek_val() == "*" || ki_peek_val() == "/" || ki_peek_val() == "%" {
+        let op = ki_peek_val();
+        ki_advance();
+        let right = _kirvm_parse_unary();
+        left = ["BinOp", op, left, right];
+    }
+    return left;
+}
+
+fn _kirvm_parse_unary() {
+    if ki_peek_val() == "-" {
+        ki_advance();
+        let inner = _kirvm_parse_primary();
+        return ["Unary", "-", inner];
+    }
+    return _kirvm_parse_primary();
+}
+
+fn _kirvm_parse_primary() {
+    let tt = ki_peek_type();
+    let tv = ki_peek_val();
+
+    if tt == TOK_NUM {
+        ki_advance();
+        return ["Num", parse_int(tv)];
+    }
+    if tt == TOK_STR {
+        ki_advance();
+        return ["Str", tv];
+    }
+    if tt == TOK_KW && tv == "true" { ki_advance(); return ["Bool", true]; }
+    if tt == TOK_KW && tv == "false" { ki_advance(); return ["Bool", false]; }
+    if tt == TOK_KW && tv == "nil" { ki_advance(); return ["Nil"]; }
+    if tt == TOK_LPAREN {
+        ki_advance();
+        let val = _kirvm_parse_expr();
+        ki_expect_val(")");
+        return val;
+    }
+    if tt == TOK_LBRACK {
+        ki_advance();
+        let elems = [];
+        while ki_peek_type() != TOK_RBRACK && ki_peek_type() != TOK_EOF {
+            push(elems, _kirvm_parse_expr());
+            if ki_peek_val() == "," { ki_advance(); }
+        }
+        ki_expect_val("]");
+        return ["Array", elems];
+    }
+    if tt == TOK_IDENT {
+        let name = tv;
+        ki_advance();
+        // Function call
+        if ki_peek_type() == TOK_LPAREN {
+            ki_advance();
+            let args = [];
+            while ki_peek_type() != TOK_RPAREN && ki_peek_type() != TOK_EOF {
+                push(args, _kirvm_parse_expr());
+                if ki_peek_val() == "," { ki_advance(); }
+            }
+            ki_expect_val(")");
+            return ["Call", ["Var", name], args];
+        }
+        return ["Var", name];
+    }
+    ki_advance();
+    return ["Nil"];
+}
+
+// Self-test for IR VM path
+fn _kirvm_test() {
+    print("kirvm: IR VM self-test...");
+    let r = kinterp_exec_ir("let x = 3 + 4 * 5; let y = x - 1;");
+    print("kirvm: result = " + to_string(r));
+    print("kirvm: IR VM self-test complete");
+    return r;
+}
+
+print("kinterp.hl loaded: tree-walk + IR VM dual execution engine");

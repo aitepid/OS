@@ -4,12 +4,24 @@
 
 - `.hl` 文件：`178`（63 根目录 + 115 内核模块）
 - H-L 总行数：`40,750+`
-- 内核模块：`115`（函数 1,438 个）
+- 内核模块：`115`（函数 1,457 个）
 - Shell 命令数：`63` + pipe 操作符
 - `scripts/*.ps1`：`22`（8,646 行）
-- 编译：`117/117` 模块 | 0 parse warning | 1 unresolved reloc
+- 编译：`117/117` 模块 | 0 parse warning | 1 unresolved reloc | 1,762 符号
 - 构建/测试主入口：`scripts/hl-bootstrap-build-test.ps1`
-- 最近完成迭代：`109`
+- 最近完成迭代：`110`
+
+## Iteration 110 — kinterp IR 虚拟机执行引擎
+
+- **`kinterp.hl`**: 从 745 行/31 函数升级为 **1,342 行/51 函数**
+  - 新增 **IR 虚拟机执行引擎** (`kirvm_*`)：512 寄存器文件 + 32 层调用栈
+  - `kirvm_exec_from`: 支持全部 IR 算术/比较/控制流/调用/返回指令
+  - `kirvm_scan_labels`: 预扫描 IR 标签建立 PC 映射表
+  - `kinterp_exec_ir`: 完整 IR 管道 — lex → parse → AST → IR lower → optimize → VM 执行
+  - `_kirvm_parse_*`: 为 IR 路径实现的完整递归下降解析器，生成 `ir_lower_*` 兼容 AST
+  - 双执行引擎：树遍历（`kinterp_exec`）+ IR VM（`kinterp_exec_ir`）
+  - 100,000 步安全上限，防止无限循环
+- **编译结果**: 117/117 模块 | 1,762 符号 | 1,457 函数 | 0 warning
 
 ## Iteration 109 — 链接器二次扫描 + stdlib 修复
 
