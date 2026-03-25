@@ -8,7 +8,7 @@ HicOS is a three-layer experimental x86_64 OS written entirely in Hilbert-Lang.
 |---|---|---|
 | A | `scripts/rebuild-image.ps1` → `hicos-hl.img` | BIOS image generation chain |
 | B | `hl-bootstrap.hl` (4,301 lines) | Bootstrap compiler/interpreter/toolchain |
-| C | `bare-kernel/hl/*.hl` (115 modules, 31,299 lines) | Kernel source → `kernel.bin` (23,624 bytes) |
+| C | `bare-kernel/hl/*.hl` (116 modules, 36,534 lines) | Kernel source → `kernel.bin` (27,805 bytes) |
 
 ## Boot Chain
 
@@ -18,7 +18,7 @@ HicOS is a three-layer experimental x86_64 OS written entirely in Hilbert-Lang.
 stage1 / MBR
 → stage2 (protected → long mode)
 → kernel.bin _start
-→ kernel_entry.hl (9,410 lines, 301 functions)
+→ kernel_entry.hl (10,408 lines, 303 functions)
 → kernel_init.hl (subsystem initialization)
 → shell.hl (63 commands + pipe)
 ```
@@ -29,20 +29,20 @@ stage1 / MBR
 OVMF → GPT + ESP → BOOTX64.EFI → UEFI boot output
 ```
 
-## Codebase Metrics (iteration 107, verified)
+## Codebase Metrics (iteration 114, verified)
 
 | Metric | Value |
 |---|---:|
-| Total `.hl` files | 177 |
-| Root `.hl` files | 62 |
-| Kernel modules | 115 |
-| Total H-L lines | 40,742 |
-| Kernel lines | 31,299 |
-| Kernel functions | 1,435 |
+| Total `.hl` files | 179 |
+| Root `.hl` files | 63 |
+| Kernel modules | 116 |
+| Total H-L lines | 47,395 |
+| Kernel lines | 36,534 |
+| Kernel functions (source) | 1,498 |
 | `scripts/*.ps1` | 22 |
 | PS1 lines | 8,646 |
 | Shell commands | 63 + pipe |
-| Total repo files | 309 |
+| Total repo files | 311 |
 
 ## Key Source Locations
 
@@ -55,7 +55,7 @@ OVMF → GPT + ESP → BOOTX64.EFI → UEFI boot output
 - `scripts/rebuild-image.ps1` — BIOS image rebuilder
 - `scripts/build-uefi-image.ps1` — UEFI image builder
 
-## Algorithm Upgrades (iterations 81-107)
+## Algorithm Upgrades (iterations 81-114)
 
 19 kernel modules upgraded across 5 phases:
 
@@ -65,11 +65,20 @@ OVMF → GPT + ESP → BOOTX64.EFI → UEFI boot output
 - **Phase 4** (scheduling): MLFQ, demand paging+COW, SPSC pipe, TLS 1.3 state machine
 - **Phase 5** (isolation): futex hash queue, edge-trigger epoll, cgroup enforcement, eBPF VM
 
+Phase 6 incremental runtime upgrades:
+
+- **Iteration 109**: two-pass linker + builtin/fwd stubs, unresolved relocs `120 → 1`
+- **Iteration 110**: `kinterp.hl` IR VM dual-engine execution path
+- **Iteration 111**: `execve` + `argc/argv/envp` user stack setup
+- **Iteration 112**: `quic.hl` QUIC v1 transport layer
+- **Iteration 113**: `task.hl` ZOMBIE lifecycle + `waitpid(WNOHANG)`
+- **Iteration 114**: `pty.hl` real ring-buffer IO + attach/detach/status
+
 ## Verification
 
-All gates pass as of iteration 107:
+All gates pass as of iteration 114:
 - `hl-bootstrap-build-test.ps1` ✅
 - `boot-readiness.ps1` ✅
 - `runtime-path-readiness.ps1` ✅
 - `image-layout-readiness.ps1` ✅
-- `qemu-smoke.ps1` ✅
+- `release-validate.ps1` ✅ 18/18

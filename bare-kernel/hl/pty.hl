@@ -32,6 +32,8 @@ let pty_s2m_rpos = [];
 let pty_s2m_count = [];
 let pty_line_mode = [];  // 1=cooked (line buffered), 0=raw
 let pty_echo = [];       // 1=echo input back
+let pty_master_task = [];
+let pty_slave_task = [];
 
 fn pty_init() {
     let mut i = 0;
@@ -47,6 +49,8 @@ fn pty_init() {
         push(pty_s2m_count, 0);
         push(pty_line_mode, 1);
         push(pty_echo, 1);
+        push(pty_master_task, 0 - 1);
+        push(pty_slave_task, 0 - 1);
         i = i + 1;
     }
     return 0;
@@ -70,6 +74,10 @@ fn pty_alloc() {
             pty_s2m_count[i] = 0;
             pty_line_mode[i] = 1;
             pty_echo[i] = 1;
+            pty_master_fd[i] = 0 - 1;
+            pty_slave_fd[i] = 0 - 1;
+            pty_master_task[i] = 0 - 1;
+            pty_slave_task[i] = 0 - 1;
             pty_count = pty_count + 1;
             return i;
         }
@@ -82,13 +90,44 @@ fn pty_free(id) {
     if id < 0 { return 0; }
     if id >= PTY_MAX { return 0; }
     pty_active[id] = 0;
+    pty_master_fd[id] = 0 - 1;
+    pty_slave_fd[id] = 0 - 1;
+    pty_master_task[id] = 0 - 1;
+    pty_slave_task[id] = 0 - 1;
+    pty_m2s_wpos[id] = 0;
+    pty_m2s_rpos[id] = 0;
+    pty_m2s_count[id] = 0;
+    pty_s2m_wpos[id] = 0;
+    pty_s2m_rpos[id] = 0;
+    pty_s2m_count[id] = 0;
     pty_count = pty_count - 1;
+    return 0;
+}
+
+fn pty_attach(id, master_task, slave_task, master_fd, slave_fd) {
+    if id < 0 { return 0 - 1; }
+    if id >= PTY_MAX { return 0 - 1; }
+    if pty_active[id] == 0 { return 0 - 1; }
+    pty_master_task[id] = master_task;
+    pty_slave_task[id] = slave_task;
+    pty_master_fd[id] = master_fd;
+    pty_slave_fd[id] = slave_fd;
+    return 0;
+}
+
+fn pty_detach(id) {
+    if id < 0 { return 0 - 1; }
+    if id >= PTY_MAX { return 0 - 1; }
+    pty_master_task[id] = 0 - 1;
+    pty_slave_task[id] = 0 - 1;
+    pty_master_fd[id] = 0 - 1;
+    pty_slave_fd[id] = 0 - 1;
     return 0;
 }
 
 fn pty_master_write(id, byte) {
     if pty_m2s_count[id] >= PTY_BUF_SIZE { return 0 - 1; }
-    // let addr = pty_buf_addr(id, 0) + pty_m2s_wpos[id];
+    let addr = pty_buf_addr(id, 0) + pty_m2s_wpos[id];
     mem_write_u8(addr, byte);
     pty_m2s_wpos[id] = (pty_m2s_wpos[id] + 1) % PTY_BUF_SIZE;
     pty_m2s_count[id] = pty_m2s_count[id] + 1;
@@ -97,9 +136,8 @@ fn pty_master_write(id, byte) {
 
 fn pty_slave_read(id) {
     if pty_m2s_count[id] == 0 { return 0 - 1; }
-    // let addr = pty_buf_addr(id, 0) + pty_m2s_rpos[id];
-    // let byte = mem_read_u8(addr);
-    let byte = 0;
+    let addr = pty_buf_addr(id, 0) + pty_m2s_rpos[id];
+    let byte = mem_read_u8(addr);
     pty_m2s_rpos[id] = (pty_m2s_rpos[id] + 1) % PTY_BUF_SIZE;
     pty_m2s_count[id] = pty_m2s_count[id] - 1;
     return byte;
@@ -107,7 +145,7 @@ fn pty_slave_read(id) {
 
 fn pty_slave_write(id, byte) {
     if pty_s2m_count[id] >= PTY_BUF_SIZE { return 0 - 1; }
-    // let addr = pty_buf_addr(id, 1) + pty_s2m_wpos[id];
+    let addr = pty_buf_addr(id, 1) + pty_s2m_wpos[id];
     mem_write_u8(addr, byte);
     pty_s2m_wpos[id] = (pty_s2m_wpos[id] + 1) % PTY_BUF_SIZE;
     pty_s2m_count[id] = pty_s2m_count[id] + 1;
@@ -120,9 +158,8 @@ fn pty_slave_write(id, byte) {
 
 fn pty_master_read(id) {
     if pty_s2m_count[id] == 0 { return 0 - 1; }
-    // let addr = pty_buf_addr(id, 1) + pty_s2m_rpos[id];
-    // let byte = mem_read_u8(addr);
-    let byte = 0;
+    let addr = pty_buf_addr(id, 1) + pty_s2m_rpos[id];
+    let byte = mem_read_u8(addr);
     pty_s2m_rpos[id] = (pty_s2m_rpos[id] + 1) % PTY_BUF_SIZE;
     pty_s2m_count[id] = pty_s2m_count[id] - 1;
     return byte;
@@ -140,5 +177,34 @@ fn pty_set_cooked(id) {
     return 0;
 }
 
+fn pty_info(id) {
+    if id < 0 { return "pty: invalid"; }
+    if id >= PTY_MAX { return "pty: invalid"; }
+    if pty_active[id] == 0 { return "pty: free"; }
+    let mode = "cooked";
+    if pty_line_mode[id] == 0 { mode = "raw"; }
+    return "pty" + to_string(id) +
+           " mfd=" + to_string(pty_master_fd[id]) +
+           " sfd=" + to_string(pty_slave_fd[id]) +
+           " mtask=" + to_string(pty_master_task[id]) +
+           " stask=" + to_string(pty_slave_task[id]) +
+           " m2s=" + to_string(pty_m2s_count[id]) +
+           " s2m=" + to_string(pty_s2m_count[id]) +
+           " mode=" + mode;
+}
+
+fn pty_status() {
+    let mut attached = 0;
+    let mut i = 0;
+    while i < PTY_MAX {
+        if pty_active[i] == 1 {
+            if pty_master_task[i] >= 0 || pty_slave_task[i] >= 0 { attached = attached + 1; }
+        }
+        i = i + 1;
+    }
+    return to_string(pty_count) + "/" + to_string(PTY_MAX) +
+           " PTY pairs active, " + to_string(attached) + " attached";
+}
+
 print("pty.hl loaded");
-print("PTY: " + to_string(PTY_MAX) + " pairs, cooked/raw mode, echo");
+print("PTY: " + to_string(PTY_MAX) + " pairs, cooked/raw mode, echo, attach/detach");

@@ -2,46 +2,46 @@
 
 ## 版本定位
 
-当前仓库处于 `v6.0` 发布线，迭代 107（阶段 5 收敛）里程碑。
+当前仓库处于 `v6.0` 发布线，迭代 114（阶段 6 推进）里程碑。
 
-## 本轮已核实状态（迭代 107 全量复核）
+## 本轮已核实状态（迭代 114 全量复核）
 
 ### 仓库规模（精确计数）
 
 | 指标 | 当前值 | 说明 |
 |---|---:|---|
-| 全部 `.hl` 文件 | 177 | 62 根目录 + 115 内核模块 |
-| H-L 总行数 | 40,742 | 根 9,443 + 内核 31,299 |
-| `bare-kernel/hl/` 内核模块 | 115 | 编译进 `kernel.bin` |
-| `kernel_entry.hl` 行数 | 9,410 | |
-| `kernel_entry.hl` 函数数 | 301 | |
-| 内核模块总函数数 | 1,435 | |
+| 全部 `.hl` 文件 | 179 | 63 根目录 + 116 内核模块 |
+| H-L 总行数 | 47,395 | 根 10,861 + 内核 36,534 |
+| `bare-kernel/hl/` 内核模块 | 116 | 编译进 `kernel.bin` |
+| `kernel_entry.hl` 行数 | 10,408 | |
+| `kernel_entry.hl` 函数数 | 303 | |
+| 内核模块总函数数 | 1,498 | 源码定义计数 |
 | `hl-bootstrap.hl` 行数 | 4,301 | 自举编译器 |
 | `stdlib.hl` 行数 | 1,371 | 标准库 |
 | `scripts/*.ps1` | 22 | 构建/验证/诊断 |
 | PS1 总行数 | 8,646 | |
 | `shell.hl` 命令数 | 63 + pipe | |
 | `.md` 文档 | 8 | |
-| 仓库总文件数 | 309 | 含日志/文本 |
+| 仓库总文件数 | 311 | 含日志/文本 |
 
 ### 门禁结果
 
 | 验证项 | 结果 |
 |---|---|
-| `hl-bootstrap build` | ✅ 115 模块编译 + 镜像重建 |
-| `validate-workspace` | ✅ 177 HL / 115 模块 |
+| `hl-bootstrap build` | ✅ 118 模块编译 + 镜像重建 |
+| `validate-workspace` | ✅ 179 HL / 116 模块 |
 | `boot-readiness` | ✅ 启动链 + 内核初始化 |
 | `image-layout-readiness` | ✅ MBR 签名 + 扇区布局 |
 | `runtime-path-readiness` | ✅ IDT/PIT/KBD + SYSCALL + 网络 |
-| `qemu-smoke` | ✅ BIOS 启动 + 串口输出 |
+| `release-validate` | ✅ 18/18 |
 
 ### 产物尺寸（实测）
 
 | 产物 | 大小 |
 |---|---:|
-| `hicos-hl.img`（BIOS） | 156,160 字节 |
+| `hicos-hl.img`（BIOS） | 160,256 字节 |
 | `hicos-uefi.img`（UEFI） | 34,603,008 字节 |
-| `kernel.bin` | 23,624 字节 |
+| `kernel.bin` | 27,805 字节 |
 
 ## 迭代 81-107 算法升级总汇（阶段 1-5）
 
@@ -67,18 +67,27 @@
 | 5 | 105 | `cgroup.hl` | 被动记账 → CPU/内存/IO 强制执行 | 新增 |
 | 5 | 106 | `bpf.hl` | 新建 — eBPF 寄存器 VM | 新增 |
 
+## 阶段 6 推进结果（迭代 109-114）
+
+| 迭代 | 结果 |
+|---|---|
+| 109 | 链接器二次扫描 + stub trampoline，未解析重定位 `120 → 1` |
+| 110 | `kinterp.hl` 增加 IR VM，双执行引擎形成 |
+| 111 | `execve` + `argc/argv/envp` 用户栈构建 + ring3 跳转 |
+| 112 | `quic.hl` 新建，QUIC v1 传输协议接入 |
+| 113 | `task.hl`/`posix.hl`：`ZOMBIE` 生命周期 + `waitpid(WNOHANG)` |
+| 114 | `pty.hl`：真实 ring buffer IO + `attach/detach/status` |
+
 ## 三层架构现状
 
 | 层级 | 载体 | 说明 |
 |---|---|---|
 | A | `scripts/rebuild-image.ps1` → `hicos-hl.img` | BIOS 镜像生成链 |
 | B | `hl-bootstrap.hl`（4,301 行） | 自举编译器/解释器/工具链 |
-| C | `bare-kernel/hl/*.hl`（115 模块，31,299 行） | 内核模块 → `kernel.bin` |
+| C | `bare-kernel/hl/*.hl`（116 模块，36,534 行） | 内核模块 → `kernel.bin` |
 
-## 下一阶段建议（阶段 6：迭代 109+）
+## 下一阶段建议（阶段 6 收敛：迭代 115）
 
-- 用户态 ELF 加载器
-- 虚拟终端多路复用（tmux 风格）
-- 内核模块热加载
-- 网络协议栈完善（QUIC / HTTP/2）
-- 第六轮发布收敛
+- 全量文档与策划案收敛到 `iter 115`
+- 继续补足 PTY 任务绑定路径与双 shell 会话验证
+- 远期推进内核自举原型 / TCP 回环 / DNS 实际解析

@@ -3,13 +3,25 @@
 ## Current Snapshot
 
 - `.hl` 文件：`179`（63 根目录 + 116 内核模块）
-- H-L 总行数：`47,000+`
-- 内核模块：`116`（函数 1,483 个）
+- H-L 总行数：`47,395`
+- 内核模块：`116`（函数 1,498 个，源码计数）
 - Shell 命令数：`63` + pipe 操作符
 - `scripts/*.ps1`：`22`（8,646 行）
-- 编译：`118/118` 模块 | 0 parse warning | 1 unresolved reloc | 1,788 符号
+- 编译：`118/118` 模块 | 0 parse warning | 1 unresolved reloc | 1,792 符号
 - 构建/测试主入口：`scripts/hl-bootstrap-build-test.ps1`
-- 最近完成迭代：`113`
+- 最近完成迭代：`114`
+
+## Iteration 114 — PTY 基础闭环修复
+
+- **`pty.hl`**: 真实 PTY ring buffer 读写路径接通
+  - 修复 `pty_master_write` / `pty_slave_read` / `pty_slave_write` / `pty_master_read` 中 `addr` 未定义的真实 bug
+  - `pty_buf_addr()` 现在实际参与双向缓冲读写
+  - 新增 `pty_attach()` / `pty_detach()`
+  - 新增 `pty_info()` / `pty_status()`
+  - 新增 `pty_master_task` / `pty_slave_task` 绑定信息
+- **`shell.hl`**: `pty` 命令改为走 `pty_status()`
+- **`posix.hl`**: 新增 `FD_PTY_MASTER` / `FD_PTY_SLAVE`
+- **编译结果**: 118/118 模块 | 1,792 符号 | 1,487 functions found | 0 warning
 
 ## Iteration 113 — 进程生命周期完善
 
