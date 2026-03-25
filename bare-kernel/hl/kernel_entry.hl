@@ -8961,6 +8961,11 @@ fn _ke_cmd_help() {
     // "grep"
     _ke_putc(103); _ke_putc(114); _ke_putc(101); _ke_putc(112);
     _ke_putc(13); _ke_putc(10);
+    // Line 13: "      heval"
+    _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32);
+    // "heval"
+    _ke_putc(104); _ke_putc(101); _ke_putc(118); _ke_putc(97); _ke_putc(108);
+    _ke_putc(13); _ke_putc(10);
     return 0;
 }
 
@@ -9447,6 +9452,54 @@ fn _ke_cmd_grep(buf_addr, buf_len) {
     return 0;
 }
 
+// === Iteration 116: heval — kernel self-bootstrap prototype ===
+// Evaluate H-L expression inside kernel via kinterp_exec.
+// Usage: heval <expr>
+// This proves the kernel can lex → parse → eval its own language.
+fn _ke_cmd_heval(buf_addr, buf_len) {
+    // "heval " = 6 chars (including trailing space)
+    if buf_len <= 6 {
+        // "Usage: heval <expr>\r\n"
+        _ke_putc(85); _ke_putc(115); _ke_putc(97); _ke_putc(103); _ke_putc(101);
+        _ke_putc(58); _ke_putc(32);
+        _ke_putc(104); _ke_putc(101); _ke_putc(118); _ke_putc(97); _ke_putc(108);
+        _ke_putc(32); _ke_putc(60);
+        _ke_putc(101); _ke_putc(120); _ke_putc(112); _ke_putc(114);
+        _ke_putc(62);
+        _ke_putc(13); _ke_putc(10);
+        return 0;
+    }
+
+    // Extract expression as string: build from bytes at buf_addr+6..buf_len-1
+    let expr_start = 6;
+    let expr_len = buf_len - expr_start;
+    let mut expr = "";
+    let mut xi = 0;
+    while xi < expr_len {
+        let ch = mem_read_u8(buf_addr + expr_start + xi);
+        expr = expr + char_from_code(ch);
+        xi = xi + 1;
+    }
+
+    // "keval> " prefix
+    _ke_putc(107); _ke_putc(101); _ke_putc(118); _ke_putc(97); _ke_putc(108);
+    _ke_putc(62); _ke_putc(32);
+
+    // Execute via tree-walk interpreter
+    let result = kinterp_exec(expr);
+
+    // Print result
+    let result_str = to_string(result);
+    let rlen = len(result_str);
+    let mut ri = 0;
+    while ri < rlen {
+        _ke_putc(char_code(result_str, ri));
+        ri = ri + 1;
+    }
+    _ke_putc(13); _ke_putc(10);
+    return 0;
+}
+
 // Command dispatch: compare command buffer bytes
 // Uses fixed memory at 0x310000-0x31003F as command buffer
 fn _ke_dispatch(buf_addr, buf_len) {
@@ -9832,6 +9885,13 @@ fn _ke_dispatch(buf_addr, buf_len) {
         if c0 == 101 { if c1 == 99 { if c2 == 104 { if c3 == 111 {
             _ke_cmd_echo(buf_addr, buf_len); return 0;
         } } } }
+    }
+
+    // "heval" (5) or "heval ..." (6+): 104 101 118 97 108
+    if buf_len >= 5 {
+        if c0 == 104 { if c1 == 101 { if c2 == 118 { if c3 == 97 { if c4 == 108 {
+            _ke_cmd_heval(buf_addr, buf_len); return 0;
+        } } } } }
     }
 
     // "malloc" (6) or "malloc N" (7+): 109 97 108 108 111 99

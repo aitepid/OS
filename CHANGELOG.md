@@ -3,13 +3,28 @@
 ## Current Snapshot
 
 - `.hl` 文件：`179`（63 根目录 + 116 内核模块）
-- H-L 总行数：`47,395`
-- 内核模块：`116`（函数 1,498 个，源码计数）
+- H-L 总行数：`47,461`
+- 内核模块：`116`（函数 1,499 个，源码计数）
 - Shell 命令数：`63` + pipe 操作符
 - `scripts/*.ps1`：`22`（8,646 行）
-- 编译：`118/118` 模块 | 0 parse warning | 1 unresolved reloc | 1,792 符号
+- 编译：`118/118` 模块 | 0 parse warning | 1 unresolved reloc | 1,793 符号
 - 构建/测试主入口：`scripts/hl-bootstrap-build-test.ps1`
-- 最近完成迭代：`114`
+- 最近完成迭代：`116`
+
+## Iteration 116 — 内核自举原型：heval 命令
+
+- **`kernel_entry.hl`**: 新增 `heval` 命令 — 内核级 lex→parse→eval 自举原型
+  - `_ke_cmd_heval(buf_addr, buf_len)`: 从命令缓冲区提取 H-L 表达式，调用 `kinterp_exec()` 在裸机内核中执行
+  - 帮助文本第 13 行新增 `heval`
+  - 命令分发表接入 `heval` 匹配（`buf_len >= 5`）
+  - 证明内核可以作为自身语言的実时解释器宿主
+- **`shell.hl`**: 新增 `heval <expr>` 命令，调用 `kinterp_exec()` 执行
+- **编译结果**: 118/118 模块 | 1,793 符号 | 1,488 functions found | 0 warning
+
+## Iteration 115 — 阶段 6 文档收敛
+
+- 全量 md 文件与策划案强制对齐到项目实际状态
+- 门禁全通过：`hl-bootstrap-build-test` ✅ / `release-validate` 18/18 ✅
 
 ## Iteration 114 — PTY 基础闭环修复
 
