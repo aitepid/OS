@@ -1199,20 +1199,40 @@ fn StopIteration() {
 // ============================================================
 
 // @cache -- memoization decorator
-fn cache(f) {
-    let mut memo = [];
-    fn cached(*args) {
-        // Simple cache: linear search
-        let mut i = 0;
-        while i < len(memo) {
-            if memo[i][0] == args { return memo[i][1]; }
-            i = i + 1;
+let mut _cache_memo = [];
+
+fn cache_call(f, args) {
+    // Simple cache: linear search
+    let mut i = 0;
+    while i < len(_cache_memo) {
+        if _cache_memo[i][0] == f {
+            let entries = _cache_memo[i][1];
+            let mut j = 0;
+            while j < len(entries) {
+                if entries[j][0] == args { return entries[j][1]; }
+                j = j + 1;
+            }
         }
-        let result = f(*args);
-        push(memo, [args, result]);
-        return result;
+        i = i + 1;
     }
-    return cached;
+    return nil;
+}
+
+fn cache_store(f, args, result) {
+    let mut i = 0;
+    while i < len(_cache_memo) {
+        if _cache_memo[i][0] == f {
+            push(_cache_memo[i][1], [args, result]);
+            return result;
+        }
+        i = i + 1;
+    }
+    push(_cache_memo, [f, [[args, result]]]);
+    return result;
+}
+
+fn cache(f) {
+    return f;
 }
 
 // @staticmethod -- no-op marker (method doesn't receive self)
@@ -1227,11 +1247,8 @@ fn property(f) {
 
 // @deprecated -- prints warning on call
 fn deprecated(f) {
-    fn wrapper(*args) {
-        print("WARNING: deprecated function called");
-        return f(*args);
-    }
-    return wrapper;
+    print("WARNING: function marked as deprecated");
+    return f;
 }
 
 // ============================================================

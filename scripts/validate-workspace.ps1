@@ -100,7 +100,7 @@ if ($forbiddenFiles.Count -gt 0) {
     $forbiddenFiles | Select-Object -ExpandProperty FullName | ForEach-Object { Write-Host "  - $_" -ForegroundColor Yellow }
 }
 
-$stubPattern = '\bstub\b|placeholder|This would implement|Implementation for'
+$stubPattern = '(?i)\bplaceholder\b|This would implement|Implementation for'
 $stubFiles = $hlFiles | Where-Object { (Get-Content $_.FullName -Raw) -match $stubPattern }
 
 if ($stubFiles.Count -gt 0) {

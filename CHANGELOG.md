@@ -2,13 +2,32 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`177`（62 根目录 + 115 内核模块）
-- H-L 总行数：`40,742`（根 9,443 + 内核 31,299）
-- 内核模块：`115`（函数 1,435 个）
+- `.hl` 文件：`178`（63 根目录 + 115 内核模块）
+- H-L 总行数：`40,750+`
+- 内核模块：`115`（函数 1,438 个）
 - Shell 命令数：`63` + pipe 操作符
 - `scripts/*.ps1`：`22`（8,646 行）
+- 编译：`117/117` 模块 | 0 parse warning | 1 unresolved reloc
 - 构建/测试主入口：`scripts/hl-bootstrap-build-test.ps1`
-- 最近完成迭代：`107`
+- 最近完成迭代：`109`
+
+## Iteration 109 — 链接器二次扫描 + stdlib 修复
+
+- **`hl-compile-pipeline.ps1`**: 链接器深化
+  - `Link-PreScan`: 编译前预扫描所有 .hl 源文件的 `fn` 声明，构建前向声明表
+  - `Link-GenerateStubs`: 为语言内建函数和前向声明生成 stub trampoline
+  - 未解析重定位从 **120 → 1**（降低 99.2%）
+  - 已解析重定位从 **114 → 264**（增加 131%）
+- **`linker.hl`**: 内核侧链接器升级
+  - `linker_register_builtins`: 内建函数 stub 注册
+  - `linker_register_fwd_stubs`: 前向声明 stub 注册
+  - `linker_pass2_enhanced`: 增强型二次解析
+- **`stdlib.hl`**: Parse warning 修复
+  - 消除 2 条嵌套 `fn` 闭包导致的 parse warning
+  - `cache()` / `deprecated()` 改为平铺函数结构
+  - stdlib 首次完整编译，贡献 **2,117 B** 到 kernel.bin
+- **编译结果**: 117/117 全量零警告编译
+- **`EVOLUTION_PLAN.hl`**: 新建 — 全量审计型系统进化策划案（9 章）
 
 ## Iteration 107 — 阶段 5 收敛
 

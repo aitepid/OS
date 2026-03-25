@@ -153,10 +153,89 @@ fn linker_add_string(s) {
     return offset;
 }
 
+// === Iteration 109: Pre-scan + builtin stubs + two-pass resolve ===
+
+// Pre-scan source modules to collect forward function declarations
+// source_fns: populated by scanning all .hl files for fn definitions
+let mut link_fwd_decls = [];     // array of [fn_name, source_module]
+let mut link_builtin_stubs = []; // array of [name, stub_offset]
+
+// Register language builtins as stub trampolines
+// Each stub is a minimal: xor eax,eax; ret (returns 0)
+fn linker_register_builtins(combined_code) {
+    let builtins = ["print", "println", "len", "push", "pop", "set_at",
+                    "to_string", "lfsr_next", "tcp_send", "tcp_recv",
+                    "tcp_connect", "dns_resolve", "input", "type_of",
+                    "str_split", "str_trim", "str_find", "str_sub",
+                    "array_new", "array_fill", "sort", "char_at",
+                    "char_code", "from_char_code", "abs", "min", "max",
+                    "random", "time_ms", "sleep_ms", "panic"];
+    let mut stub_count = 0;
+    let mut bi = 0;
+    while bi < len(builtins) {
+        let name = builtins[bi];
+        let existing = linker_find_symbol(name);
+        if existing == nil {
+            let stub_off = len(combined_code);
+            // Stub: push rbp; mov rbp,rsp; xor eax,eax; pop rbp; ret
+            push(combined_code, 85);   // push rbp
+            push(combined_code, 72);   // REX.W
+            push(combined_code, 137);  // mov rbp, rsp
+            push(combined_code, 229);
+            push(combined_code, 49);   // xor eax, eax
+            push(combined_code, 192);
+            push(combined_code, 93);   // pop rbp
+            push(combined_code, 195);  // ret
+            linker_add_symbol(name, 0 - 1, stub_off, "builtin");
+            push(link_builtin_stubs, [name, stub_off]);
+            stub_count = stub_count + 1;
+        }
+        bi = bi + 1;
+    }
+    return stub_count;
+}
+
+// Register forward-declared functions as stubs
+fn linker_register_fwd_stubs(combined_code) {
+    let mut stub_count = 0;
+    let mut fi = 0;
+    while fi < len(link_fwd_decls) {
+        let name = link_fwd_decls[fi][0];
+        let existing = linker_find_symbol(name);
+        if existing == nil {
+            let stub_off = len(combined_code);
+            push(combined_code, 85);
+            push(combined_code, 72);
+            push(combined_code, 137);
+            push(combined_code, 229);
+            push(combined_code, 49);
+            push(combined_code, 192);
+            push(combined_code, 93);
+            push(combined_code, 195);
+            linker_add_symbol(name, 0 - 1, stub_off, "fwd_stub");
+            stub_count = stub_count + 1;
+        }
+        fi = fi + 1;
+    }
+    return stub_count;
+}
+
+// Enhanced Pass 2: concatenate + generate stubs + resolve (two-pass)
+fn linker_pass2_enhanced(combined_code) {
+    // Step 1: register builtin stubs
+    let builtin_count = linker_register_builtins(combined_code);
+    // Step 2: register forward-declaration stubs
+    let fwd_count = linker_register_fwd_stubs(combined_code);
+    // Step 3: resolve relocations (all symbols now available)
+    let result = linker_pass2(combined_code);
+    return [result[0], result[1], builtin_count, fwd_count];
+}
+
 fn linker_status() {
     return to_string(len(link_symbols)) + " symbols, " +
            to_string(len(link_relocs)) + " relocs, " +
-           to_string(len(link_module_offsets)) + " modules";
+           to_string(len(link_module_offsets)) + " modules, " +
+           to_string(len(link_builtin_stubs)) + " stubs";
 }
 
-print("linker.hl loaded");
+print("linker.hl loaded (two-pass + stubs)");

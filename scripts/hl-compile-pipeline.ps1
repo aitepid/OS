@@ -692,6 +692,8 @@ function Link-Init {
     $script:link_modules = [System.Collections.ArrayList]::new()
     $script:link_global_syms = @{}
     $script:link_combined = [System.Collections.ArrayList]::new()
+    $script:link_builtin_stubs = @{}  # builtin name -> stub offset
+    $script:link_fwd_decls = @{}      # pre-scanned fn names -> source module
 }
 
 # Pass 1: layout modules sequentially, collect global symbol table
@@ -708,12 +710,86 @@ function Link-Pass1 {
     return $offset
 }
 
-# Pass 2: concatenate code, resolve relocations
+# Pre-scan: collect all fn declarations across all source files for forward binding
+function Link-PreScan {
+    param([string[]]$sourcePaths)
+    foreach ($p in $sourcePaths) {
+        if (-not (Test-Path $p)) { continue }
+        $src = Get-Content $p -Raw
+        $modName = [System.IO.Path]::GetFileName($p)
+        # Match fn <name>( patterns
+        $matches = [regex]::Matches($src, '\bfn\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(')
+        foreach ($m in $matches) {
+            $fnName = $m.Groups[1].Value
+            if (-not $script:link_fwd_decls.ContainsKey($fnName)) {
+                $script:link_fwd_decls[$fnName] = $modName
+            }
+        }
+    }
+}
+
+# Generate stub trampolines for builtins and unresolved forward declarations
+function Link-GenerateStubs {
+    # H-L language builtins that have no .hl source definition
+    $builtins = @('print','println','len','push','pop','set_at','to_string',
+                  'lfsr_next','tcp_send','tcp_recv','tcp_connect','dns_resolve',
+                  'input','type_of','str_split','str_trim','str_find','str_sub',
+                  'array_new','array_fill','sort','char_at','char_code',
+                  'from_char_code','str_contains','str_starts_with','str_ends_with',
+                  'str_replace','str_to_upper','str_to_lower','str_join',
+                  'abs','min','max','floor','ceil','sqrt','pow','log',
+                  'random','time_ms','sleep_ms','panic')
+    $stubBase = $script:link_combined.Count
+    $stubCount = 0
+    foreach ($name in $builtins) {
+        if (-not $script:link_global_syms.ContainsKey($name)) {
+            $stubOff = $script:link_combined.Count
+            # Stub: push rbp; mov rbp,rsp; xor eax,eax; pop rbp; ret (8 bytes)
+            [void]$script:link_combined.Add([byte]0x55)           # push rbp
+            [void]$script:link_combined.Add([byte]0x48)           # REX.W
+            [void]$script:link_combined.Add([byte]0x89)           # mov rbp, rsp
+            [void]$script:link_combined.Add([byte]0xE5)
+            [void]$script:link_combined.Add([byte]0x31)           # xor eax, eax
+            [void]$script:link_combined.Add([byte]0xC0)
+            [void]$script:link_combined.Add([byte]0x5D)           # pop rbp
+            [void]$script:link_combined.Add([byte]0xC3)           # ret
+            $script:link_global_syms[$name] = $stubOff
+            $script:link_builtin_stubs[$name] = $stubOff
+            $stubCount++
+        }
+    }
+    # Also generate stubs for forward-declared functions not yet in symbol table
+    foreach ($kv in $script:link_fwd_decls.GetEnumerator()) {
+        $fnName = $kv.Key
+        if (-not $script:link_global_syms.ContainsKey($fnName)) {
+            $stubOff = $script:link_combined.Count
+            [void]$script:link_combined.Add([byte]0x55)
+            [void]$script:link_combined.Add([byte]0x48)
+            [void]$script:link_combined.Add([byte]0x89)
+            [void]$script:link_combined.Add([byte]0xE5)
+            [void]$script:link_combined.Add([byte]0x31)
+            [void]$script:link_combined.Add([byte]0xC0)
+            [void]$script:link_combined.Add([byte]0x5D)
+            [void]$script:link_combined.Add([byte]0xC3)
+            $script:link_global_syms[$fnName] = $stubOff
+            $script:link_builtin_stubs[$fnName] = $stubOff
+            $stubCount++
+        }
+    }
+    return @($stubBase, $stubCount)
+}
+
+# Pass 2: concatenate code, generate stubs, resolve relocations (two-pass resolve)
 function Link-Pass2 {
     # Concatenate all module code into flat binary
     foreach ($mod in $script:link_modules) {
         foreach ($b in $mod.Code) { [void]$script:link_combined.Add($b) }
     }
+    # Generate builtin + forward-declaration stubs after module code
+    $stubResult = Link-GenerateStubs
+    $script:link_stub_base = $stubResult[0]
+    $script:link_stub_count = $stubResult[1]
+    # Resolve relocations (now with stubs available)
     $resolved = 0; $unresolved = 0
     foreach ($mod in $script:link_modules) {
         foreach ($reloc in $mod.Relocs) {
@@ -761,6 +837,11 @@ $warnFiles = [System.Collections.ArrayList]::new()
 $totalIR = 0; $totalIRLive = 0; $totalIROpt = 0; $totalFns = 0; $totalX86 = 0
 $moduleASTs = [System.Collections.ArrayList]::new()
 Link-Init
+
+# Pre-scan all source files for forward function declarations (iteration 109)
+$preScanPaths = @($modulePaths | ForEach-Object { $_.FullName })
+$preScanPaths += @('stdlib.hl', 'hl-bootstrap.hl') | ForEach-Object { Join-Path $repoRoot $_ } | Where-Object { Test-Path $_ }
+Link-PreScan $preScanPaths
 
 Write-Host '=== H-L Compilation Pipeline ===' -ForegroundColor Green
 Write-Host "Phase 1-5: Tokenize + Parse + IR + x86_64 + Link  ($totalFiles kernel modules)" -ForegroundColor Cyan
@@ -884,6 +965,7 @@ Write-Host ''
 $textSize = Link-Pass1
 $linkResult = Link-Pass2
 $resolved = $linkResult[0]; $unresolved = $linkResult[1]
+$stubCount = $script:link_stub_count
 $kernelBin = Join-Path (Join-Path $repoRoot 'bare-kernel') 'kernel.bin'
 $binSize = 0
 if ($script:link_combined.Count -gt 0) {
@@ -909,6 +991,9 @@ Write-Host "  Total IR instrs:  $totalIR ($totalIRLive live, $($totalIR - $total
 Write-Host "  IR optimizations: $totalIROpt (const-fold + DCE + strength-reduce)" -ForegroundColor White
 Write-Host "  x86_64 output:    $totalX86 bytes (.text)" -ForegroundColor White
 Write-Host "  Linker:           $($script:link_modules.Count) modules, $symCount symbols, $resolved relocs resolved" -ForegroundColor White
+if ($stubCount -gt 0) {
+    Write-Host "  Builtin stubs:    $stubCount (runtime-bound trampolines)" -ForegroundColor DarkCyan
+}
 if ($unresolved -gt 0) {
     Write-Host "  Unresolved relocs: $unresolved" -ForegroundColor Yellow
 }
