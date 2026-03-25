@@ -147,6 +147,148 @@ fn sys_exec(path) {
     return 0;
 }
 
+// === execve(path, argv, envp) ===
+// Replace current task's image with new ELF binary, with arguments and environment.
+// argv: array of argument strings (argv[0] = program name)
+// envp: array of "KEY=VALUE" strings (environment)
+//
+// User stack layout after setup (grows downward):
+//   [envp strings]    NUL-terminated strings
+//   [argv strings]    NUL-terminated strings
+//   [alignment pad]
+//   envp[n] = 0       (NULL terminator)
+//   envp[n-1]         pointer to env string n-1
+//   ...
+//   envp[0]           pointer to env string 0
+//   argv[argc] = 0    (NULL terminator)
+//   argv[argc-1]      pointer to arg string argc-1
+//   ...
+//   argv[0]           pointer to arg string 0
+//   argc              (integer)
+//   <- RSP points here on entry
+let EXECVE_STACK_TOP = 8380416;  // 0x7FF000 -- user stack top (below 0x800000)
+
+fn sys_execve(path, argv, envp) {
+    // 1. Open and read ELF binary from VFS
+    let fd = vfs_open(path, O_RDONLY);
+    if fd < 0 { return 0 - 1; }
+    let stat = vfs_stat(path);
+    let file_size = stat[0];
+    if file_size == 0 { vfs_close(fd); return 0 - 1; }
+
+    let buf_addr = page_alloc();
+    if buf_addr == 0 { vfs_close(fd); return 0 - 1; }
+    let bytes_read = vfs_read(fd, buf_addr, file_size);
+    vfs_close(fd);
+
+    // Convert to array for elf_load
+    let mut elf_data = [];
+    let mut ri = 0;
+    while ri < bytes_read {
+        push(elf_data, mem_read_u8(buf_addr + ri));
+        ri = ri + 1;
+    }
+    page_free(buf_addr);
+
+    // 2. Parse ELF header
+    let entry_point = elf_entry(elf_data);
+    if entry_point == 0 { return 0 - 1; }
+
+    // 3. Load PT_LOAD segments
+    elf_load_segments(elf_data, current_task);
+
+    // 4. Allocate user stack page(s)
+    let stack_page = page_alloc();
+    if stack_page == 0 { return 0 - 1; }
+    map_page(EXECVE_STACK_TOP - 4096, stack_page, 7); // USER|WRITABLE|PRESENT
+
+    // 5. Setup argc/argv/envp on user stack
+    let mut sp = EXECVE_STACK_TOP;
+
+    // 5a. Write envp strings to stack, collect pointers
+    let mut envp_ptrs = [];
+    if envp != nil {
+        let mut ei = 0;
+        while ei < len(envp) {
+            let env_str = envp[ei];
+            let env_len = len(env_str);
+            sp = sp - env_len - 1;  // string + NUL
+            let mut si = 0;
+            while si < env_len {
+                mem_write_u8(sp + si, char_code(env_str, si));
+                si = si + 1;
+            }
+            mem_write_u8(sp + env_len, 0);  // NUL terminator
+            push(envp_ptrs, sp);
+            ei = ei + 1;
+        }
+    }
+
+    // 5b. Write argv strings to stack, collect pointers
+    let mut argv_ptrs = [];
+    let argc = len(argv);
+    let mut ai = 0;
+    while ai < argc {
+        let arg_str = argv[ai];
+        let arg_len = len(arg_str);
+        sp = sp - arg_len - 1;
+        let mut si = 0;
+        while si < arg_len {
+            mem_write_u8(sp + si, char_code(arg_str, si));
+            si = si + 1;
+        }
+        mem_write_u8(sp + arg_len, 0);
+        push(argv_ptrs, sp);
+        ai = ai + 1;
+    }
+
+    // 5c. Align SP to 16 bytes
+    sp = sp & (0 - 16);
+
+    // 5d. Write envp pointer array (NULL-terminated)
+    sp = sp - 8;
+    mem_write_u64(sp, 0);  // envp NULL terminator
+    let mut ei2 = len(envp_ptrs) - 1;
+    while ei2 >= 0 {
+        sp = sp - 8;
+        mem_write_u64(sp, envp_ptrs[ei2]);
+        ei2 = ei2 - 1;
+    }
+
+    // 5e. Write argv pointer array (NULL-terminated)
+    sp = sp - 8;
+    mem_write_u64(sp, 0);  // argv NULL terminator
+    let mut ai2 = argc - 1;
+    while ai2 >= 0 {
+        sp = sp - 8;
+        mem_write_u64(sp, argv_ptrs[ai2]);
+        ai2 = ai2 - 1;
+    }
+
+    // 5f. Write argc
+    sp = sp - 8;
+    mem_write_u64(sp, argc);
+
+    // 6. Update task registers
+    let addr = task_addr(current_task);
+    mem_write_u64(addr + 24, entry_point);  // RIP
+    mem_write_u64(addr + 16, sp);           // RSP
+
+    // 7. Reset FDs 3+ (keep stdin/stdout/stderr)
+    let mut fi = 3;
+    while fi < MAX_FDS {
+        mem_write_u64(fd_addr(current_task, fi), FD_CLOSED);
+        mem_write_u64(fd_addr(current_task, fi) + 8, 0);
+        fi = fi + 1;
+    }
+
+    // 8. Trigger user-mode transition
+    enter_usermode(entry_point, sp);
+
+    // Does not return (user-mode entry)
+    return 0;
+}
+
 // === wait(child_pid) ===
 // Blocks parent until child exits. Returns child exit code.
 fn sys_wait(child_pid) {
@@ -243,4 +385,4 @@ fn fd_alloc(task_id) {
 }
 
 print("posix.hl loaded");
-print("fork/exec/exit/wait/pipe/dup2 + 16 FDs per task");
+print("fork/exec/execve/exit/wait/pipe/dup2 + 16 FDs per task");

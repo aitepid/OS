@@ -4,12 +4,24 @@
 
 - `.hl` 文件：`178`（63 根目录 + 115 内核模块）
 - H-L 总行数：`40,750+`
-- 内核模块：`115`（函数 1,457 个）
+- 内核模块：`115`（函数 1,458 个）
 - Shell 命令数：`63` + pipe 操作符
 - `scripts/*.ps1`：`22`（8,646 行）
 - 编译：`117/117` 模块 | 0 parse warning | 1 unresolved reloc | 1,762 符号
 - 构建/测试主入口：`scripts/hl-bootstrap-build-test.ps1`
-- 最近完成迭代：`110`
+- 最近完成迭代：`111`
+
+## Iteration 111 — execve + 用户态地址空间初始化
+
+- **`posix.hl`**: 新增 `sys_execve(path, argv, envp)`
+  - 完整 POSIX execve 语义：加载 ELF + argc/argv/envp 栈构建 + 用户态跳转
+  - 用户栈布局：字符串区 → envp 指针数组 → argv 指针数组 → argc
+  - 栈地址 0x7FF000（与内核地址空间隔离）
+  - FD 3+ 自动关闭，stdin/stdout/stderr 保留
+  - 调用 `enter_usermode()` 实现 ring0 → ring3 IRETQ 跳转
+- **`syscall.hl`**: 新增 `SYS_EXECVE = 9` 并接入分发表
+- **`usermode.hl`**: execve 集成文档更新
+- **编译结果**: 117/117 | 1,763 符号 | 1,458 函数 | 0 warning
 
 ## Iteration 110 — kinterp IR 虚拟机执行引擎
 
