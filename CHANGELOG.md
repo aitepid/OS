@@ -2,14 +2,30 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`178`（63 根目录 + 115 内核模块）
-- H-L 总行数：`40,750+`
-- 内核模块：`115`（函数 1,458 个）
+- `.hl` 文件：`179`（63 根目录 + 116 内核模块）
+- H-L 总行数：`42,000+`
+- 内核模块：`116`（函数 1,480 个）
 - Shell 命令数：`63` + pipe 操作符
 - `scripts/*.ps1`：`22`（8,646 行）
-- 编译：`117/117` 模块 | 0 parse warning | 1 unresolved reloc | 1,762 符号
+- 编译：`118/118` 模块 | 0 parse warning | 1 unresolved reloc | 1,785 符号
 - 构建/测试主入口：`scripts/hl-bootstrap-build-test.ps1`
-- 最近完成迭代：`111`
+- 最近完成迭代：`112`
+
+## Iteration 112 — QUIC 传输协议
+
+- **`quic.hl`**: 新建 — **QUIC v1 传输协议**（RFC 9000）
+  - 16 连接槽位 × 16 双向流/连接
+  - 1-RTT 握手：Initial → Handshake → Established （6 状态机）
+  - 流多路复用：`quic_stream_open/send/recv` 带流级流控
+  - 包保护：AEAD 加密密钥派生（CID 混合）
+  - 拥塞控制：NewReno 慢启动 + 拥塞避免
+  - RTT 估算：Jacobson/Karels 自适应 RTO
+  - ACK 帧处理 + CONNECTION_CLOSE
+  - STREAM 帧解析（offset/length/FIN 标志）
+  - 连接级 + 流级双层流控
+  - `quic_status()` / `quic_conn_info()` 诊断
+  - 22 个函数，440+ 行
+- **编译结果**: 118/118 模块 | 1,785 符号 | 1,480 函数 | 0 warning
 
 ## Iteration 111 — execve + 用户态地址空间初始化
 

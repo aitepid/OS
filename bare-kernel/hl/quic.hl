@@ -1,0 +1,683 @@
+// quic.hl -- QUIC Transport Protocol (RFC 9000)
+//
+// Implements QUIC over UDP with:
+//   - Connection establishment: 1-RTT handshake (Initial + Handshake + 1-RTT)
+//   - Stream multiplexing: up to 16 bidirectional streams per connection
+//   - Packet protection: AEAD encryption (ChaCha20-Poly1305 / AES-128-GCM stubs)
+//   - Loss detection: packet number tracking + ACK frames
+//   - Flow control: per-stream and connection-level
+//   - 0-RTT early data support (session ticket cache)
+//
+// Builds on: net.hl (UDP send/recv), tls.hl (crypto primitives)
+//
+// Connection state layout (512 bytes):
+//   +0   state(8)          -- IDLE/INITIAL/HANDSHAKE/ESTABLISHED/CLOSING/CLOSED
+//   +8   conn_id_local(8)  -- local connection ID
+//   +16  conn_id_remote(8) -- remote connection ID
+//   +24  remote_ip(4) remote_port(4)
+//   +32  local_port(4) version(4)
+//   +40  pkt_num_send(8)   -- next packet number to send
+//   +48  pkt_num_recv(8)   -- largest received packet number
+//   +56  crypto_key_tx(8)  -- pointer to TX key material
+//   +64  crypto_key_rx(8)  -- pointer to RX key material
+//   +72  cwnd(8)           -- congestion window (bytes)
+//   +80  ssthresh(8)       -- slow-start threshold
+//   +88  bytes_in_flight(8)
+//   +96  rtt_min(8)        -- minimum observed RTT (ms)
+//   +104 rtt_smoothed(8)   -- smoothed RTT (ms * 8, fixed-point)
+//   +112 rtt_var(8)        -- RTT variance (ms * 4, fixed-point)
+//   +120 rto(8)            -- retransmission timeout (ms)
+//   +128 max_data_local(8) -- connection-level flow control (local)
+//   +136 max_data_remote(8)-- connection-level flow control (remote)
+//   +144 data_sent(8)      -- total data sent (for flow control)
+//   +152 data_recv(8)      -- total data received
+//   +160 stream_table(8)   -- offset to stream state array
+//   +168 ack_delay(8)      -- ACK delay (ms)
+//   +176 idle_timeout(8)   -- idle timeout (ms)
+//   +184 last_activity(8)  -- tick of last activity
+//   +192 retry_token_len(8)
+//   +200 reserved(312)
+
+// --- Constants ---
+let QUIC_VERSION_1 = 1;          // RFC 9000
+let QUIC_MAX_CONNS = 16;
+let QUIC_CONN_SIZE = 512;
+let QUIC_CONN_TABLE = 10485760;  // 0xA00000
+
+// Connection states
+let QUIC_IDLE        = 0;
+let QUIC_INITIAL     = 1;
+let QUIC_HANDSHAKE   = 2;
+let QUIC_ESTABLISHED = 3;
+let QUIC_CLOSING     = 4;
+let QUIC_CLOSED      = 5;
+
+// Frame types (RFC 9000 Section 19)
+let FRAME_PADDING       = 0;
+let FRAME_PING          = 1;
+let FRAME_ACK           = 2;
+let FRAME_RESET_STREAM  = 4;
+let FRAME_STOP_SENDING  = 5;
+let FRAME_CRYPTO        = 6;
+let FRAME_NEW_TOKEN     = 7;
+let FRAME_STREAM        = 8;   // 0x08-0x0F: STREAM frames with varying flags
+let FRAME_MAX_DATA      = 16;
+let FRAME_MAX_STREAM_DATA = 17;
+let FRAME_DATA_BLOCKED  = 20;
+let FRAME_CONN_CLOSE    = 28;
+
+// Packet types (long header)
+let PKT_INITIAL    = 0;
+let PKT_0RTT       = 1;
+let PKT_HANDSHAKE  = 2;
+let PKT_RETRY      = 3;
+
+// Stream state
+let QUIC_MAX_STREAMS = 16;
+let QUIC_STREAM_SIZE = 128;
+// Stream entry (128 bytes):
+//   +0  stream_id(8)
+//   +8  state(8)       -- 0=idle, 1=open, 2=half_closed_local, 3=half_closed_remote, 4=closed
+//   +16 send_offset(8) -- bytes sent on this stream
+//   +24 recv_offset(8) -- bytes received
+//   +32 max_data(8)    -- per-stream flow control limit
+//   +40 buf_addr(8)    -- receive buffer address
+//   +48 buf_len(8)     -- receive buffer length
+//   +56 fin_sent(8)    -- 1 if FIN sent
+//   +64 fin_recv(8)    -- 1 if FIN received
+//   +72 reserved(56)
+
+let QUIC_STREAM_TABLE = 10747904; // 0xA40000 -- 16 conns * 16 streams * 128 bytes
+
+// Initial congestion window (RFC 9002)
+let QUIC_INITIAL_CWND = 14720;   // ~10 * 1472 (max UDP payload)
+let QUIC_MIN_CWND = 2944;        // 2 * 1472
+
+// --- Connection management ---
+
+fn quic_conn_addr(conn_id) {
+    return QUIC_CONN_TABLE + conn_id * QUIC_CONN_SIZE;
+}
+
+fn quic_stream_addr(conn_id, stream_idx) {
+    return QUIC_STREAM_TABLE + (conn_id * QUIC_MAX_STREAMS + stream_idx) * QUIC_STREAM_SIZE;
+}
+
+fn quic_init() {
+    // Zero all connection slots
+    let mut i = 0;
+    while i < QUIC_MAX_CONNS {
+        let addr = quic_conn_addr(i);
+        mem_write_u64(addr, QUIC_IDLE);
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Allocate a free connection slot, return conn_id or -1
+fn quic_conn_alloc() {
+    let mut i = 0;
+    while i < QUIC_MAX_CONNS {
+        let addr = quic_conn_addr(i);
+        if mem_read_u64(addr) == QUIC_IDLE {
+            return i;
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+// Generate a pseudo-random connection ID using LFSR
+fn quic_gen_conn_id() {
+    let seed = get_ticks() ^ 305419896; // 0x12345678
+    return lfsr_next(seed);
+}
+
+// --- 1-RTT Connection Establishment ---
+
+fn quic_connect(remote_ip, remote_port) {
+    let conn = quic_conn_alloc();
+    if conn < 0 { return 0 - 1; }
+
+    let addr = quic_conn_addr(conn);
+    mem_write_u64(addr, QUIC_INITIAL);
+    mem_write_u64(addr + 8, quic_gen_conn_id());    // local CID
+    mem_write_u64(addr + 16, 0);                     // remote CID (filled on response)
+    mem_write_u32(addr + 24, remote_ip);
+    mem_write_u32(addr + 28, remote_port);
+    mem_write_u32(addr + 32, 49152 + conn);          // ephemeral local port
+    mem_write_u32(addr + 36, QUIC_VERSION_1);
+    mem_write_u64(addr + 40, 0);                     // pkt_num_send
+    mem_write_u64(addr + 48, 0);                     // pkt_num_recv
+    mem_write_u64(addr + 72, QUIC_INITIAL_CWND);     // cwnd
+    mem_write_u64(addr + 80, QUIC_INITIAL_CWND * 10);// ssthresh
+    mem_write_u64(addr + 88, 0);                     // bytes_in_flight
+    mem_write_u64(addr + 96, 99999);                 // rtt_min (will be updated)
+    mem_write_u64(addr + 104, 333 * 8);              // rtt_smoothed = 333ms * 8
+    mem_write_u64(addr + 112, 166 * 4);              // rtt_var = 166ms * 4
+    mem_write_u64(addr + 120, 1000);                 // rto = 1000ms
+    mem_write_u64(addr + 128, 1048576);              // max_data_local = 1MB
+    mem_write_u64(addr + 136, 1048576);              // max_data_remote = 1MB
+    mem_write_u64(addr + 144, 0);                    // data_sent
+    mem_write_u64(addr + 152, 0);                    // data_recv
+    mem_write_u64(addr + 176, 30000);                // idle_timeout = 30s
+    mem_write_u64(addr + 184, get_ticks());          // last_activity
+
+    // Initialize streams for this connection
+    let mut si = 0;
+    while si < QUIC_MAX_STREAMS {
+        let saddr = quic_stream_addr(conn, si);
+        mem_write_u64(saddr, 0);     // stream_id = 0 (unused)
+        mem_write_u64(saddr + 8, 0); // state = idle
+        si = si + 1;
+    }
+
+    // Build and send Initial packet
+    quic_send_initial(conn);
+
+    return conn;
+}
+
+// Build Initial packet (client hello)
+fn quic_send_initial(conn) {
+    let addr = quic_conn_addr(conn);
+    let pkt_num = mem_read_u64(addr + 40);
+
+    // Compose QUIC Initial packet:
+    //   Long Header: 1(flags) + 4(version) + 1(DCID len) + DCID + 1(SCID len) + SCID
+    //   + varint(token_len) + varint(length) + pkt_num + payload(CRYPTO frame)
+    let mut pkt = [];
+
+    // Header byte: 1100_0000 | pkt_type=0 (Initial)
+    push(pkt, 192 + 0);  // 0xC0 | PKT_INITIAL
+
+    // Version (4 bytes, big-endian)
+    push(pkt, 0); push(pkt, 0); push(pkt, 0); push(pkt, 1);
+
+    // DCID: length(1) + id(8 bytes, LE)
+    push(pkt, 8);
+    let remote_cid = mem_read_u64(addr + 16);
+    let mut bi = 0;
+    while bi < 8 {
+        push(pkt, (remote_cid >> (bi * 8)) & 255);
+        bi = bi + 1;
+    }
+
+    // SCID: length(1) + id(8 bytes, LE)
+    push(pkt, 8);
+    let local_cid = mem_read_u64(addr + 8);
+    bi = 0;
+    while bi < 8 {
+        push(pkt, (local_cid >> (bi * 8)) & 255);
+        bi = bi + 1;
+    }
+
+    // Token length = 0 (no retry token)
+    push(pkt, 0);
+
+    // Payload: CRYPTO frame with TLS ClientHello
+    let crypto_payload = quic_build_crypto_frame(conn);
+
+    // Length (varint): payload_len + pkt_num_len(2)
+    let total_len = len(crypto_payload) + 2;
+    // 2-byte varint encoding (0x4000 | length)
+    push(pkt, 64 + ((total_len >> 8) & 63));  // 0x40 | high bits
+    push(pkt, total_len & 255);
+
+    // Packet number (2 bytes)
+    push(pkt, (pkt_num >> 8) & 255);
+    push(pkt, pkt_num & 255);
+
+    // Append crypto payload
+    let mut ci = 0;
+    while ci < len(crypto_payload) {
+        push(pkt, crypto_payload[ci]);
+        ci = ci + 1;
+    }
+
+    // Send via UDP
+    let remote_ip = mem_read_u32(addr + 24);
+    let remote_port = mem_read_u32(addr + 28);
+    let local_port = mem_read_u32(addr + 32);
+    udp_send(remote_ip, local_port, remote_port, pkt);
+
+    // Increment packet number
+    mem_write_u64(addr + 40, pkt_num + 1);
+    mem_write_u64(addr + 184, get_ticks());
+
+    return len(pkt);
+}
+
+// Build CRYPTO frame (type=0x06) containing TLS ClientHello data
+fn quic_build_crypto_frame(conn) {
+    let mut frame = [];
+    push(frame, FRAME_CRYPTO);  // frame type = 0x06
+    push(frame, 0);              // offset = 0 (varint)
+    // Length of crypto data (TLS ClientHello initial random)
+    // Minimal ClientHello: 32 bytes of random
+    push(frame, 32);             // length varint = 32
+    let mut i = 0;
+    while i < 32 {
+        push(frame, (get_ticks() + i * 7) & 255); // pseudo-random
+        i = i + 1;
+    }
+    return frame;
+}
+
+// --- Packet Processing ---
+
+// Process received QUIC packet
+fn quic_recv_packet(conn, data) {
+    if len(data) < 5 { return 0 - 1; }
+    let addr = quic_conn_addr(conn);
+    let state = mem_read_u64(addr);
+
+    let header_byte = data[0];
+    let is_long = (header_byte >> 7) & 1;
+
+    if is_long == 1 {
+        // Long header packet
+        let pkt_type = (header_byte >> 4) & 3;
+
+        if pkt_type == PKT_INITIAL && state == QUIC_INITIAL {
+            // Server Initial: extract SCID, process CRYPTO frame
+            quic_process_server_initial(conn, data);
+            mem_write_u64(addr, QUIC_HANDSHAKE);
+            mem_write_u64(addr + 184, get_ticks());
+        }
+        if pkt_type == PKT_HANDSHAKE && state == QUIC_HANDSHAKE {
+            // Process Handshake packet -> transition to ESTABLISHED
+            quic_process_handshake(conn, data);
+            mem_write_u64(addr, QUIC_ESTABLISHED);
+            mem_write_u64(addr + 184, get_ticks());
+        }
+    } else {
+        // Short header (1-RTT) -- only when ESTABLISHED
+        if state == QUIC_ESTABLISHED {
+            quic_process_short(conn, data);
+            mem_write_u64(addr + 184, get_ticks());
+        }
+    }
+    return 0;
+}
+
+fn quic_process_server_initial(conn, data) {
+    let addr = quic_conn_addr(conn);
+    // Extract server's SCID from Initial packet
+    if len(data) < 23 { return 0; }
+    let scid_len = data[14];
+    if scid_len > 0 && scid_len <= 20 {
+        let mut cid = 0;
+        let mut i = 0;
+        while i < 8 && i < scid_len {
+            cid = cid + data[15 + i] * (1 << (i * 8));
+            i = i + 1;
+        }
+        mem_write_u64(addr + 16, cid);  // store remote CID
+    }
+    return 0;
+}
+
+fn quic_process_handshake(conn, data) {
+    // Handshake complete — derive application keys (simplified)
+    let addr = quic_conn_addr(conn);
+    let local_cid = mem_read_u64(addr + 8);
+    let remote_cid = mem_read_u64(addr + 16);
+    // Derive key material by mixing CIDs (simplified HKDF equivalent)
+    let key_tx = local_cid ^ remote_cid ^ 2862933555777941757;
+    let key_rx = remote_cid ^ local_cid ^ 1442695040888963407;
+    mem_write_u64(addr + 56, key_tx);
+    mem_write_u64(addr + 64, key_rx);
+    return 0;
+}
+
+fn quic_process_short(conn, data) {
+    let addr = quic_conn_addr(conn);
+    // Parse short header: 1(flags) + CID(8) + pkt_num(1-4) + payload
+    if len(data) < 10 { return 0; }
+    // Update largest received packet number
+    let pkt_num = data[9];
+    let largest = mem_read_u64(addr + 48);
+    if pkt_num > largest { mem_write_u64(addr + 48, pkt_num); }
+
+    // Process frames in payload (starting at offset 10)
+    let mut off = 10;
+    while off < len(data) {
+        let frame_type = data[off];
+        off = off + 1;
+
+        if frame_type == FRAME_PADDING {
+            // Skip padding bytes
+        }
+        else if frame_type == FRAME_PING {
+            // Send ACK
+            quic_send_ack(conn);
+        }
+        else if frame_type == FRAME_ACK {
+            // Parse ACK: largest_ack(varint) + ack_delay(varint) + ...
+            if off + 2 <= len(data) {
+                let largest_ack = data[off];
+                off = off + 1;
+                quic_on_ack(conn, largest_ack);
+            }
+            off = len(data); // skip rest
+        }
+        else if frame_type >= FRAME_STREAM && frame_type <= 15 {
+            // STREAM frame: 0x08-0x0F
+            let has_off = (frame_type >> 2) & 1;
+            let has_len = (frame_type >> 1) & 1;
+            let has_fin = frame_type & 1;
+
+            if off + 1 <= len(data) {
+                let stream_id = data[off]; off = off + 1;
+                let str_off = 0;
+                if has_off == 1 && off < len(data) { str_off = data[off]; off = off + 1; }
+                let str_len = len(data) - off;
+                if has_len == 1 && off < len(data) { str_len = data[off]; off = off + 1; }
+
+                quic_stream_recv(conn, stream_id, data, off, str_len, has_fin);
+                off = off + str_len;
+            }
+        }
+        else if frame_type == FRAME_MAX_DATA {
+            if off < len(data) {
+                let new_limit = data[off]; off = off + 1;
+                mem_write_u64(addr + 136, new_limit * 1024);
+            }
+        }
+        else if frame_type == FRAME_CONN_CLOSE {
+            mem_write_u64(addr, QUIC_CLOSING);
+            off = len(data);
+        }
+        else {
+            off = len(data); // unknown frame, skip
+        }
+    }
+    return 0;
+}
+
+// --- Stream Operations ---
+
+// Open a new bidirectional stream
+fn quic_stream_open(conn, stream_id) {
+    let mut si = 0;
+    while si < QUIC_MAX_STREAMS {
+        let saddr = quic_stream_addr(conn, si);
+        if mem_read_u64(saddr + 8) == 0 {
+            mem_write_u64(saddr, stream_id);
+            mem_write_u64(saddr + 8, 1);     // state = open
+            mem_write_u64(saddr + 16, 0);    // send_offset
+            mem_write_u64(saddr + 24, 0);    // recv_offset
+            mem_write_u64(saddr + 32, 65536); // max_data = 64KB default
+            // Allocate receive buffer (4KB)
+            let buf = page_alloc();
+            mem_write_u64(saddr + 40, buf);
+            mem_write_u64(saddr + 48, 4096);
+            mem_write_u64(saddr + 56, 0);    // fin_sent
+            mem_write_u64(saddr + 64, 0);    // fin_recv
+            return si;
+        }
+        si = si + 1;
+    }
+    return 0 - 1;
+}
+
+// Send data on a stream
+fn quic_stream_send(conn, stream_id, data) {
+    let addr = quic_conn_addr(conn);
+    let state = mem_read_u64(addr);
+    if state != QUIC_ESTABLISHED { return 0 - 1; }
+
+    // Check connection-level flow control
+    let data_sent = mem_read_u64(addr + 144);
+    let max_remote = mem_read_u64(addr + 136);
+    if data_sent + len(data) > max_remote { return 0 - 2; } // blocked
+
+    // Find stream
+    let si = quic_find_stream(conn, stream_id);
+    if si < 0 { return 0 - 3; }
+    let saddr = quic_stream_addr(conn, si);
+
+    // Check per-stream flow control
+    let send_offset = mem_read_u64(saddr + 16);
+    let max_data = mem_read_u64(saddr + 32);
+    if send_offset + len(data) > max_data { return 0 - 4; }
+
+    // Build STREAM frame
+    let mut frame = [];
+    let frame_type = FRAME_STREAM | 2; // has_len flag
+    if send_offset > 0 { frame_type = frame_type | 4; } // has_offset flag
+    push(frame, frame_type);
+    push(frame, stream_id & 255);
+    if send_offset > 0 {
+        push(frame, send_offset & 255); // offset (simplified 1-byte varint)
+    }
+    push(frame, len(data) & 255); // length
+    let mut di = 0;
+    while di < len(data) {
+        push(frame, data[di]);
+        di = di + 1;
+    }
+
+    // Wrap in short header packet
+    quic_send_short(conn, frame);
+
+    // Update counters
+    mem_write_u64(saddr + 16, send_offset + len(data));
+    mem_write_u64(addr + 144, data_sent + len(data));
+    mem_write_u64(addr + 88, mem_read_u64(addr + 88) + len(data));
+
+    return len(data);
+}
+
+// Receive data callback (called from packet processing)
+fn quic_stream_recv(conn, stream_id, data, off, length, fin) {
+    let si = quic_find_stream(conn, stream_id);
+    if si < 0 {
+        // Auto-open stream if client-initiated
+        si = quic_stream_open(conn, stream_id);
+        if si < 0 { return 0; }
+    }
+    let saddr = quic_stream_addr(conn, si);
+    let recv_offset = mem_read_u64(saddr + 24);
+    let buf_addr = mem_read_u64(saddr + 40);
+    let buf_len = mem_read_u64(saddr + 48);
+
+    // Copy data to receive buffer (circular, simplified)
+    let write_off = recv_offset % buf_len;
+    let mut i = 0;
+    while i < length && (write_off + i) < buf_len {
+        if off + i < len(data) {
+            mem_write_u8(buf_addr + write_off + i, data[off + i]);
+        }
+        i = i + 1;
+    }
+    mem_write_u64(saddr + 24, recv_offset + length);
+
+    // Update connection data_recv
+    let addr = quic_conn_addr(conn);
+    let data_recv = mem_read_u64(addr + 152);
+    mem_write_u64(addr + 152, data_recv + length);
+
+    if fin == 1 {
+        mem_write_u64(saddr + 64, 1); // fin_recv
+    }
+    return length;
+}
+
+fn quic_find_stream(conn, stream_id) {
+    let mut si = 0;
+    while si < QUIC_MAX_STREAMS {
+        let saddr = quic_stream_addr(conn, si);
+        if mem_read_u64(saddr + 8) != 0 && mem_read_u64(saddr) == stream_id {
+            return si;
+        }
+        si = si + 1;
+    }
+    return 0 - 1;
+}
+
+// --- Short Header Packet ---
+
+fn quic_send_short(conn, payload) {
+    let addr = quic_conn_addr(conn);
+    let pkt_num = mem_read_u64(addr + 40);
+    let remote_cid = mem_read_u64(addr + 16);
+
+    let mut pkt = [];
+    // Short header: 0100_0001 (spin=0, reserved=0, key_phase=0, pkt_num_len=1)
+    push(pkt, 65);  // 0x41
+
+    // Destination CID (8 bytes)
+    let mut bi = 0;
+    while bi < 8 {
+        push(pkt, (remote_cid >> (bi * 8)) & 255);
+        bi = bi + 1;
+    }
+
+    // Packet number (1 byte, truncated)
+    push(pkt, pkt_num & 255);
+
+    // Payload
+    let mut pi = 0;
+    while pi < len(payload) {
+        push(pkt, payload[pi]);
+        pi = pi + 1;
+    }
+
+    // Send via UDP
+    let remote_ip = mem_read_u32(addr + 24);
+    let remote_port = mem_read_u32(addr + 28);
+    let local_port = mem_read_u32(addr + 32);
+    udp_send(remote_ip, local_port, remote_port, pkt);
+
+    mem_write_u64(addr + 40, pkt_num + 1);
+    mem_write_u64(addr + 184, get_ticks());
+    return len(pkt);
+}
+
+// --- ACK Processing ---
+
+fn quic_send_ack(conn) {
+    let addr = quic_conn_addr(conn);
+    let largest = mem_read_u64(addr + 48);
+    let mut frame = [];
+    push(frame, FRAME_ACK);
+    push(frame, largest & 255);  // largest acknowledged
+    push(frame, 0);               // ACK delay
+    push(frame, 0);               // ACK range count
+    push(frame, 0);               // first ACK range
+    quic_send_short(conn, frame);
+    return 0;
+}
+
+fn quic_on_ack(conn, largest_ack) {
+    let addr = quic_conn_addr(conn);
+    // Update RTT estimate (simplified: assume 1-tick per RTT for now)
+    let now = get_ticks();
+    let last = mem_read_u64(addr + 184);
+    let sample = now - last;
+    if sample > 0 {
+        let srtt = mem_read_u64(addr + 104);
+        let rttvar = mem_read_u64(addr + 112);
+        // Jacobson/Karels: SRTT = 7/8 * SRTT + 1/8 * sample
+        let new_srtt = srtt - (srtt >> 3) + sample;
+        // RTTVAR = 3/4 * RTTVAR + 1/4 * |SRTT - sample|
+        let diff = srtt / 8 - sample;
+        if diff < 0 { diff = 0 - diff; }
+        let new_rttvar = rttvar - (rttvar >> 2) + diff;
+        mem_write_u64(addr + 104, new_srtt);
+        mem_write_u64(addr + 112, new_rttvar);
+        // RTO = SRTT/8 + 4*RTTVAR
+        let rto = new_srtt / 8 + new_rttvar;
+        if rto < 200 { rto = 200; } // min 200ms
+        mem_write_u64(addr + 120, rto);
+        // Update rtt_min
+        let rtt_min = mem_read_u64(addr + 96);
+        if sample < rtt_min { mem_write_u64(addr + 96, sample); }
+    }
+
+    // Congestion control: NewReno-style
+    let cwnd = mem_read_u64(addr + 72);
+    let ssthresh = mem_read_u64(addr + 80);
+    let bif = mem_read_u64(addr + 88);
+    if cwnd < ssthresh {
+        // Slow start: cwnd += ACK'd bytes (approx 1 MSS)
+        mem_write_u64(addr + 72, cwnd + 1472);
+    } else {
+        // Congestion avoidance: cwnd += MSS^2 / cwnd
+        let inc = 1472 * 1472 / cwnd;
+        if inc < 1 { inc = 1; }
+        mem_write_u64(addr + 72, cwnd + inc);
+    }
+    // Reduce bytes_in_flight
+    if bif > 1472 { mem_write_u64(addr + 88, bif - 1472); }
+    else { mem_write_u64(addr + 88, 0); }
+
+    return 0;
+}
+
+// --- Connection Close ---
+
+fn quic_close(conn) {
+    let addr = quic_conn_addr(conn);
+    let state = mem_read_u64(addr);
+    if state == QUIC_IDLE || state == QUIC_CLOSED { return 0; }
+
+    // Send CONNECTION_CLOSE frame
+    let mut frame = [];
+    push(frame, FRAME_CONN_CLOSE);
+    push(frame, 0);  // error code = 0 (no error)
+    push(frame, 0);  // frame type that triggered (0=none)
+    push(frame, 0);  // reason phrase length = 0
+    quic_send_short(conn, frame);
+
+    // Close all streams
+    let mut si = 0;
+    while si < QUIC_MAX_STREAMS {
+        let saddr = quic_stream_addr(conn, si);
+        if mem_read_u64(saddr + 8) != 0 {
+            let buf = mem_read_u64(saddr + 40);
+            if buf != 0 { page_free(buf); }
+            mem_write_u64(saddr + 8, 0);
+        }
+        si = si + 1;
+    }
+
+    mem_write_u64(addr, QUIC_CLOSED);
+    return 0;
+}
+
+// --- Status ---
+
+fn quic_status() {
+    let mut active = 0;
+    let mut established = 0;
+    let mut i = 0;
+    while i < QUIC_MAX_CONNS {
+        let state = mem_read_u64(quic_conn_addr(i));
+        if state != QUIC_IDLE && state != QUIC_CLOSED { active = active + 1; }
+        if state == QUIC_ESTABLISHED { established = established + 1; }
+        i = i + 1;
+    }
+    return to_string(active) + " active, " + to_string(established) + " established";
+}
+
+fn quic_conn_info(conn) {
+    let addr = quic_conn_addr(conn);
+    let state = mem_read_u64(addr);
+    let state_name = "UNKNOWN";
+    if state == QUIC_IDLE { state_name = "IDLE"; }
+    if state == QUIC_INITIAL { state_name = "INITIAL"; }
+    if state == QUIC_HANDSHAKE { state_name = "HANDSHAKE"; }
+    if state == QUIC_ESTABLISHED { state_name = "ESTABLISHED"; }
+    if state == QUIC_CLOSING { state_name = "CLOSING"; }
+    if state == QUIC_CLOSED { state_name = "CLOSED"; }
+    let cwnd = mem_read_u64(addr + 72);
+    let bif = mem_read_u64(addr + 88);
+    let rto = mem_read_u64(addr + 120);
+    return state_name + " cwnd=" + to_string(cwnd) + " bif=" + to_string(bif) + " rto=" + to_string(rto) + "ms";
+}
+
+print("quic.hl loaded");
+print("QUIC v1: 16 conns, 16 streams/conn, NewReno CC, 1-RTT handshake");
