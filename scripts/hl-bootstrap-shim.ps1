@@ -230,6 +230,52 @@ if ($target -eq 'interpret') {
         return $net
     }
 
+    function Resolve-IndexedTail {
+        param($base, [string]$rest, [hashtable]$localVars, [string]$fullExpr)
+        $tail = $rest
+        while ($tail -ne '' -and $tail[0] -eq '[') {
+            $bd = 0; $ei = -1
+            for ($bi = 0; $bi -lt $tail.Length; $bi++) {
+                if ($tail[$bi] -eq '[') { $bd++ }
+                elseif ($tail[$bi] -eq ']') {
+                    $bd--
+                    if ($bd -eq 0) { $ei = $bi; break }
+                }
+            }
+            if ($ei -lt 0) { break }
+            $idxExpr = $tail.Substring(1, $ei - 1)
+            $idx = Eval-Expr $idxExpr $localVars
+            if ($base -is [string]) { $base = [string]$base[[int]$idx] } else { $base = $base[[int]$idx] }
+            $tail = $tail.Substring($ei + 1)
+        }
+        if ($tail.Trim() -ne '') {
+            foreach ($op in @(' || ',' && ',' == ',' != ',' >= ',' <= ',' > ',' < ',' + ',' - ',' * ',' / ',' % ')) {
+                if ($tail.StartsWith($op) -or $tail.StartsWith($op.TrimStart())) {
+                    $opTrimmed = $op.Trim()
+                    $rightExpr = $tail.Substring($tail.IndexOf($opTrimmed) + $opTrimmed.Length)
+                    $right = Eval-Expr $rightExpr $localVars
+                    switch ($opTrimmed) {
+                        '||' { if (($base -and $base -ne 0) -or ($right -and $right -ne 0)) { return 1 } else { return 0 } }
+                        '&&' { if (($base -and $base -ne 0) -and ($right -and $right -ne 0)) { return 1 } else { return 0 } }
+                        '+' { if ($base -is [string] -or $right -is [string]) { return "$base$right" } else { return [long]$base + [long]$right } }
+                        '-' { return [long]$base - [long]$right }
+                        '*' { return [long]$base * [long]$right }
+                        '/' { if ([long]$right -eq 0) { throw "DIVZERO $base / $right in $fullExpr" } else { return [math]::Floor([long]$base / [long]$right) } }
+                        '%' { if ([long]$right -eq 0) { throw "MODZERO $base % $right in $fullExpr" } else { return [long]$base % [long]$right } }
+                        '==' { if ($base -eq $right) { return 1 } else { return 0 } }
+                        '!=' { if ($base -ne $right) { return 1 } else { return 0 } }
+                        '>=' { if ([long]$base -ge [long]$right) { return 1 } else { return 0 } }
+                        '<=' { if ([long]$base -le [long]$right) { return 1 } else { return 0 } }
+                        '>' { if ([long]$base -gt [long]$right) { return 1 } else { return 0 } }
+                        '<' { if ([long]$base -lt [long]$right) { return 1 } else { return 0 } }
+                    }
+                }
+            }
+        }
+        if ($base -is [System.Collections.IList]) { return ,$base }
+        return $base
+    }
+
     function Eval-Expr {
         param([string]$expr, [hashtable]$localVars)
         $e = $expr.Trim()
@@ -248,6 +294,43 @@ if ($target -eq 'interpret') {
         if ($e -eq 'nil') { return $null }
         if ($e -eq 'true') { return 1 }
         if ($e -eq 'false') { return 0 }
+        # Function call result indexing: func(args)[i] / func(args)[i] + expr
+        if ($e -match '^([\w.]+)\s*\(') {
+            $pStart = $e.IndexOf('(')
+            $pd = 0; $pEnd = -1; $inQ = $false
+            for ($pi = $pStart; $pi -lt $e.Length; $pi++) {
+                $pc = $e[$pi]
+                if ($pc -eq '"') { $inQ = !$inQ }
+                if (-not $inQ) {
+                    if ($pc -eq '(') { $pd++ }
+                    elseif ($pc -eq ')') { $pd--; if ($pd -eq 0) { $pEnd = $pi; break } }
+                }
+            }
+            if ($pEnd -gt 0 -and ($pEnd + 1) -lt $e.Length -and $e[$pEnd + 1] -eq '[') {
+                $callOnly = $e.Substring(0, $pEnd + 1)
+                $callRes = Eval-Expr $callOnly $localVars
+                $tail = $e.Substring($pEnd + 1)
+                return Resolve-IndexedTail $callRes $tail $localVars $e
+            }
+        }
+        # Parenthesized expression result indexing: (expr)[i]
+        if ($e.StartsWith('(')) {
+            $pd = 0; $pEnd = -1; $inQ = $false
+            for ($pi = 0; $pi -lt $e.Length; $pi++) {
+                $pc = $e[$pi]
+                if ($pc -eq '"') { $inQ = !$inQ }
+                if (-not $inQ) {
+                    if ($pc -eq '(') { $pd++ }
+                    elseif ($pc -eq ')') { $pd--; if ($pd -eq 0) { $pEnd = $pi; break } }
+                }
+            }
+            if ($pEnd -gt 0 -and ($pEnd + 1) -lt $e.Length -and $e[$pEnd + 1] -eq '[') {
+                $innerExpr = $e.Substring(1, $pEnd - 1)
+                $innerRes = Eval-Expr $innerExpr $localVars
+                $tail = $e.Substring($pEnd + 1)
+                return Resolve-IndexedTail $innerRes $tail $localVars $e
+            }
+        }
         # Array/string indexing: name[expr] or name[expr][expr]...
         # Only handle as pure indexing if nothing follows the brackets (no trailing binary ops)
         if ($e -match '^(\w+)\[') {
@@ -257,54 +340,7 @@ if ($target -eq 'interpret') {
             if ($localVars -and $localVars.ContainsKey($baseName)) { $base = $localVars[$baseName] }
             elseif ($vars.ContainsKey($baseName)) { $base = $vars[$baseName] }
             $rest = $e.Substring($baseName.Length)
-            while ($rest -ne '' -and $rest[0] -eq '[') {
-                $bd = 0; $ei = -1
-                for ($bi = 0; $bi -lt $rest.Length; $bi++) {
-                    if ($rest[$bi] -eq '[') { $bd++ } elseif ($rest[$bi] -eq ']') { $bd--; if ($bd -eq 0) { $ei = $bi; break } }
-                }
-                if ($ei -lt 0) { break }
-                $idxExpr = $rest.Substring(1, $ei - 1)
-                $idx = Eval-Expr $idxExpr $localVars
-                if ($base -is [string]) { $base = [string]$base[[int]$idx] } else { $base = $base[[int]$idx] }
-                $rest = $rest.Substring($ei + 1)
-            }
-            # If rest is non-empty (e.g., " == val", " + 1"), there are trailing binary ops.
-            # Rebuild the expression with the resolved indexed value and re-evaluate.
-            if ($rest.Trim() -ne '') {
-                $resolvedLeft = $base
-                $resolvedExpr = $rest.TrimStart()
-                # Re-evaluate: resolvedLeft <op> <right>
-                # Find the operator at the start of resolvedExpr
-                $rebuilt = "($resolvedLeft)$rest"
-                # Simpler: directly scan resolvedExpr for the operator and evaluate right side
-                foreach ($op in @(' || ',' && ',' == ',' != ',' >= ',' <= ',' > ',' < ',' + ',' - ',' * ',' / ',' % ')) {
-                    if ($rest.StartsWith($op) -or $rest.StartsWith($op.TrimStart())) {
-                        $opTrimmed = $op.Trim()
-                        $rightExpr = $rest.Substring($rest.IndexOf($opTrimmed) + $opTrimmed.Length)
-                        $right = Eval-Expr $rightExpr $localVars
-                        switch ($opTrimmed) {
-                            '||' { if (($resolvedLeft -and $resolvedLeft -ne 0) -or ($right -and $right -ne 0)) { return 1 } else { return 0 } }
-                            '&&' { if (($resolvedLeft -and $resolvedLeft -ne 0) -and ($right -and $right -ne 0)) { return 1 } else { return 0 } }
-                            '+' { if ($resolvedLeft -is [string] -or $right -is [string]) { return "$resolvedLeft$right" } else { return [long]$resolvedLeft + [long]$right } }
-                            '-' { return [long]$resolvedLeft - [long]$right }
-                            '*' { return [long]$resolvedLeft * [long]$right }
-                            '/' { if ([long]$right -eq 0) { throw "DIVZERO $resolvedLeft / $right in $e" } else { return [math]::Floor([long]$resolvedLeft / [long]$right) } }
-                            '%' { if ([long]$right -eq 0) { throw "MODZERO $resolvedLeft % $right in $e" } else { return [long]$resolvedLeft % [long]$right } }
-                            '==' { if ($resolvedLeft -eq $right) { return 1 } else { return 0 } }
-                            '!=' { if ($resolvedLeft -ne $right) { return 1 } else { return 0 } }
-                            '>=' { if ([long]$resolvedLeft -ge [long]$right) { return 1 } else { return 0 } }
-                            '<=' { if ([long]$resolvedLeft -le [long]$right) { return 1 } else { return 0 } }
-                            '>' { if ([long]$resolvedLeft -gt [long]$right) { return 1 } else { return 0 } }
-                            '<' { if ([long]$resolvedLeft -lt [long]$right) { return 1 } else { return 0 } }
-                        }
-                    }
-                }
-                # Fallback: return indexed value (shouldn't reach here normally)
-                if ($base -is [System.Collections.IList]) { return ,$base }
-                return $base
-            }
-            if ($base -is [System.Collections.IList]) { return ,$base }
-            return $base
+            return Resolve-IndexedTail $base $rest $localVars $e
         }
         # Logical NOT prefix: !expr
         if ($e.StartsWith('!') -and $e.Length -gt 1 -and $e[1] -ne '=') {

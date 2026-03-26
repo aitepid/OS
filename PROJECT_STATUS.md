@@ -10,8 +10,8 @@
 
 | 指标 | 当前值 | 说明 |
 |---|---:|---|
-| 全部 `.hl` 文件 | 182 | 65 根目录 + 117 内核模块 |
-| H-L 总行数 | 43,226 | 根 9,966 + 内核 33,260 |
+| 全部 `.hl` 文件 | 185 | 68 根目录 + 117 内核模块 |
+| H-L 总行数 | 43,246 | 根 9,986 + 内核 33,260 |
 | `bare-kernel/hl/` 内核模块 | 117 | 编译进 `kernel.bin` |
 | `kernel_entry.hl` 行数 | 9,565 | 内核入口 + 命令分发 |
 | 内核模块总函数数 | 1,499 | 源码定义计数 |
@@ -22,16 +22,16 @@
 | PS1 总行数 | 8,816 | |
 | Shell + 内核命令（去重） | 112 | shell.hl 64 + kernel_entry.hl 70 |
 | `HicOS_*.hl` 子系统模块 | 27 | |
-| `test_*.hl` / `test-*.hl` | 15 | |
+| `test_*.hl` / `test-*.hl` | 18 | |
 | `.md` 文档 | 8 | |
-| 活跃仓库文件数 | 280 | 排除 `.git/.vs/archive` |
+| 活跃仓库文件数 | 283 | 排除 `.git/.vs/archive` |
 
 ### 门禁结果
 
 | 验证项 | 结果 |
 |---|---|
 | `hl-bootstrap build` | ✅ 119 模块编译 + 镜像重建 |
-| `validate-workspace` | ✅ 182 HL / 117 模块 |
+| `validate-workspace` | ✅ 185 HL / 117 模块 |
 | `boot-readiness` | ✅ 启动链 + 内核初始化 |
 | `image-layout-readiness` | ✅ MBR 签名 + 扇区布局 |
 | `runtime-path-readiness` | ✅ IDT/PIT/KBD + SYSCALL + 网络 |

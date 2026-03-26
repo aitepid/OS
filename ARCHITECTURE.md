@@ -33,11 +33,11 @@ OVMF → GPT + ESP → BOOTX64.EFI → UEFI boot output
 
 | Metric | Value |
 |---|---:|
-| Total `.hl` files | 182 |
-| Root `.hl` files | 65 |
+| Total `.hl` files | 185 |
+| Root `.hl` files | 68 |
 | Kernel modules | 117 |
-| Total H-L lines | 43,226 |
-| Root H-L lines | 9,966 |
+| Total H-L lines | 43,246 |
+| Root H-L lines | 9,986 |
 | Kernel lines | 33,260 |
 | Kernel functions (source) | 1,499 |
 | `kernel_entry.hl` lines | 9,565 |
@@ -48,8 +48,8 @@ OVMF → GPT + ESP → BOOTX64.EFI → UEFI boot output
 | PS1 lines | 8,816 |
 | Shell + kernel commands (unique) | 112 |
 | HicOS_*.hl subsystem modules | 27 |
-| test_*.hl / test-*.hl | 15 |
-| Total active repo files (excl. `.git/.vs/archive`) | 280 |
+| test_*.hl / test-*.hl | 18 |
+| Total active repo files (excl. `.git/.vs/archive`) | 283 |
 
 ## Key Source Locations
 

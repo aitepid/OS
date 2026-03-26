@@ -2,8 +2,8 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`182`（65 根目录 + 117 内核模块）
-- H-L 总行数：`43,226`（根 9,966 + 内核 33,260）
+- `.hl` 文件：`185`（68 根目录 + 117 内核模块）
+- H-L 总行数：`43,246`（根 9,986 + 内核 33,260）
 - 内核模块：`117`（函数 1,499 个，源码计数）
 - `kernel_entry.hl`：`9,565` 行
 - `hl-bootstrap.hl`：`4,306` 行，`208` 函数
@@ -19,9 +19,11 @@
 
 - **验证入口统一**：`validate-workspace.ps1` 现在同时支持 PATH 中的 `hl-bootstrap` 和仓库根目录的 `hl-bootstrap.cmd`
 - **解释器修复**：`Split-Stmts` 修正单行函数体中 `if { ... } return ...` 的拆分问题，修复嵌套函数调用条件判断失效
+- **宿主增强补齐**：`hl-bootstrap-shim.ps1` 新增函数调用结果与括号表达式结果的后缀索引解析，补齐 `make()[1]`、`str_sub(...)[1]`、`([1,2,3])[1]` 等路径
 - **QEMU 兼容性**：`run-qemu.ps1` / `qemu-smoke.ps1` / `diag-boot.ps1` / `perf-baseline.ps1` 扩展 QEMU 自动发现路径并统一 legacy VirtIO 启动参数
 - **日志清理**：`qemu-boot-test.ps1` / `qemu-uefi-test.ps1` / `perf-baseline.ps1` 补全 `.stderr.txt` 清理，避免仓库根目录残留日志
 - **回归覆盖**：新增 `test_shim_andor.hl` 与 `test_shim_arridx_cond.hl`，补齐逻辑运算与数组索引后续二元表达式测试
+- **回归补强**：新增 `test_shim_ret.hl`、`test_shim_diag.hl`、`test_shim_arrfind.hl`，覆盖函数返回数组后直接索引、表达式结果字符串索引、嵌套数组 push 后访问
 
 ## Iteration 119 — 高级特性验证接入基线
 
