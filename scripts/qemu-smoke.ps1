@@ -5,8 +5,15 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 Set-Location $repoRoot
 
-$qemu = 'C:\Program Files\qemu\qemu-system-x86_64.exe'
-if (-not (Test-Path $qemu)) {
+$qemu = $null
+$qemuCmd = Get-Command 'qemu-system-x86_64' -ErrorAction SilentlyContinue
+if ($qemuCmd) { $qemu = $qemuCmd.Source }
+if (-not $qemu -or -not (Test-Path $qemu)) {
+    foreach ($p in @('C:\Program Files\qemu\qemu-system-x86_64.exe','C:\Program Files (x86)\qemu\qemu-system-x86_64.exe')) {
+        if (Test-Path $p) { $qemu = $p; break }
+    }
+}
+if (-not $qemu) {
     Write-Host 'QEMU not found' -ForegroundColor Red
     exit 2
 }

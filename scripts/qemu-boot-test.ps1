@@ -540,14 +540,14 @@ $r3Args = @(
     '-netdev', 'user,id=net0',
     '-device', 'virtio-net-pci,netdev=net0,disable-modern=on',
     '-no-reboot', '-no-shutdown',
-    '-monitor', 'telnet:127.0.0.1:55598,server,nowait'
+    '-monitor', 'telnet:127.0.0.1:55605,server,nowait'
 )
 
 $r3Proc = Start-QemuLogged -QemuPath $qemuPath -ArgumentList $r3Args -LogFile $r3LogFile
 Start-Sleep -Seconds 5
 
 try {
-    $r3Client = New-Object System.Net.Sockets.TcpClient('127.0.0.1', 55598)
+    $r3Client = New-Object System.Net.Sockets.TcpClient('127.0.0.1', 55605)
     $r3Stream = $r3Client.GetStream()
     $r3Writer = New-Object System.IO.StreamWriter($r3Stream)
     $r3Writer.AutoFlush = $true
@@ -1020,7 +1020,7 @@ try {
     Start-Sleep -Milliseconds 500
 
     # sha256 abc
-    foreach ($k in @('s','h','a','2','5','6','space','a','b','c','ret')) { $sWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    foreach ($k in @('s','h','a','2','5','6','spc','a','b','c','ret')) { $sWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
     Start-Sleep -Seconds 5
 
     # sha256 (no arg, usage test)
@@ -1094,7 +1094,7 @@ try {
     Start-Sleep -Milliseconds 500
 
     # hmac test
-    foreach ($k in @('h','m','a','c','space','t','e','s','t','ret')) { $hWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    foreach ($k in @('h','m','a','c','spc','t','e','s','t','ret')) { $hWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
     Start-Sleep -Seconds 5
 
     # hkdf
@@ -1343,7 +1343,7 @@ try {
     Start-Sleep -Milliseconds 500
 
     # lex command: "lex let x = 42;"
-    foreach ($k in @('l','e','x','space','l','e','t','space','x','space','equal','space','4','2','semicolon','ret')) { $v8Writer.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    foreach ($k in @('l','e','x','spc','l','e','t','spc','x','spc','equal','spc','4','2','semicolon','ret')) { $v8Writer.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
     Start-Sleep -Seconds 5
 
     # vgpu command
@@ -1597,7 +1597,7 @@ try {
     $v9bWriter.AutoFlush = $true
     Start-Sleep -Milliseconds 500
 
-    foreach ($k in @('a','d','d','u','s','e','r','space','a','d','m','i','n','ret')) { $v9bWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
+    foreach ($k in @('a','d','d','u','s','e','r','spc','a','d','m','i','n','ret')) { $v9bWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
     Start-Sleep -Seconds 3
     foreach ($k in @('s','e','r','v','i','c','e','ret')) { $v9bWriter.WriteLine("sendkey $k"); Start-Sleep -Milliseconds 200 }
     Start-Sleep -Seconds 3
