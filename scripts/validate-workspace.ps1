@@ -66,22 +66,31 @@ if ($manifestVersion -ne '6.0') {
     $errors += "manifest version is not 6.0 (actual: $manifestVersion)"
 }
 
+$hlBootstrapCmd = $null
 $hlBootstrap = Get-Command 'hl-bootstrap' -ErrorAction SilentlyContinue
+if ($hlBootstrap) {
+    $hlBootstrapCmd = $hlBootstrap.Source
+} else {
+    $repoLocalHlBootstrap = Join-Path $repoRoot 'hl-bootstrap.cmd'
+    if (Test-Path $repoLocalHlBootstrap) {
+        $hlBootstrapCmd = $repoLocalHlBootstrap
+    }
+}
 if ($RunHlBuild -or $RunHlTests) {
-    if (-not $hlBootstrap) {
-        $errors += 'hl-bootstrap not found in PATH; cannot run H-L build/tests'
+    if (-not $hlBootstrapCmd) {
+        $errors += 'hl-bootstrap not found in PATH or repo root; cannot run H-L build/tests'
     }
 }
 
-if ($hlBootstrap -and $RunHlBuild) {
-    & hl-bootstrap 'bare-kernel/hl/build.hl'
+if ($hlBootstrapCmd -and $RunHlBuild) {
+    & $hlBootstrapCmd 'bare-kernel/hl/build.hl'
     if ($LASTEXITCODE -ne 0) {
         $errors += "hl build failed with code $LASTEXITCODE"
     }
 }
 
-if ($hlBootstrap -and $RunHlTests) {
-    & hl-bootstrap 'bare-kernel/hl/test-runner.hl'
+if ($hlBootstrapCmd -and $RunHlTests) {
+    & $hlBootstrapCmd 'bare-kernel/hl/test-runner.hl'
     if ($LASTEXITCODE -ne 0) {
         $errors += "hl tests failed with code $LASTEXITCODE"
     }
