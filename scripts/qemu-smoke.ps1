@@ -22,7 +22,7 @@ Write-Host "=== QEMU Smoke Test ===" -ForegroundColor Cyan
 Write-Host "  Image: hicos-hl.img ($((Get-Item 'hicos-hl.img').Length) bytes)"
 Write-Host "  Timeout: ${TimeoutSec}s"
 
-$args = @(
+$qemuArgs = @(
     '-drive', 'format=raw,file=hicos-hl.img',
     '-serial', "file:$logFile",
     '-m', '128',
@@ -30,7 +30,7 @@ $args = @(
     '-no-reboot', '-no-shutdown'
 )
 
-$proc = Start-Process -FilePath $qemu -ArgumentList $args -PassThru -NoNewWindow
+$proc = Start-Process -FilePath $qemu -ArgumentList $qemuArgs -PassThru -NoNewWindow
 Start-Sleep -Seconds $TimeoutSec
 
 if (-not $proc.HasExited) {

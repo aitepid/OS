@@ -252,12 +252,14 @@ quadrant lexer {
             // Block comment
             else if ch == "/" && char_at(src, i + 1) == "*" {
                 i = i + 2;
-                while i < srclen - 1 {
+                let mut found_end = false;
+                while i < srclen - 1 && !found_end {
                     if char_at(src, i) == "*" && char_at(src, i + 1) == "/" {
                         i = i + 2;
-                        // break
+                        found_end = true;
+                    } else {
+                        i = i + 1;
                     }
-                    i = i + 1;
                 }
             }
             // Number
@@ -340,7 +342,6 @@ quadrant lexer {
             else if ch == "*" && char_at(src, i + 1) == "*" && char_at(src, i + 2) == "=" { push(tokens, [TT_POWEREQ, "**="]); i = i + 3; }
             else if ch == "*" && char_at(src, i + 1) == "*" { push(tokens, [TT_POWER, "**"]); i = i + 2; }
             else if ch == "*" && char_at(src, i + 1) == "=" { push(tokens, [TT_STAREQ, "*="]); i = i + 2; }
-            else if ch == "/" && char_at(src, i + 1) == "/" { push(tokens, [TT_FLOORDIV, "//"]); i = i + 2; }
             else if ch == "/" && char_at(src, i + 1) == "=" { push(tokens, [TT_SLASHEQ, "/="]); i = i + 2; }
             else if ch == "%" && char_at(src, i + 1) == "=" { push(tokens, [TT_PERCENTEQ, "%="]); i = i + 2; }
             else if ch == "<" && char_at(src, i + 1) == "<" { push(tokens, [TT_SHL, "<<"]); i = i + 2; }
@@ -1465,6 +1466,8 @@ quadrant vm {
                 let result = eval_stmts(node[2], env, output);
                 if result[0] == "return_signal" { return result; }
                 if result[0] == "break_signal" { return ["ok", r]; }
+                if result[0] == "exception_signal" { return result; }
+                if result[0] == "yield_signal" { return result; }
                 if result[0] == "continue_signal" { r = result[1]; }
                 else { r = result[1]; }
             }
@@ -1481,6 +1484,8 @@ quadrant vm {
                 let result = eval_stmts(node[3], env, output);
                 if result[0] == "return_signal" { return result; }
                 if result[0] == "break_signal" { return ["ok", r]; }
+                if result[0] == "exception_signal" { return result; }
+                if result[0] == "yield_signal" { return result; }
                 if result[0] == "continue_signal" { j = j + 1; }
                 else { r = result[1]; j = j + 1; }
             }

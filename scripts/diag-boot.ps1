@@ -1,5 +1,5 @@
 $ErrorActionPreference = 'Stop'
-$repoRoot = "C:\Users\Administrator\HicOS"
+$repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 Set-Location $repoRoot
 
 $qemu = "C:\Program Files\qemu\qemu-system-x86_64.exe"
@@ -22,7 +22,7 @@ Write-Host "=== Diagnostic Boot ===" -ForegroundColor Cyan
 Write-Host "QEMU: $qemu"
 
 # Run with debug logging to capture exceptions/faults
-$args = @(
+$qemuArgs = @(
     '-drive', "format=raw,file=$repoRoot\hicos-hl.img",
     '-serial', "file:$serialLog",
     '-m', '128',
@@ -37,7 +37,7 @@ $args = @(
     '-D', $debugLog
 )
 
-$proc = Start-Process -FilePath $qemu -ArgumentList $args -PassThru -NoNewWindow
+$proc = Start-Process -FilePath $qemu -ArgumentList $qemuArgs -PassThru -NoNewWindow
 Start-Sleep 10
 
 if (-not $proc.HasExited) {

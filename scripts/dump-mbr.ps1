@@ -1,5 +1,5 @@
 $ErrorActionPreference = 'Stop'
-$repoRoot = "C:\Users\Administrator\HicOS"
+$repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 $imgPath = Join-Path $repoRoot "hicos-hl.img"
 $bytes = [System.IO.File]::ReadAllBytes($imgPath)
 

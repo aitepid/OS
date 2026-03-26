@@ -384,7 +384,7 @@ emit_mov_edx_imm32 ($COM1 + 2); emit_mov_al_imm8 0xC7; emit_out_dx_al # FIFO
 emit_mov_edx_imm32 ($COM1 + 4); emit_mov_al_imm8 0x0B; emit_out_dx_al # IRQ + RTS/DSR
 
 # --- Boot banner ---
-emit_serial_string "HicOS 5.0 -- Hilbert-Lang Kernel`r`n" $COM1
+emit_serial_string "HicOS 6.0 -- Hilbert-Lang Kernel`r`n" $COM1
 emit_serial_string "=== Kernel Init ===`r`n" $COM1
 emit_serial_string "  [ok] Serial: COM1 38400 8N1`r`n" $COM1
 
@@ -3830,6 +3830,6 @@ $kern_start = (1 + $s2_sectors) * 512
 Write-Host '' -ForegroundColor White
 Write-Host "  Total: $img_size bytes ($total_sectors sectors)" -ForegroundColor Green
 Write-Host "  Stage1: sector 0 (MBR, reads $read_sectors sectors to 0x8000)" -ForegroundColor White
-Write-Host "  Stage2: sectors 1-$s2_sectors (real→long mode)" -ForegroundColor White
+Write-Host "  Stage2: sectors 1-$s2_sectors (real->long mode)" -ForegroundColor White
 Write-Host "  Kernel: sectors $($s2_sectors+1)-$($total_sectors-1) (loaded at 0x100000)" -ForegroundColor White
 Write-Host "  Written: hicos-hl.img" -ForegroundColor Green

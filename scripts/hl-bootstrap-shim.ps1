@@ -9,7 +9,7 @@ $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 Set-Location $repoRoot
 
 if ($Args.Count -lt 1) {
-    Write-Host 'H-L Self-Hosting Bootstrap Compiler v5.0' -ForegroundColor Green
+    Write-Host 'H-L Self-Hosting Bootstrap Compiler v6.0' -ForegroundColor Green
     Write-Host 'Usage: hl-bootstrap <command|target.hl> [args...]' -ForegroundColor Red
     Write-Host ''
     Write-Host 'Commands:'
@@ -104,7 +104,7 @@ if ($target -eq 'boot') {
 }
 
 if ($target -eq 'info') {
-    Write-Host 'H-L Self-Hosting Bootstrap Compiler v5.0' -ForegroundColor Green
+    Write-Host 'H-L Self-Hosting Bootstrap Compiler v6.0' -ForegroundColor Green
     Write-Host "Source: hl-bootstrap.hl ($((Get-Content hl-bootstrap.hl | Measure-Object -Line).Lines) lines)" -ForegroundColor White
     Write-Host "Binary: hicos-hl.img ($((Get-Item hicos-hl.img).Length) bytes)" -ForegroundColor White
     $hlFiles = (Get-ChildItem -Recurse -Filter '*.hl' -Exclude '.vs' | Measure-Object).Count

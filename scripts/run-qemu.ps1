@@ -39,7 +39,7 @@ if (-not $qemuPath) {
     exit 1
 }
 
-$args = @(
+$qemuArgs = @(
     '-drive','format=raw,file=hicos-hl.img',
     '-serial','stdio',
     '-m','128',
@@ -49,7 +49,7 @@ $args = @(
     '-device','virtio-net-pci,netdev=net0'
 )
 if ($NoDisplay) {
-    $args += @('-display','none')
+    $qemuArgs += @('-display','none')
 }
 
 # Create test disk if missing
@@ -61,5 +61,5 @@ if (-not (Test-Path 'hicos-disk.img')) {
 }
 
 Write-Host "Launching HicOS in QEMU: $qemuPath" -ForegroundColor Cyan
-& $qemuPath @args
+& $qemuPath @qemuArgs
 exit $LASTEXITCODE
