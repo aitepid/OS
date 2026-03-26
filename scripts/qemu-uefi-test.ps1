@@ -183,3 +183,7 @@ if ($total -ge 3) {
 if (-not $KeepLog -and (Test-Path $serialLog)) {
     Remove-Item $serialLog -Force
 }
+if (-not $KeepLog) {
+    $stderrClean = "$serialLog.stderr.txt"
+    if (Test-Path $stderrClean) { Remove-Item $stderrClean -Force }
+}

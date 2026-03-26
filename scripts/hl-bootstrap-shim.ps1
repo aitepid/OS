@@ -182,6 +182,8 @@ if ($target -eq 'interpret') {
     }
 
     # Split by semicolons respecting brace/string nesting (for single-line function bodies)
+    # Also splits when } brings brace depth back to 0 so that
+    #   "if cond { body; } return x;" becomes ["if cond { body; }", "return x"]
     function Split-Stmts {
         param([string]$s)
         $result = [System.Collections.ArrayList]::new()
@@ -190,7 +192,16 @@ if ($target -eq 'interpret') {
             $c = $s[$j]
             if ($c -eq '"') { $inS = !$inS }
             if (-not $inS) {
-                if ($c -eq '{') { $bd++ } elseif ($c -eq '}') { $bd-- }
+                if ($c -eq '{') { $bd++ }
+                elseif ($c -eq '}') {
+                    $bd--
+                    if ($bd -eq 0) {
+                        $cur += $c
+                        $t = $cur.Trim()
+                        if ($t -ne '') { [void]$result.Add($t) }
+                        $cur = ''; continue
+                    }
+                }
                 if ($c -eq ';' -and $bd -eq 0) {
                     $t = $cur.Trim()
                     if ($t -ne '') { [void]$result.Add($t) }

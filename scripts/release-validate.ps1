@@ -124,7 +124,7 @@ if ($jsFiles.Count -eq 0 -and $rsFiles.Count -eq 0 -and $jsonFiles.Count -eq 0) 
 }
 
 # --- 9. Source stats ---
-$hlAll = Get-ChildItem -Recurse -Filter '*.hl' | Where-Object { $_.FullName -notmatch 'node_modules|\.git' }
+$hlAll = Get-ChildItem -Recurse -Filter '*.hl' | Where-Object { $_.FullName -notmatch 'node_modules|\.git|\.vs|\\archive' }
 if ($hlAll.Count -ge 170) {
     $passes += "Total H-L files: $($hlAll.Count) (>=170)"
 } else {
