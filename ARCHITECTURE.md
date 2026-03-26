@@ -18,7 +18,7 @@ HicOS is a three-layer experimental x86_64 OS written entirely in Hilbert-Lang.
 stage1 / MBR
 → stage2 (protected → long mode)
 → kernel.bin _start
-→ kernel_entry.hl (10,575 lines, 305 functions)
+→ kernel_entry.hl (9,565 lines)
 → kernel_init.hl (subsystem initialization)
 → shell.hl (64 commands + pipe) + kernel_entry.hl (70 commands)
 ```
@@ -94,3 +94,4 @@ All gates pass on the current maintenance baseline:
 - `runtime-path-readiness.ps1` ✅
 - `image-layout-readiness.ps1` ✅
 - `release-validate.ps1` ✅ 18/18
+

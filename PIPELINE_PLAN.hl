@@ -1,9 +1,11 @@
 // PIPELINE_PLAN.hl -- 编译管线打通：项目推进策划案
 //
 // 当前同步说明（iteration 119 功能基线 + 后续维护修复）：
-//   - 实际已编译 119/119 模块
+//   - host-side 编译管线已编译 119/119 模块
 //   - 未解析重定位已从 120 降到 1
-//   - 该文件保留“原始断裂诊断”价值，但最新推进以 PROJECT_ADVANCEMENT_PLAN.hl 为准
+//   - hl-bootstrap cmd_build 当前可对 111 个 kernel module_paths（外加 3 个 boot stage，共 114 项构建集）完成 token+parse
+//   - build_kernel() 的 native code 生成与跨模块链接仍未接通
+//   - 该文件保留“自举闭环尚未完全打通”的诊断价值，但最新推进以 PROJECT_ADVANCEMENT_PLAN.hl 为准
 //
 // 目标: 继续使 hl-bootstrap build_kernel() 更接近完整自举闭环
 //
@@ -34,11 +36,11 @@
 // 二、六个断裂点（按严重程度排序）
 // ============================================================
 //
-// 断裂点 ① [致命] build_kernel() 不读源文件
-//   位置: hl-bootstrap.hl 第 3545 行
+// 断裂点 ① [致命] build_kernel() 尚未消费已解析模块 AST
+//   位置: hl-bootstrap.hl `build_kernel()`（当前起始约第 3495 行）
 //   现象: module_paths 参数被传入但完全未使用
 //         函数生成硬编码 x86 字节序列 (串口+PIC+PIT+IDT+echo)
-//   影响: 113 个 .hl 模块的代码从未进入编译流程
+//   影响: 111 个 kernel module_paths 虽已进入 token+parse，但尚未进入 native build 阶段
 //
 // 断裂点 ② [致命] 缺少 AST → IR 降低 (Lowering) 层
 //   位置: 需要在 ir.hl / codegen.hl 之间新建
@@ -58,14 +60,13 @@
 //   位置: 缺失
 //   现象: 每个模块编译后是独立字节数组，无符号表/重定位表
 //         模块 A 调用模块 B 的函数时无法解析目标地址
-//   影响: 113 个模块无法组装成一个完整内核二进制
+//   影响: 111 个 kernel module_paths 尚无法组装成一个完整内核二进制
 //
-// 断裂点 ⑤ [中等] cmd_build() 模块列表不完整
-//   位置: hl-bootstrap.hl 第 4110 行
-//   现象: 只列出 55 个模块，实际有 113 个
-//         缺少: smp, usermode, ext2, ntfs, gpu, wifi, bluetooth,
-//               icmp, ipv6, secure_boot, gpt, nvme, font 等 58 个
-//   影响: 即使管线打通，也只能编译一半模块
+// 断裂点 ⑤ [中等] cmd_build() 构建集仍未覆盖 bare-kernel/hl 全量模块
+//   位置: hl-bootstrap.hl `cmd_build()`（当前起始约第 4064 行）
+//   现象: 当前构建集为 boot_chain 3 + module_paths 111 = 114 项，
+//         与仓库中的 117 个 bare-kernel/hl 模块仍有差距
+//   影响: 即使自举 native 管线接通，也还需要补齐构建集覆盖
 //
 // 断裂点 ⑥ [中等] 宿主文件 I/O 桥接
 //   位置: hl-bootstrap-shim.ps1 interpret 命令
@@ -95,7 +96,7 @@ let phases = [
     //   1.2  在 image_builder.build_kernel() 中:
     //        遍历 module_paths，对每个路径调用 file_read()
     //   1.3  对读取到的源码调用 lexer.tokenize() 产出 token 流
-    //   1.4  验证: 113 个模块均能成功 tokenize，无 panic
+    //   1.4  验证: 111 个 kernel module_paths 均能成功 tokenize/parse，无 panic
     //
     // 验收标准:
     //   hl-bootstrap build 输出:
@@ -103,7 +104,7 @@ let phases = [
     //     [lex] bare-kernel/hl/serial.hl: 312 tokens
     //     ...
     //     [lex] bare-kernel/hl/shell.hl: 2104 tokens
-    //     Total: 113 modules, xxxxx tokens
+    //     Total: 111 modules, xxxxx tokens
     "Phase 1: Module Loader",
 
     // ----------------------------------------------------------
@@ -143,7 +144,7 @@ let phases = [
     //        [ir] mem.hl: 342 instrs (280 live, 62 dead), 45 temps
     //
     // 验收标准:
-    //   所有 113 模块产出有效 IR，优化 pass 能删除 >10% 死代码
+    //   所有 111 个 kernel module_paths 产出有效 IR，优化 pass 能删除 >10% 死代码
     "Phase 2: AST to IR Lowering",
 
     // ----------------------------------------------------------
@@ -193,7 +194,7 @@ let phases = [
     // ----------------------------------------------------------
     // Phase 4: 跨模块链接器 (Cross-Module Linker)
     // ----------------------------------------------------------
-    // 目标: 113 个模块的 native code 合并为一个可执行内核
+    // 目标: 111 个 kernel module_paths 的 native code 合并为一个可执行内核
     // 工作量: 大
     // 优先级: ★★★★☆
     //
@@ -218,7 +219,7 @@ let phases = [
     //        链接器确保 kernel_init.kernel_main 是第一个
     //        被调用的函数
     //   4.5  每次链接输出:
-    //        [link] 113 modules, 847 symbols, 2341 relocations
+    //        [link] 111 modules, 847 symbols, 2341 relocations
     //        [link] .text: 89,472 bytes
     //        [link] .rodata: 12,304 bytes
     //        [link] Total kernel: 101,776 bytes
@@ -228,16 +229,16 @@ let phases = [
     "Phase 4: Cross-Module Linker",
 
     // ----------------------------------------------------------
-    // Phase 5: 完整 113 模块集成 + 镜像生成
+    // Phase 5: 完整 111 模块集成 + 镜像生成
     // ----------------------------------------------------------
-    // 目标: build() 自动编译链接全部 113 模块并输出 .img
+    // 目标: build() 自动编译链接全部 111 个 kernel module_paths 并输出 .img
     // 工作量: 中等
     // 优先级: ★★★☆☆
     //
     // 任务清单:
     //   5.1  更新 cmd_build() 模块列表:
-    //        从当前 55 个 → 全部 113 个
-    //        按 build.hl 中的依赖顺序排列
+    //        从当前 111 个 module_paths + 3 个 boot stage
+    //        扩展到覆盖全部 117 个 bare-kernel/hl 模块的真实构建集
     //   5.2  更新 build_kernel():
     //        替换硬编码内核为:
     //          a) 串口初始化 (保留现有 native code)
@@ -253,14 +254,14 @@ let phases = [
     //
     // 验收标准:
     //   hl-bootstrap build 输出:
-    //     Compiling 113 kernel modules...
-    //     [lex] ... 113 模块
-    //     [ir] ... 113 模块
-    //     [codegen] ... 113 模块
-    //     [link] 113 modules linked
+    //     Compiling 111 kernel modules...
+    //     [lex] ... 111 模块
+    //     [ir] ... 111 模块
+    //     [codegen] ... 111 模块
+    //     [link] 111 modules linked
     //     Image size: XXX bytes (YYY sectors)
     //     HicOS Build Complete
-    "Phase 5: Full 113-Module Integration",
+    "Phase 5: Full 111-Module Integration",
 
     // ----------------------------------------------------------
     // Phase 6: 自验证与 QEMU 启动测试
@@ -275,7 +276,7 @@ let phases = [
     //                           -serial stdio -display none
     //        期望串口输出:
     //          HL!
-    //          HicOS 5.0 -- Hilbert-Lang Kernel (113 modules)
+    //          HicOS 6.0 -- Hilbert-Lang Kernel
     //          Initializing subsystems...
     //          [ok] ...
     //          HicOS>
@@ -289,7 +290,7 @@ let phases = [
     //        - qemu-boot-test.ps1 通过
     //
     // 验收标准:
-    //   QEMU 串口输出包含 "HicOS 5.0" 和 "HicOS>"
+    //   QEMU 串口输出包含 "HicOS 6.0" 和 "HicOS>"
     "Phase 6: Self-Verification and QEMU Boot"
 ];
 
@@ -355,7 +356,7 @@ let phases = [
 //
 // 风险 2: 编译后的 native code 太大超出 1MB .text 段
 //   概率: 低
-//   缓解: 113 模块的 .hl 源码约 30,000 行
+//   缓解: 111 个 kernel module_paths 的源码量仍远低于 1MB .text 的风险阈值
 //         估计 native code < 200KB (远小于 1MB 限制)
 //         如需要可扩展页表映射更多 2MB 页
 //
@@ -372,12 +373,12 @@ let phases = [
 // 七、里程碑时间线
 // ============================================================
 //
-// M1: Phase 1 完成 → 113 模块全部 tokenize 成功
+// M1: Phase 1 完成 → 111 个 kernel module_paths 全部 tokenize/parse 成功
 // M2: Phase 2 完成 → 核心 20 模块产出 IR，优化 pass 可运行
 // M3: Phase 3 完成 → 单模块 native code 能在 QEMU 执行
 // M4: Phase 4 完成 → 多模块链接后 call 地址正确
-// M5: Phase 5 完成 → 完整 .img 包含 113 模块编译产物
-// M6: Phase 6 完成 → QEMU 启动显示 "HicOS 5.0" + shell 响应
+// M5: Phase 5 完成 → 完整 .img 包含 111 个 kernel module_paths 编译产物
+// M6: Phase 6 完成 → QEMU 启动显示 "HicOS 6.0" + shell 响应
 //
 // 每个里程碑通过 hl-bootstrap gate 验证
 
@@ -386,11 +387,11 @@ let phases = [
 // ============================================================
 //
 // Phase 1 是打通管线的最小可行步骤。
-// 实施后，build_kernel() 将首次"看到"113 个模块的源码。
+// 实施后，build_kernel() 将首次真正消费已进入 token+parse 阶段的 111 个 kernel module_paths。
 //
 // 具体变更:
 //
-// 1) hl-bootstrap.hl 第 3545 行 build_kernel():
+// 1) hl-bootstrap.hl build_kernel()（当前起始约第 3495 行）:
 //    在串口初始化之前添加:
 //    ```
 //    let mut compiled_modules = [];
@@ -411,8 +412,8 @@ let phases = [
 //    }
 //    ```
 //
-// 2) hl-bootstrap.hl cmd_build() 第 4110 行:
-//    将 module_paths 更新为完整的 113 模块列表
+// 2) hl-bootstrap.hl cmd_build()（当前起始约第 4064 行）:
+//    将 module_paths/build set 持续对齐到完整的 117 个 bare-kernel/hl 模块
 //    (按 build.hl 中的依赖顺序)
 //
 // 3) scripts/hl-bootstrap-shim.ps1 build 命令:
@@ -426,24 +427,23 @@ let phases = [
 fn pipeline_status() {
     print("=== HicOS 编译管线状态 ===");
     print("");
-    print("Phase 0: 宿主增强 (新增)      - 待实施 (见 COMPILER_PIPELINE_STRATEGY.hl)");
-    print("  0.1 quadrant 扁平化          - 待实施 (~30 行 PS1)");
-    print("  0.2 嵌套数组+索引+push       - 待实施 (~100 行 PS1)");
-    print("  0.3 字符串索引               - 待实施 (~20 行 PS1)");
-    print("  0.4 端到端验证               - 待实施 (~50 行 PS1)");
-    print("Phase 1: Module Loader        - 完成 ✓ (114 modules tokenized)");
-    print("Phase 2: AST → IR Lowering    - 待实施 (阻塞于 Phase 0)");
-    print("Phase 3: Full IR → Native     - 待实施 (codegen.hl 需大量新增)");
-    print("Phase 4: Cross-Module Linker  - 待实施 (linker.hl skeleton ready)");
-    print("Phase 5: 114-Module Integ.    - 待实施");
-    print("Phase 6: Self-Verification    - 待实施");
+    print("Phase 0: 宿主增强 (新增)       - 待实施 (见 COMPILER_PIPELINE_STRATEGY.hl)");
+    print("  0.1 quadrant 扁平化           - 待实施 (~30 行 PS1)");
+    print("  0.2 嵌套数组+索引+push        - 待实施 (~100 行 PS1)");
+    print("  0.3 字符串索引                - 待实施 (~20 行 PS1)");
+    print("  0.4 端到端验证                - 待实施 (~50 行 PS1)");
+    print("Phase 1: Module Loader         - 完成 ✓ (111 module_paths parsed; 114 build-set items incl. boot stages)");
+    print("Phase 2: AST → IR Lowering     - 待实施 (build_kernel 仍是硬编码 native 内核)");
+    print("Phase 3: Full IR → Native      - 待实施 (codegen.hl 需大量新增)");
+    print("Phase 4: Cross-Module Linker   - 待实施 (host-side linker 路径已存在，自举路径未接通)");
+    print("Phase 5: Full Build-Set Integ. - 待实施 (需补齐到 117 bare-kernel modules)");
+    print("Phase 6: Self-Verification     - 待实施");
     print("");
-    print("当前阻塞: shim 无法执行 x86enc quadrant 函数");
-    print("下一步: Phase 0.1 — quadrant 扁平化");
+    print("当前阻塞: build_kernel 尚未消费已解析 AST，也未接通跨模块 native 链接");
+    print("下一步: Phase 2 — AST → IR Lowering");
     return 0;
 }
 
 pipeline_status();
 
-// UPDATE (latest state): We have fully transitioned to hl-bootstrap. The build uses scripts\hl-bootstrap-build-test.ps1 exclusively, and Phase 1 (lexer) compilation testing and execution works. No JS. Pure H-L.
-
+// UPDATE (latest state): host-side 119/119 compile pipeline is working, but full self-hosted native closure is still pending.
