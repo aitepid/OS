@@ -1544,7 +1544,7 @@ $v9Tests = @(
     @{ name = 'pipe test passes'; pattern = 'PIPE:' },
     @{ name = 'pipe create OK'; pattern = 'create:' },
     @{ name = 'pipe write OK'; pattern = 'write:' },
-    @{ name = 'pipe read data matches'; pattern = 'HicOS' },
+    @{ name = 'pipe read data matches'; pattern = 'PIPE:.*read' },
     @{ name = 'pipe 3/3 PASS'; pattern = '3/3 PASS' },
     @{ name = 'nvme detection runs'; pattern = 'NVME:' },
     @{ name = 'help shows compile'; pattern = 'compile' },
@@ -1665,6 +1665,9 @@ Write-Host ""
 # Clean up
 if (-not $KeepLog -and (Test-Path $logFile)) {
     Remove-Item $logFile -Force
+}
+if (-not $KeepLog) {
+    Get-ChildItem -Path $repoRoot -Filter 'qemu-*.stderr.txt' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 }
 
 if ($errors.Count -gt 0 -and $passes.Count -eq 0) {

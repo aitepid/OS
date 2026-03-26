@@ -342,6 +342,8 @@ if (-not $KeepLog) {
     @('qemu-perf-boot.log','qemu-perf-fio.log','qemu-perf-net.log') | ForEach-Object {
         $f = Join-Path $repoRoot $_
         if (Test-Path $f) { Remove-Item $f -Force }
+        $sf = "$f.stderr.txt"
+        if (Test-Path $sf) { Remove-Item $sf -Force }
     }
 }
 

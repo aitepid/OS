@@ -80,14 +80,12 @@ if ($failed.Count -gt 0) {
 }
 
 Write-Host 'Full gate passed.' -ForegroundColor Green
-foreach ($c in $checks) {
-    if ($skipped -contains $c.Name) {
-        Write-Host "- $($c.Name): SKIPPED ($($skipReasons[$c.Name]))" -ForegroundColor Yellow
+$allNames = @($checks | ForEach-Object { $_.Name })
+foreach ($s in $skipped) { if ($allNames -notcontains $s) { $allNames += $s } }
+foreach ($n in $allNames) {
+    if ($skipped -contains $n) {
+        Write-Host "- ${n}: SKIPPED ($($skipReasons[$n]))" -ForegroundColor Yellow
     } else {
-        Write-Host "- $($c.Name): OK"
+        Write-Host "- ${n}: OK"
     }
-}
-if ($skipped.Count -gt 0) {
-    Write-Host '- skipped checks:' -ForegroundColor Yellow
-    $skipped | ForEach-Object { Write-Host "  - $_" -ForegroundColor Yellow }
 }
