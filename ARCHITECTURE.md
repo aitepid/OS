@@ -7,8 +7,8 @@ HicOS is a three-layer experimental x86_64 OS written entirely in Hilbert-Lang.
 | Layer | Medium | Current Role |
 |---|---|---|
 | A | `scripts/rebuild-image.ps1` → `hicos-hl.img` | BIOS image generation chain |
-| B | `hl-bootstrap.hl` (4,567 lines) | Bootstrap compiler/interpreter/toolchain |
-| C | `bare-kernel/hl/*.hl` (117 modules, 37,044 lines) | Kernel source → `kernel.bin` (27,970 bytes) |
+| B | `hl-bootstrap.hl` (4,306 lines) | Bootstrap compiler/interpreter/toolchain |
+| C | `bare-kernel/hl/*.hl` (117 modules, 33,260 lines) | Kernel source → `kernel.bin` (27,970 bytes) |
 
 ## Boot Chain
 
@@ -29,35 +29,36 @@ stage1 / MBR
 OVMF → GPT + ESP → BOOTX64.EFI → UEFI boot output
 ```
 
-## Codebase Metrics (iteration 119, verified)
+## Codebase Metrics (post-iteration-119 maintenance sync)
 
 | Metric | Value |
 |---|---:|
-| Total `.hl` files | 180 |
-| Root `.hl` files | 63 |
+| Total `.hl` files | 182 |
+| Root `.hl` files | 65 |
 | Kernel modules | 117 |
-| Total H-L lines | 47,950 |
-| Root H-L lines | 10,906 |
-| Kernel lines | 37,044 |
+| Total H-L lines | 43,226 |
+| Root H-L lines | 9,966 |
+| Kernel lines | 33,260 |
 | Kernel functions (source) | 1,499 |
-| `kernel_entry.hl` lines / functions | 10,575 / 305 |
-| `hl-bootstrap.hl` lines | 4,567 |
-| `stdlib.hl` lines | 1,545 |
+| `kernel_entry.hl` lines | 9,565 |
+| `hl-bootstrap.hl` lines | 4,306 |
+| `stdlib.hl` lines | 1,385 |
+| `kinterp.hl` lines | 1,245 |
 | `scripts/*.ps1` | 22 |
-| PS1 lines | 9,866 |
+| PS1 lines | 8,816 |
 | Shell + kernel commands (unique) | 112 |
 | HicOS_*.hl subsystem modules | 27 |
-| test_*.hl / test-*.hl | 13 |
-| Total repo files | 312 |
+| test_*.hl / test-*.hl | 15 |
+| Total active repo files (excl. `.git/.vs/archive`) | 280 |
 
 ## Key Source Locations
 
-- `bare-kernel/hl/kernel_entry.hl` — Kernel entry, interrupt init, command dispatch (10,575 lines, 305 fn, 70 commands)
+- `bare-kernel/hl/kernel_entry.hl` — Kernel entry, interrupt init, command dispatch (9,565 lines)
 - `bare-kernel/hl/kernel_init.hl` — Subsystem initialization sequence
 - `bare-kernel/hl/shell.hl` — Serial shell (64 commands + pipe)
-- `bare-kernel/hl/kinterp.hl` — Kernel interpreter (1,341 lines, 46 fn, tree-walk + IR VM)
-- `hl-bootstrap.hl` — Self-hosting compiler/toolchain (4,567 lines, 208 fn)
-- `stdlib.hl` — Standard library (1,545 lines, 143 fn)
+- `bare-kernel/hl/kinterp.hl` — Kernel interpreter (1,245 lines, tree-walk + IR VM)
+- `hl-bootstrap.hl` — Self-hosting compiler/toolchain (4,306 lines, 208 fn)
+- `stdlib.hl` — Standard library (1,385 lines, 143 fn)
 - `scripts/hl-bootstrap-build-test.ps1` — Primary build/test entry
 - `scripts/rebuild-image.ps1` — BIOS image rebuilder
 - `scripts/build-uefi-image.ps1` — UEFI image builder
@@ -87,7 +88,7 @@ Phase 6 incremental runtime upgrades:
 
 ## Verification
 
-All gates pass as of iteration 119:
+All gates pass on the current maintenance baseline:
 - `hl-bootstrap-build-test.ps1` ✅
 - `boot-readiness.ps1` ✅
 - `runtime-path-readiness.ps1` ✅

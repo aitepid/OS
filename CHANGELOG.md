@@ -2,17 +2,26 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`180`（63 根目录 + 117 内核模块）
-- H-L 总行数：`47,950`（根 10,906 + 内核 37,044）
+- `.hl` 文件：`182`（65 根目录 + 117 内核模块）
+- H-L 总行数：`43,226`（根 9,966 + 内核 33,260）
 - 内核模块：`117`（函数 1,499 个，源码计数）
-- `kernel_entry.hl`：`10,575` 行，`305` 函数，`70` 命令
-- `hl-bootstrap.hl`：`4,567` 行，`208` 函数
-- `stdlib.hl`：`1,545` 行，`143` 函数
+- `kernel_entry.hl`：`9,565` 行
+- `hl-bootstrap.hl`：`4,306` 行，`208` 函数
+- `stdlib.hl`：`1,385` 行，`143` 函数
+- `kinterp.hl`：`1,245` 行
 - Shell + 内核命令（去重）：`112`
-- `scripts/*.ps1`：`22`（9,866 行）
+- `scripts/*.ps1`：`22`（8,816 行）
 - 编译：`119/119` 模块 | 0 parse warning | 1 unresolved reloc | 1,804 符号
-- 构建/测试主入口：`scripts/hl-bootstrap-build-test.ps1`
-- 最近完成迭代：`119`
+- 构建/测试主入口：`hl-bootstrap.cmd test`
+- 最近完成功能迭代：`119`（其后为工程化/验证修复）
+
+## Post-Iteration 119 — 工程化修复与回归补强
+
+- **验证入口统一**：`validate-workspace.ps1` 现在同时支持 PATH 中的 `hl-bootstrap` 和仓库根目录的 `hl-bootstrap.cmd`
+- **解释器修复**：`Split-Stmts` 修正单行函数体中 `if { ... } return ...` 的拆分问题，修复嵌套函数调用条件判断失效
+- **QEMU 兼容性**：`run-qemu.ps1` / `qemu-smoke.ps1` / `diag-boot.ps1` / `perf-baseline.ps1` 扩展 QEMU 自动发现路径并统一 legacy VirtIO 启动参数
+- **日志清理**：`qemu-boot-test.ps1` / `qemu-uefi-test.ps1` / `perf-baseline.ps1` 补全 `.stderr.txt` 清理，避免仓库根目录残留日志
+- **回归覆盖**：新增 `test_shim_andor.hl` 与 `test_shim_arridx_cond.hl`，补齐逻辑运算与数组索引后续二元表达式测试
 
 ## Iteration 119 — 高级特性验证接入基线
 

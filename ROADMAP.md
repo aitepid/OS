@@ -1,13 +1,13 @@
 ﻿# HicOS Roadmap
 
-## 当前同步基线（迭代 119 全量复核）
+## 当前同步基线（迭代 119 功能基线 + 后续维护修复）
 
-- `180` 个 `.hl` 文件（47,950 行）：63 根目录 + 117 内核模块
-- `22` 个 PowerShell 脚本（9,866 行）
-- `hl-bootstrap.hl`：`4,567` 行 | `stdlib.hl`：`1,545` 行
+- `182` 个 `.hl` 文件（43,226 行）：65 根目录 + 117 内核模块
+- `22` 个 PowerShell 脚本（8,816 行）
+- `hl-bootstrap.hl`：`4,306` 行 | `stdlib.hl`：`1,385` 行
 - 内核函数：`1,499` | Shell + 内核命令（去重）：`112`
-- 构建/测试主入口：`scripts/hl-bootstrap-build-test.ps1`
-- 最近完成迭代：`119`
+- 构建/测试主入口：`hl-bootstrap.cmd test`
+- 最近完成功能迭代：`119`（其后为工程化/验证修复）
 
 ## 已完成阶段
 
@@ -85,7 +85,7 @@
 ## 当前推荐执行顺序
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\hl-bootstrap-build-test.ps1
+.\hl-bootstrap.cmd test
 powershell -ExecutionPolicy Bypass -File .\scripts\release-validate.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\full-gate.ps1
 ```

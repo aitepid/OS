@@ -4,16 +4,17 @@
 
 ## 当前状态
 
-- 代码仓库包含 `180` 个 `.hl` 文件（共 `47,950` 行）
-  - 根目录：`63` 个（含自举编译器、标准库、子系统模块、测试）
-  - `bare-kernel/hl/`：`117` 个内核模块（`37,044` 行，源码定义 `1,499` 个函数）
-- `kernel_entry.hl`：`10,575` 行，`305` 个函数
-- `hl-bootstrap.hl`：`4,567` 行（自举编译器/工具链）
-- `stdlib.hl`：`1,545` 行（标准库）
-- `scripts/` 下有 `22` 个 PowerShell 构建/验证脚本（共 `9,866` 行）
-- Shell + 内核命令总数：`112`（shell.hl `64` + kernel_entry.hl `70`，去重后 `112`）
-- 最新完成迭代：`119`（高级特性验证接入基线：eBPF / TLS 1.3 / QUIC）
-- 当前主构建/测试入口：`scripts/hl-bootstrap-build-test.ps1`
+- 代码仓库包含 `182` 个 `.hl` 文件（共 `43,226` 行）
+  - 根目录：`65` 个（含自举编译器、标准库、子系统模块、测试与策划案）
+  - `bare-kernel/hl/`：`117` 个内核模块（`33,260` 行，源码定义 `1,499` 个函数）
+- `kernel_entry.hl`：`9,565` 行
+- `hl-bootstrap.hl`：`4,306` 行（自举编译器/工具链，编译管线统计 `208` 个函数）
+- `stdlib.hl`：`1,385` 行（标准库，编译管线统计 `143` 个函数）
+- `kinterp.hl`：`1,245` 行（树遍历 + IR VM 双执行引擎）
+- `scripts/` 下有 `22` 个 PowerShell 构建/验证脚本（共 `8,816` 行）
+- Shell + 内核命令总数：`112`（去重后）
+- 当前功能里程碑仍为 `119`（高级特性验证接入基线：eBPF / TLS 1.3 / QUIC），其后已完成多轮工程化修复与回归补强
+- 当前主构建/测试入口：`hl-bootstrap.cmd test`（封装 `scripts/hl-bootstrap-build-test.ps1`）
 - 三层架构：
   - `Layer A`：`scripts/rebuild-image.ps1` → 可引导 BIOS 镜像
   - `Layer B`：`hl-bootstrap.hl` 自举编译器/工具链
@@ -73,7 +74,7 @@
 ## 推荐构建方式
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\hl-bootstrap-build-test.ps1
+.\hl-bootstrap.cmd test
 ```
 
 ## 常用验证命令
@@ -89,13 +90,13 @@ powershell -ExecutionPolicy Bypass -File .\scripts\qemu-smoke.ps1
 ```text
 HicOS/
 ├─ bare-kernel/
-│  ├─ hl/                      # 117 个内核模块（37,044 行）
+│  ├─ hl/                      # 117 个内核模块（33,260 行）
 │  └─ kernel.bin              # 编译产物（27,970 字节）
-├─ scripts/                   # 22 个构建/验证脚本（9,866 行）
-├─ hl-bootstrap.hl            # 自举编译器（4,567 行）
-├─ stdlib.hl                  # 标准库（1,545 行）
+├─ scripts/                   # 22 个构建/验证脚本（8,816 行）
+├─ hl-bootstrap.hl            # 自举编译器（4,306 行）
+├─ stdlib.hl                  # 标准库（1,385 行）
 ├─ HicOS_*.hl                 # 27 个子系统模块
-├─ test_*.hl / test-*.hl      # 13 个测试文件
+├─ test_*.hl / test-*.hl      # 15 个测试文件
 ├─ hicos-hl.img               # BIOS 镜像
 ├─ hicos-uefi.img             # UEFI 镜像
 └─ *.md                       # 8 个文档
