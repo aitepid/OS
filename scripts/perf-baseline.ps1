@@ -238,6 +238,8 @@ $netArgs = @(
 )
 
 $netProc = Start-Process -FilePath $qemuPath -ArgumentList $netArgs -PassThru -NoNewWindow
+$dhcpStart = $null
+$dhcpEnd = $null
 
 try {
     Start-Sleep -Seconds 5
@@ -269,11 +271,14 @@ if (Test-Path $netLogFile) {
     try { $netContent = [System.IO.File]::ReadAllText($netLogFile) } catch {}
 }
 
-if ($netContent -match 'IP acquired') {
+if ($netContent -match 'IP acquired' -and $dhcpStart -and $dhcpEnd) {
     $dhcpMs = [int]($dhcpEnd - $dhcpStart).TotalMilliseconds
     $metrics['dhcp_acquire_ms'] = $dhcpMs
     Write-Host "  DHCP acquire: ${dhcpMs}ms (wall)" -ForegroundColor White
     $passes += "Network: DHCP acquired ($dhcpMs ms)"
+} elseif ($netContent -match 'IP acquired') {
+    $passes += 'Network: DHCP acquired'
+    Write-Host '  DHCP acquired (timing unavailable due to monitor interruption)' -ForegroundColor Yellow
 } else {
     Write-Host '  DHCP not acquired within timeout' -ForegroundColor Yellow
 }

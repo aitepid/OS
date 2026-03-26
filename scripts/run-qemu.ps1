@@ -43,10 +43,10 @@ $qemuArgs = @(
     '-drive','format=raw,file=hicos-hl.img',
     '-serial','stdio',
     '-m','128',
-    '-device','virtio-blk-pci,drive=disk0',
+    '-device','virtio-blk-pci,drive=disk0,disable-modern=on',
     '-drive','id=disk0,file=hicos-disk.img,format=raw,if=none',
     '-netdev','user,id=net0',
-    '-device','virtio-net-pci,netdev=net0'
+    '-device','virtio-net-pci,netdev=net0,disable-modern=on'
 )
 if ($NoDisplay) {
     $qemuArgs += @('-display','none')

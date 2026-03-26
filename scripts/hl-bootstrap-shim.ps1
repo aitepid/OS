@@ -277,8 +277,8 @@ if ($target -eq 'interpret') {
                             '+' { if ($resolvedLeft -is [string] -or $right -is [string]) { return "$resolvedLeft$right" } else { return [long]$resolvedLeft + [long]$right } }
                             '-' { return [long]$resolvedLeft - [long]$right }
                             '*' { return [long]$resolvedLeft * [long]$right }
-                            '/' { if ([long]$right -eq 0) { return 0 } else { return [math]::Floor([long]$resolvedLeft / [long]$right) } }
-                            '%' { return [long]$resolvedLeft % [long]$right }
+                            '/' { if ([long]$right -eq 0) { throw "DIVZERO $resolvedLeft / $right in $e" } else { return [math]::Floor([long]$resolvedLeft / [long]$right) } }
+                            '%' { if ([long]$right -eq 0) { throw "MODZERO $resolvedLeft % $right in $e" } else { return [long]$resolvedLeft % [long]$right } }
                             '==' { if ($resolvedLeft -eq $right) { return 1 } else { return 0 } }
                             '!=' { if ($resolvedLeft -ne $right) { return 1 } else { return 0 } }
                             '>=' { if ([long]$resolvedLeft -ge [long]$right) { return 1 } else { return 0 } }
