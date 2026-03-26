@@ -23,7 +23,10 @@ function Resolve-Qemu {
     if ($cmd) { return $cmd.Source }
     $candidates = @(
         'C:\Program Files\qemu\qemu-system-x86_64.exe',
-        'C:\Program Files (x86)\qemu\qemu-system-x86_64.exe'
+        'C:\Program Files (x86)\qemu\qemu-system-x86_64.exe',
+        "$env:USERPROFILE\scoop\apps\qemu\current\qemu-system-x86_64.exe",
+        'C:\ProgramData\chocolatey\bin\qemu-system-x86_64.exe',
+        'C:\msys64\usr\bin\qemu-system-x86_64.exe'
     )
     if ($env:QEMU_HOME) {
         $candidates = ,(Join-Path $env:QEMU_HOME 'qemu-system-x86_64.exe') + $candidates
@@ -126,7 +129,10 @@ if (Test-Path $bootLogFile) {
     try { $bootContent = [System.IO.File]::ReadAllText($bootLogFile) } catch {}
 }
 
-$initLines = ($bootContent -split "`n").Count
+$initLines = 0
+if ($bootContent.Length -gt 0) {
+    $initLines = ($bootContent -split "`n").Count
+}
 $metrics['boot_serial_lines'] = $initLines
 Write-Host "  Init serial lines: $initLines" -ForegroundColor White
 if ($initLines -ge 10) {
@@ -308,7 +314,7 @@ if (Test-Path 'BOOTX64.EFI') {
 }
 
 # --- Count H-L source ---
-$hlFiles = Get-ChildItem -Recurse -Filter '*.hl' | Where-Object { $_.FullName -notmatch 'node_modules|\.git' }
+$hlFiles = Get-ChildItem -Recurse -Filter '*.hl' | Where-Object { $_.FullName -notmatch 'node_modules|\.git|\.vs|archive' }
 $hlCount = $hlFiles.Count
 $hlLines = 0
 foreach ($f in $hlFiles) {
