@@ -13,7 +13,10 @@ function Resolve-Qemu {
 
     $candidates = @(
         'C:\Program Files\qemu\qemu-system-x86_64.exe',
-        'C:\Program Files (x86)\qemu\qemu-system-x86_64.exe'
+        'C:\Program Files (x86)\qemu\qemu-system-x86_64.exe',
+        "$env:USERPROFILE\scoop\apps\qemu\current\qemu-system-x86_64.exe",
+        'C:\ProgramData\chocolatey\bin\qemu-system-x86_64.exe',
+        'C:\msys64\usr\bin\qemu-system-x86_64.exe'
     )
 
     if ($env:QEMU_HOME) {

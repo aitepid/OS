@@ -9,9 +9,19 @@ $qemu = $null
 $qemuCmd = Get-Command 'qemu-system-x86_64' -ErrorAction SilentlyContinue
 if ($qemuCmd) { $qemu = $qemuCmd.Source }
 if (-not $qemu -or -not (Test-Path $qemu)) {
-    foreach ($p in @('C:\Program Files\qemu\qemu-system-x86_64.exe','C:\Program Files (x86)\qemu\qemu-system-x86_64.exe')) {
+    foreach ($p in @(
+        'C:\Program Files\qemu\qemu-system-x86_64.exe',
+        'C:\Program Files (x86)\qemu\qemu-system-x86_64.exe',
+        "$env:USERPROFILE\scoop\apps\qemu\current\qemu-system-x86_64.exe",
+        'C:\ProgramData\chocolatey\bin\qemu-system-x86_64.exe',
+        'C:\msys64\usr\bin\qemu-system-x86_64.exe'
+    )) {
         if (Test-Path $p) { $qemu = $p; break }
     }
+}
+if ((-not $qemu -or -not (Test-Path $qemu)) -and $env:QEMU_HOME) {
+    $qemuHomePath = Join-Path $env:QEMU_HOME 'qemu-system-x86_64.exe'
+    if (Test-Path $qemuHomePath) { $qemu = $qemuHomePath }
 }
 if (-not $qemu) {
     Write-Host 'QEMU not found' -ForegroundColor Red
