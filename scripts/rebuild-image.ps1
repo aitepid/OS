@@ -3837,11 +3837,53 @@ $s2_origin = [uint32]0x8000
 
 emit_cli
 
-# === VESA disabled for headless boot path ===
-# QEMU `-display none` may not provide a usable VBE path during Stage2.
-# Clear the stored LFB address; the kernel can treat this as "no framebuffer".
-buf_emit 0x66; buf_emit 0x31; buf_emit 0xC0              # xor eax, eax
-buf_emit 0x66; buf_emit 0xA3; buf_emit16 0x7000          # mov [0x7000], eax
+# === VBE Mode Setting (Real Mode) ===
+# Set VESA 1024x768x32 mode via VBE BIOS INT 10h before switching to long mode.
+# 1. Get VBE mode info for mode 0x118 into buffer at 0x7100
+# 2. Extract LFB physical address from offset +40
+# 3. Store at [0x7000] for kernel to read
+# 4. Set the mode with LFB enabled (bit 14 of mode number)
+# If VBE call fails, fall back to LFB=0 (kernel treats as no framebuffer).
+
+# Get VBE mode info: AX=0x4F01, CX=mode, ES:DI=buffer
+buf_emit 0x31; buf_emit 0xC0                               # xor ax, ax
+buf_emit 0x8E; buf_emit 0xC0                               # mov es, ax
+buf_emit 0x66; buf_emit 0xB8; buf_emit32 0x00004F01        # mov eax, 0x4F01
+buf_emit 0xB9; buf_emit16 0x0118                            # mov cx, 0x0118
+buf_emit 0xBF; buf_emit16 0x7100                            # mov di, 0x7100
+buf_emit 0xCD; buf_emit 0x10                                # int 0x10
+# Check AX == 0x004F
+buf_emit 0x66; buf_emit 0x3D; buf_emit16 0x004F; buf_emit16 0x0000  # cmp eax, 0x004F
+$jne_vbe_fail_patch = buf_len
+buf_emit 0x0F; buf_emit 0x85; buf_emit32 0                 # jne vbe_fail (patch later)
+
+# Save LFB address: [0x7100 + 40] = [0x7128] -> [0x7000]
+buf_emit 0x66; buf_emit 0xA1; buf_emit16 0x7128            # mov eax, [0x7128]
+buf_emit 0x66; buf_emit 0xA3; buf_emit16 0x7000            # mov [0x7000], eax
+
+# Set VBE mode: AX=0x4F02, BX=mode|0x4000 (LFB bit)
+buf_emit 0x66; buf_emit 0xB8; buf_emit32 0x00004F02        # mov eax, 0x4F02
+buf_emit 0xBB; buf_emit16 0x4118                            # mov bx, 0x4118 (mode 0x118 + LFB)
+buf_emit 0xCD; buf_emit 0x10                                # int 0x10
+$jmp_vbe_done_patch = buf_len
+buf_emit 0xE9; buf_emit16 0                                # jmp vbe_done (patch later)
+
+# vbe_fail: clear LFB address (no framebuffer)
+$vbe_fail_off = buf_len
+buf_emit 0x66; buf_emit 0x31; buf_emit 0xC0                # xor eax, eax
+buf_emit 0x66; buf_emit 0xA3; buf_emit16 0x7000            # mov [0x7000], eax
+
+# vbe_done:
+$vbe_done_off = buf_len
+# Patch jump targets
+$rel_fail = $vbe_fail_off - ($jne_vbe_fail_patch + 6)
+buf_set ($jne_vbe_fail_patch + 2) ([byte]($rel_fail -band 0xFF))
+buf_set ($jne_vbe_fail_patch + 3) ([byte](($rel_fail -shr 8) -band 0xFF))
+buf_set ($jne_vbe_fail_patch + 4) ([byte](($rel_fail -shr 16) -band 0xFF))
+buf_set ($jne_vbe_fail_patch + 5) ([byte](($rel_fail -shr 24) -band 0xFF))
+$rel_done = $vbe_done_off - ($jmp_vbe_done_patch + 3)
+buf_set ($jmp_vbe_done_patch + 1) ([byte]($rel_done -band 0xFF))
+buf_set ($jmp_vbe_done_patch + 2) ([byte](($rel_done -shr 8) -band 0xFF))
 
 # === Load kernel after Stage2 (real mode, BIOS CHS one-sector loop) ===
 # QEMU BIOS exposes a 63-sector, 16-head geometry for this small image, so the
