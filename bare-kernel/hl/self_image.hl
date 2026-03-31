@@ -1,0 +1,126 @@
+// self_image.hl -- Kernel Self-Image Awareness
+//
+// The running HicOS kernel knows its own binary image layout in memory.
+// This enables self-installation: the kernel can write itself to a target disk.
+//
+// Memory layout (set by Stage2 loader):
+//   0x100000 (1MB):  Start of kernel code (loaded by Stage2 from disk)
+//   Kernel occupies contiguous sectors from LBA 0 of the boot device
+//
+// Boot image layout:
+//   Sector 0:     Stage1 (MBR, 512 bytes)
+//   Sector 1..N:  Stage2 (real→long mode transition)
+//   Sector N+1..: Kernel payload (native x86_64 code)
+//
+// The total boot image (hicos-hl.img) is loaded starting at sector 0.
+// To self-install, we copy the entire image from memory to a target disk.
+//
+// Image source addresses (populated during boot):
+//   0x300930: image start in memory (set to 0x7C00 for MBR or 0x100000 for kernel)
+//   0x300938: image total bytes (set during boot from manifest)
+//   0x300940: image total sectors
+//
+// Iteration 122: self-install kernel image awareness
+
+let SELF_IMG_ADDR = 3148080;    // 0x300930: image memory base
+let SELF_IMG_BYTES = 3148088;   // 0x300938: image byte count
+let SELF_IMG_SECTORS = 3148096; // 0x300940: image sector count
+
+// The boot image is loaded starting at physical address 0x7C00 (MBR).
+// However, the MBR + Stage2 occupy low memory and the kernel starts at 0x100000.
+// For self-install, we need to re-read the image from the boot disk
+// (since low memory may have been overwritten), OR we use the kernel's
+// knowledge of the image structure to reconstruct it.
+
+// Initialize self-image metadata from known constants
+fn self_image_init() {
+    // Default values matching hicos-hl.img manifest
+    // These are overwritten at boot time by the native kernel
+    mem_write_u64(SELF_IMG_ADDR, 1048576);      // 0x100000 (kernel load address)
+    mem_write_u64(SELF_IMG_BYTES, 160768);       // total image bytes
+    mem_write_u64(SELF_IMG_SECTORS, 314);        // total image sectors
+    return 0;
+}
+
+// Get total image sectors
+fn self_image_sectors() {
+    return mem_read_u64(SELF_IMG_SECTORS);
+}
+
+// Get total image bytes
+fn self_image_bytes() {
+    return mem_read_u64(SELF_IMG_BYTES);
+}
+
+// Get kernel load address
+fn self_image_base() {
+    return mem_read_u64(SELF_IMG_ADDR);
+}
+
+// Write the running kernel image to a target disk using the installer's disk backend.
+// This reads the boot disk sector-by-sector and writes to the target.
+// src_backend: source disk backend (where we booted from)
+// Returns number of sectors written, or 0 on failure.
+fn self_install_to_disk() {
+    let total_sectors = self_image_sectors();
+    if total_sectors == 0 {
+        print("self_install: no image metadata available");
+        return 0;
+    }
+
+    print("Self-install: writing " + to_string(total_sectors) + " sectors to target disk...");
+
+    // The kernel image in memory starts at 0x100000.
+    // But we need the FULL boot image (MBR + Stage2 + Kernel).
+    // The MBR is at 0x7C00 and Stage2 at 0x8000 in memory (if still intact).
+    //
+    // Strategy: use the installer's disk read from the boot device,
+    // then write to the target device. For now, we write sector-by-sector
+    // from the boot disk to the target.
+    //
+    // If the source and target are the same disk, we skip (already installed).
+
+    let buf = page_alloc();
+    let mut written = 0;
+    let mut sec = 0;
+
+    while sec < total_sectors {
+        // Read from boot disk (same backend we booted from)
+        let ok = installer_disk_read(sec, 1, buf);
+        if ok == 0 {
+            print("self_install: read failed at sector " + to_string(sec));
+            page_free(buf);
+            return written;
+        }
+        // Write to target disk
+        let wok = installer_disk_write(sec, 1, buf);
+        if wok == 0 {
+            print("self_install: write failed at sector " + to_string(sec));
+            page_free(buf);
+            return written;
+        }
+        written = written + 1;
+        sec = sec + 1;
+        // Progress every 50 sectors
+        if sec % 50 == 0 {
+            print("  ... " + to_string(sec) + "/" + to_string(total_sectors) + " sectors");
+        }
+    }
+
+    page_free(buf);
+    print("Self-install complete: " + to_string(written) + " sectors written.");
+    return written;
+}
+
+// Print self-image info
+fn self_image_info() {
+    let base = self_image_base();
+    let bytes = self_image_bytes();
+    let sectors = self_image_sectors();
+    print("Self-image:");
+    print("  Kernel base: 0x" + format_hex(base, 8));
+    print("  Image size:  " + to_string(bytes) + " bytes (" + to_string(sectors) + " sectors)");
+    return 0;
+}
+
+print("self_image.hl loaded -- kernel self-image awareness");

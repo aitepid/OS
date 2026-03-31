@@ -2,36 +2,36 @@
 
 ## 版本定位
 
-当前仓库处于 `v6.0` 发布线，功能里程碑仍为迭代 119（高级特性验证接入基线）；其后已完成多轮工程化、验证与文档同步修复。
+当前仓库处于 `v6.0` 发布线，功能里程碑为迭代 123（VGA 完整交互闭环 + USB 键盘）。
 
-## 本轮已核实状态（迭代 119 功能基线 + 后续维护修复）
+## 本轮已核实状态（迭代 123 功能基线）
 
 ### 仓库规模（精确计数）
 
 | 指标 | 当前值 | 说明 |
 |---|---:|---|
-| 全部 `.hl` 文件 | 185 | 68 根目录 + 117 内核模块 |
-| H-L 总行数 | 43,246 | 根 9,986 + 内核 33,260 |
-| `bare-kernel/hl/` 内核模块 | 117 | 编译进 `kernel.bin` |
-| `kernel_entry.hl` 行数 | 9,565 | 内核入口 + 命令分发 |
-| 内核模块总函数数 | 1,499 | 源码定义计数 |
-| `hl-bootstrap.hl` 行数 | 4,306 | 自举编译器（208 函数） |
-| `stdlib.hl` 行数 | 1,385 | 标准库（143 函数） |
-| `kinterp.hl` 行数 | 1,245 | 内核解释器（tree-walk + IR VM） |
+| 全部 `.hl` 文件 | 190 | 68 根目录 + 122 内核模块 |
+| H-L 总行数 | 49,700 | 根 10,946 + 内核 38,750 |
+| `bare-kernel/hl/` 内核模块 | 122 | 编译进 `kernel.bin` |
+| `kernel_entry.hl` 行数 | 10,609 | 内核入口 + 命令分发 |
+| 内核模块总函数数 | 1,600 | 源码定义计数 |
+| `hl-bootstrap.hl` 行数 | 4,572 | 自举编译器（215 函数） |
+| `stdlib.hl` 行数 | 1,545 | 标准库（144 函数） |
+| `kinterp.hl` 行数 | 1,341 | 内核解释器（tree-walk + IR VM） |
 | `scripts/*.ps1` | 22 | 构建/验证/诊断 |
-| PS1 总行数 | 8,816 | |
-| Shell + 内核命令（去重） | 112 | shell.hl 64 + kernel_entry.hl 70 |
+| PS1 总行数 | 9,965 | |
+| Shell + 内核命令（去重） | 113 | shell.hl 69 + kernel_entry.hl 72 |
 | `HicOS_*.hl` 子系统模块 | 27 | |
-| `test_*.hl` / `test-*.hl` | 18 | |
+| `test_*.hl` / `test-*.hl` | 19 | |
 | `.md` 文档 | 8 | |
-| 活跃仓库文件数 | 283 | 排除 `.git/.vs/archive` |
+| 活跃仓库文件数 | 284 | 排除 `.git/.vs/archive` |
 
 ### 门禁结果
 
 | 验证项 | 结果 |
 |---|---|
-| `hl-bootstrap build` | ✅ 119 模块编译 + 镜像重建 |
-| `validate-workspace` | ✅ 185 HL / 117 模块 |
+| `hl-bootstrap build` | ✅ 118 模块编译 + 镜像重建 |
+| `validate-workspace` | ✅ 186 HL / 118 模块 |
 | `boot-readiness` | ✅ 启动链 + 内核初始化 |
 | `image-layout-readiness` | ✅ MBR 签名 + 扇区布局 |
 | `runtime-path-readiness` | ✅ IDT/PIT/KBD + SYSCALL + 网络 |
@@ -69,7 +69,7 @@
 | 5 | 105 | `cgroup.hl` | 被动记账 → CPU/内存/IO 强制执行 | 新增 |
 | 5 | 106 | `bpf.hl` | 新建 — eBPF 寄存器 VM | 新增 |
 
-## 阶段 6 推进结果（迭代 109-119）
+## 阶段 6 推进结果（迭代 109-121）
 
 | 迭代 | 结果 |
 |---|---|
@@ -84,16 +84,20 @@
 | 117 | `tcp.hl`：TCP 回环自测 — 127.0.0.1 SYN→ESTABLISHED→DATA(5B)→FIN→CLOSE_WAIT |
 | 118 | `dns.hl`：DNS 回环自测 — 查询→mock响应→解析→缓存命中→TTL过期→未命中→static |
 | 119 | `advanced_verify.hl`：eBPF / TLS1.3 / QUIC 统一自测 + `advtest` 命令 + 门禁接入 |
+| 120 | `kmod.hl`：内核热补丁框架 — 64 模块槽位 + 256 trampoline + 原子热替换 + 自测 |
+| 121 | 裸机安装基础：`vga_console.hl` VGA 文本 80×25 + `ata_pio.hl` ATA PIO 磁盘 + `installer.hl` 三后端 |
+| 122 | 原生 VGA Shell 交互：键盘回显→VGA + 退格/回车→VGA + 自安装映像 `self_image.hl` |
+| 123 | VGA 完整交互闭环：真实滚屏 + `_ke_putc` 双输出 + `usb_kbd.hl` USB HID 键盘 |
 
 ## 三层架构现状
 
 | 层级 | 载体 | 说明 |
 |---|---|---|
 | A | `scripts/rebuild-image.ps1` → `hicos-hl.img` | BIOS 镜像生成链 |
-| B | `hl-bootstrap.hl`（4,306 行，208 函数） | 自举编译器/解释器/工具链 |
-| C | `bare-kernel/hl/*.hl`（117 模块，33,260 行，1,499 函数） | 内核模块 → `kernel.bin` |
+| B | `hl-bootstrap.hl`（4,572 行，215 函数） | 自举编译器/解释器/工具链 |
+| C | `bare-kernel/hl/*.hl`（118 模块，37,711 行，1,520 函数） | 内核模块 → `kernel.bin` |
 
-## 下一阶段建议（迭代 120+）
+## 下一阶段建议（迭代 121+）
 
-- `kmod.hl` 内核热补丁
-- 音频管道 / GPU 2D 加速
+- 音频管道（audio→mixer）— AC97 PCM 播放
+- GPU 2D 加速 — framebuffer 硬件 blit

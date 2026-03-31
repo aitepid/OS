@@ -1,7 +1,7 @@
-﻿// PROJECT_ADVANCEMENT_PLAN.hl -- HicOS 项目推进策划案（迭代 119 功能基线 + 后续维护同步版）
+﻿// PROJECT_ADVANCEMENT_PLAN.hl -- HicOS 项目推进策划案（迭代 120 功能基线）
 //
 // 基于 EVOLUTION_PLAN.hl（迭代 108 基准版）全量审计型策划案，
-// 结合实际执行路径同步。六阶段 + 高级特性验证接入推进至迭代 119。
+// 结合实际执行路径同步。六阶段 + 高级特性验证接入 + 内核热补丁推进至迭代 120。
 // 口径：仅保留当前仓库可见事实 + 本轮已执行验证结果。
 
 // ============================================================================
@@ -9,14 +9,14 @@
 // ============================================================================
 //
 // 文件统计：
-//   - .hl 文件总数：185（68 根目录 + 117 内核模块）
-//   - H-L 总行数：43,246（根 9,986 + 内核 33,260）
-//   - 内核模块函数数：1,499（源码计数）
-//   - scripts/*.ps1：22 个（8,816 行）
-//   - hl-bootstrap.hl：4,306 行 | stdlib.hl：1,385 行
-//   - kernel_entry.hl：9,565 行
-//   - kinterp.hl：1,245 行（含 IR VM）
-//   - Shell + 内核命令（去重）：112
+//   - .hl 文件总数：186（68 根目录 + 118 内核模块）
+//   - H-L 总行数：48,657（根 10,946 + 内核 37,711）
+//   - 内核模块函数数：1,520（源码计数）
+//   - scripts/*.ps1：22 个（9,965 行）
+//   - hl-bootstrap.hl：4,572 行 | stdlib.hl：1,545 行
+//   - kernel_entry.hl：10,609 行
+//   - kinterp.hl：1,341 行（含 IR VM）
+//   - Shell + 内核命令（去重）：113
 //   - kernel.bin：27,970 B | hicos-hl.img：160,256 B
 //   - 主入口：hl-bootstrap.cmd test / scripts/hl-bootstrap-build-test.ps1
 //
@@ -273,7 +273,7 @@
 //   - 编译: 119/119 | 1,804 符号 | 1,499 functions found | 0 warning
 
 // ============================================================================
-// 十、阶段 6 已完成（迭代 109-119）
+// 十、阶段 6 已完成（迭代 109-120）
 // ============================================================================
 //
 // 基于 EVOLUTION_PLAN 未完成目标重新排期：
@@ -283,9 +283,25 @@
 //   迭代 117：TCP 回环自测 ✓
 //   迭代 118：DNS 回环自测 ✓
 //   迭代 119：高级特性验证接入基线 ✓
+//   迭代 120：内核热补丁 (kmod.hl) ✓
+
+// Iteration 120 已完成：内核热补丁框架
+//   - 新建 kmod.hl：运行时模块加载/卸载/热替换框架
+//   - 64 模块槽位 × 128 B 元数据（state/name_hash/code_addr/version/ref_count/dep_mask/flags）
+//   - 256 trampoline 槽位：MOV RAX, imm64 + JMP RAX 原子重定向
+//   - 256 KB 连续代码 arena（16 字节对齐分配）
+//   - FNV-1a 哈希符号/模块名查找
+//   - kmod_load / kmod_activate / kmod_unload / kmod_hotpatch / kmod_replace
+//   - 引用计数延迟卸载（UNLOADING 状态 + ref_put 自动完成）
+//   - 依赖位掩码阻止被依赖模块提前卸载
+//   - kmod_selftest：11 步自测闭环
+//   - kernel_init.hl Phase 11 接入 kmod_init()
+//   - shell.hl：lsmod + kmodtest 命令
+//   - kernel_entry.hl：_ke_cmd_lsmod + _ke_cmd_kmodtest + 分发 + 帮助
+//   - 编译指标演进：118/118 模块 | 1,520 函数
+
 //
-// 远期规划（迭代 120+，对标 EVOLUTION_PLAN 第七章）：
-//   120: 内核热补丁 (kmod.hl) — 运行时模块替换
+// 远期规划（迭代 121+，对标 EVOLUTION_PLAN 第七章）：
 //   121: 音频管道 (audio→mixer) — AC97 PCM 播放
 //   122: GPU 2D 加速 — framebuffer 硬件 blit
 
@@ -299,13 +315,11 @@
 //   3. 本轮已复核
 
 fn advancement_status() {
-    print("=== HicOS 项目推进策划案（迭代 119 功能基线 + 后续维护同步版） ===");
-    print(".hl: 185 (68 root + 117 kernel) | 43,246 lines");
-    print("kernel fns: 1,499 | scripts: 22 (8,816 lines) | commands: 112");
-    print("compile: 119/119 modules | 0 warnings | 1 unresolved reloc");
-    print("symbols: 1,804 | relocs resolved: 264");
+    print("=== HicOS 项目推进策划案（迭代 120 功能基线） ===");
+    print(".hl: 186 (68 root + 118 kernel) | 48,657 lines");
+    print("kernel fns: 1,520 | scripts: 22 (9,965 lines) | commands: 113");
     print("kernel.bin: 27,970 B | hicos-hl.img: 160,256 B");
-    print("hl-bootstrap.hl: 4,306 lines | stdlib.hl: 1,385 lines");
+    print("hl-bootstrap.hl: 4,572 lines | stdlib.hl: 1,545 lines");
     print("主入口: hl-bootstrap.cmd test");
     print("");
     print("阶段 1 完成: iteration 81-84 (内存+排序)");
@@ -313,19 +327,18 @@ fn advancement_status() {
     print("阶段 3 完成: iteration 91-95 (外设+多核+页置换)");
     print("阶段 4 完成: iteration 97-101 (调度+内存+安全)");
     print("阶段 5 完成: iteration 103-107 (同步+IO+隔离)");
-    print("阶段 6 完成: iteration 109-119 (编译器+用户态+网络+自举+高级特性验证)");
+    print("阶段 6 完成: iteration 109-120 (编译器+用户态+网络+自举+高级特性+热补丁)");
     print("");
     print("三主线推进（对标 EVOLUTION_PLAN）:");
     print("  α 编译器: iter 109 链接器 + iter 110 IR VM + iter 116 heval 自举 ✓");
     print("  β 用户态: iter 111 execve ✓ | iter 113 fork生命周期 ✓ | iter 114 PTY ✓");
     print("  γ 网络:   iter 112 QUIC ✓ | iter 117 TCP回环 ✓ | iter 118 DNS回环 ✓ | iter 119 高级特性接入 ✓");
+    print("  δ 运行时: iter 120 kmod内核热补丁 ✓");
     print("");
-    print("下一步: iteration 120 (内核热补丁 kmod.hl)");
+    print("下一步: iteration 121 (音频管道 audio→mixer)");
 }
 
 advancement_status();
-
-
 
 
 

@@ -84,12 +84,15 @@ fn _ke_putc(ch) {
         }
         return 0;
     }
+    // Serial output (COM1)
     let mut ready = 0;
     while ready == 0 {
         let status = port_in_u8(1021); // COM1+5: line status
         ready = status / 32 % 2;       // bit 5 = TX empty
     }
     port_out_u8(1016, ch);             // COM1+0: data
+    // VGA text buffer output (0xB8000, 80x25)
+    vga_putchar(ch);
     return 0;
 }
 
@@ -8961,7 +8964,7 @@ fn _ke_cmd_help() {
     // "grep"
     _ke_putc(103); _ke_putc(114); _ke_putc(101); _ke_putc(112);
     _ke_putc(13); _ke_putc(10);
-    // Line 13: "      heval tcploop dnstest"
+    // Line 13: "      heval tcploop dnstest advtest"
     _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32);
     // "heval "
     _ke_putc(104); _ke_putc(101); _ke_putc(118); _ke_putc(97); _ke_putc(108);
@@ -8970,9 +8973,22 @@ fn _ke_cmd_help() {
     _ke_putc(116); _ke_putc(99); _ke_putc(112); _ke_putc(108);
     _ke_putc(111); _ke_putc(111); _ke_putc(112);
     _ke_putc(32);
-    // "dnstest"
+    // "dnstest "
     _ke_putc(100); _ke_putc(110); _ke_putc(115); _ke_putc(116);
     _ke_putc(101); _ke_putc(115); _ke_putc(116);
+    _ke_putc(32);
+    // "advtest"
+    _ke_putc(97); _ke_putc(100); _ke_putc(118); _ke_putc(116);
+    _ke_putc(101); _ke_putc(115); _ke_putc(116);
+    _ke_putc(13); _ke_putc(10);
+    // Line 14: "      lsmod kmodtest"
+    _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32);
+    // "lsmod "
+    _ke_putc(108); _ke_putc(115); _ke_putc(109); _ke_putc(111); _ke_putc(100);
+    _ke_putc(32);
+    // "kmodtest"
+    _ke_putc(107); _ke_putc(109); _ke_putc(111); _ke_putc(100);
+    _ke_putc(116); _ke_putc(101); _ke_putc(115); _ke_putc(116);
     _ke_putc(13); _ke_putc(10);
     return 0;
 }
@@ -9541,6 +9557,17 @@ fn _ke_cmd_advtest() {
     return 0;
 }
 
+// === Iteration 120: lsmod / kmodtest — kernel module hot-patching ===
+fn _ke_cmd_lsmod() {
+    kmod_status();
+    return 0;
+}
+
+fn _ke_cmd_kmodtest() {
+    kmod_selftest();
+    return 0;
+}
+
 // === Iteration 116: heval — kernel self-bootstrap prototype ===
 // Evaluate H-L expression inside kernel via kinterp_exec.
 // Usage: heval <expr>
@@ -9613,6 +9640,12 @@ fn _ke_dispatch(buf_addr, buf_len) {
         if c0 == 104 { if c1 == 111 { if c2 == 115 { if c3 == 116 {
             if c4 == 110 { if c5 == 97 { if c6 == 109 { if c7 == 101 {
                 _ke_cmd_hostname(); return 0;
+            } } } }
+        } } } }
+        // "kmodtest" (8): 107 109 111 100 116 101 115 116
+        if c0 == 107 { if c1 == 109 { if c2 == 111 { if c3 == 100 {
+            if c4 == 116 { if c5 == 101 { if c6 == 115 { if c7 == 116 {
+                _ke_cmd_kmodtest(); return 0;
             } } } }
         } } } }
     }
@@ -9984,6 +10017,10 @@ fn _ke_dispatch(buf_addr, buf_len) {
         // "mouse" (5): 109 111 117 115 101
         if c0 == 109 { if c1 == 111 { if c2 == 117 { if c3 == 115 { if c4 == 101 {
             _ke_cmd_mouse(); return 0;
+        } } } } }
+        // "lsmod" (5): 108 115 109 111 100
+        if c0 == 108 { if c1 == 115 { if c2 == 109 { if c3 == 111 { if c4 == 100 {
+            _ke_cmd_lsmod(); return 0;
         } } } } }
     }
 

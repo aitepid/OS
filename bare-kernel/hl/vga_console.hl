@@ -1,0 +1,235 @@
+// vga_console.hl -- VGA Text-Mode Console Driver
+//
+// Provides 80x25 text output to VGA-compatible video memory at 0xB8000.
+// This is the PRIMARY display output for bare-metal installation.
+// Every x86_64 PC (BIOS boot) starts in VGA text mode -- no mode switch needed.
+//
+// VGA text buffer format:
+//   Address: 0xB8000 (physical, identity-mapped)
+//   Size:    80 columns x 25 rows x 2 bytes = 4000 bytes
+//   Each character cell: [ascii_byte, attribute_byte]
+//   Attribute byte: [bg_color:4 | fg_color:4]
+//     0x07 = light gray on black (default)
+//     0x0F = white on black (bright)
+//     0x0A = green on black
+//     0x0C = red on black
+//     0x0E = yellow on black
+//     0x02 = dark green on black
+//
+// Cursor position tracked in memory at 0x300900:
+//   0x300900: vga_row (u64)
+//   0x300908: vga_col (u64)
+//
+// Iteration 121: bare-metal installation foundation
+
+let VGA_TEXT_BASE = 753664;     // 0xB8000
+let VGA_COLS = 80;
+let VGA_ROWS = 25;
+let VGA_ATTR_DEFAULT = 7;       // 0x07: light gray on black
+let VGA_ATTR_BRIGHT = 15;       // 0x0F: white on black
+let VGA_ATTR_OK = 10;           // 0x0A: green on black
+let VGA_ATTR_ERR = 12;          // 0x0C: red on black
+let VGA_ATTR_WARN = 14;         // 0x0E: yellow on black
+let VGA_ATTR_BANNER = 159;      // 0x9F: bright white on blue
+
+// Memory-mapped cursor state
+let VGA_ROW_ADDR = 3148032;     // 0x300900
+let VGA_COL_ADDR = 3148040;     // 0x300908
+let VGA_ATTR_ADDR = 3148048;    // 0x300910
+
+// Initialize VGA text-mode console
+fn vga_console_init() {
+    mem_write_u64(VGA_ROW_ADDR, 0);
+    mem_write_u64(VGA_COL_ADDR, 0);
+    mem_write_u64(VGA_ATTR_ADDR, VGA_ATTR_DEFAULT);
+    vga_console_clear();
+    return 0;
+}
+
+// Clear the entire screen
+fn vga_console_clear() {
+    let mut i = 0;
+    while i < VGA_COLS * VGA_ROWS {
+        mem_write_u8(VGA_TEXT_BASE + i * 2, 32);       // space
+        mem_write_u8(VGA_TEXT_BASE + i * 2 + 1, VGA_ATTR_DEFAULT);
+        i = i + 1;
+    }
+    mem_write_u64(VGA_ROW_ADDR, 0);
+    mem_write_u64(VGA_COL_ADDR, 0);
+    vga_update_cursor();
+    return 0;
+}
+
+// Scroll screen up by one line
+fn vga_console_scroll() {
+    // Copy rows 1..24 to rows 0..23
+    let mut i = 0;
+    while i < VGA_COLS * (VGA_ROWS - 1) {
+        let src = VGA_TEXT_BASE + (i + VGA_COLS) * 2;
+        let dst = VGA_TEXT_BASE + i * 2;
+        mem_write_u8(dst, mem_read_u8(src));
+        mem_write_u8(dst + 1, mem_read_u8(src + 1));
+        i = i + 1;
+    }
+    // Clear last row
+    let last_row_off = VGA_COLS * (VGA_ROWS - 1);
+    let mut j = 0;
+    while j < VGA_COLS {
+        mem_write_u8(VGA_TEXT_BASE + (last_row_off + j) * 2, 32);
+        mem_write_u8(VGA_TEXT_BASE + (last_row_off + j) * 2 + 1, VGA_ATTR_DEFAULT);
+        j = j + 1;
+    }
+    return 0;
+}
+
+// Update hardware cursor position via VGA CRTC registers (ports 0x3D4/0x3D5)
+fn vga_update_cursor() {
+    let row = mem_read_u64(VGA_ROW_ADDR);
+    let col = mem_read_u64(VGA_COL_ADDR);
+    let pos = row * VGA_COLS + col;
+    // Cursor Location Low Register (index 0x0F)
+    port_out_u8(980, 15);          // 0x3D4 = 980, index 0x0F
+    port_out_u8(981, pos % 256);   // 0x3D5
+    // Cursor Location High Register (index 0x0E)
+    port_out_u8(980, 14);          // index 0x0E
+    port_out_u8(981, pos / 256);   // 0x3D5
+    return 0;
+}
+
+// Write a single character at current cursor position
+fn vga_putchar(ch) {
+    let row = mem_read_u64(VGA_ROW_ADDR);
+    let col = mem_read_u64(VGA_COL_ADDR);
+    let attr = mem_read_u64(VGA_ATTR_ADDR);
+
+    if ch == 10 {
+        // Newline: move to start of next row
+        mem_write_u64(VGA_COL_ADDR, 0);
+        row = row + 1;
+        if row >= VGA_ROWS {
+            vga_console_scroll();
+            row = VGA_ROWS - 1;
+        }
+        mem_write_u64(VGA_ROW_ADDR, row);
+        vga_update_cursor();
+        return 0;
+    }
+    if ch == 13 {
+        // Carriage return: move to start of current row
+        mem_write_u64(VGA_COL_ADDR, 0);
+        vga_update_cursor();
+        return 0;
+    }
+    if ch == 8 {
+        // Backspace: move cursor left and erase
+        if col > 0 {
+            col = col - 1;
+            mem_write_u64(VGA_COL_ADDR, col);
+            let off = (row * VGA_COLS + col) * 2;
+            mem_write_u8(VGA_TEXT_BASE + off, 32);
+            mem_write_u8(VGA_TEXT_BASE + off + 1, attr);
+            vga_update_cursor();
+        }
+        return 0;
+    }
+    if ch == 9 {
+        // Tab: advance to next 8-column boundary
+        let target = ((col / 8) + 1) * 8;
+        if target >= VGA_COLS { target = VGA_COLS - 1; }
+        mem_write_u64(VGA_COL_ADDR, target);
+        vga_update_cursor();
+        return 0;
+    }
+
+    // Printable character
+    let off = (row * VGA_COLS + col) * 2;
+    mem_write_u8(VGA_TEXT_BASE + off, ch);
+    mem_write_u8(VGA_TEXT_BASE + off + 1, attr);
+    col = col + 1;
+    if col >= VGA_COLS {
+        col = 0;
+        row = row + 1;
+        if row >= VGA_ROWS {
+            vga_console_scroll();
+            row = VGA_ROWS - 1;
+        }
+        mem_write_u64(VGA_ROW_ADDR, row);
+    }
+    mem_write_u64(VGA_COL_ADDR, col);
+    vga_update_cursor();
+    return 0;
+}
+
+// Print a string to VGA console
+fn vga_print(text) {
+    let mut i = 0;
+    while i < len(text) {
+        vga_putchar(char_at(text, i));
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Print a string followed by newline
+fn vga_println(text) {
+    vga_print(text);
+    vga_putchar(13);
+    vga_putchar(10);
+    return 0;
+}
+
+// Set text attribute for subsequent writes
+fn vga_set_attr(attr) {
+    mem_write_u64(VGA_ATTR_ADDR, attr);
+    return 0;
+}
+
+// Print with specific attribute, then restore default
+fn vga_print_colored(text, attr) {
+    let saved = mem_read_u64(VGA_ATTR_ADDR);
+    vga_set_attr(attr);
+    vga_print(text);
+    vga_set_attr(saved);
+    return 0;
+}
+
+// Dual output: print to both serial AND VGA console
+// This is the primary output function for bare-metal visibility
+fn dual_print(text) {
+    serial_print(text);
+    vga_println(text);
+    return 0;
+}
+
+// Dual putchar: output to both serial AND VGA
+fn dual_putchar(ch) {
+    _ke_putc(ch);
+    vga_putchar(ch);
+    return 0;
+}
+
+// Print boot banner with colored output
+fn vga_boot_banner() {
+    vga_set_attr(VGA_ATTR_BANNER);
+    vga_print("  HicOS 6.0 -- Hilbert-Lang Kernel  ");
+    vga_set_attr(VGA_ATTR_DEFAULT);
+    vga_putchar(13);
+    vga_putchar(10);
+    return 0;
+}
+
+// Print status line: "[ok] message" in green
+fn vga_print_ok(msg) {
+    vga_print_colored("  [ok] ", VGA_ATTR_OK);
+    vga_println(msg);
+    return 0;
+}
+
+// Print error line: "[ERR] message" in red
+fn vga_print_err(msg) {
+    vga_print_colored("  [ERR] ", VGA_ATTR_ERR);
+    vga_println(msg);
+    return 0;
+}
+
+print("vga_console.hl loaded -- VGA text-mode console (80x25, 0xB8000)");

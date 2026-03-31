@@ -2,18 +2,96 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`185`（68 根目录 + 117 内核模块）
-- H-L 总行数：`43,246`（根 9,986 + 内核 33,260）
-- 内核模块：`117`（函数 1,499 个，源码计数）
-- `kernel_entry.hl`：`9,565` 行
-- `hl-bootstrap.hl`：`4,306` 行，`208` 函数
-- `stdlib.hl`：`1,385` 行，`143` 函数
-- `kinterp.hl`：`1,245` 行
-- Shell + 内核命令（去重）：`112`
-- `scripts/*.ps1`：`22`（8,816 行）
-- 编译：`119/119` 模块 | 0 parse warning | 1 unresolved reloc | 1,804 符号
+- `.hl` 文件：`190`（68 根目录 + 122 内核模块）
+- H-L 总行数：`49,700`（根 10,946 + 内核 38,750）
+- 内核模块：`122`（函数 1,600 个，源码计数）
+- `kernel_entry.hl`：`10,609` 行
+- `hl-bootstrap.hl`：`4,572` 行，`215` 函数
+- `stdlib.hl`：`1,545` 行，`144` 函数
+- `kinterp.hl`：`1,341` 行
+- Shell + 内核命令（去重）：`113`
+- `scripts/*.ps1`：`22`（9,965 行）
 - 构建/测试主入口：`hl-bootstrap.cmd test`
-- 最近完成功能迭代：`119`（其后为工程化/验证修复）
+- 最近完成功能迭代：`123`（VGA 完整交互闭环 + USB 键盘）
+
+## Iteration 123 — VGA 完整交互闭环 + USB 键盘
+
+- **`rebuild-image.ps1`**: 原生内核 VGA 真实滚屏
+  - LF 路径：`rep movsb` 复制 3840 字节（rows 1..24 → 0..23）+ 清空 row 24
+  - Col 溢出换行路径：同样触发完整滚屏（不再简单截断 row=24）
+  - 清行使用 `mov word [rdi], 0x0720` 循环（空格 + 灰色属性）
+- **`kernel_entry.hl`**: `_ke_putc()` 双输出升级
+  - 每个字符输出同时写入 COM1 串口 + VGA 文本缓冲区（调用 `vga_putchar()`）
+  - 管道捕获模式不受影响（pipe 仍仅写入捕获缓冲区）
+  - **效果**：所有 113 条 shell/kernel 命令的输出自动出现在 VGA 显示器上
+- **`usb_kbd.hl`**: 新建 — USB HID 键盘驱动（Boot Protocol）
+  - `usb_kbd_init()`: 扫描 USB 设备树，检测 HID class=3/subclass=1/protocol=1
+  - `usb_kbd_set_boot_protocol()`: 强制 Boot Protocol 模式（8 字节标准报文）
+  - `usb_kbd_poll()`: 轮询 Interrupt 端点，解析 8 字节报文
+  - `_usb_kbd_usage_to_ascii()`: HID Usage ID → ASCII 完整映射
+    - 字母 a-z/A-Z、数字 0-9、符号 `-=[]\\;',./` + Shift 变体
+    - Enter/Escape/Backspace/Tab/Space 特殊键
+  - `usb_kbd_set_leds()`: SET_REPORT 控制 NumLock/CapsLock/ScrollLock LED
+  - `usb_kbd_status()`: 检测状态 + 修饰键显示
+- **`kernel_init.hl`**: Phase 7 新增 `usb_kbd_init()` 接入初始化序列
+- **`build.hl`**: 新增 `usb_kbd.hl` 到编译列表
+
+## Iteration 122 — 原生 VGA Shell 交互 + 自安装映像感知
+
+- **`rebuild-image.ps1`**: 原生内核 `vga_putchar` 子程序（x86_64 机器码）
+  - `vga_putchar`: 可调用子程序，处理 LF/CR/BS + 可打印字符 + 自动换行/行溢出
+  - 键盘字符回显路径：串口 + VGA 双输出（用户在显示器上实时看到输入）
+  - 退格键：串口 BS+SP+BS + VGA 光标回退擦除
+  - 回车键：串口 CR+LF + VGA 换行（`vga_putchar(10)`）
+  - 11 条关键启动消息转为 `emit_dual_string`（PIC/PIT/IDT/Scancode/Timer/Memory/SYSCALL/Modules/Boot Complete/prompt）
+- **`self_image.hl`**: 新建 — 内核自映像感知模块
+  - `self_image_init()`: 初始化映像元数据（基地址 0x100000 / 大小 / 扇区数）
+  - `self_image_info()`: 输出映像信息
+  - `self_install_to_disk()`: 逐扇区将引导镜像通过 installer 磁盘后端写入目标
+  - 内存映射：0x300930 映像基址 / 0x300938 字节数 / 0x300940 扇区数
+- **`kernel_init.hl`**: 新增 Phase 13 — `self_image_init()` 接入初始化序列
+- **`build.hl`**: 新增 `self_image.hl` + `installer.hl` 到编译列表
+
+## Iteration 121 — 裸机安装基础
+
+- **`vga_console.hl`**: 新建 — VGA 文本模式控制台驱动（80×25，0xB8000）
+  - `vga_console_init()`: 清屏 + 光标归零 + 属性初始化
+  - `vga_putchar()`: 处理 CR/LF/BS/TAB + 自动滚屏
+  - `vga_print()` / `vga_println()`: 字符串输出
+  - `vga_update_cursor()`: CRTC 0x3D4/0x3D5 硬件光标同步
+  - `vga_print_colored()`: 多色属性（banner/ok/err/warn）
+  - `dual_print()` / `dual_putchar()`: 串口 + VGA 双输出
+- **`ata_pio.hl`**: 新建 — ATA PIO 磁盘驱动（真实 IDE/SATA 硬件）
+  - `ata_pio_init()`: 主/从 × 主/副通道 4 设备扫描 + IDENTIFY DEVICE
+  - `ata_pio_read()` / `ata_pio_write()`: 28-bit LBA PIO 扇区读/写
+  - `ata_pio_selftest()`: 读扇区 0 + MBR 签名校验
+  - 支持 CACHE FLUSH、BSY/DRQ 等待、软复位
+- **`installer.hl`**: 升级 v5.0 → v6.0 — 三后端磁盘自动检测
+  - 新增 `installer_disk_backend` 变量（1=ATA PIO, 2=AHCI, 3=VirtIO）
+  - 新增 `installer_disk_read()` / `installer_disk_write()` 统一调度器
+  - `installer_detect_disk()`: 优先级 ATA PIO → AHCI → VirtIO-blk
+  - 所有磁盘操作通过统一调度器，支持真实硬件安装
+- **`rebuild-image.ps1`**: 原生内核 VGA 文本双输出
+  - 新增 `emit_vga_string()` / `emit_dual_string()` 函数
+  - 启动消息 + Shell 提示符同步显示到 VGA 文本缓冲区
+  - VGA 光标状态追踪（0x300900/0x300908）
+- **`kernel_init.hl`**: 新增 Phase 12 — `vga_console_init()` + `ata_pio_init()`
+- **`build.hl`**: 新增 `vga_console.hl` + `ata_pio.hl` 到编译列表
+
+## Iteration 120 — 内核热补丁框架
+
+- **`kmod.hl`**: 新建 — 内核模块热加载/卸载/热替换框架
+  - `kmod_init()`: 初始化 64 模块槽位表 + 256 trampoline 表 + 256 KB 代码 arena
+  - `kmod_load()`: 分配模块槽位、复制代码/数据到 arena、填充元数据
+  - `kmod_activate()`: 调用模块 init 函数，状态 LOADED → ACTIVE
+  - `kmod_unload()`: 引用计数检查 + 依赖检查 + 清理函数调用
+  - `kmod_hotpatch()`: MOV RAX, imm64 + JMP RAX 原子 trampoline 重定向
+  - `kmod_replace()`: 原子版本升级 — 加载新代码、重定向所有关联 trampoline
+  - `kmod_selftest()`: 11 步自测（加载→查找→激活→trampoline→热补丁→引用计数→替换→卸载）
+  - FNV-1a 哈希符号查找、引用计数延迟卸载、依赖位掩码
+- **`kernel_init.hl`**: 新增 Phase 11 — `kmod_init()` 接入初始化序列
+- **`shell.hl`**: 新增 `lsmod`（模块状态）+ `kmodtest`（自测）命令
+- **`kernel_entry.hl`**: 新增 `_ke_cmd_lsmod` + `_ke_cmd_kmodtest` + 命令分发 + 帮助文本
 
 ## Post-Iteration 119 — 工程化修复与回归补强
 

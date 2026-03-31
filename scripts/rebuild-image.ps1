@@ -374,6 +374,64 @@ if ((Test-Path $kernelBinPath) -and (Test-Path $kernelEntryPath)) {
 $script:buf = [System.Collections.ArrayList]::new()
 $COM1 = [uint32]0x3F8
 
+# --- VGA Text Mode state addresses ---
+# 0x300900: vga_row, 0x300908: vga_col (tracked by kernel)
+$VGA_TEXT_BASE = [uint32]0xB8000
+$VGA_ROW_ADDR = [uint32]0x300900
+$VGA_COL_ADDR = [uint32]0x300908
+
+# Helper: emit VGA text-mode string write (white on black)
+# Writes string directly to VGA text buffer and advances cursor.
+# Destroys: RDI, RSI, RAX, RCX, RDX. Preserves: RBX.
+function emit_vga_string([string]$text) {
+    foreach ($ch in $text.ToCharArray()) {
+        $code = [int]$ch
+        if ($code -eq 13) { continue }  # skip CR, handle LF only
+        if ($code -eq 10) {
+            # Newline: col=0, row++
+            # mov qword [VGA_COL_ADDR], 0
+            buf_emit 0x48; buf_emit 0xC7; buf_emit 0x04; buf_emit 0x25
+            buf_emit32 $VGA_COL_ADDR; buf_emit32 0
+            # inc qword [VGA_ROW_ADDR]
+            buf_emit 0x48; buf_emit 0xFF; buf_emit 0x04; buf_emit 0x25
+            buf_emit32 $VGA_ROW_ADDR
+            continue
+        }
+        # Calculate offset: (row * 80 + col) * 2
+        # mov rax, [VGA_ROW_ADDR]
+        buf_emit 0x48; buf_emit 0x8B; buf_emit 0x04; buf_emit 0x25; buf_emit32 $VGA_ROW_ADDR
+        # imul rax, 80
+        buf_emit 0x48; buf_emit 0x6B; buf_emit 0xC0; buf_emit 80
+        # add rax, [VGA_COL_ADDR]
+        buf_emit 0x48; buf_emit 0x03; buf_emit 0x04; buf_emit 0x25; buf_emit32 $VGA_COL_ADDR
+        # shl rax, 1  (multiply by 2)
+        buf_emit 0x48; buf_emit 0xD1; buf_emit 0xE0
+        # mov rdi, VGA_TEXT_BASE; add rdi, rax
+        buf_emit 0x48; buf_emit 0xBF; buf_emit32 $VGA_TEXT_BASE; buf_emit32 0
+        buf_emit 0x48; buf_emit 0x01; buf_emit 0xC7  # add rdi, rax
+        # mov byte [rdi], char
+        buf_emit 0xC6; buf_emit 0x07; buf_emit ([byte]$code)
+        # mov byte [rdi+1], 0x07 (light gray on black)
+        buf_emit 0xC6; buf_emit 0x47; buf_emit 1; buf_emit 0x07
+        # inc qword [VGA_COL_ADDR]
+        buf_emit 0x48; buf_emit 0xFF; buf_emit 0x04; buf_emit 0x25; buf_emit32 $VGA_COL_ADDR
+    }
+}
+
+# Helper: emit dual output (serial + VGA)
+function emit_dual_string([string]$text, [uint32]$com1) {
+    emit_serial_string $text $com1
+    emit_vga_string $text
+}
+
+# --- Initialize VGA cursor state ---
+# mov qword [VGA_ROW_ADDR], 0
+buf_emit 0x48; buf_emit 0xC7; buf_emit 0x04; buf_emit 0x25
+buf_emit32 $VGA_ROW_ADDR; buf_emit32 0
+# mov qword [VGA_COL_ADDR], 0
+buf_emit 0x48; buf_emit 0xC7; buf_emit 0x04; buf_emit 0x25
+buf_emit32 $VGA_COL_ADDR; buf_emit32 0
+
 # --- Serial port init (COM1 38400 8N1) ---
 emit_mov_edx_imm32 ($COM1 + 1); emit_mov_al_imm8 0; emit_out_dx_al    # disable interrupts
 emit_mov_edx_imm32 ($COM1 + 3); emit_mov_al_imm8 0x80; emit_out_dx_al # DLAB on
@@ -383,10 +441,10 @@ emit_mov_edx_imm32 ($COM1 + 3); emit_mov_al_imm8 3; emit_out_dx_al    # 8N1
 emit_mov_edx_imm32 ($COM1 + 2); emit_mov_al_imm8 0xC7; emit_out_dx_al # FIFO
 emit_mov_edx_imm32 ($COM1 + 4); emit_mov_al_imm8 0x0B; emit_out_dx_al # IRQ + RTS/DSR
 
-# --- Boot banner ---
-emit_serial_string "HicOS 6.0 -- Hilbert-Lang Kernel`r`n" $COM1
-emit_serial_string "=== Kernel Init ===`r`n" $COM1
-emit_serial_string "  [ok] Serial: COM1 38400 8N1`r`n" $COM1
+# --- Boot banner (dual output: serial + VGA monitor) ---
+emit_dual_string "HicOS 6.0 -- Hilbert-Lang Kernel`r`n" $COM1
+emit_dual_string "=== Kernel Init ===`r`n" $COM1
+emit_dual_string "  [ok] Serial: COM1 38400 8N1`r`n" $COM1
 
 # --- Remap PIC ---
 emit_mov_edx_imm32 0x20; emit_mov_al_imm8 0x11; emit_out_dx_al   # PIC1 ICW1
@@ -399,13 +457,13 @@ emit_mov_edx_imm32 0x21; emit_mov_al_imm8 1; emit_out_dx_al      # PIC1 ICW4: 80
 emit_mov_edx_imm32 0xA1; emit_mov_al_imm8 1; emit_out_dx_al      # PIC2 ICW4: 8086
 emit_mov_edx_imm32 0x21; emit_mov_al_imm8 0xFC; emit_out_dx_al   # unmask IRQ0+1
 emit_mov_edx_imm32 0xA1; emit_mov_al_imm8 0xFF; emit_out_dx_al   # mask PIC2
-emit_serial_string "  [ok] PIC: 8259A remapped (IRQ0=vec32, IRQ1=vec33)`r`n" $COM1
+emit_dual_string "  [ok] PIC: 8259A remapped`r`n" $COM1
 
 # --- PIT 100Hz ---
 emit_mov_edx_imm32 0x43; emit_mov_al_imm8 0x36; emit_out_dx_al   # PIT cmd
 emit_mov_edx_imm32 0x40; emit_mov_al_imm8 0x9C; emit_out_dx_al   # divisor lo
 emit_mov_al_imm8 0x2E; emit_out_dx_al                              # divisor hi
-emit_serial_string "  [ok] PIT: 100 Hz timer`r`n" $COM1
+emit_dual_string "  [ok] PIT: 100 Hz timer`r`n" $COM1
 
 # --- Build IDT at 0x200000 ---
 $idt_base = [uint32]0x200000
@@ -576,7 +634,7 @@ buf_emit 0x25                                   # SIB = [disp32]
 buf_emit32 $idtr_addr
 
 emit_sti
-emit_serial_string "  [ok] IDT: 256 vectors, ISR stubs at 0x210000`r`n" $COM1
+emit_dual_string "  [ok] IDT: 256 vectors`r`n" $COM1
 # --- Scancode to ASCII lookup table at 0x300100 ---
 # Write PS/2 Set 1 scancode→ASCII table (128 entries, 1 byte each)
 # 0x300100 + scancode = ASCII char (0 = no mapping)
@@ -616,11 +674,11 @@ for ($si = 0; $si -lt 128; $si++) {
         buf_emit 0x88; buf_emit 0x02  # mov [rdx], al
     }
 }
-emit_serial_string "  [ok] Scancode table: PS/2 Set 1 loaded`r`n" $COM1
+emit_dual_string "  [ok] Scancode: PS/2 loaded`r`n" $COM1
 
 # --- Print tick count and memory info ---
 buf_emit 0x48; buf_emit 0x8B; buf_emit 0x04; buf_emit 0x25; buf_emit32 0x300000
-emit_serial_string "  [ok] Timer ticks: active`r`n" $COM1
+emit_dual_string "  [ok] Timer ticks: active`r`n" $COM1
 
 # --- PCI Bus Scan ---
 # Enumerate PCI bus 0, scan devices 0-31, function 0
@@ -1481,7 +1539,7 @@ buf_set ($jz_no_net_patch + 3) ([byte](($jz_net_rel -shr 8) -band 0xFF))
 buf_set ($jz_no_net_patch + 4) ([byte](($jz_net_rel -shr 16) -band 0xFF))
 buf_set ($jz_no_net_patch + 5) ([byte](($jz_net_rel -shr 24) -band 0xFF))
 
-emit_serial_string "  [ok] Memory: 8MB identity mapped`r`n" $COM1
+emit_dual_string "  [ok] Memory: 8MB identity mapped`r`n" $COM1
 
 # Save VESA framebuffer address from [0x7000] to [0x3002B8]
 buf_emit 0x8B; buf_emit 0x04; buf_emit 0x25; buf_emit32 0x7000  # mov eax, [0x7000]
@@ -1550,7 +1608,7 @@ buf_emit 0xB8; buf_emit32 0x200       # mov eax, 0x200 (IF)
 buf_emit 0x31; buf_emit 0xD2          # xor edx, edx
 buf_emit 0x0F; buf_emit 0x30          # wrmsr
 
-emit_serial_string "  [ok] SYSCALL: STAR/LSTAR/FMASK configured, TSS loaded`r`n" $COM1
+emit_dual_string "  [ok] SYSCALL: configured`r`n" $COM1
 
 # Jump past SYSCALL entry stub
 $jmp_past_syscall = buf_len
@@ -1630,8 +1688,8 @@ $b_ps = [System.BitConverter]::GetBytes([int32]$rel_ps)
 buf_set ($jmp_past_syscall + 1) $b_ps[0]; buf_set ($jmp_past_syscall + 2) $b_ps[1]
 buf_set ($jmp_past_syscall + 3) $b_ps[2]; buf_set ($jmp_past_syscall + 4) $b_ps[3]
 
-emit_serial_string "  [ok] Modules: 113 kernel, 27 userspace`r`n" $COM1
-emit_serial_string "=== Boot Complete (all subsystems nominal) ===`r`n" $COM1
+emit_dual_string "  [ok] Modules: 113 kernel, 27 userspace`r`n" $COM1
+emit_dual_string "=== Boot Complete ===`r`n" $COM1
 
 # === Call appended `kernel.bin` entrypoint when present ===
 # Absolute address = 0x120000 + `_start` offset (read from `kernel.entry`)
@@ -1646,9 +1704,7 @@ if ($kb_entry_offset -ge 0 -and (Test-Path (Join-Path $PSScriptRoot '..\bare-ker
     buf_emit 0xFF; buf_emit 0xD0
 }
 
-emit_serial_string "HicOS> " $COM1
-
-# Jump past serial_puts subroutine (it's a callable function, not inline code)
+emit_dual_string "HicOS> " $COM1
 buf_emit 0xE9  # jmp rel32
 $jmp_past_puts_patch = buf_len
 buf_emit32 0  # patched after subroutine
@@ -1924,7 +1980,141 @@ buf_emit 0x58  # pop rax (restore len)
 buf_emit 0x59  # pop rcx
 emit_ret
 
-# Patch the jump past subroutines (serial_puts + disk_rw + net_send + net_rx_poll)
+# === vga_putchar subroutine ===
+# Write character in BL to VGA text buffer at current cursor position.
+# Handles: printable chars, CR (13), LF (10), BS (8)
+# Clobbers: RAX, RCX, RDX, RDI. Preserves: RBX, RSI.
+$vga_putchar_off = buf_len
+
+# Check LF (10): newline -> col=0, row++
+buf_emit 0x80; buf_emit 0xFB; buf_emit 10  # cmp bl, 10
+buf_emit 0x75; buf_emit 0  # jne .not_lf (patched)
+$jne_not_lf_patch = (buf_len) - 1
+# col = 0
+buf_emit 0x48; buf_emit 0xC7; buf_emit 0x04; buf_emit 0x25
+buf_emit32 $VGA_COL_ADDR; buf_emit32 0
+# row++
+buf_emit 0x48; buf_emit 0xFF; buf_emit 0x04; buf_emit 0x25; buf_emit32 $VGA_ROW_ADDR
+# Check row >= 25 -> scroll
+buf_emit 0x48; buf_emit 0x83; buf_emit 0x3C; buf_emit 0x25; buf_emit32 $VGA_ROW_ADDR; buf_emit 25
+buf_emit 0x7C; buf_emit 0  # jl .lf_done (patched)
+$jl_lf_done_patch = (buf_len) - 1
+# === VGA SCROLL: copy rows 1..24 to 0..23, clear row 24 ===
+# row = 24
+buf_emit 0x48; buf_emit 0xC7; buf_emit 0x04; buf_emit 0x25
+buf_emit32 $VGA_ROW_ADDR; buf_emit32 24
+# Save RBX (caller's char), RSI
+buf_emit 0x53  # push rbx
+buf_emit 0x56  # push rsi
+# Copy 24 rows * 160 bytes = 3840 bytes from 0xB80A0 to 0xB8000
+# mov rdi, 0xB8000 (dest = row 0)
+buf_emit 0x48; buf_emit 0xBF; buf_emit32 $VGA_TEXT_BASE; buf_emit32 0
+# mov rsi, 0xB80A0 (src = row 1 = 0xB8000 + 160)
+buf_emit 0x48; buf_emit 0xBE; buf_emit32 ([uint32]($VGA_TEXT_BASE + 160)); buf_emit32 0
+# mov rcx, 3840 (24 rows * 160 bytes)
+buf_emit 0x48; buf_emit 0xC7; buf_emit 0xC1; buf_emit32 3840
+# cld; rep movsb
+emit_cld
+buf_emit 0xF3; buf_emit 0xA4  # rep movsb
+# Clear row 24: fill 160 bytes at 0xB8000 + 24*160 = 0xB8F00 with space+attr
+# mov rdi, 0xB8F00
+buf_emit 0x48; buf_emit 0xBF; buf_emit32 ([uint32]($VGA_TEXT_BASE + 24 * 160)); buf_emit32 0
+# mov rcx, 80 (80 character cells)
+buf_emit 0x48; buf_emit 0xC7; buf_emit 0xC1; buf_emit32 80
+# .clear_loop: mov word [rdi], 0x0720 (space + light gray attr); add rdi, 2; dec rcx; jnz
+$vga_clear_loop = buf_len
+buf_emit 0x66; buf_emit 0xC7; buf_emit 0x07; buf_emit 0x20; buf_emit 0x07  # mov word [rdi], 0x0720
+buf_emit 0x48; buf_emit 0x83; buf_emit 0xC7; buf_emit 2  # add rdi, 2
+buf_emit 0x48; buf_emit 0xFF; buf_emit 0xC9  # dec rcx
+buf_emit 0x75; buf_emit ([byte](($vga_clear_loop - (buf_len) - 1) -band 0xFF))  # jnz .clear_loop
+# Restore RSI, RBX
+buf_emit 0x5E  # pop rsi
+buf_emit 0x5B  # pop rbx
+# .lf_done:
+buf_set $jl_lf_done_patch ([byte]((buf_len) - $jl_lf_done_patch - 1))
+emit_ret
+# .not_lf:
+buf_set $jne_not_lf_patch ([byte]((buf_len) - $jne_not_lf_patch - 1))
+
+# Check CR (13): col=0
+buf_emit 0x80; buf_emit 0xFB; buf_emit 13  # cmp bl, 13
+buf_emit 0x75; buf_emit 0  # jne .not_cr
+$jne_not_cr_patch = (buf_len) - 1
+buf_emit 0x48; buf_emit 0xC7; buf_emit 0x04; buf_emit 0x25
+buf_emit32 $VGA_COL_ADDR; buf_emit32 0
+emit_ret
+buf_set $jne_not_cr_patch ([byte]((buf_len) - $jne_not_cr_patch - 1))
+
+# Check BS (8): col-- and erase
+buf_emit 0x80; buf_emit 0xFB; buf_emit 8  # cmp bl, 8
+buf_emit 0x75; buf_emit 0  # jne .not_bs
+$jne_not_vbs_patch = (buf_len) - 1
+# if col > 0: col--
+buf_emit 0x48; buf_emit 0x83; buf_emit 0x3C; buf_emit 0x25; buf_emit32 $VGA_COL_ADDR; buf_emit 0
+buf_emit 0x74; buf_emit 0  # je .bs_done
+$je_vbs_done_patch = (buf_len) - 1
+# dec col
+buf_emit 0x48; buf_emit 0xFF; buf_emit 0x0C; buf_emit 0x25; buf_emit32 $VGA_COL_ADDR
+# Erase: compute offset, write space+attr
+buf_emit 0x48; buf_emit 0x8B; buf_emit 0x04; buf_emit 0x25; buf_emit32 $VGA_ROW_ADDR  # mov rax, [row]
+buf_emit 0x48; buf_emit 0x6B; buf_emit 0xC0; buf_emit 80  # imul rax, 80
+buf_emit 0x48; buf_emit 0x03; buf_emit 0x04; buf_emit 0x25; buf_emit32 $VGA_COL_ADDR  # add rax, [col]
+buf_emit 0x48; buf_emit 0xD1; buf_emit 0xE0  # shl rax, 1
+buf_emit 0x48; buf_emit 0xBF; buf_emit32 $VGA_TEXT_BASE; buf_emit32 0  # mov rdi, 0xB8000
+buf_emit 0x48; buf_emit 0x01; buf_emit 0xC7  # add rdi, rax
+buf_emit 0xC6; buf_emit 0x07; buf_emit 0x20  # mov byte [rdi], ' '
+buf_emit 0xC6; buf_emit 0x47; buf_emit 1; buf_emit 0x07  # mov byte [rdi+1], 0x07
+# .bs_done:
+buf_set $je_vbs_done_patch ([byte]((buf_len) - $je_vbs_done_patch - 1))
+emit_ret
+buf_set $jne_not_vbs_patch ([byte]((buf_len) - $jne_not_vbs_patch - 1))
+
+# Default: printable character in BL
+# Compute VGA offset: (row * 80 + col) * 2
+buf_emit 0x48; buf_emit 0x8B; buf_emit 0x04; buf_emit 0x25; buf_emit32 $VGA_ROW_ADDR
+buf_emit 0x48; buf_emit 0x6B; buf_emit 0xC0; buf_emit 80  # imul rax, 80
+buf_emit 0x48; buf_emit 0x03; buf_emit 0x04; buf_emit 0x25; buf_emit32 $VGA_COL_ADDR
+buf_emit 0x48; buf_emit 0xD1; buf_emit 0xE0  # shl rax, 1
+buf_emit 0x48; buf_emit 0xBF; buf_emit32 $VGA_TEXT_BASE; buf_emit32 0
+buf_emit 0x48; buf_emit 0x01; buf_emit 0xC7  # add rdi, rax
+# Write char + attribute
+buf_emit 0x88; buf_emit 0x1F  # mov byte [rdi], bl
+buf_emit 0xC6; buf_emit 0x47; buf_emit 1; buf_emit 0x07  # mov byte [rdi+1], 0x07
+# Advance col
+buf_emit 0x48; buf_emit 0xFF; buf_emit 0x04; buf_emit 0x25; buf_emit32 $VGA_COL_ADDR
+# If col >= 80: col=0, row++
+buf_emit 0x48; buf_emit 0x83; buf_emit 0x3C; buf_emit 0x25; buf_emit32 $VGA_COL_ADDR; buf_emit 80
+buf_emit 0x7C; buf_emit 0  # jl .no_wrap
+$jl_nowrap_patch = (buf_len) - 1
+buf_emit 0x48; buf_emit 0xC7; buf_emit 0x04; buf_emit 0x25; buf_emit32 $VGA_COL_ADDR; buf_emit32 0
+buf_emit 0x48; buf_emit 0xFF; buf_emit 0x04; buf_emit 0x25; buf_emit32 $VGA_ROW_ADDR
+# If row >= 25: call vga_putchar with LF to trigger scroll
+buf_emit 0x48; buf_emit 0x83; buf_emit 0x3C; buf_emit 0x25; buf_emit32 $VGA_ROW_ADDR; buf_emit 25
+buf_emit 0x7C; buf_emit 0  # jl .no_wrap2
+$jl_nowrap2_patch = (buf_len) - 1
+# Scroll inline: same as LF scroll above
+buf_emit 0x48; buf_emit 0xC7; buf_emit 0x04; buf_emit 0x25
+buf_emit32 $VGA_ROW_ADDR; buf_emit32 24
+buf_emit 0x53; buf_emit 0x56  # push rbx, rsi
+buf_emit 0x48; buf_emit 0xBF; buf_emit32 $VGA_TEXT_BASE; buf_emit32 0
+buf_emit 0x48; buf_emit 0xBE; buf_emit32 ([uint32]($VGA_TEXT_BASE + 160)); buf_emit32 0
+buf_emit 0x48; buf_emit 0xC7; buf_emit 0xC1; buf_emit32 3840
+emit_cld
+buf_emit 0xF3; buf_emit 0xA4  # rep movsb
+buf_emit 0x48; buf_emit 0xBF; buf_emit32 ([uint32]($VGA_TEXT_BASE + 24 * 160)); buf_emit32 0
+buf_emit 0x48; buf_emit 0xC7; buf_emit 0xC1; buf_emit32 80
+$vga_wrap_clear = buf_len
+buf_emit 0x66; buf_emit 0xC7; buf_emit 0x07; buf_emit 0x20; buf_emit 0x07
+buf_emit 0x48; buf_emit 0x83; buf_emit 0xC7; buf_emit 2
+buf_emit 0x48; buf_emit 0xFF; buf_emit 0xC9
+buf_emit 0x75; buf_emit ([byte](($vga_wrap_clear - (buf_len) - 1) -band 0xFF))
+buf_emit 0x5E; buf_emit 0x5B  # pop rsi, rbx
+buf_set $jl_nowrap2_patch ([byte]((buf_len) - $jl_nowrap2_patch - 1))
+# .no_wrap:
+buf_set $jl_nowrap_patch ([byte]((buf_len) - $jl_nowrap_patch - 1))
+emit_ret
+
+# Patch the jump past subroutines (serial_puts + disk_rw + net_send + net_rx_poll + vga_putchar)
 $past_puts_off = buf_len
 $rel_pp = $past_puts_off - $jmp_past_puts_patch - 4
 $bytes_pp = [System.BitConverter]::GetBytes([int32]$rel_pp)
@@ -2062,6 +2252,10 @@ foreach ($bsc in @(8, 32, 8)) {
     buf_emit 0x74; buf_emit 0xF6
     emit_mov_edx_imm32 $COM1; emit_mov_al_imm8 $bsc; emit_out_dx_al
 }
+# Erase character on VGA: call vga_putchar with BL=8 (backspace)
+buf_emit 0xB3; buf_emit 8  # mov bl, 8
+buf_emit 0x48; buf_emit 0xB8; buf_emit32 $vga_putchar_off; buf_emit32 0  # mov rax, vga_putchar
+buf_emit 0xFF; buf_emit 0xD0  # call rax
 # jmp loop_start
 buf_emit 0xE9; buf_emit32_signed ($loop_start - (buf_len) - 4)
 # not_bs: patch jne
@@ -2088,7 +2282,7 @@ buf_emit 0xB9; buf_emit32 136  # mov ecx, 136
 emit_cld
 buf_emit 0xF3; buf_emit 0xAA  # rep stosb
 # Print prompt
-emit_serial_string "HicOS> " $COM1
+emit_dual_string "HicOS> " $COM1
 # jmp loop_start
 buf_emit 0xE9; buf_emit32_signed ($loop_start - (buf_len) - 4)
 
@@ -2117,6 +2311,9 @@ buf_emit 0x74; buf_emit 0xF6
 buf_emit 0x48; buf_emit 0x89; buf_emit 0xD8  # mov rax, rbx
 emit_mov_edx_imm32 $COM1
 emit_out_dx_al
+# Echo character via VGA
+buf_emit 0x48; buf_emit 0xB8; buf_emit32 $vga_putchar_off; buf_emit32 0  # mov rax, vga_putchar
+buf_emit 0xFF; buf_emit 0xD0  # call rax
 # jmp loop_start
 buf_emit 0xE9; buf_emit32_signed ($loop_start - (buf_len) - 4)
 
@@ -2129,8 +2326,12 @@ $rel_disp = $cmd_dispatch - $jmp_to_dispatch - 4
 $bytes_d = [System.BitConverter]::GetBytes([int32]$rel_disp)
 for ($p = 0; $p -lt 4; $p++) { buf_set ($jmp_to_dispatch + $p) $bytes_d[$p] }
 
-# Print CR+LF
+# Print CR+LF (serial + VGA)
 emit_serial_string "`r`n" $COM1
+# VGA newline: call vga_putchar with BL=10
+buf_emit 0xB3; buf_emit 10  # mov bl, 10 (LF)
+buf_emit 0x48; buf_emit 0xB8; buf_emit32 $vga_putchar_off; buf_emit32 0
+buf_emit 0xFF; buf_emit 0xD0  # call rax
 # Null-terminate buffer: mov rcx,[0x300880]; mov rdi,0x300800; add rdi,rcx; mov byte [rdi],0
 buf_emit 0x48; buf_emit 0x8B; buf_emit 0x0C; buf_emit 0x25; buf_emit32 0x300880
 buf_emit 0x48; buf_emit 0xBF; buf_emit32 0x300800; buf_emit32 0

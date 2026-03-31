@@ -9,7 +9,7 @@
 fn kernel_main() {
     // === Phase 0: Early hardware ===
     serial_init();         // serial.hl  -- COM1 for debug output
-    serial_print("HicOS 6.0 -- Hilbert-Lang Kernel (114 modules)");
+    serial_print("HicOS 6.0 -- Hilbert-Lang Kernel (122 modules)");
     serial_print("Initializing subsystems...");
 
     // === Phase 0b: Boot mode detection ===
@@ -61,11 +61,13 @@ fn kernel_main() {
     // === Phase 7: PCI + Storage + Network + Audio ===
     pci_scan();            // pci.hl -- enumerate PCI bus
     ahci_init();           // ahci.hl -- SATA controller
+    ata_pio_init();        // ata_pio.hl -- ATA PIO (legacy IDE/SATA)
     usb_init();            // usb.hl -- xHCI controller
+    usb_kbd_init();        // usb_kbd.hl -- USB HID keyboard
     ac97_init();           // audio.hl -- AC97 audio codec
     net_init();            // net.hl -- VirtIO-net + ARP
     dhcp_discover();       // dhcp.hl -- IP address
-    serial_print("  [ok] PCI + AHCI + USB + AC97 + VirtIO-net + DHCP");
+    serial_print("  [ok] PCI + AHCI + ATA-PIO + USB + USB-KBD + AC97 + Net + DHCP");
 
     // === Phase 8: ACPI + SMP + RTC ===
     power_init();          // power.hl -- ACPI tables
@@ -88,9 +90,21 @@ fn kernel_main() {
         serial_print("  [ok] MBR partition layout");
     }
 
+    // === Phase 11: Kernel Module Hot-Patching ===
+    kmod_init();           // kmod.hl -- runtime module loading
+    serial_print("  [ok] kmod: 64 module slots, 256 trampolines");
+
+    // === Phase 12: VGA Text Console ===
+    vga_console_init();    // vga_console.hl -- 80x25 text-mode display
+    serial_print("  [ok] VGA console: 80x25 text mode (0xB8000)");
+
+    // === Phase 13: Self-Image Awareness ===
+    self_image_init();     // self_image.hl -- kernel self-install metadata
+    serial_print("  [ok] Self-image: " + to_string(self_image_sectors()) + " sectors");
+
     // === Summary ===
     serial_print("");
-    serial_print("=== HicOS kernel initialized (114 modules) ===");
+    serial_print("=== HicOS kernel initialized (122 modules) ===");
     serial_print("");
 
     // === Enter interactive shell ===
@@ -190,9 +204,10 @@ fn kernel_main() {
 //   |-> regalloc     (no deps)
 //   |-> abi          (x86enc)
 //   |-> codegen      (ir, regalloc, abi, x86enc)
+//   |-> kmod         (timer)
 //   |-> login        (users, env, shell)
 //   |-> shell        (serial, syscall, vfs, task, timer, rtc, env)
 
 print("kernel_init.hl loaded");
-print("Init sequence: 12 phases, 100 modules");
+print("Init sequence: 13 phases, 118 modules");
 kernel_main();

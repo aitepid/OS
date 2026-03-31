@@ -1,0 +1,699 @@
+UNITED STATES PATENT APPLICATION
+Non-Provisional Utility Patent Application
+
+Filed pursuant to 35 U.S.C. §111(a)
+Prepared in compliance with 37 C.F.R. §1.71-1.77
+
+IMPORTANT NOTICE:
+  This document is a draft prepared for attorney/agent review.
+  Final submission MUST be reviewed by a registered USPTO patent
+  attorney or agent before filing via Patent Center.
+  Filing fees apply per 37 C.F.R. §1.16.
+
+Recommended filing route:
+  1. Patent Center (https://patentcenter.uspto.gov)
+  2. File as Non-Provisional Utility Patent Application
+  3. Entity status: Micro Entity (if qualifying under 37 C.F.R. §1.29)
+  4. Consider PCT filing within 12 months for international protection
+
+
+======================================================================
+TITLE OF THE INVENTION
+======================================================================
+
+SYSTEM AND METHOD FOR HILBERT SPACE-FILLING CURVE BASED
+SPATIAL ADDRESSING IN OPERATING SYSTEM KERNEL ARCHITECTURE
+
+
+======================================================================
+CROSS-REFERENCE TO RELATED APPLICATIONS
+======================================================================
+
+This application claims the benefit of first public disclosure on
+March 19, 2026, via the GitHub repository at
+https://github.com/tepid888-code/HicOS (commit SHA: 0b8942c).
+
+This application is related to co-pending application titled
+"SINGLE-LANGUAGE SELF-BOOTSTRAPPING OPERATING SYSTEM TOOLCHAIN
+AND METHOD" filed concurrently herewith.
+
+
+======================================================================
+STATEMENT REGARDING FEDERALLY SPONSORED RESEARCH
+======================================================================
+
+Not applicable.
+
+
+======================================================================
+FIELD OF THE INVENTION
+======================================================================
+
+The present invention relates generally to operating system kernel
+architecture, and more particularly to a system and method for
+organizing and addressing operating system kernel subsystems,
+inter-process communication routing, memory allocation, and system
+call dispatching using Hilbert space-filling curve mappings between
+multi-dimensional coordinate spaces and linear address spaces.
+
+
+======================================================================
+BACKGROUND OF THE INVENTION
+======================================================================
+
+Modern operating system kernels organize their subsystems -- process
+management, memory management, file systems, device drivers,
+networking stacks, and inter-process communication (IPC) -- within
+linear virtual address spaces. In conventional architectures such
+as Linux, Windows, and macOS, kernel code and data structures are
+mapped into contiguous or segmented regions of a flat address
+space. While functionally correct, this linear organization does
+not inherently preserve the logical proximity relationships among
+kernel subsystems.
+
+For example, the memory management subsystem may frequently
+interact with the process scheduler (e.g., during page fault
+handling or copy-on-write operations), yet these subsystems may
+reside at distant locations within the linear address space. This
+spatial separation can result in suboptimal cache utilization,
+increased translation lookaside buffer (TLB) pressure, and
+inefficient inter-subsystem communication patterns.
+
+Hilbert curves are a class of space-filling curves first described
+by David Hilbert in 1891. A Hilbert curve provides a continuous
+mapping between a multi-dimensional space and a one-dimensional
+line while preserving locality: points that are close in the
+multi-dimensional space remain relatively close along the
+one-dimensional curve. This locality-preserving property has been
+utilized in database indexing (e.g., spatial databases, R-tree
+alternatives), geographic information systems (e.g., Google S2
+geometry library), and scientific computing.
+
+However, Hilbert curves have not been applied to the fundamental
+architectural organization of operating system kernels. No prior
+art exists in which an operating system kernel uses Hilbert curve
+encodings as the primary organizational primitive for subsystem
+layout, IPC message routing, memory allocation strategies, or
+system call dispatch mechanisms.
+
+What is needed is a system and method that leverages the
+locality-preserving properties of Hilbert space-filling curves
+to organize operating system kernel subsystems in a manner that
+inherently maintains spatial locality between functionally related
+components, thereby improving cache performance, IPC efficiency,
+and system call dispatch.
+
+
+======================================================================
+BRIEF SUMMARY OF THE INVENTION
+======================================================================
+
+The present invention provides a system and method for organizing
+an operating system kernel using Hilbert space-filling curve
+mappings. In accordance with one embodiment, kernel subsystems
+are assigned coordinates in a multi-dimensional space (e.g.,
+three-dimensional), where each axis represents a distinct
+organizational dimension such as functional domain, hierarchical
+depth, and implementation specificity. These multi-dimensional
+coordinates are then mapped to a one-dimensional linear address
+space using a Hilbert curve encoding algorithm, such that
+functionally related subsystems occupy nearby regions of the
+linear address space.
+
+In a preferred embodiment, the invention provides:
+
+(a) A three-dimensional Hilbert coordinate space for kernel
+    subsystem organization, wherein:
+    - A first axis (x) represents the functional domain
+      (e.g., kernel entry, memory, scheduler, IPC, file system,
+      device drivers);
+    - A second axis (y) represents the sub-functional hierarchy
+      within each domain;
+    - A third axis (z) represents the implementation depth or
+      abstraction level;
+
+(b) A bit-interleaving encoding algorithm that maps three-
+    dimensional coordinates (x, y, z) to a one-dimensional
+    Hilbert key value by interleaving bits from each coordinate
+    axis with 10-bit precision per axis, producing a 30-bit key;
+
+(c) Application of the Hilbert key values for:
+    - Spatial routing of inter-process communication (IPC)
+      messages, where sender and receiver proximity in Hilbert
+      space determines routing priority and buffer selection;
+    - Locality-aware memory page allocation, where physical
+      pages are assigned to processes based on their Hilbert
+      coordinates to maximize cache line sharing among
+      frequently interacting subsystems;
+    - System call dispatch mapping, where system call numbers
+      are organized according to the Hilbert spatial layout
+      of the kernel subsystems they invoke;
+
+(d) A reverse decoding algorithm that recovers three-dimensional
+    coordinates from a Hilbert key value using sequential bit
+    extraction and power-weighted accumulation;
+
+(e) A programming language-level integration, wherein the
+    Hilbert coordinate system is expressed through a native
+    language construct ("quadrant") that provides compile-time
+    and runtime support for spatial addressing.
+
+
+======================================================================
+BRIEF DESCRIPTION OF THE DRAWINGS
+======================================================================
+
+[Note to patent attorney: The following figures should be prepared
+as formal patent drawings per 37 C.F.R. §1.84]
+
+FIG. 1 is a block diagram illustrating the overall architecture
+of an operating system kernel organized using Hilbert space-filling
+curve addressing, showing the mapping between three-dimensional
+subsystem coordinates and linear kernel address space.
+
+FIG. 2 is a diagram illustrating the three-dimensional Hilbert
+coordinate assignment for major kernel subsystems, showing the
+(x, y, z) coordinates for kernel entry (2,0,0), memory management
+(2,1,0), scheduler (2,0,1), IPC (2,1,1), file system (2,2,0),
+and device drivers (2,2,1).
+
+FIG. 3 is a flowchart depicting the bit-interleaving encoding
+algorithm (interleave3) that maps a three-dimensional coordinate
+(x, y, z) to a one-dimensional Hilbert key value.
+
+FIG. 4 is a flowchart depicting the reverse decoding algorithm
+(deinterleave3) that recovers a three-dimensional coordinate
+from a Hilbert key value.
+
+FIG. 5 is a diagram illustrating the 2D Hilbert curve encoding
+used for spatial page allocation, showing the rotation-based
+algorithm mapping (x, y) grid positions to 1D indices.
+
+FIG. 6 is a block diagram illustrating the IPC spatial routing
+mechanism, showing how message queues are organized and routed
+based on Hilbert distances between sender and receiver
+subsystems.
+
+FIG. 7 is a diagram illustrating the system call dispatch table
+organized by Hilbert spatial layout, showing syscall number
+ranges mapped to kernel functional domains.
+
+FIG. 8 is a block diagram illustrating the Hilbert-aware memory
+allocator (hilbert_alloc), showing how physical pages are
+assigned using merge-sort-ordered Hilbert keys to maintain
+spatial locality.
+
+FIG. 9 is a system architecture diagram showing the complete
+boot chain from MBR through Stage 2 to the Hilbert-addressed
+kernel entry point.
+
+FIG. 10 is a block diagram showing the memory map of the
+running kernel with Hilbert coordinate annotations for each
+major region.
+
+
+======================================================================
+DETAILED DESCRIPTION OF THE INVENTION
+======================================================================
+
+The following description provides specific details for a thorough
+understanding of the present invention. However, one skilled in
+the art will appreciate that the present invention may be practiced
+without some or all of these specific details.
+
+
+1. System Overview
+
+Referring to FIG. 1, the present invention provides an operating
+system kernel 100 that organizes its subsystems using a Hilbert
+space-filling curve mapping. The kernel 100 includes:
+
+  - A Hilbert Coordinate Engine 110 that provides encoding and
+    decoding functions for mapping between multi-dimensional
+    coordinate spaces and one-dimensional key values;
+  - A Kernel Subsystem Map 120 that assigns three-dimensional
+    Hilbert coordinates to each major kernel subsystem;
+  - A Spatial IPC Router 130 that uses Hilbert distances to
+    optimize inter-process message routing;
+  - A Hilbert-Aware Memory Allocator 140 that assigns physical
+    pages based on Hilbert key proximity;
+  - A Spatial System Call Dispatcher 150 that maps system call
+    numbers according to the Hilbert layout of target subsystems.
+
+
+2. Hilbert Coordinate Engine (110)
+
+The Hilbert Coordinate Engine 110 implements the core mathematical
+operations required for Hilbert curve encoding and decoding.
+
+2.1 Three-Dimensional Encoding (interleave3)
+
+Referring to FIG. 3, the three-dimensional encoding function
+receives input coordinates (x, y, z) where each coordinate is a
+non-negative integer. The algorithm proceeds as follows:
+
+  Step 1: Initialize result accumulator r = 0 and iteration
+          counter i = 0.
+  Step 2: For each bit position i from 0 to 9 (10-bit precision):
+    Step 2a: Extract the least significant bit of each coordinate:
+             bit_x = x mod 2, bit_y = y mod 2, bit_z = z mod 2
+    Step 2b: Compute the bit position shift for each axis:
+             shift_x = 2^(3*i), shift_y = 2^(3*i+1),
+             shift_z = 2^(3*i+2)
+    Step 2c: Accumulate bits into result:
+             r = r + bit_x * shift_x + bit_y * shift_y +
+                 bit_z * shift_z
+    Step 2d: Right-shift each coordinate: x = x/2, y = y/2, z = z/2
+    Step 2e: Increment i
+  Step 3: Return r as the 30-bit Hilbert key value.
+
+This produces a bit-interleaved representation where the bits of
+x, y, and z are interleaved in the pattern:
+  z0 y0 x0 z1 y1 x1 z2 y2 x2 ... z9 y9 x9
+
+2.2 Three-Dimensional Decoding (deinterleave3)
+
+Referring to FIG. 4, the decoding function receives a Hilbert key
+value k and recovers the original (x, y, z) coordinates:
+
+  Step 1: Initialize x = 0, y = 0, z = 0, i = 0, kk = k.
+  Step 2: For each bit position i from 0 to 9:
+    Step 2a: Compute power: pow = 2^i
+    Step 2b: Extract x bit: x = x + (kk mod 2) * pow; kk = kk / 2
+    Step 2c: Extract y bit: y = y + (kk mod 2) * pow; kk = kk / 2
+    Step 2d: Extract z bit: z = z + (kk mod 2) * pow; kk = kk / 2
+    Step 2e: Increment i
+  Step 3: Return [x, y, z].
+
+2.3 Distance Computation
+
+The Manhattan distance between two Hilbert keys a and b is
+computed by decoding each key to (x, y, z) coordinates and
+summing the absolute differences: |x_a - x_b| + |y_a - y_b| +
+|z_a - z_b|. This distance metric enables the IPC router and
+memory allocator to assess subsystem proximity.
+
+2.4 Two-Dimensional Hilbert Encoding
+
+For memory allocation purposes, a standard 2D Hilbert curve
+encoding is also provided (FIG. 5). The algorithm maps grid
+position (x, y) on an NxN grid (N = power of 2) to a 1D index
+using the rotation-based Hilbert algorithm:
+
+  Step 1: Initialize d = 0, s = N/2, px = x, py = y.
+  Step 2: For each scale s from N/2 down to 1 (halving):
+    Step 2a: Determine quadrant: rx = 1 if px >= s else 0;
+             ry = 1 if py >= s else 0
+    Step 2b: Accumulate: d = d + s * s * ((3 * rx) XOR ry)
+    Step 2c: Rotate if ry == 0: if rx == 1, reflect; then swap
+    Step 2d: Halve s
+  Step 3: Return d.
+
+
+3. Kernel Subsystem Spatial Map (120)
+
+Referring to FIG. 2, the kernel subsystem map assigns the
+following three-dimensional Hilbert coordinates:
+
+  Subsystem         | Coordinate (x,y,z) | Hilbert Key
+  ------------------|--------------------|-----------
+  Kernel Entry      | (2, 0, 0)          | Entry point
+  Memory/Heap       | (2, 1, 0)          | Memory mgmt
+  Scheduler         | (2, 0, 1)          | Process sched
+  IPC               | (2, 1, 1)          | Message passing
+  File System       | (2, 2, 0)          | VFS/FAT16/ext2
+  Device Drivers    | (2, 2, 1)          | PCI/USB/NVMe
+
+The coordinate assignment is designed such that:
+  - Subsystems that interact frequently (e.g., memory and
+    scheduler during page faults) are spatially adjacent;
+  - The functional domain axis (x) groups major categories;
+  - The hierarchy axis (y) separates abstraction layers within
+    each domain;
+  - The depth axis (z) distinguishes interface from
+    implementation.
+
+
+4. Spatial IPC Router (130)
+
+Referring to FIG. 6, the IPC subsystem uses Hilbert coordinates
+for message queue organization. The system provides:
+
+  - 32 pipe channels organized at IPC table address 0x700000,
+    each comprising 4,096 bytes of buffer space and 64 bytes
+    of metadata including reader/writer process IDs;
+  - 16 message queues at address 0x730000, each supporting
+    256 messages of 64 bytes;
+  - Spatial routing: when a kernel subsystem at Hilbert
+    coordinate A sends a message to subsystem at coordinate B,
+    the Hilbert distance d(A, B) is computed. Messages between
+    spatially close subsystems are prioritized and may use
+    shared-memory fast paths, while distant messages use the
+    full pipe infrastructure.
+
+
+5. Hilbert-Aware Memory Allocator (140)
+
+Referring to FIG. 8, the Hilbert-aware allocator (hilbert_alloc)
+maintains a free page list sorted by Hilbert keys. The allocator:
+
+  - Computes Hilbert keys for each free physical page based on
+    its position in the page frame number space;
+  - Maintains the free list in Hilbert key order using a
+    merge sort algorithm with O(n log n) complexity;
+  - On allocation, selects the page whose Hilbert key is
+    nearest to the requesting subsystem's Hilbert coordinate,
+    preserving spatial locality;
+  - Uses an iterative bottom-up merge sort to avoid deep
+    recursion in kernel context;
+  - Supports quadrant-based allocation: hilbert_quadrant_alloc()
+    restricts allocation to pages within a specific Hilbert
+    coordinate region.
+
+
+6. Spatial System Call Dispatcher (150)
+
+Referring to FIG. 7, system call numbers are organized according
+to the Hilbert spatial layout:
+
+  Syscall Range | Functional Domain     | Hilbert Region
+  0-15          | Process management    | (2,0,1) region
+  16-31         | Memory management     | (2,1,0) region
+  32-47         | I/O operations        | (2,2,0) region
+  48-63         | IPC                   | (2,1,1) region
+  64-79         | File system           | (2,2,0) region
+  80+           | Hilbert-specific      | Extended space
+
+The Hilbert-specific system calls include:
+  - SYS_HILBERT_ENCODE (80): Encode (x,y,z) to Hilbert key
+  - SYS_HILBERT_DECODE (81): Decode Hilbert key to (x,y,z)
+  - SYS_HILBERT_DIST (82): Compute Hilbert distance
+
+These system calls enable user-space programs to participate in
+the Hilbert addressing scheme, enabling user-space libraries to
+optimize their own data layouts based on Hilbert locality.
+
+
+7. Language-Level Integration
+
+The Hilbert coordinate system is integrated at the programming
+language level through the "quadrant" keyword in Hilbert-Lang.
+A quadrant declaration:
+
+    quadrant hilbert {
+        fn interleave3(x, y, z) { ... }
+        fn deinterleave3(k) { ... }
+        fn distance(a, b) { ... }
+    }
+
+defines a named spatial region that groups related functions.
+The compiler recognizes quadrant declarations and:
+  - Assigns Hilbert coordinates to code within each quadrant;
+  - Enables cross-quadrant references using dot notation
+    (e.g., hilbert.interleave3());
+  - Preserves spatial locality information through the
+    compilation pipeline.
+
+
+8. Boot Chain and Memory Map
+
+Referring to FIGS. 9 and 10, the system boots through:
+  Stage 1 (MBR at 0x7C00): Loads Stage 2 via INT 13h
+  Stage 2 (0x8000): Transitions real -> protected -> long mode,
+    sets up identity paging (64 x 2MB pages = 128MB),
+    copies kernel to 0x100000, jumps to kernel entry
+  Kernel Entry (0x100000): Initializes serial, PIC, PIT, IDT,
+    then enters Hilbert-addressed subsystem initialization
+
+The kernel memory map annotated with Hilbert coordinates:
+  0x100000 - 0x1FFFFF : Kernel code (1 MB) - quadrant (2,0,0)
+  0x200000 - 0x200FFF : IDT (4 KB)
+  0x300000 - 0x300017 : Tick/scancode/key counters
+  0x700000 - 0x720FFF : IPC pipes - quadrant (2,1,1)
+  0x730000 - 0x770FFF : Message queues - quadrant (2,1,1)
+  0x900000 - 0x93FFFF : Module hot-patch area
+
+
+======================================================================
+CLAIMS
+======================================================================
+
+What is claimed is:
+
+1. A method for organizing an operating system kernel using
+Hilbert space-filling curve addressing, the method comprising:
+
+  (a) assigning, to each of a plurality of kernel subsystems, a
+      coordinate in a multi-dimensional coordinate space, wherein
+      each dimension of said coordinate space represents a
+      distinct organizational characteristic of the kernel
+      subsystem;
+
+  (b) encoding said multi-dimensional coordinates into
+      one-dimensional key values using a Hilbert space-filling
+      curve encoding algorithm that preserves spatial locality,
+      such that kernel subsystems having proximate multi-
+      dimensional coordinates produce proximate one-dimensional
+      key values;
+
+  (c) mapping said one-dimensional key values to regions of a
+      linear address space of a processor, such that the kernel
+      subsystems are arranged in the linear address space in an
+      order determined by the Hilbert curve encoding; and
+
+  (d) utilizing said one-dimensional key values for at least one
+      of:
+      (i)   routing inter-process communication messages between
+            kernel subsystems based on the Hilbert distance
+            between the sender subsystem key value and the
+            receiver subsystem key value;
+      (ii)  allocating physical memory pages to kernel subsystems
+            based on the proximity of the page Hilbert key to the
+            requesting subsystem Hilbert key; or
+      (iii) dispatching system calls to handler functions based on
+            a mapping from system call numbers to Hilbert key
+            values of target kernel subsystems.
+
+2. The method of claim 1, wherein said multi-dimensional
+coordinate space is a three-dimensional space having:
+  a first axis representing a functional domain of the kernel
+  subsystem;
+  a second axis representing a hierarchical position within the
+  functional domain; and
+  a third axis representing an implementation depth or
+  abstraction level.
+
+3. The method of claim 1, wherein said Hilbert space-filling
+curve encoding algorithm comprises a bit-interleaving operation
+that interleaves bits from each coordinate axis at a predetermined
+precision, producing a key value having a bit length equal to the
+product of the number of dimensions and the per-axis bit
+precision.
+
+4. The method of claim 3, wherein said predetermined precision is
+10 bits per axis, producing a 30-bit Hilbert key value for a
+three-dimensional coordinate space.
+
+5. The method of claim 1, further comprising:
+  decoding a one-dimensional Hilbert key value back to the
+  corresponding multi-dimensional coordinates using a reverse
+  bit-extraction algorithm that sequentially extracts bits for
+  each axis using modular arithmetic and power-weighted
+  accumulation.
+
+6. The method of claim 1, wherein said routing inter-process
+communication messages comprises:
+  computing a Manhattan distance between the Hilbert coordinates
+  of a sender subsystem and a receiver subsystem;
+  selecting a communication path based on said Manhattan distance,
+  wherein a shorter distance results in selection of a lower-
+  latency communication path.
+
+7. The method of claim 1, wherein said allocating physical memory
+pages comprises:
+  maintaining a free page list sorted by Hilbert key values using
+  a merge sort algorithm;
+  upon receiving an allocation request from a kernel subsystem,
+  selecting a free page whose Hilbert key value is nearest to the
+  Hilbert key value of the requesting subsystem.
+
+8. The method of claim 7, wherein said merge sort algorithm is
+an iterative bottom-up merge sort that avoids recursive function
+calls to prevent kernel stack overflow.
+
+9. The method of claim 1, wherein said dispatching system calls
+comprises:
+  organizing system call numbers into ranges corresponding to
+  functional domains of the kernel, wherein each range maps to a
+  distinct region of the Hilbert coordinate space; and
+  providing dedicated system calls that enable user-space programs
+  to invoke Hilbert encoding, decoding, and distance computation
+  functions.
+
+10. The method of claim 1, further comprising:
+  providing a programming language construct that associates a
+  named spatial region with a group of related functions, wherein
+  said programming language construct is recognized by a compiler
+  and used to assign Hilbert coordinates to the compiled code.
+
+11. A computer system for executing an operating system kernel
+organized using Hilbert space-filling curve addressing, the
+system comprising:
+
+  a processor capable of executing instructions in a 64-bit
+  long mode;
+
+  a memory coupled to the processor; and
+
+  a kernel stored in the memory, the kernel comprising:
+    a Hilbert Coordinate Engine configured to encode multi-
+    dimensional coordinates into one-dimensional key values and
+    decode one-dimensional key values into multi-dimensional
+    coordinates using Hilbert space-filling curve algorithms;
+
+    a kernel subsystem map associating each kernel subsystem
+    with a coordinate in a three-dimensional Hilbert space;
+
+    a spatial IPC router configured to route inter-process
+    messages based on Hilbert distances between communicating
+    subsystems;
+
+    a Hilbert-aware memory allocator configured to assign
+    physical pages based on Hilbert key proximity; and
+
+    a system call dispatcher configured to map system call
+    numbers to kernel handler functions based on the Hilbert
+    spatial layout of the kernel.
+
+12. The system of claim 11, wherein the Hilbert Coordinate
+Engine implements a three-dimensional bit-interleaving encoder
+with 10-bit per-axis precision and a reverse decoder using
+sequential bit extraction.
+
+13. The system of claim 11, wherein the Hilbert-aware memory
+allocator maintains free pages in a list sorted by Hilbert key
+values and allocates pages by selecting the entry with the
+nearest Hilbert key to the requesting subsystem.
+
+14. The system of claim 11, wherein the kernel subsystem map
+assigns coordinates such that kernel entry occupies coordinate
+(2,0,0), memory management occupies (2,1,0), the scheduler
+occupies (2,0,1), IPC occupies (2,1,1), the file system
+occupies (2,2,0), and device drivers occupy (2,2,1).
+
+15. A non-transitory computer-readable storage medium storing
+instructions that, when executed by a processor, cause the
+processor to:
+
+  assign, to each of a plurality of operating system kernel
+  subsystems, a coordinate in a three-dimensional space;
+
+  encode said coordinates into one-dimensional Hilbert key
+  values using a bit-interleaving algorithm;
+
+  arrange the kernel subsystems in a linear address space
+  according to said Hilbert key values;
+
+  route inter-process communications between kernel subsystems
+  based on Hilbert distances between their respective key
+  values; and
+
+  allocate physical memory pages to kernel subsystems based on
+  proximity of page Hilbert key values to requesting subsystem
+  Hilbert key values.
+
+16. The medium of claim 15, wherein the instructions further
+cause the processor to:
+  expose Hilbert encoding, decoding, and distance computation
+  functions to user-space programs via dedicated system calls.
+
+
+======================================================================
+ABSTRACT OF THE DISCLOSURE
+======================================================================
+
+A system and method for organizing an operating system kernel
+using Hilbert space-filling curve addressing. Kernel subsystems
+are assigned coordinates in a multi-dimensional space where each
+axis represents a distinct organizational characteristic.
+A bit-interleaving algorithm encodes these coordinates into
+one-dimensional Hilbert key values that preserve spatial
+locality. The key values are used to arrange kernel subsystems
+in linear address space, route inter-process communications
+based on Hilbert distances between subsystems, allocate physical
+memory pages based on Hilbert key proximity, and dispatch system
+calls according to the Hilbert spatial layout. A programming
+language construct ("quadrant") provides compile-time integration
+of the spatial addressing scheme. The invention improves cache
+utilization and IPC efficiency by ensuring that frequently
+interacting kernel subsystems occupy nearby regions of address
+space.
+
+
+======================================================================
+INVENTOR(S)
+======================================================================
+
+[To be completed by applicant]
+Name: CHEN SONG
+Residence: Fuqing City, Fuzhou City, Fujian Province, CN (350300)
+Citizenship: CN
+
+
+======================================================================
+ASSIGNEE
+======================================================================
+
+[To be completed if applicable]
+
+
+======================================================================
+USPTO FILING CHECKLIST
+======================================================================
+
+Required documents for Non-Provisional Utility Patent Application
+(37 C.F.R. §1.51):
+
+[ ] Utility Patent Application Transmittal Form (PTO/AIA/15)
+[ ] Fee Transmittal Form (PTO/AIA/17)
+    - Micro entity: $400 filing + $200 search + $180 examination
+      (approximate, verify current schedule at
+       https://www.uspto.gov/learning-and-resources/fees-and-payment)
+[ ] Application Data Sheet (ADS) (PTO/AIA/14)
+[ ] Specification (this document, converted to proper format)
+    - Title
+    - Cross-References
+    - Field of the Invention
+    - Background
+    - Summary
+    - Brief Description of Drawings
+    - Detailed Description
+    - Claims
+    - Abstract
+[ ] Drawings (10 figures, per 37 C.F.R. §1.84)
+    - Black and white line drawings
+    - 8.5" x 11" or A4 paper
+    - Margins: top 2.5cm, left 2.5cm, right 1.5cm, bottom 1.0cm
+[ ] Oath or Declaration (PTO/AIA/01)
+[ ] Micro Entity Certification (PTO/AIA/15A, if applicable)
+[ ] Information Disclosure Statement (IDS) with:
+    - Google S2 geometry library documentation
+    - David Hilbert, "Ueber die stetige Abbildung einer Linie
+      auf ein Flaechenstueck" (1891)
+    - Linux kernel source code (kernel.org)
+    - Oberon System documentation (ETH Zurich)
+    - TempleOS source code
+[ ] Sequence listing: Not applicable
+
+Filing method:
+  Patent Center: https://patentcenter.uspto.gov
+  Electronic filing via EFS-Web is also accepted
+
+Important dates:
+  First public disclosure: March 19, 2026
+  12-month grace period expires: March 19, 2027
+  PCT deadline (from priority date): March 19, 2027
+
+Estimated prosecution timeline:
+  Filing to First Office Action: 12-18 months
+  Filing to Issuance (if allowed): 24-36 months

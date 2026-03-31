@@ -1,0 +1,387 @@
+// ata_pio.hl -- ATA PIO Disk Driver (Legacy IDE)
+//
+// Provides sector-level read/write for standard ATA/IDE disk controllers
+// using Programmed I/O (PIO) mode. Works on virtually all x86 hardware
+// including legacy BIOS systems without AHCI.
+//
+// This is the SIMPLEST disk access method and is critical for bare-metal
+// installation on real hardware where VirtIO is not available.
+//
+// I/O Ports (Primary ATA Channel):
+//   0x1F0: Data Register (16-bit R/W)
+//   0x1F1: Error Register (R) / Features (W)
+//   0x1F2: Sector Count
+//   0x1F3: LBA Low (bits 0-7)
+//   0x1F4: LBA Mid (bits 8-15)
+//   0x1F5: LBA High (bits 16-23)
+//   0x1F6: Drive/Head (bits 24-27 + drive select)
+//   0x1F7: Status (R) / Command (W)
+//   0x3F6: Alternate Status (R) / Device Control (W)
+//
+// Secondary ATA Channel:
+//   0x170-0x177, control at 0x376
+//
+// Status Register bits:
+//   Bit 0: ERR  -- error occurred
+//   Bit 3: DRQ  -- data request (ready for data transfer)
+//   Bit 6: DRDY -- drive ready
+//   Bit 7: BSY  -- drive busy
+//
+// Commands:
+//   0x20: READ SECTORS (28-bit LBA)
+//   0x30: WRITE SECTORS (28-bit LBA)
+//   0x24: READ SECTORS EXT (48-bit LBA)
+//   0x34: WRITE SECTORS EXT (48-bit LBA)
+//   0xEC: IDENTIFY DEVICE
+//   0xE7: CACHE FLUSH
+//
+// Iteration 121: bare-metal installation foundation
+
+let ATA_PRI_DATA = 496;        // 0x1F0
+let ATA_PRI_ERR = 497;         // 0x1F1
+let ATA_PRI_COUNT = 498;       // 0x1F2
+let ATA_PRI_LBA_LO = 499;     // 0x1F3
+let ATA_PRI_LBA_MID = 500;    // 0x1F4
+let ATA_PRI_LBA_HI = 501;     // 0x1F5
+let ATA_PRI_DRIVE = 502;      // 0x1F6
+let ATA_PRI_CMD = 503;        // 0x1F7
+let ATA_PRI_STATUS = 503;     // 0x1F7 (read = status)
+let ATA_PRI_CTRL = 1014;      // 0x3F6
+
+let ATA_SEC_DATA = 368;       // 0x170
+let ATA_SEC_ERR = 369;        // 0x171
+let ATA_SEC_COUNT = 370;      // 0x172
+let ATA_SEC_LBA_LO = 371;    // 0x173
+let ATA_SEC_LBA_MID = 372;   // 0x174
+let ATA_SEC_LBA_HI = 373;    // 0x175
+let ATA_SEC_DRIVE = 374;     // 0x176
+let ATA_SEC_CMD = 375;       // 0x177
+let ATA_SEC_STATUS = 375;    // 0x177
+let ATA_SEC_CTRL = 886;      // 0x376
+
+let ATA_CMD_READ = 32;        // 0x20: READ SECTORS (28-bit)
+let ATA_CMD_WRITE = 48;       // 0x30: WRITE SECTORS (28-bit)
+let ATA_CMD_READ_EXT = 36;    // 0x24: READ SECTORS EXT (48-bit)
+let ATA_CMD_WRITE_EXT = 52;   // 0x34: WRITE SECTORS EXT (48-bit)
+let ATA_CMD_IDENTIFY = 236;   // 0xEC: IDENTIFY DEVICE
+let ATA_CMD_FLUSH = 231;      // 0xE7: CACHE FLUSH
+
+let ATA_STATUS_ERR = 1;
+let ATA_STATUS_DRQ = 8;
+let ATA_STATUS_DRDY = 64;
+let ATA_STATUS_BSY = 128;
+
+// Detection state
+let mut ata_pri_master = 0;    // 1 if primary master detected
+let mut ata_pri_slave = 0;     // 1 if primary slave detected
+let mut ata_sec_master = 0;    // 1 if secondary master detected
+let mut ata_sec_slave = 0;     // 1 if secondary slave detected
+
+// Capacity in sectors
+let mut ata_pri_master_sectors = 0;
+let mut ata_pri_slave_sectors = 0;
+let mut ata_sec_master_sectors = 0;
+let mut ata_sec_slave_sectors = 0;
+
+// Data buffer at 0x920000 (for PIO transfers)
+let ATA_DATA_BUF = 9568256;   // 0x920000
+
+// Wait for BSY to clear on a channel
+fn ata_wait_bsy(status_port) {
+    let mut timeout = 100000;
+    while timeout > 0 {
+        let st = port_in_u8(status_port);
+        if (st / 128) % 2 == 0 {
+            return st;
+        }
+        timeout = timeout - 1;
+    }
+    return 255;  // timeout
+}
+
+// Wait for DRQ to set (data ready)
+fn ata_wait_drq(status_port) {
+    let mut timeout = 100000;
+    while timeout > 0 {
+        let st = port_in_u8(status_port);
+        if (st / 128) % 2 == 0 {
+            if (st / 8) % 2 == 1 {
+                return st;
+            }
+            if st % 2 == 1 {
+                return st;  // error
+            }
+        }
+        timeout = timeout - 1;
+    }
+    return 255;  // timeout
+}
+
+// 400ns delay by reading alternate status 4 times
+fn ata_delay(ctrl_port) {
+    port_in_u8(ctrl_port);
+    port_in_u8(ctrl_port);
+    port_in_u8(ctrl_port);
+    port_in_u8(ctrl_port);
+    return 0;
+}
+
+// Software reset on a channel
+fn ata_soft_reset(ctrl_port) {
+    port_out_u8(ctrl_port, 4);   // SRST bit
+    ata_delay(ctrl_port);
+    port_out_u8(ctrl_port, 0);   // clear SRST
+    ata_delay(ctrl_port);
+    return 0;
+}
+
+// Select drive: 0 = master, 1 = slave
+fn ata_select_drive(drive_port, drive) {
+    if drive == 0 {
+        port_out_u8(drive_port, 160);  // 0xA0 = master
+    } else {
+        port_out_u8(drive_port, 176);  // 0xB0 = slave
+    }
+    return 0;
+}
+
+// IDENTIFY DEVICE on a specific channel/drive
+// Returns total sectors (0 = not found)
+fn ata_identify(data_port, err_port, count_port, lba_lo_port, lba_mid_port, lba_hi_port, drive_port, cmd_port, status_port, ctrl_port, drive) {
+    // Select drive
+    if drive == 0 {
+        port_out_u8(drive_port, 160);  // 0xA0 master
+    } else {
+        port_out_u8(drive_port, 176);  // 0xB0 slave
+    }
+    ata_delay(ctrl_port);
+
+    // Zero sector count and LBA registers
+    port_out_u8(count_port, 0);
+    port_out_u8(lba_lo_port, 0);
+    port_out_u8(lba_mid_port, 0);
+    port_out_u8(lba_hi_port, 0);
+
+    // Send IDENTIFY command
+    port_out_u8(cmd_port, ATA_CMD_IDENTIFY);
+    ata_delay(ctrl_port);
+
+    // Check if drive exists: read status
+    let st = port_in_u8(status_port);
+    if st == 0 {
+        return 0;  // no drive
+    }
+
+    // Wait for BSY to clear
+    let st2 = ata_wait_bsy(status_port);
+    if st2 == 255 {
+        return 0;  // timeout
+    }
+
+    // Check LBA mid/high for ATAPI (should be 0 for ATA)
+    let lba_m = port_in_u8(lba_mid_port);
+    let lba_h = port_in_u8(lba_hi_port);
+    if lba_m != 0 || lba_h != 0 {
+        return 0;  // not ATA (could be ATAPI or SATA)
+    }
+
+    // Wait for DRQ or ERR
+    let st3 = ata_wait_drq(status_port);
+    if st3 == 255 || (st3 % 2 == 1) {
+        return 0;  // error or timeout
+    }
+
+    // Read 256 words (512 bytes) of IDENTIFY data
+    let mut i = 0;
+    while i < 256 {
+        let word = port_in_u16(data_port);
+        mem_write_u16(ATA_DATA_BUF + i * 2, word);
+        i = i + 1;
+    }
+
+    // Parse total sectors
+    // Words 60-61 (offset 120): total addressable sectors (28-bit)
+    let sectors_28 = mem_read_u32(ATA_DATA_BUF + 120);
+    // Words 100-103 (offset 200): total sectors (48-bit LBA)
+    let sectors_48_lo = mem_read_u32(ATA_DATA_BUF + 200);
+    let sectors_48_hi = mem_read_u32(ATA_DATA_BUF + 204);
+    let total_sectors = sectors_48_lo;
+    if total_sectors == 0 {
+        total_sectors = sectors_28;
+    }
+
+    return total_sectors;
+}
+
+// Detect drives on primary and secondary channels
+fn ata_pio_init() {
+    // Software reset both channels
+    ata_soft_reset(ATA_PRI_CTRL);
+    ata_soft_reset(ATA_SEC_CTRL);
+
+    // Identify primary master
+    ata_pri_master_sectors = ata_identify(
+        ATA_PRI_DATA, ATA_PRI_ERR, ATA_PRI_COUNT,
+        ATA_PRI_LBA_LO, ATA_PRI_LBA_MID, ATA_PRI_LBA_HI,
+        ATA_PRI_DRIVE, ATA_PRI_CMD, ATA_PRI_STATUS, ATA_PRI_CTRL, 0
+    );
+    if ata_pri_master_sectors > 0 {
+        ata_pri_master = 1;
+        let mb = ata_pri_master_sectors / 2048;
+        print("ATA PIO: primary master " + to_string(ata_pri_master_sectors) + " sectors (" + to_string(mb) + " MB)");
+    }
+
+    // Identify primary slave
+    ata_pri_slave_sectors = ata_identify(
+        ATA_PRI_DATA, ATA_PRI_ERR, ATA_PRI_COUNT,
+        ATA_PRI_LBA_LO, ATA_PRI_LBA_MID, ATA_PRI_LBA_HI,
+        ATA_PRI_DRIVE, ATA_PRI_CMD, ATA_PRI_STATUS, ATA_PRI_CTRL, 1
+    );
+    if ata_pri_slave_sectors > 0 {
+        ata_pri_slave = 1;
+        let mb = ata_pri_slave_sectors / 2048;
+        print("ATA PIO: primary slave " + to_string(ata_pri_slave_sectors) + " sectors (" + to_string(mb) + " MB)");
+    }
+
+    // Identify secondary master
+    ata_sec_master_sectors = ata_identify(
+        ATA_SEC_DATA, ATA_SEC_ERR, ATA_SEC_COUNT,
+        ATA_SEC_LBA_LO, ATA_SEC_LBA_MID, ATA_SEC_LBA_HI,
+        ATA_SEC_DRIVE, ATA_SEC_CMD, ATA_SEC_STATUS, ATA_SEC_CTRL, 0
+    );
+    if ata_sec_master_sectors > 0 {
+        ata_sec_master = 1;
+        let mb = ata_sec_master_sectors / 2048;
+        print("ATA PIO: secondary master " + to_string(ata_sec_master_sectors) + " sectors (" + to_string(mb) + " MB)");
+    }
+
+    // Identify secondary slave
+    ata_sec_slave_sectors = ata_identify(
+        ATA_SEC_DATA, ATA_SEC_ERR, ATA_SEC_COUNT,
+        ATA_SEC_LBA_LO, ATA_SEC_LBA_MID, ATA_SEC_LBA_HI,
+        ATA_SEC_DRIVE, ATA_SEC_CMD, ATA_SEC_STATUS, ATA_SEC_CTRL, 1
+    );
+    if ata_sec_slave_sectors > 0 {
+        ata_sec_slave = 1;
+        let mb = ata_sec_slave_sectors / 2048;
+        print("ATA PIO: secondary slave " + to_string(ata_sec_slave_sectors) + " sectors (" + to_string(mb) + " MB)");
+    }
+
+    let total = ata_pri_master + ata_pri_slave + ata_sec_master + ata_sec_slave;
+    if total == 0 {
+        print("ATA PIO: no drives detected");
+    } else {
+        print("ATA PIO: " + to_string(total) + " drive(s) initialized");
+    }
+    return total;
+}
+
+// Read sectors using 28-bit LBA PIO (primary master)
+// buf_addr: physical address to store data
+// Returns 1 on success, 0 on failure
+fn ata_pio_read(lba, count, buf_addr) {
+    if count == 0 || count > 256 { return 0; }
+    let actual_count = count;
+    if count == 256 { actual_count = 0; }  // 0 means 256 in ATA
+
+    // Select drive + LBA bits 24-27
+    let drive_byte = 224 + ((lba / 16777216) % 16);  // 0xE0 | (lba >> 24)
+    port_out_u8(ATA_PRI_DRIVE, drive_byte);
+    ata_delay(ATA_PRI_CTRL);
+
+    // Set sector count
+    port_out_u8(ATA_PRI_COUNT, actual_count);
+    // Set LBA
+    port_out_u8(ATA_PRI_LBA_LO, lba % 256);
+    port_out_u8(ATA_PRI_LBA_MID, (lba / 256) % 256);
+    port_out_u8(ATA_PRI_LBA_HI, (lba / 65536) % 256);
+    // Send READ command
+    port_out_u8(ATA_PRI_CMD, ATA_CMD_READ);
+
+    let mut sec = 0;
+    while sec < count {
+        // Wait for DRQ
+        let st = ata_wait_drq(ATA_PRI_STATUS);
+        if st == 255 || (st % 2 == 1) {
+            return 0;  // error
+        }
+        // Read 256 words (512 bytes)
+        let buf_off = buf_addr + sec * 512;
+        let mut w = 0;
+        while w < 256 {
+            let word = port_in_u16(ATA_PRI_DATA);
+            mem_write_u16(buf_off + w * 2, word);
+            w = w + 1;
+        }
+        sec = sec + 1;
+    }
+    return 1;
+}
+
+// Write sectors using 28-bit LBA PIO (primary master)
+fn ata_pio_write(lba, count, buf_addr) {
+    if count == 0 || count > 256 { return 0; }
+    let actual_count = count;
+    if count == 256 { actual_count = 0; }
+
+    let drive_byte = 224 + ((lba / 16777216) % 16);  // 0xE0 | (lba >> 24)
+    port_out_u8(ATA_PRI_DRIVE, drive_byte);
+    ata_delay(ATA_PRI_CTRL);
+
+    port_out_u8(ATA_PRI_COUNT, actual_count);
+    port_out_u8(ATA_PRI_LBA_LO, lba % 256);
+    port_out_u8(ATA_PRI_LBA_MID, (lba / 256) % 256);
+    port_out_u8(ATA_PRI_LBA_HI, (lba / 65536) % 256);
+    port_out_u8(ATA_PRI_CMD, ATA_CMD_WRITE);
+
+    let mut sec = 0;
+    while sec < count {
+        let st = ata_wait_drq(ATA_PRI_STATUS);
+        if st == 255 || (st % 2 == 1) {
+            return 0;
+        }
+        let buf_off = buf_addr + sec * 512;
+        let mut w = 0;
+        while w < 256 {
+            let word = mem_read_u16(buf_off + w * 2);
+            port_out_u16(ATA_PRI_DATA, word);
+            w = w + 1;
+        }
+        sec = sec + 1;
+    }
+
+    // Flush cache
+    port_out_u8(ATA_PRI_CMD, ATA_CMD_FLUSH);
+    ata_wait_bsy(ATA_PRI_STATUS);
+    return 1;
+}
+
+// Get total sectors of primary master drive
+fn ata_pio_capacity() {
+    return ata_pri_master_sectors;
+}
+
+// Self-test: read sector 0 and check for MBR signature
+fn ata_pio_selftest() {
+    if ata_pri_master == 0 {
+        print("ATA PIO selftest: no primary master drive");
+        return 0;
+    }
+    let buf = ATA_DATA_BUF;
+    mem_zero(buf, 512);
+    let ok = ata_pio_read(0, 1, buf);
+    if ok == 0 {
+        print("ATA PIO selftest: read sector 0 FAILED");
+        return 0;
+    }
+    let sig_lo = mem_read_u8(buf + 510);
+    let sig_hi = mem_read_u8(buf + 511);
+    if sig_lo == 85 && sig_hi == 170 {
+        print("ATA PIO selftest: sector 0 has valid MBR signature (0x55AA)");
+    } else {
+        print("ATA PIO selftest: sector 0 read OK (no MBR signature)");
+    }
+    return 1;
+}
+
+print("ata_pio.hl loaded -- ATA PIO disk driver (primary/secondary, master/slave)");

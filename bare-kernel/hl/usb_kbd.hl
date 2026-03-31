@@ -1,0 +1,216 @@
+// usb_kbd.hl -- USB HID Keyboard Driver
+//
+// Provides keyboard input from USB HID keyboards via xHCI controller.
+// This is essential for bare-metal installation on modern hardware
+// where PS/2 keyboards are not available.
+//
+// USB HID Boot Protocol Keyboard:
+//   - Interface class 3 (HID), subclass 1 (Boot), protocol 1 (Keyboard)
+//   - Boot protocol report format (8 bytes):
+//     Byte 0: Modifier keys (Ctrl/Shift/Alt/GUI bitmask)
+//     Byte 1: Reserved (0x00)
+//     Byte 2-7: Up to 6 simultaneous key scan codes (USB HID usage IDs)
+//
+// Modifier key bitmask (byte 0):
+//   Bit 0: Left Ctrl
+//   Bit 1: Left Shift
+//   Bit 2: Left Alt
+//   Bit 3: Left GUI (Windows key)
+//   Bit 4: Right Ctrl
+//   Bit 5: Right Shift
+//   Bit 6: Right Alt
+//   Bit 7: Right GUI
+//
+// USB HID Usage IDs → ASCII mapping:
+//   0x04-0x1D: a-z
+//   0x1E-0x27: 1-9, 0
+//   0x28: Enter
+//   0x29: Escape
+//   0x2A: Backspace
+//   0x2B: Tab
+//   0x2C: Space
+//   0x2D-0x38: symbols (-, =, [, ], \, ;, ', `, ,, ., /)
+//
+// Iteration 123: USB keyboard for modern bare-metal hardware
+
+// USB HID keyboard state
+let mut usb_kbd_detected = 0;
+let mut usb_kbd_interface = 0;
+let mut usb_kbd_endpoint = 0;
+let mut usb_kbd_interval = 0;     // polling interval in ms
+let mut usb_kbd_modifiers = 0;    // current modifier state
+let mut usb_kbd_last_keys = [0, 0, 0, 0, 0, 0];  // last report keys
+
+// Keyboard report buffer at 0x930000 (8 bytes)
+let USB_KBD_REPORT_BUF = 9633792;  // 0x930000
+
+// USB HID Usage ID to ASCII lookup table (unshifted)
+// Index = HID usage ID, Value = ASCII code
+fn _usb_kbd_usage_to_ascii(usage, shifted) {
+    // Letters a-z (0x04-0x1D)
+    if usage >= 4 && usage <= 29 {
+        if shifted == 1 {
+            return 65 + (usage - 4);   // 'A'-'Z'
+        }
+        return 97 + (usage - 4);       // 'a'-'z'
+    }
+    // Numbers 1-9 (0x1E-0x26), 0 (0x27)
+    if usage >= 30 && usage <= 38 {
+        if shifted == 1 {
+            let shift_nums = [33, 64, 35, 36, 37, 94, 38, 42, 40]; // !@#$%^&*(
+            return shift_nums[usage - 30];
+        }
+        if usage == 38 { return 48; }  // '0'
+        return 49 + (usage - 30);      // '1'-'9'
+    }
+    if usage == 39 {
+        if shifted == 1 { return 41; }  // ')'
+        return 48;  // '0'
+    }
+    // Special keys
+    if usage == 40 { return 13; }  // Enter
+    if usage == 41 { return 27; }  // Escape
+    if usage == 42 { return 8; }   // Backspace
+    if usage == 43 { return 9; }   // Tab
+    if usage == 44 { return 32; }  // Space
+    // Symbols
+    if usage == 45 { if shifted == 1 { return 95; } return 45; }  // - / _
+    if usage == 46 { if shifted == 1 { return 43; } return 61; }  // = / +
+    if usage == 47 { if shifted == 1 { return 123; } return 91; } // [ / {
+    if usage == 48 { if shifted == 1 { return 125; } return 93; } // ] / }
+    if usage == 49 { if shifted == 1 { return 124; } return 92; } // \ / |
+    if usage == 51 { if shifted == 1 { return 58; } return 59; }  // ; / :
+    if usage == 52 { if shifted == 1 { return 34; } return 39; }  // ' / "
+    if usage == 53 { if shifted == 1 { return 126; } return 96; } // ` / ~
+    if usage == 54 { if shifted == 1 { return 60; } return 44; }  // , / <
+    if usage == 55 { if shifted == 1 { return 62; } return 46; }  // . / >
+    if usage == 56 { if shifted == 1 { return 63; } return 47; }  // / / ?
+    return 0;  // unmapped
+}
+
+// Detect USB HID keyboard via xHCI
+fn usb_kbd_detect() {
+    // Check if USB is initialized and has devices
+    if usb_device_count() == 0 {
+        return 0;
+    }
+    // Scan USB devices for HID keyboard interface
+    let mut i = 0;
+    while i < usb_device_count() {
+        let cls = usb_device_class(i);
+        let sub = usb_device_subclass(i);
+        let proto = usb_device_protocol(i);
+        // HID class=3, Boot subclass=1, Keyboard protocol=1
+        if cls == 3 && sub == 1 && proto == 1 {
+            usb_kbd_detected = 1;
+            usb_kbd_interface = i;
+            print("USB HID keyboard detected at interface " + to_string(i));
+            return 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Set USB keyboard to boot protocol mode
+fn usb_kbd_set_boot_protocol() {
+    if usb_kbd_detected == 0 { return 0; }
+    // SET_PROTOCOL request: bmRequestType=0x21, bRequest=0x0B, wValue=0 (boot), wIndex=interface
+    usb_control_transfer(usb_kbd_interface, 33, 11, 0, usb_kbd_interface, 0, 0);
+    print("USB keyboard: boot protocol set");
+    return 1;
+}
+
+// Set keyboard LEDs (Num Lock, Caps Lock, Scroll Lock)
+fn usb_kbd_set_leds(led_mask) {
+    if usb_kbd_detected == 0 { return 0; }
+    // SET_REPORT: bmRequestType=0x21, bRequest=0x09, wValue=0x0200 (Output,ID=0)
+    mem_write_u8(USB_KBD_REPORT_BUF, led_mask);
+    usb_control_transfer(usb_kbd_interface, 33, 9, 512, usb_kbd_interface, 1, USB_KBD_REPORT_BUF);
+    return 0;
+}
+
+// Poll keyboard for input (reads interrupt endpoint)
+// Returns ASCII character code, or 0 if no key pressed
+fn usb_kbd_poll() {
+    if usb_kbd_detected == 0 { return 0; }
+
+    // Read 8-byte boot protocol report
+    let ok = usb_interrupt_read(usb_kbd_interface, USB_KBD_REPORT_BUF, 8);
+    if ok == 0 { return 0; }
+
+    // Parse report
+    let modifiers = mem_read_u8(USB_KBD_REPORT_BUF);
+    usb_kbd_modifiers = modifiers;
+
+    // Check for new key presses (compare with last report)
+    let shifted = 0;
+    if (modifiers % 4) > 0 { shifted = 1; }  // Left/Right Shift
+    if (modifiers / 32) % 2 == 1 { shifted = 1; }  // Right Shift
+
+    let mut key_idx = 2;
+    while key_idx < 8 {
+        let usage = mem_read_u8(USB_KBD_REPORT_BUF + key_idx);
+        if usage == 0 { key_idx = key_idx + 1; continue; }
+        if usage == 1 { key_idx = key_idx + 1; continue; }  // ErrorRollOver
+
+        // Check if this key was in previous report (ignore if already held)
+        let mut was_pressed = 0;
+        let mut j = 0;
+        while j < 6 {
+            if usb_kbd_last_keys[j] == usage {
+                was_pressed = 1;
+            }
+            j = j + 1;
+        }
+
+        if was_pressed == 0 {
+            // New key press - convert to ASCII
+            let ascii = _usb_kbd_usage_to_ascii(usage, shifted);
+            if ascii > 0 {
+                // Save current keys for next comparison
+                let mut k = 0;
+                while k < 6 {
+                    usb_kbd_last_keys[k] = mem_read_u8(USB_KBD_REPORT_BUF + 2 + k);
+                    k = k + 1;
+                }
+                return ascii;
+            }
+        }
+        key_idx = key_idx + 1;
+    }
+
+    // Update last keys
+    let mut k = 0;
+    while k < 6 {
+        usb_kbd_last_keys[k] = mem_read_u8(USB_KBD_REPORT_BUF + 2 + k);
+        k = k + 1;
+    }
+    return 0;
+}
+
+// Initialize USB keyboard
+fn usb_kbd_init() {
+    usb_kbd_detected = 0;
+    usb_kbd_detect();
+    if usb_kbd_detected == 1 {
+        usb_kbd_set_boot_protocol();
+        usb_kbd_set_leds(0);  // all LEDs off
+        print("USB keyboard initialized (boot protocol)");
+    }
+    return usb_kbd_detected;
+}
+
+// Status display
+fn usb_kbd_status() {
+    if usb_kbd_detected == 1 {
+        print("USB Keyboard: detected (boot protocol)");
+        print("  Interface: " + to_string(usb_kbd_interface));
+        print("  Modifiers: 0x" + format_hex(usb_kbd_modifiers, 2));
+    } else {
+        print("USB Keyboard: not detected (using PS/2 fallback)");
+    }
+    return 0;
+}
+
+print("usb_kbd.hl loaded -- USB HID keyboard driver (boot protocol)");
