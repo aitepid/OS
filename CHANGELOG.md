@@ -12,7 +12,28 @@
 - Shell + 内核命令（去重）：`113`
 - `scripts/*.ps1`：`22`（9,965 行）
 - 构建/测试主入口：`hl-bootstrap.cmd test`
-- 最近完成功能迭代：`123`（VGA 完整交互闭环 + USB 键盘）
+- 最近完成功能迭代：`124`（完整当前镜像裸机安装）
+
+## Iteration 124 — 完整当前镜像裸机安装
+
+- **`self_image.hl`**: 自映像写盘路径从“回读目标盘”升级为“从内存重建完整启动镜像”
+  - `self_image_read_sector(lba, buf_addr)`: 按 LBA 重建当前运行镜像
+    - `LBA0` → `0x7C00` stage1/MBR
+    - `LBA1` → `0x8000` stage2
+    - `LBA2+` → `0x100000` kernel payload
+  - `self_install_to_disk()`: 逐扇区将当前启动镜像直接写入目标磁盘
+  - 默认镜像元数据同步到最新构建：`161280` bytes / `315` sectors
+- **`installer.hl`**: 安装器主流程升级为真实裸机安装闭环
+  - `[3/7]` 检查当前运行镜像
+  - `[4/7]` 校验目标磁盘容量是否足够容纳完整镜像
+  - `[5/7]` 执行 raw boot image 全盘写入
+  - `[6/7]` Legacy BIOS 路径补写/修正 MBR 分区元数据
+  - `[7/7]` 回读校验 `0x55AA` 启动签名
+  - 移除文件加载时自动执行 `installer_main()` 的危险行为
+- **`kernel_entry.hl`**: 原生 `install` 命令改为直接委托 `installer_main()`
+  - 不再使用旧的 VirtIO-only 假安装流程
+  - 现在走 ATA PIO / AHCI / VirtIO 三后端统一安装器
+- **`manifest.hl`**: `BOOT_IMAGE_BYTES` 同步为 `161280`
 
 ## Iteration 123 — VGA 完整交互闭环 + USB 键盘
 

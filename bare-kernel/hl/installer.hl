@@ -196,9 +196,35 @@ fn installer_verify() {
     return 0;
 }
 
+fn installer_check_capacity() {
+    let need = self_image_sectors();
+    if need == 0 {
+        print("  ERROR: current boot image metadata unavailable.");
+        return 0;
+    }
+    if installer_disk_sectors < need {
+        print("  ERROR: target disk too small.");
+        print("  Need: " + to_string(need) + " sectors, have: " + to_string(installer_disk_sectors));
+        return 0;
+    }
+    print("  Capacity OK: " + to_string(installer_disk_sectors) + " >= " + to_string(need) + " sectors");
+    return 1;
+}
+
+fn installer_write_current_image() {
+    let total = self_image_sectors();
+    let written = self_install_to_disk();
+    if written != total {
+        print("  ERROR: image write incomplete (" + to_string(written) + "/" + to_string(total) + " sectors)");
+        return 0;
+    }
+    print("  Raw boot image written: " + to_string(written) + " sectors");
+    return 1;
+}
+
 fn installer_main() {
     print("========================================");
-    print("  HicOS Bare-Metal Installer v6.0");
+    print("  HicOS Bare-Metal Installer v7.0");
     print("========================================");
     print("");
 
@@ -216,58 +242,30 @@ fn installer_main() {
         print("  Boot mode: Legacy BIOS");
     }
 
-    // Step 3: Partition disk
-    print("[3/7] Creating partition table...");
+    // Step 3: Inspect current image
+    print("[3/7] Inspecting running boot image...");
+    self_image_info();
+    if self_image_sectors() == 0 { return 1; }
+
+    // Step 4: Capacity check
+    print("[4/7] Checking target capacity...");
+    if installer_check_capacity() == 0 { return 1; }
+
+    // Step 5: Raw image write
+    print("[5/7] Writing full boot image to target disk...");
+    if installer_write_current_image() == 0 { return 1; }
+
+    // Step 6: Boot metadata fixup
+    print("[6/7] Finalizing boot metadata...");
     if is_uefi == 1 {
-        gpt_create(cap);
-        let esp_info = gpt_find_esp();
-        if len(esp_info) > 0 {
-            print("  ESP at LBA " + to_string(esp_info[0]) + "-" + to_string(esp_info[1]));
-        }
+        print("  Current runtime is UEFI; raw image written as current boot snapshot.");
     } else {
         installer_create_mbr(cap);
     }
 
-    // Step 4: Format partitions
-    print("[4/7] Formatting partitions...");
-    if is_uefi == 1 {
-        let esp_info = gpt_find_esp();
-        if len(esp_info) > 0 {
-            let esp_sectors = esp_info[1] - esp_info[0] + 1;
-            print("  Formatting ESP (" + to_string(esp_sectors) + " sectors)...");
-        }
-        print("  Formatting HicOS system partition...");
-    } else {
-        installer_format_partition(1, cap - 1);
-    }
-
-    // Step 5: Write bootloader
-    print("[5/7] Writing bootloader...");
-    if is_uefi == 1 {
-        print("  Writing BOOTX64.EFI to ESP \\EFI\\BOOT\\...");
-    } else {
-        print("  Writing Stage1 + Stage2 + Kernel from current image...");
-    }
-
-    // Step 6: Write source files
-    print("[6/7] Writing H-L source files...");
-    if is_uefi == 0 {
-        fat16_create_file("HICOS.SYS", 0);
-        print("  Created HICOS.SYS");
-    }
-
     // Step 7: Verify
     print("[7/7] Verifying installation...");
-    if is_uefi == 1 {
-        let gpt_ok = gpt_read();
-        if gpt_ok > 0 {
-            print("  GPT verification: " + to_string(gpt_ok) + " partition(s) OK");
-        } else {
-            print("  GPT verification FAILED");
-        }
-    } else {
-        installer_verify();
-    }
+    installer_verify();
 
     print("");
     print("========================================");
@@ -285,5 +283,3 @@ fn installer_main() {
     print("========================================");
     return 0;
 }
-
-installer_main();

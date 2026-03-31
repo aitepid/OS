@@ -25,6 +25,9 @@
 let SELF_IMG_ADDR = 3148080;    // 0x300930: image memory base
 let SELF_IMG_BYTES = 3148088;   // 0x300938: image byte count
 let SELF_IMG_SECTORS = 3148096; // 0x300940: image sector count
+let SELF_STAGE1_ADDR = 31744;   // 0x7C00: stage1/MBR in low memory
+let SELF_STAGE2_ADDR = 32768;   // 0x8000: stage2 in low memory
+let SELF_KERNEL_ADDR = 1048576; // 0x100000: native kernel payload
 
 // The boot image is loaded starting at physical address 0x7C00 (MBR).
 // However, the MBR + Stage2 occupy low memory and the kernel starts at 0x100000.
@@ -37,8 +40,8 @@ fn self_image_init() {
     // Default values matching hicos-hl.img manifest
     // These are overwritten at boot time by the native kernel
     mem_write_u64(SELF_IMG_ADDR, 1048576);      // 0x100000 (kernel load address)
-    mem_write_u64(SELF_IMG_BYTES, 160768);       // total image bytes
-    mem_write_u64(SELF_IMG_SECTORS, 314);        // total image sectors
+    mem_write_u64(SELF_IMG_BYTES, 161280);       // total image bytes
+    mem_write_u64(SELF_IMG_SECTORS, 315);        // total image sectors
     return 0;
 }
 
@@ -57,6 +60,58 @@ fn self_image_base() {
     return mem_read_u64(SELF_IMG_ADDR);
 }
 
+fn self_image_kernel_bytes() {
+    let total = self_image_bytes();
+    if total <= 1024 {
+        return 0;
+    }
+    return total - 1024;
+}
+
+// Reconstruct one sector of the currently running boot image from memory.
+// LBA 0: stage1/MBR @ 0x7C00
+// LBA 1: stage2     @ 0x8000
+// LBA 2+: kernel    @ 0x100000
+fn self_image_read_sector(lba, buf_addr) {
+    mem_zero(buf_addr, 512);
+
+    if lba >= self_image_sectors() {
+        return 0;
+    }
+
+    let mut i = 0;
+    if lba == 0 {
+        while i < 512 {
+            mem_write_u8(buf_addr + i, mem_read_u8(SELF_STAGE1_ADDR + i));
+            i = i + 1;
+        }
+        return 1;
+    }
+
+    if lba == 1 {
+        while i < 512 {
+            mem_write_u8(buf_addr + i, mem_read_u8(SELF_STAGE2_ADDR + i));
+            i = i + 1;
+        }
+        return 1;
+    }
+
+    let kernel_bytes = self_image_kernel_bytes();
+    let kernel_off = (lba - 2) * 512;
+    if kernel_off >= kernel_bytes {
+        return 1;
+    }
+
+    while i < 512 {
+        let src_off = kernel_off + i;
+        if src_off < kernel_bytes {
+            mem_write_u8(buf_addr + i, mem_read_u8(SELF_KERNEL_ADDR + src_off));
+        }
+        i = i + 1;
+    }
+    return 1;
+}
+
 // Write the running kernel image to a target disk using the installer's disk backend.
 // This reads the boot disk sector-by-sector and writes to the target.
 // src_backend: source disk backend (where we booted from)
@@ -68,31 +123,24 @@ fn self_install_to_disk() {
         return 0;
     }
 
-    print("Self-install: writing " + to_string(total_sectors) + " sectors to target disk...");
+    if installer_disk_backend == 0 {
+        print("self_install: no target disk backend selected");
+        return 0;
+    }
 
-    // The kernel image in memory starts at 0x100000.
-    // But we need the FULL boot image (MBR + Stage2 + Kernel).
-    // The MBR is at 0x7C00 and Stage2 at 0x8000 in memory (if still intact).
-    //
-    // Strategy: use the installer's disk read from the boot device,
-    // then write to the target device. For now, we write sector-by-sector
-    // from the boot disk to the target.
-    //
-    // If the source and target are the same disk, we skip (already installed).
+    print("Self-install: writing " + to_string(total_sectors) + " sectors to target disk...");
 
     let buf = page_alloc();
     let mut written = 0;
     let mut sec = 0;
 
     while sec < total_sectors {
-        // Read from boot disk (same backend we booted from)
-        let ok = installer_disk_read(sec, 1, buf);
+        let ok = self_image_read_sector(sec, buf);
         if ok == 0 {
-            print("self_install: read failed at sector " + to_string(sec));
+            print("self_install: reconstruct failed at sector " + to_string(sec));
             page_free(buf);
             return written;
         }
-        // Write to target disk
         let wok = installer_disk_write(sec, 1, buf);
         if wok == 0 {
             print("self_install: write failed at sector " + to_string(sec));
@@ -120,6 +168,7 @@ fn self_image_info() {
     print("Self-image:");
     print("  Kernel base: 0x" + format_hex(base, 8));
     print("  Image size:  " + to_string(bytes) + " bytes (" + to_string(sectors) + " sectors)");
+    print("  Layout: stage1@0x7C00 stage2@0x8000 kernel@0x100000");
     return 0;
 }
 
