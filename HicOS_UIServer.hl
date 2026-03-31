@@ -66,6 +66,7 @@ fn uis_init() {
     uis_evq_count = 0;
     uis_composite_needed = 1;
     uis_frame_count = 0;
+    uidsk_init();
     print("ui-server: display server started (max " + to_string(UIS_MAX_CLIENTS) + " clients)");
     return 0;
 }
@@ -98,7 +99,7 @@ fn uis_connect(client_pid) {
 
 fn uis_create_window(client_id, x, y, w, h, title) {
     if client_id < 0 || client_id >= uis_client_count { return 0 - 1; }
-    let win_id = wm_create_window(x, y, w, h, title);
+    let win_id = wm_create_window(x, y, w, h, title, uis_client_pids[client_id]);
     uis_client_wins[client_id] = win_id;
     uis_client_dirty[client_id] = 1;
     uis_composite_needed = 1;
@@ -169,6 +170,7 @@ fn uis_dispatch_event(event_type, event_data) {
 fn uis_dispatch_key(scancode, pressed) {
     uis_evq_push(UIS_MSG_KEY_EVENT, scancode);
     if pressed == 1 {
+        if uidsk_handle_key(scancode) == 1 { return 0; }
         uis_dispatch_event(UIS_MSG_KEY_EVENT, scancode);
     }
     return 0;
@@ -205,6 +207,38 @@ fn uis_handle_message(src_pid, msg_type, msg_data) {
         }
         return 0 - 1;
     }
+    if msg_type == UIS_MSG_CREATE_WIN {
+        let mut i = 0;
+        while i < uis_client_count {
+            if uis_client_pids[i] == src_pid {
+                return uis_create_window(i, 100, 80, 400, 300, "App");
+            }
+            i = i + 1;
+        }
+        return 0 - 1;
+    }
+    if msg_type == UIS_MSG_DESTROY_WIN {
+        let mut i = 0;
+        while i < uis_client_count {
+            if uis_client_pids[i] == src_pid {
+                return uis_destroy_window(i);
+            }
+            i = i + 1;
+        }
+        return 0 - 1;
+    }
+    if msg_type == UIS_MSG_SET_TITLE {
+        let mut i = 0;
+        while i < uis_client_count {
+            if uis_client_pids[i] == src_pid {
+                let win_id = uis_client_wins[i];
+                if win_id >= 0 { wm_set_title(win_id, "App"); }
+                return 0;
+            }
+            i = i + 1;
+        }
+        return 0 - 1;
+    }
     return 0 - 1;
 }
 
@@ -219,6 +253,15 @@ fn uis_composite() {
         uis_client_dirty[i] = 0;
         i = i + 1;
     }
+    // Notify focused client
+    let focused = wm_get_focused();
+    let mut j = 0;
+    while j < uis_client_count {
+        if uis_client_wins[j] == focused {
+            ipc_send(uis_client_pids[j], UIS_MSG_FOCUS_EVENT, 1);
+        }
+        j = j + 1;
+    }
     uis_composite_needed = 0;
     uis_frame_count = uis_frame_count + 1;
     return 0;
@@ -226,6 +269,7 @@ fn uis_composite() {
 
 fn uis_tick() {
     // Called from main loop every timer tick
+    uidsk_tick();
     // Process pending events
     while uis_evq_pending() > 0 {
         let idx = uis_evq_pop();
@@ -260,6 +304,7 @@ fn uis_stats() {
     print("  clients:    " + to_string(uis_client_count));
     print("  frames:     " + to_string(uis_frame_count));
     print("  evt_queued: " + to_string(uis_evq_count));
+    print("  toasts:     " + to_string(ui_notify_count()));
     print("  running:    " + to_string(uis_running));
     return 0;
 }

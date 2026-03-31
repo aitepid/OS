@@ -1,0 +1,249 @@
+// ui_dialog.hl -- HicOS Modal Dialog System
+//
+// Provides modal dialog boxes rendered on top of the window manager.
+// Used for confirmations, warnings, errors, and informational popups.
+//
+// Dialog types:
+//   INFO    -- informational message, single OK button
+//   CONFIRM -- yes/no confirmation
+//   WARNING -- warning with OK/Cancel
+//   ERROR   -- error message with OK
+//
+// All dialogs are modal: they block interaction with windows behind them.
+// Uses ui_controls.hl for rendering and ui_theme.hl for colors.
+
+let UI_DLG_NONE    = 0;
+let UI_DLG_INFO    = 1;
+let UI_DLG_CONFIRM = 2;
+let UI_DLG_WARNING = 3;
+let UI_DLG_ERROR   = 4;
+
+let UI_DLG_RESULT_NONE   = 0;
+let UI_DLG_RESULT_OK     = 1;
+let UI_DLG_RESULT_YES    = 2;
+let UI_DLG_RESULT_NO     = 3;
+let UI_DLG_RESULT_CANCEL = 4;
+
+let mut ui_dlg_active = 0;
+let mut ui_dlg_type = 0;
+let mut ui_dlg_result = 0;
+let mut ui_dlg_x = 0;
+let mut ui_dlg_y = 0;
+let mut ui_dlg_w = 320;
+let mut ui_dlg_h = 160;
+let mut ui_dlg_title = "Dialog";
+let mut ui_dlg_message = "";
+let mut ui_dlg_selected = 0;
+
+fn ui_dialog_open(dlg_type, title, message) {
+    ui_dlg_type = dlg_type;
+    ui_dlg_title = title;
+    ui_dlg_message = message;
+    ui_dlg_result = UI_DLG_RESULT_NONE;
+    ui_dlg_selected = 0;
+    ui_dlg_w = 320;
+    let msg_w = ui_text_width(message) + 40;
+    if msg_w > ui_dlg_w { ui_dlg_w = msg_w; }
+    if ui_dlg_w > 500 { ui_dlg_w = 500; }
+    ui_dlg_h = 140;
+    ui_dlg_x = (vesa_width - ui_dlg_w) / 2;
+    ui_dlg_y = (vesa_height - ui_dlg_h) / 2;
+    ui_dlg_active = 1;
+    return 0;
+}
+
+fn ui_dialog_close() {
+    ui_dlg_active = 0;
+    return ui_dlg_result;
+}
+
+fn ui_dialog_is_open() {
+    return ui_dlg_active;
+}
+
+fn ui_dialog_get_result() {
+    return ui_dlg_result;
+}
+
+fn ui_dialog_render() {
+    if ui_dlg_active == 0 { return 0; }
+
+    let x = ui_dlg_x;
+    let y = ui_dlg_y;
+    let w = ui_dlg_w;
+    let h = ui_dlg_h;
+    let title_h = ui_theme_title_height();
+
+    // Dim overlay
+    vesa_fill_rect(0, 0, vesa_width, vesa_height, ui_theme_shadow_color());
+
+    // Shadow
+    vesa_fill_rect(x + 4, y + 4, w, h + title_h, ui_theme_shadow_color());
+
+    // Title bar
+    let mut tb_color = ui_theme_titlebar_active_color();
+    if ui_dlg_type == UI_DLG_WARNING { tb_color = ui_theme_warning_color(); }
+    if ui_dlg_type == UI_DLG_ERROR { tb_color = ui_theme_error_color(); }
+    vesa_fill_rect(x, y, w, title_h, tb_color);
+    ui_draw_text(x + 8, y + (title_h - 16) / 2, ui_dlg_title, ui_theme_surface_color(), 0);
+
+    // Body
+    vesa_fill_rect(x, y + title_h, w, h, ui_theme_surface_color());
+    vesa_rect(x, y, w, h + title_h, ui_theme_border_color());
+
+    // Message text
+    let msg_x = x + 20;
+    let msg_y = y + title_h + 20;
+    ui_draw_text(msg_x, msg_y, ui_dlg_message, ui_theme_text_muted_color(), 0);
+
+    // Buttons
+    let btn_w = 80;
+    let btn_h = 28;
+    let btn_y = y + title_h + h - btn_h - 16;
+
+    if ui_dlg_type == UI_DLG_INFO {
+        let ok_x = x + (w - btn_w) / 2;
+        if ui_dlg_selected == 0 {
+            ui_button_active(ok_x, btn_y, btn_w, btn_h, "OK");
+        } else {
+            ui_button(ok_x, btn_y, btn_w, btn_h, "OK");
+        }
+    }
+    if ui_dlg_type == UI_DLG_ERROR {
+        let ok_x = x + (w - btn_w) / 2;
+        if ui_dlg_selected == 0 {
+            ui_button_active(ok_x, btn_y, btn_w, btn_h, "OK");
+        } else {
+            ui_button(ok_x, btn_y, btn_w, btn_h, "OK");
+        }
+    }
+    if ui_dlg_type == UI_DLG_CONFIRM {
+        let yes_x = x + w / 2 - btn_w - 10;
+        let no_x = x + w / 2 + 10;
+        if ui_dlg_selected == 0 {
+            ui_button_active(yes_x, btn_y, btn_w, btn_h, "Yes");
+            ui_button(no_x, btn_y, btn_w, btn_h, "No");
+        } else {
+            ui_button(yes_x, btn_y, btn_w, btn_h, "Yes");
+            ui_button_active(no_x, btn_y, btn_w, btn_h, "No");
+        }
+    }
+    if ui_dlg_type == UI_DLG_WARNING {
+        let ok_x = x + w / 2 - btn_w - 10;
+        let cancel_x = x + w / 2 + 10;
+        if ui_dlg_selected == 0 {
+            ui_button_active(ok_x, btn_y, btn_w, btn_h, "OK");
+            ui_button(cancel_x, btn_y, btn_w, btn_h, "Cancel");
+        } else {
+            ui_button(ok_x, btn_y, btn_w, btn_h, "OK");
+            ui_button_active(cancel_x, btn_y, btn_w, btn_h, "Cancel");
+        }
+    }
+    return 0;
+}
+
+fn ui_dialog_key(key) {
+    if ui_dlg_active == 0 { return 0; }
+    // Tab or arrow keys toggle selection
+    if key == 9 { ui_dlg_selected = 1 - ui_dlg_selected; return 0; }
+    if key == 75 { ui_dlg_selected = 0; return 0; }
+    if key == 77 { ui_dlg_selected = 1; return 0; }
+    // Enter confirms
+    if key == 13 {
+        if ui_dlg_type == UI_DLG_INFO { ui_dlg_result = UI_DLG_RESULT_OK; }
+        if ui_dlg_type == UI_DLG_ERROR { ui_dlg_result = UI_DLG_RESULT_OK; }
+        if ui_dlg_type == UI_DLG_CONFIRM {
+            if ui_dlg_selected == 0 { ui_dlg_result = UI_DLG_RESULT_YES; }
+            if ui_dlg_selected == 1 { ui_dlg_result = UI_DLG_RESULT_NO; }
+        }
+        if ui_dlg_type == UI_DLG_WARNING {
+            if ui_dlg_selected == 0 { ui_dlg_result = UI_DLG_RESULT_OK; }
+            if ui_dlg_selected == 1 { ui_dlg_result = UI_DLG_RESULT_CANCEL; }
+        }
+        ui_dialog_close();
+        return 1;
+    }
+    // Escape cancels
+    if key == 27 {
+        if ui_dlg_type == UI_DLG_CONFIRM { ui_dlg_result = UI_DLG_RESULT_NO; }
+        if ui_dlg_type == UI_DLG_WARNING { ui_dlg_result = UI_DLG_RESULT_CANCEL; }
+        if ui_dlg_type == UI_DLG_INFO { ui_dlg_result = UI_DLG_RESULT_OK; }
+        if ui_dlg_type == UI_DLG_ERROR { ui_dlg_result = UI_DLG_RESULT_OK; }
+        ui_dialog_close();
+        return 1;
+    }
+    return 0;
+}
+
+fn ui_dialog_click(mx, my) {
+    if ui_dlg_active == 0 { return 0; }
+    let btn_w = 80;
+    let btn_h = 28;
+    let btn_y = ui_dlg_y + ui_theme_title_height() + ui_dlg_h - btn_h - 16;
+
+    if ui_dlg_type == UI_DLG_INFO {
+        let ok_x = ui_dlg_x + (ui_dlg_w - btn_w) / 2;
+        if ui_button_hit(ok_x, btn_y, btn_w, btn_h, mx, my) == 1 {
+            ui_dlg_result = UI_DLG_RESULT_OK;
+            ui_dialog_close();
+            return 1;
+        }
+    }
+    if ui_dlg_type == UI_DLG_ERROR {
+        let ok_x = ui_dlg_x + (ui_dlg_w - btn_w) / 2;
+        if ui_button_hit(ok_x, btn_y, btn_w, btn_h, mx, my) == 1 {
+            ui_dlg_result = UI_DLG_RESULT_OK;
+            ui_dialog_close();
+            return 1;
+        }
+    }
+    if ui_dlg_type == UI_DLG_CONFIRM {
+        let yes_x = ui_dlg_x + ui_dlg_w / 2 - btn_w - 10;
+        let no_x = ui_dlg_x + ui_dlg_w / 2 + 10;
+        if ui_button_hit(yes_x, btn_y, btn_w, btn_h, mx, my) == 1 {
+            ui_dlg_result = UI_DLG_RESULT_YES;
+            ui_dialog_close();
+            return 1;
+        }
+        if ui_button_hit(no_x, btn_y, btn_w, btn_h, mx, my) == 1 {
+            ui_dlg_result = UI_DLG_RESULT_NO;
+            ui_dialog_close();
+            return 1;
+        }
+    }
+    if ui_dlg_type == UI_DLG_WARNING {
+        let ok_x = ui_dlg_x + ui_dlg_w / 2 - btn_w - 10;
+        let cancel_x = ui_dlg_x + ui_dlg_w / 2 + 10;
+        if ui_button_hit(ok_x, btn_y, btn_w, btn_h, mx, my) == 1 {
+            ui_dlg_result = UI_DLG_RESULT_OK;
+            ui_dialog_close();
+            return 1;
+        }
+        if ui_button_hit(cancel_x, btn_y, btn_w, btn_h, mx, my) == 1 {
+            ui_dlg_result = UI_DLG_RESULT_CANCEL;
+            ui_dialog_close();
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// Convenience wrappers
+fn ui_dialog_info(title, msg) {
+    return ui_dialog_open(UI_DLG_INFO, title, msg);
+}
+
+fn ui_dialog_confirm(title, msg) {
+    return ui_dialog_open(UI_DLG_CONFIRM, title, msg);
+}
+
+fn ui_dialog_warn(title, msg) {
+    return ui_dialog_open(UI_DLG_WARNING, title, msg);
+}
+
+fn ui_dialog_error(title, msg) {
+    return ui_dialog_open(UI_DLG_ERROR, title, msg);
+}
+
+print("ui_dialog.hl loaded");
+print("UI dialog: info/confirm/warning/error modal dialogs");

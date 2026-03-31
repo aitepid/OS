@@ -1,0 +1,304 @@
+// ui_installer.hl -- HicOS Graphical Installer Wizard
+//
+// Multi-step installation wizard rendered in a wm window.
+// Uses ui_controls for buttons, progress bar, labels, and badges.
+// Delegates actual disk operations to installer.hl functions.
+//
+// Steps:
+//   0: Welcome      -- system info, start button
+//   1: Detect       -- disk detection results
+//   2: Confirm      -- capacity check, danger warning
+//   3: Install      -- progress bar, writing image
+//   4: Complete     -- success/failure summary, reboot prompt
+
+let UIINST_STEP_WELCOME  = 0;
+let UIINST_STEP_DETECT   = 1;
+let UIINST_STEP_CONFIRM  = 2;
+let UIINST_STEP_INSTALL  = 3;
+let UIINST_STEP_COMPLETE = 4;
+
+let mut uiinst_win_id = 0 - 1;
+let mut uiinst_step = 0;
+let mut uiinst_win_x = 120;
+let mut uiinst_win_y = 60;
+let mut uiinst_win_w = 480;
+let mut uiinst_win_h = 340;
+let mut uiinst_disk_cap = 0;
+let mut uiinst_disk_backend_name = "none";
+let mut uiinst_boot_mode = "Legacy BIOS";
+let mut uiinst_install_ok = 0;
+let mut uiinst_progress = 0;
+
+fn uiinst_open() {
+    if uiinst_win_id >= 0 { return uiinst_win_id; }
+    uiinst_step = UIINST_STEP_WELCOME;
+    uiinst_disk_cap = 0;
+    uiinst_install_ok = 0;
+    uiinst_progress = 0;
+    uiinst_win_id = wm_create_window(uiinst_win_x, uiinst_win_y, uiinst_win_w, uiinst_win_h, "Installer", 0);
+    return uiinst_win_id;
+}
+
+fn uiinst_close() {
+    if uiinst_win_id >= 0 {
+        wm_close_window(uiinst_win_id);
+        uiinst_win_id = 0 - 1;
+    }
+    uiinst_step = 0;
+    return 0;
+}
+
+fn uiinst_is_open() {
+    if uiinst_win_id >= 0 { return 1; }
+    return 0;
+}
+
+// Content area origin (inside window, after title bar)
+fn uiinst_cx() { return uiinst_win_x + 1; }
+fn uiinst_cy() { return uiinst_win_y + ui_theme_title_height(); }
+fn uiinst_cw() { return uiinst_win_w - 2; }
+fn uiinst_ch() { return uiinst_win_h - 1; }
+
+// --- Step renderers ---
+fn uiinst_draw_welcome() {
+    let cx = uiinst_cx();
+    let cy = uiinst_cy();
+    let cw = uiinst_cw();
+
+    ui_draw_text(cx + 20, cy + 20, "HicOS Installer", ui_theme_text_color(), 0);
+    ui_separator_h(cx + 20, cy + 42, cw - 40);
+
+    ui_draw_text(cx + 20, cy + 56, "Install HicOS to your disk.", ui_theme_text_muted_color(), 0);
+    ui_draw_text(cx + 20, cy + 80, "Version: 6.0", ui_theme_text_muted_color(), 0);
+    ui_draw_text(cx + 20, cy + 100, "Image: " + to_string(self_image_sectors()) + " sectors", ui_theme_text_muted_color(), 0);
+
+    // Next button
+    ui_button_active(cx + cw - 120, cy + uiinst_ch() - 48, 100, 32, "Next >");
+    return 0;
+}
+
+fn uiinst_draw_detect() {
+    let cx = uiinst_cx();
+    let cy = uiinst_cy();
+    let cw = uiinst_cw();
+
+    ui_draw_text(cx + 20, cy + 20, "[1/4] Disk Detection", ui_theme_text_color(), 0);
+    ui_separator_h(cx + 20, cy + 42, cw - 40);
+
+    if uiinst_disk_cap > 0 {
+        let mb = uiinst_disk_cap * 512 / 1048576;
+        ui_badge_ok(cx + 20, cy + 56, "Disk Found");
+        ui_draw_text(cx + 20, cy + 84, "Backend: " + uiinst_disk_backend_name, ui_theme_text_muted_color(), 0);
+        ui_draw_text(cx + 20, cy + 104, "Capacity: " + to_string(uiinst_disk_cap) + " sectors (" + to_string(mb) + " MB)", ui_theme_text_muted_color(), 0);
+        ui_draw_text(cx + 20, cy + 124, "Boot: " + uiinst_boot_mode, ui_theme_text_muted_color(), 0);
+        ui_button_active(cx + cw - 120, cy + uiinst_ch() - 48, 100, 32, "Next >");
+    } else {
+        ui_badge_err(cx + 20, cy + 56, "No Disk");
+        ui_draw_text(cx + 20, cy + 84, "No ATA/AHCI/VirtIO disk detected.", ui_theme_text_muted_color(), 0);
+    }
+    ui_button(cx + 20, cy + uiinst_ch() - 48, 100, 32, "< Back");
+    return 0;
+}
+
+fn uiinst_draw_confirm() {
+    let cx = uiinst_cx();
+    let cy = uiinst_cy();
+    let cw = uiinst_cw();
+
+    ui_draw_text(cx + 20, cy + 20, "[2/4] Confirm Installation", ui_theme_text_color(), 0);
+    ui_separator_h(cx + 20, cy + 42, cw - 40);
+
+    ui_badge_warn(cx + 20, cy + 56, "WARNING");
+    ui_draw_text(cx + 20, cy + 84, "This will OVERWRITE target disk data.", ui_theme_error_color(), 0);
+
+    let need = self_image_sectors();
+    ui_draw_text(cx + 20, cy + 112, "Required: " + to_string(need) + " sectors", ui_theme_text_muted_color(), 0);
+    ui_draw_text(cx + 20, cy + 132, "Available: " + to_string(uiinst_disk_cap) + " sectors", ui_theme_text_muted_color(), 0);
+
+    if uiinst_disk_cap >= need {
+        ui_badge_ok(cx + 20, cy + 160, "Capacity OK");
+        ui_button_active(cx + cw - 120, cy + uiinst_ch() - 48, 100, 32, "Install");
+    } else {
+        ui_badge_err(cx + 20, cy + 160, "Too Small");
+    }
+    ui_button(cx + 20, cy + uiinst_ch() - 48, 100, 32, "< Back");
+    return 0;
+}
+
+fn uiinst_draw_install() {
+    let cx = uiinst_cx();
+    let cy = uiinst_cy();
+    let cw = uiinst_cw();
+
+    ui_draw_text(cx + 20, cy + 20, "[3/4] Installing...", ui_theme_text_color(), 0);
+    ui_separator_h(cx + 20, cy + 42, cw - 40);
+
+    ui_draw_text(cx + 20, cy + 60, "Writing boot image to disk.", ui_theme_text_muted_color(), 0);
+    ui_progress_bar(cx + 20, cy + 90, cw - 40, 24, uiinst_progress);
+
+    if uiinst_progress >= 100 {
+        if uiinst_install_ok == 1 {
+            ui_badge_ok(cx + 20, cy + 130, "Write Complete");
+        } else {
+            ui_badge_err(cx + 20, cy + 130, "Write Failed");
+        }
+        ui_button_active(cx + cw - 120, cy + uiinst_ch() - 48, 100, 32, "Next >");
+    }
+    return 0;
+}
+
+fn uiinst_draw_complete() {
+    let cx = uiinst_cx();
+    let cy = uiinst_cy();
+    let cw = uiinst_cw();
+
+    ui_draw_text(cx + 20, cy + 20, "[4/4] Installation Complete", ui_theme_text_color(), 0);
+    ui_separator_h(cx + 20, cy + 42, cw - 40);
+
+    if uiinst_install_ok == 1 {
+        ui_badge_ok(cx + 20, cy + 56, "Success");
+        ui_draw_text(cx + 20, cy + 84, "HicOS installed to disk.", ui_theme_text_color(), 0);
+        ui_draw_text(cx + 20, cy + 104, "Backend: " + uiinst_disk_backend_name, ui_theme_text_muted_color(), 0);
+        ui_draw_text(cx + 20, cy + 124, "Reboot to start from disk.", ui_theme_text_muted_color(), 0);
+    } else {
+        ui_badge_err(cx + 20, cy + 56, "Failed");
+        ui_draw_text(cx + 20, cy + 84, "Installation did not complete.", ui_theme_error_color(), 0);
+        ui_draw_text(cx + 20, cy + 104, "Use terminal: install", ui_theme_text_muted_color(), 0);
+    }
+    ui_button_active(cx + cw - 120, cy + uiinst_ch() - 48, 100, 32, "Close");
+    return 0;
+}
+
+fn uiinst_render() {
+    if uiinst_win_id < 0 { return 0; }
+    if uiinst_step == UIINST_STEP_WELCOME { uiinst_draw_welcome(); }
+    if uiinst_step == UIINST_STEP_DETECT { uiinst_draw_detect(); }
+    if uiinst_step == UIINST_STEP_CONFIRM { uiinst_draw_confirm(); }
+    if uiinst_step == UIINST_STEP_INSTALL { uiinst_draw_install(); }
+    if uiinst_step == UIINST_STEP_COMPLETE { uiinst_draw_complete(); }
+    return 0;
+}
+
+// --- Step transitions ---
+fn uiinst_do_detect() {
+    uiinst_disk_cap = installer_detect_disk();
+    if installer_disk_backend == 1 { uiinst_disk_backend_name = "ATA PIO"; }
+    if installer_disk_backend == 2 { uiinst_disk_backend_name = "AHCI"; }
+    if installer_disk_backend == 3 { uiinst_disk_backend_name = "VirtIO"; }
+    if uefi_is_boot() == 1 {
+        uiinst_boot_mode = "UEFI";
+    } else {
+        uiinst_boot_mode = "Legacy BIOS";
+    }
+    return 0;
+}
+
+fn uiinst_do_install() {
+    uiinst_progress = 10;
+    // Write current boot image
+    let total = self_image_sectors();
+    if total == 0 {
+        uiinst_install_ok = 0;
+        uiinst_progress = 100;
+        return 0;
+    }
+    uiinst_progress = 30;
+    let written = self_install_to_disk();
+    uiinst_progress = 70;
+    if written != total {
+        uiinst_install_ok = 0;
+        uiinst_progress = 100;
+        return 0;
+    }
+    // Boot metadata fixup
+    if uefi_is_boot() == 0 {
+        installer_create_mbr(uiinst_disk_cap);
+    }
+    uiinst_progress = 90;
+    // Verify
+    let verify_ok = installer_verify();
+    uiinst_install_ok = verify_ok;
+    uiinst_progress = 100;
+    return 0;
+}
+
+fn uiinst_next() {
+    if uiinst_step == UIINST_STEP_WELCOME {
+        uiinst_step = UIINST_STEP_DETECT;
+        uiinst_do_detect();
+        return 0;
+    }
+    if uiinst_step == UIINST_STEP_DETECT {
+        if uiinst_disk_cap > 0 {
+            uiinst_step = UIINST_STEP_CONFIRM;
+        }
+        return 0;
+    }
+    if uiinst_step == UIINST_STEP_CONFIRM {
+        uiinst_step = UIINST_STEP_INSTALL;
+        uiinst_do_install();
+        return 0;
+    }
+    if uiinst_step == UIINST_STEP_INSTALL {
+        if uiinst_progress >= 100 {
+            uiinst_step = UIINST_STEP_COMPLETE;
+        }
+        return 0;
+    }
+    if uiinst_step == UIINST_STEP_COMPLETE {
+        uiinst_close();
+        return 0;
+    }
+    return 0;
+}
+
+fn uiinst_back() {
+    if uiinst_step == UIINST_STEP_DETECT {
+        uiinst_step = UIINST_STEP_WELCOME;
+        return 0;
+    }
+    if uiinst_step == UIINST_STEP_CONFIRM {
+        uiinst_step = UIINST_STEP_DETECT;
+        return 0;
+    }
+    return 0;
+}
+
+// --- Click handler (called from wm_draw_all content area) ---
+fn uiinst_handle_click(mx, my) {
+    if uiinst_win_id < 0 { return 0; }
+    let cx = uiinst_cx();
+    let cy = uiinst_cy();
+    let cw = uiinst_cw();
+
+    // Next / Install / Close button (bottom right)
+    let next_x = cx + cw - 120;
+    let next_y = cy + uiinst_ch() - 48;
+    if ui_button_hit(next_x, next_y, 100, 32, mx, my) == 1 {
+        uiinst_next();
+        return 1;
+    }
+    // Back button (bottom left, steps 1-2)
+    if uiinst_step >= UIINST_STEP_DETECT {
+        if uiinst_step <= UIINST_STEP_CONFIRM {
+            if ui_button_hit(cx + 20, next_y, 100, 32, mx, my) == 1 {
+                uiinst_back();
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+fn uiinst_info() {
+    print("UI Installer:");
+    print("  Window:  " + to_string(uiinst_win_id));
+    print("  Step:    " + to_string(uiinst_step));
+    print("  Disk:    " + uiinst_disk_backend_name + " (" + to_string(uiinst_disk_cap) + " sectors)");
+    print("  Progress:" + to_string(uiinst_progress) + "%");
+    print("  Result:  " + to_string(uiinst_install_ok));
+    return 0;
+}
+
+print("ui_installer.hl loaded");
+print("UI installer: 5-step graphical wizard with progress bar");

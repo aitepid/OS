@@ -1,0 +1,136 @@
+// ui_notify.hl -- HicOS Toast Notification System
+//
+// Provides transient notification messages (toasts) displayed at the
+// top-right corner of the screen, above all windows.
+//
+// Notification queue: max 4 visible, FIFO, auto-dismiss after timeout.
+// Each notification: type (info/success/warning/error), message, TTL.
+
+let UI_TOAST_MAX = 4;
+let UI_TOAST_WIDTH = 260;
+let UI_TOAST_HEIGHT = 36;
+let UI_TOAST_PAD = 6;
+let UI_TOAST_TTL = 300;
+
+let UI_TOAST_INFO    = 0;
+let UI_TOAST_SUCCESS = 1;
+let UI_TOAST_WARNING = 2;
+let UI_TOAST_ERROR   = 3;
+
+// Toast slots
+let mut ui_toast_active = [0, 0, 0, 0];
+let mut ui_toast_type   = [0, 0, 0, 0];
+let mut ui_toast_msg    = ["", "", "", ""];
+let mut ui_toast_ttl    = [0, 0, 0, 0];
+
+fn ui_notify(ntype, message) {
+    // Find free slot or recycle oldest
+    let mut slot = 0 - 1;
+    let mut i = 0;
+    while i < UI_TOAST_MAX {
+        if ui_toast_active[i] == 0 { slot = i; i = UI_TOAST_MAX; }
+        i = i + 1;
+    }
+    if slot < 0 {
+        // Shift all up, drop oldest (slot 0)
+        let mut j = 0;
+        while j < UI_TOAST_MAX - 1 {
+            ui_toast_active[j] = ui_toast_active[j + 1];
+            ui_toast_type[j] = ui_toast_type[j + 1];
+            ui_toast_msg[j] = ui_toast_msg[j + 1];
+            ui_toast_ttl[j] = ui_toast_ttl[j + 1];
+            j = j + 1;
+        }
+        slot = UI_TOAST_MAX - 1;
+    }
+    ui_toast_active[slot] = 1;
+    ui_toast_type[slot] = ntype;
+    ui_toast_msg[slot] = message;
+    ui_toast_ttl[slot] = UI_TOAST_TTL;
+    return slot;
+}
+
+fn ui_notify_info(msg) { return ui_notify(UI_TOAST_INFO, msg); }
+fn ui_notify_ok(msg) { return ui_notify(UI_TOAST_SUCCESS, msg); }
+fn ui_notify_warn(msg) { return ui_notify(UI_TOAST_WARNING, msg); }
+fn ui_notify_err(msg) { return ui_notify(UI_TOAST_ERROR, msg); }
+
+fn ui_notify_tick() {
+    let mut i = 0;
+    while i < UI_TOAST_MAX {
+        if ui_toast_active[i] == 1 {
+            ui_toast_ttl[i] = ui_toast_ttl[i] - 1;
+            if ui_toast_ttl[i] <= 0 {
+                ui_toast_active[i] = 0;
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn ui_notify_has_visible() {
+    let mut i = 0;
+    while i < UI_TOAST_MAX {
+        if ui_toast_active[i] == 1 { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn ui_notify_toast_color(ntype) {
+    if ntype == UI_TOAST_SUCCESS { return ui_theme_success_color(); }
+    if ntype == UI_TOAST_WARNING { return ui_theme_warning_color(); }
+    if ntype == UI_TOAST_ERROR { return ui_theme_error_color(); }
+    return ui_theme_accent_color();
+}
+
+fn ui_notify_render() {
+    if ui_notify_has_visible() == 0 { return 0; }
+    let top_h = ui_theme_topbar_height();
+    let base_x = vesa_width - UI_TOAST_WIDTH - 12;
+    let mut y = top_h + 8;
+    let mut i = 0;
+    while i < UI_TOAST_MAX {
+        if ui_toast_active[i] == 1 {
+            let bg = ui_notify_toast_color(ui_toast_type[i]);
+            // Shadow
+            vesa_fill_rect(base_x + 2, y + 2, UI_TOAST_WIDTH, UI_TOAST_HEIGHT, ui_theme_shadow_color());
+            // Body
+            vesa_fill_rect(base_x, y, UI_TOAST_WIDTH, UI_TOAST_HEIGHT, bg);
+            vesa_rect(base_x, y, UI_TOAST_WIDTH, UI_TOAST_HEIGHT, ui_theme_border_color());
+            // Accent bar at left
+            vesa_fill_rect(base_x, y, 4, UI_TOAST_HEIGHT, ui_theme_surface_color());
+            // Text
+            let msg = ui_toast_msg[i];
+            let max_c = (UI_TOAST_WIDTH - 20) / 8;
+            if len(msg) > max_c { msg = substr(msg, 0, max_c); }
+            ui_draw_text(base_x + 10, y + (UI_TOAST_HEIGHT - 16) / 2, msg, ui_theme_surface_color(), 0);
+            y = y + UI_TOAST_HEIGHT + UI_TOAST_PAD;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn ui_notify_clear() {
+    let mut i = 0;
+    while i < UI_TOAST_MAX {
+        ui_toast_active[i] = 0;
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn ui_notify_count() {
+    let mut c = 0;
+    let mut i = 0;
+    while i < UI_TOAST_MAX {
+        if ui_toast_active[i] == 1 { c = c + 1; }
+        i = i + 1;
+    }
+    return c;
+}
+
+print("ui_notify.hl loaded");
+print("Notifications: toast info/success/warning/error with auto-dismiss");

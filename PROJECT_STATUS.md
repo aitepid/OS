@@ -2,48 +2,47 @@
 
 ## 版本定位
 
-当前仓库处于 `v6.0` 发布线，功能里程碑为迭代 123（VGA 完整交互闭环 + USB 键盘）。
+当前仓库处于 `v6.0` 发布线，功能里程碑为迭代 130（UI Phase 1-6 完成）。
 
-## 本轮已核实状态（迭代 123 功能基线）
+## 本轮已核实状态（迭代 130 实测基线）
 
 ### 仓库规模（精确计数）
 
 | 指标 | 当前值 | 说明 |
 |---|---:|---|
-| 全部 `.hl` 文件 | 190 | 68 根目录 + 122 内核模块 |
-| H-L 总行数 | 49,700 | 根 10,946 + 内核 38,750 |
-| `bare-kernel/hl/` 内核模块 | 122 | 编译进 `kernel.bin` |
-| `kernel_entry.hl` 行数 | 10,609 | 内核入口 + 命令分发 |
-| 内核模块总函数数 | 1,600 | 源码定义计数 |
-| `hl-bootstrap.hl` 行数 | 4,572 | 自举编译器（215 函数） |
-| `stdlib.hl` 行数 | 1,545 | 标准库（144 函数） |
-| `kinterp.hl` 行数 | 1,341 | 内核解释器（tree-walk + IR VM） |
-| `scripts/*.ps1` | 22 | 构建/验证/诊断 |
-| PS1 总行数 | 9,965 | |
-| Shell + 内核命令（去重） | 113 | shell.hl 69 + kernel_entry.hl 72 |
+| 全部 `.hl` 文件 | 198 | 68 根目录 + 130 内核模块 |
+| H-L 总行数 | 46,499 | 根 10,044 + 内核 36,455 |
+| `bare-kernel/hl/` 内核模块 | 130 | 编译进 `kernel.bin` |
+| `kernel_entry.hl` 行数 | 9,428 | 内核入口 + 命令分发 |
+| 编译产出函数数 | 1,700 | 编译管线实测 |
+| 链接符号数 | 2,003 | linker 实测 |
+| `hl-bootstrap.hl` 行数 | 4,306 | 自举编译器（208 函数） |
+| `stdlib.hl` 行数 | 1,385 | 标准库（143 函数） |
+| `kinterp.hl` 行数 | 1,245 | 内核解释器（tree-walk + IR VM） |
+| `scripts/*.ps1` | 28 | 构建/验证/诊断 |
+| PS1 总行数 | 9,729 | |
+| Shell 命令（`if cmd ==`） | 68 | shell.hl |
 | `HicOS_*.hl` 子系统模块 | 27 | |
 | `test_*.hl` / `test-*.hl` | 19 | |
-| `.md` 文档 | 8 | |
-| 活跃仓库文件数 | 284 | 排除 `.git/.vs/archive` |
+| `IP-Protection/` 文件数 | 60 | 知识产权文件 |
+| `.md` 文档 | 10 | |
 
 ### 门禁结果
 
 | 验证项 | 结果 |
 |---|---|
-| `hl-bootstrap build` | ✅ 118 模块编译 + 镜像重建 |
-| `validate-workspace` | ✅ 186 HL / 118 模块 |
-| `boot-readiness` | ✅ 启动链 + 内核初始化 |
-| `image-layout-readiness` | ✅ MBR 签名 + 扇区布局 |
-| `runtime-path-readiness` | ✅ IDT/PIT/KBD + SYSCALL + 网络 |
+| `hl-bootstrap build` | ✅ 132 模块编译 + 镜像重建 |
+| `validate-workspace` | ✅ 198 HL / 130 模块 / 0 stub |
+| `runtime-path-readiness` | ✅ IDT/PIT/KBD + SYSCALL + 网络 + eBPF/TLS/QUIC |
 | `release-validate` | ✅ 18/18 |
 
 ### 产物尺寸（实测）
 
 | 产物 | 大小 |
 |---|---:|
-| `hicos-hl.img`（BIOS） | 160,256 字节 |
+| `hicos-hl.img`（BIOS） | 162,816 字节（318 扇区） |
 | `hicos-uefi.img`（UEFI） | 34,603,008 字节 |
-| `kernel.bin` | 27,970 字节 |
+| `kernel.bin` | 30,704 字节 |
 
 ## 迭代 81-107 算法升级总汇（阶段 1-5）
 
@@ -94,10 +93,27 @@
 | 层级 | 载体 | 说明 |
 |---|---|---|
 | A | `scripts/rebuild-image.ps1` → `hicos-hl.img` | BIOS 镜像生成链 |
-| B | `hl-bootstrap.hl`（4,572 行，215 函数） | 自举编译器/解释器/工具链 |
-| C | `bare-kernel/hl/*.hl`（118 模块，37,711 行，1,520 函数） | 内核模块 → `kernel.bin` |
+| B | `hl-bootstrap.hl`（4,306 行，208 函数） | 自举编译器/解释器/工具链 |
+| C | `bare-kernel/hl/*.hl`（130 模块，36,455 行，1,700 函数） | 内核模块 → `kernel.bin` |
 
-## 下一阶段建议（迭代 121+）
+## UI 模块栈（迭代 125-130）
 
+| 模块 | 功能 |
+|---|---|
+| `ui_theme.hl` | Slate 配色 + 间距常量 |
+| `ui_controls.hl` | 按钮 / 标签 / 进度条 / 分隔线 / 徽章 |
+| `ui_dialog.hl` | 模态对话框（INFO / CONFIRM / WARNING / ERROR） |
+| `ui_terminal.hl` | 图形终端 24×80 |
+| `ui_installer.hl` | 5 步图形安装器向导 |
+| `ui_sysmon.hl` | 系统监控（运行时间 / 内存 / 任务） |
+| `ui_notify.hl` | Toast 通知（4 类型 × 4 并发） |
+| `ui_desktop.hl` | 桌面编排（顶栏时钟 + dock 启动器） |
+| `wm.hl` | 窗口管理器（标题文字 / 拖拽 / 最小化） |
+| `HicOS_UIServer.hl` | UI 服务器（IPC + 焦点通知） |
+
+## 下一阶段建议
+
+- 文件管理器（`ui_files.hl`）
+- 设置中心（`ui_settings.hl`）
 - 音频管道（audio→mixer）— AC97 PCM 播放
 - GPU 2D 加速 — framebuffer 硬件 blit

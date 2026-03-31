@@ -35,18 +35,291 @@ let mut wm_drag_win = 0;
 let mut wm_drag_off_x = 0;
 let mut wm_drag_off_y = 0;
 
-// Desktop colors (ARGB)
-let WM_DESKTOP_COLOR = 4281611316;  // 0xFF336699 dark blue
-let WM_TITLEBAR_COLOR = 4284506208; // 0xFF4488DD
-let WM_TITLEBAR_ACTIVE = 4278222848; // 0xFF0066FF
-let WM_BORDER_COLOR = 4280427042;   // 0xFF222222
-let WM_TITLE_HEIGHT = 20;
+// Window title strings (parallel array, indexed by window id)
+let wm_titles = ["", "", "", "", "", "", "", "",
+                 "", "", "", "", "", "", "", ""];
+
+fn wm_get_title(win_id) {
+    if win_id < 0 { return ""; }
+    if win_id >= WM_MAX_WINDOWS { return ""; }
+    return wm_titles[win_id];
+}
+
+fn wm_set_title(win_id, title) {
+    if win_id < 0 { return 0; }
+    if win_id >= WM_MAX_WINDOWS { return 0; }
+    wm_titles[win_id] = title;
+    return 0;
+}
+
+fn wm_make_flags(visible, focused, minimized) {
+    let mut flags = 0;
+    if visible == 1 { flags = flags + WM_FLAG_VISIBLE; }
+    if focused == 1 { flags = flags + WM_FLAG_FOCUSED; }
+    if minimized == 1 { flags = flags + WM_FLAG_MINIMIZED; }
+    return flags;
+}
+
+fn wm_is_visible(flags) {
+    if flags % 2 == 1 { return 1; }
+    return 0;
+}
+
+fn wm_is_focused(flags) {
+    if (flags / 2) % 2 == 1 { return 1; }
+    return 0;
+}
+
+fn wm_is_minimized(flags) {
+    if (flags / 4) % 2 == 1 { return 1; }
+    return 0;
+}
+
+fn wm_find_top_visible() {
+    let mut best = 0 - 1;
+    let mut best_z = 0 - 1;
+    let mut i = 0;
+    while i < wm_window_count {
+        let addr = WM_TABLE_ADDR + i * 128;
+        let flags = mem_read_u64(addr + 48);
+        let z = mem_read_u64(addr + 40);
+        if wm_is_visible(flags) == 1 {
+            if wm_is_minimized(flags) == 0 {
+                if z > best_z {
+                    best = i;
+                    best_z = z;
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return best;
+}
+
+fn wm_raise_window(win_id) {
+    if win_id < 0 { return 0; }
+    if win_id >= wm_window_count { return 0; }
+    let target = WM_TABLE_ADDR + win_id * 128;
+    let old_z = mem_read_u64(target + 40);
+    let top_z = wm_window_count - 1;
+    if old_z >= top_z { return 0; }
+    let mut i = 0;
+    while i < wm_window_count {
+        if i != win_id {
+            let addr = WM_TABLE_ADDR + i * 128;
+            let z = mem_read_u64(addr + 40);
+            if z > old_z {
+                mem_write_u64(addr + 40, z - 1);
+            }
+        }
+        i = i + 1;
+    }
+    mem_write_u64(target + 40, top_z);
+    return 0;
+}
+
+fn wm_focus_window(win_id) {
+    if win_id < 0 { return 0; }
+    if win_id >= wm_window_count { return 0; }
+    let mut i = 0;
+    while i < wm_window_count {
+        let addr = WM_TABLE_ADDR + i * 128;
+        let flags = mem_read_u64(addr + 48);
+        if wm_is_visible(flags) == 1 {
+            let minimized = wm_is_minimized(flags);
+            let mut focused = 0;
+            if i == win_id {
+                if minimized == 0 {
+                    focused = 1;
+                    wm_focused_id = win_id;
+                }
+            }
+            mem_write_u64(addr + 48, wm_make_flags(1, focused, minimized));
+        }
+        i = i + 1;
+    }
+    wm_raise_window(win_id);
+    return 0;
+}
+
+fn wm_hit_test_window(win_id, px, py) {
+    if win_id < 0 { return 0; }
+    if win_id >= wm_window_count { return 0; }
+    let title_h = ui_theme_title_height();
+    let addr = WM_TABLE_ADDR + win_id * 128;
+    let flags = mem_read_u64(addr + 48);
+    if wm_is_visible(flags) == 0 { return 0; }
+    if wm_is_minimized(flags) == 1 { return 0; }
+    let wx = mem_read_u64(addr + 8);
+    let wy = mem_read_u64(addr + 16);
+    let ww = mem_read_u64(addr + 24);
+    let wh = mem_read_u64(addr + 32) + title_h;
+    if px >= wx {
+        if px < wx + ww {
+            if py >= wy {
+                if py < wy + wh { return 1; }
+            }
+        }
+    }
+    return 0;
+}
+
+fn wm_hit_test_titlebar(win_id, px, py) {
+    let title_h = ui_theme_title_height();
+    let addr = WM_TABLE_ADDR + win_id * 128;
+    let wx = mem_read_u64(addr + 8);
+    let wy = mem_read_u64(addr + 16);
+    let ww = mem_read_u64(addr + 24);
+    if px >= wx {
+        if px < wx + ww {
+            if py >= wy {
+                if py < wy + title_h { return 1; }
+            }
+        }
+    }
+    return 0;
+}
+
+fn wm_hit_test_close(win_id, px, py) {
+    let addr = WM_TABLE_ADDR + win_id * 128;
+    let wx = mem_read_u64(addr + 8);
+    let wy = mem_read_u64(addr + 16);
+    let ww = mem_read_u64(addr + 24);
+    let bx = wx + ww - 18;
+    let by = wy + 2;
+    if px >= bx {
+        if px < bx + 16 {
+            if py >= by {
+                if py < by + 16 { return 1; }
+            }
+        }
+    }
+    return 0;
+}
+
+fn wm_hit_test_minimize(win_id, px, py) {
+    let addr = WM_TABLE_ADDR + win_id * 128;
+    let wx = mem_read_u64(addr + 8);
+    let wy = mem_read_u64(addr + 16);
+    let ww = mem_read_u64(addr + 24);
+    let bx = wx + ww - 38;
+    let by = wy + 2;
+    if px >= bx {
+        if px < bx + 16 {
+            if py >= by {
+                if py < by + 16 { return 1; }
+            }
+        }
+    }
+    return 0;
+}
+
+fn wm_minimize_window(win_id) {
+    if win_id < 0 { return 0; }
+    if win_id >= wm_window_count { return 0; }
+    let addr = WM_TABLE_ADDR + win_id * 128;
+    let flags = mem_read_u64(addr + 48);
+    if wm_is_visible(flags) == 0 { return 0; }
+    mem_write_u64(addr + 48, wm_make_flags(1, 0, 1));
+    if wm_focused_id == win_id {
+        let next = wm_find_top_visible();
+        if next >= 0 {
+            wm_focus_window(next);
+        }
+    }
+    return 0;
+}
+
+fn wm_restore_window(win_id) {
+    if win_id < 0 { return 0; }
+    if win_id >= wm_window_count { return 0; }
+    let addr = WM_TABLE_ADDR + win_id * 128;
+    let flags = mem_read_u64(addr + 48);
+    if wm_is_visible(flags) == 0 { return 0; }
+    mem_write_u64(addr + 48, wm_make_flags(1, 0, 0));
+    wm_focus_window(win_id);
+    return 0;
+}
+
+// --- Taskbar ---
+let WM_DOCK_BTN_W = 60;
+let WM_DOCK_BTN_H = 28;
+let WM_DOCK_BTN_PAD = 4;
+
+fn wm_draw_taskbar() {
+    let dock_h = ui_theme_dock_height();
+    let dock_y = vesa_height - dock_h;
+    let mut x = WM_DOCK_BTN_PAD;
+    let btn_y = dock_y + (dock_h - WM_DOCK_BTN_H) / 2;
+    let mut i = 0;
+    while i < wm_window_count {
+        let addr = WM_TABLE_ADDR + i * 128;
+        let flags = mem_read_u64(addr + 48);
+        if wm_is_visible(flags) == 1 {
+            let mut bg = ui_theme_border_color();
+            if i == wm_focused_id {
+                if wm_is_minimized(flags) == 0 {
+                    bg = ui_theme_accent_color();
+                }
+            }
+            vesa_fill_rect(x, btn_y, WM_DOCK_BTN_W, WM_DOCK_BTN_H, bg);
+            vesa_rect(x, btn_y, WM_DOCK_BTN_W, WM_DOCK_BTN_H, ui_theme_panel_color());
+            x = x + WM_DOCK_BTN_W + WM_DOCK_BTN_PAD;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn wm_hit_test_taskbar(px, py) {
+    let dock_h = ui_theme_dock_height();
+    let dock_y = vesa_height - dock_h;
+    if py < dock_y { return 0 - 1; }
+    let btn_y = dock_y + (dock_h - WM_DOCK_BTN_H) / 2;
+    if py < btn_y { return 0 - 1; }
+    if py >= btn_y + WM_DOCK_BTN_H { return 0 - 1; }
+    let mut x = WM_DOCK_BTN_PAD;
+    let mut i = 0;
+    while i < wm_window_count {
+        let addr = WM_TABLE_ADDR + i * 128;
+        let flags = mem_read_u64(addr + 48);
+        if wm_is_visible(flags) == 1 {
+            if px >= x {
+                if px < x + WM_DOCK_BTN_W { return i; }
+            }
+            x = x + WM_DOCK_BTN_W + WM_DOCK_BTN_PAD;
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn wm_draw_topbar_text() {
+    let top_h = ui_theme_topbar_height();
+    let ty = (top_h - 16) / 2;
+    // "HicOS" brand at left
+    ui_draw_text(8, ty, "HicOS", ui_theme_text_color(), 0);
+    return 0;
+}
 
 fn wm_init() {
     wm_window_count = 0;
     wm_focused_id = 0;
+    ui_theme_init();
     // Clear screen to desktop color
-    vesa_clear(WM_DESKTOP_COLOR);
+    vesa_clear(ui_theme_desktop_color());
+    return 0;
+}
+
+fn wm_draw_desktop_chrome() {
+    let top_h = ui_theme_topbar_height();
+    let dock_h = ui_theme_dock_height();
+    vesa_fill_rect(0, 0, vesa_width, top_h, ui_theme_panel_color());
+    vesa_fill_rect(0, top_h - 1, vesa_width, 1, ui_theme_border_color());
+    wm_draw_topbar_text();
+    vesa_fill_rect(0, vesa_height - dock_h, vesa_width, dock_h, ui_theme_panel_color());
+    vesa_fill_rect(0, vesa_height - dock_h, vesa_width, 1, ui_theme_border_color());
+    wm_draw_taskbar();
     return 0;
 }
 
@@ -61,9 +334,12 @@ fn wm_create_window(x, y, w, h, title, owner) {
     mem_write_u64(addr+24, w);
     mem_write_u64(addr+32, h);
     mem_write_u64(addr+40, id);  // z = creation order
-    mem_write_u64(addr+48, WM_FLAG_VISIBLE | WM_FLAG_FOCUSED);
+    mem_write_u64(addr+48, wm_make_flags(1, 0, 0));
+    mem_write_u64(addr+56, 0);
+    wm_titles[id] = title;
     mem_write_u64(addr+72, owner);
     mem_write_u64(addr+80, 1);  // dirty
+    wm_focus_window(id);
     return id;
 }
 
@@ -74,26 +350,51 @@ fn wm_draw_window(win_id) {
     let w = mem_read_u64(addr+24);
     let h = mem_read_u64(addr+32);
     let flags = mem_read_u64(addr+48);
+    let title_h = ui_theme_title_height();
+
+    if wm_is_visible(flags) == 0 { return 0; }
+    if wm_is_minimized(flags) == 1 { return 0; }
+
+    // Shadow
+    vesa_fill_rect(x + ui_theme_shadow_offset(), y + ui_theme_shadow_offset(), w, h + title_h, ui_theme_shadow_color());
 
     // Title bar
-    let title_color = WM_TITLEBAR_COLOR;
-    if win_id == wm_focused_id { title_color = WM_TITLEBAR_ACTIVE; }
-    vesa_fill_rect(x, y, w, WM_TITLE_HEIGHT, title_color);
+    let mut title_color = ui_theme_titlebar_color();
+    if win_id == wm_focused_id { title_color = ui_theme_titlebar_active_color(); }
+    vesa_fill_rect(x, y, w, title_h, title_color);
+
+    // Title text
+    let t_str = wm_get_title(win_id);
+    let t_ty = y + (title_h - 16) / 2;
+    let max_chars = (w - 48) / 8;
+    if max_chars > 0 {
+        let mut draw_str = t_str;
+        if len(draw_str) > max_chars { draw_str = substr(draw_str, 0, max_chars); }
+        ui_draw_text(x + 6, t_ty, draw_str, ui_theme_surface_color(), 0);
+    }
+
+    // Minimize button (accent square next to close)
+    vesa_fill_rect(x + w - 38, y + 2, 16, 16, ui_theme_accent_color());
 
     // Close button (red square at top-right)
-    vesa_fill_rect(x + w - 18, y + 2, 16, 16, 4294901760); // red
+    vesa_fill_rect(x + w - 18, y + 2, 16, 16, ui_theme_error_color());
 
     // Border
-    vesa_rect(x, y, w, h + WM_TITLE_HEIGHT, WM_BORDER_COLOR);
+    vesa_rect(x, y, w, h + title_h, ui_theme_border_color());
 
-    // Content area (white)
-    vesa_fill_rect(x + 1, y + WM_TITLE_HEIGHT, w - 2, h - 1, VESA_WHITE);
+    // Content area
+    vesa_fill_rect(x + 1, y + title_h, w - 2, h - 1, ui_theme_surface_color());
 
     return 0;
 }
 
 fn wm_draw_all() {
-    vesa_clear(WM_DESKTOP_COLOR);
+    vesa_clear(ui_theme_desktop_color());
+    if uidsk_initialized == 1 {
+        uidsk_draw_chrome();
+    } else {
+        wm_draw_desktop_chrome();
+    }
     // Draw windows from lowest z to highest z
     let mut z = 0;
     while z < wm_window_count {
@@ -105,7 +406,17 @@ fn wm_draw_all() {
         }
         z = z + 1;
     }
-    // Draw mouse cursor
+    // Render UI terminal content if open
+    if uiterm_is_open() == 1 { uiterm_render(); }
+    // Render UI installer content if open
+    if uiinst_is_open() == 1 { uiinst_render(); }
+    // Render system monitor if open
+    if uismon_is_open() == 1 { uismon_render(); }
+    // Toast notifications
+    ui_notify_render();
+    // Modal dialog overlay
+    if ui_dialog_is_open() == 1 { ui_dialog_render(); }
+    // Draw mouse cursor on top
     wm_draw_cursor(wm_mouse_x, wm_mouse_y);
     return 0;
 }
@@ -132,10 +443,19 @@ fn wm_mouse_move(dx, dy) {
     if wm_mouse_y >= vesa_height { wm_mouse_y = vesa_height - 1; }
 
     if wm_dragging == 1 {
-        // Move window
         let addr = WM_TABLE_ADDR + wm_drag_win * 128;
-        mem_write_u64(addr+8, wm_mouse_x - wm_drag_off_x);
-        mem_write_u64(addr+16, wm_mouse_y - wm_drag_off_y);
+        let ww = mem_read_u64(addr + 24);
+        let wh = mem_read_u64(addr + 32) + ui_theme_title_height();
+        let mut nx = wm_mouse_x - wm_drag_off_x;
+        let mut ny = wm_mouse_y - wm_drag_off_y;
+        let min_y = ui_theme_topbar_height();
+        let max_x = vesa_width - ww;
+        let max_y = vesa_height - ui_theme_dock_height() - wh;
+        if nx < 0 { nx = 0; }
+        if ny < min_y { ny = min_y; }
+        if nx > max_x { nx = max_x; }
+        if ny > max_y { ny = max_y; }
+        wm_move_window(wm_drag_win, nx, ny);
     }
     return 0;
 }
@@ -153,19 +473,67 @@ fn wm_mouse_click(button) {
     let mut i = 0;
     while i < wm_window_count {
         let addr = WM_TABLE_ADDR + i * 128;
-        let wx = mem_read_u64(addr+8); let wy = mem_read_u64(addr+16);
-        let ww = mem_read_u64(addr+24); let wh = mem_read_u64(addr+32) + WM_TITLE_HEIGHT;
         let wz = mem_read_u64(addr+40);
-        if wm_mouse_x >= wx && wm_mouse_x < wx+ww && wm_mouse_y >= wy && wm_mouse_y < wy+wh {
-            if wz > best_z { best_z = wz; best = i; }
+        if wm_hit_test_window(i, wm_mouse_x, wm_mouse_y) == 1 {
+            if wz > best_z {
+                best_z = wz;
+                best = i;
+            }
         }
         i = i + 1;
     }
 
+    // Dialog intercepts all clicks when open
+    if ui_dialog_is_open() == 1 {
+        ui_dialog_click(wm_mouse_x, wm_mouse_y);
+        return 0;
+    }
+    // Desktop app launcher
+    if uidsk_initialized == 1 {
+        if uidsk_handle_click(wm_mouse_x, wm_mouse_y) == 1 { return 0; }
+    }
+    // Check taskbar click
+    let dock_win = wm_hit_test_taskbar(wm_mouse_x, wm_mouse_y);
+    if dock_win >= 0 {
+        let addr = WM_TABLE_ADDR + dock_win * 128;
+        let flags = mem_read_u64(addr + 48);
+        if wm_is_minimized(flags) == 1 {
+            wm_restore_window(dock_win);
+        } else {
+            if dock_win == wm_focused_id {
+                wm_minimize_window(dock_win);
+            } else {
+                wm_focus_window(dock_win);
+            }
+        }
+        return 0;
+    }
+
     if best >= 0 {
-        wm_focused_id = best;
-        // Check if click is on title bar -> start drag
-        // Check if click is on close button -> close window
+        wm_focus_window(best);
+        if wm_hit_test_close(best, wm_mouse_x, wm_mouse_y) == 1 {
+            wm_close_window(best);
+            return 0;
+        }
+        if wm_hit_test_minimize(best, wm_mouse_x, wm_mouse_y) == 1 {
+            wm_minimize_window(best);
+            return 0;
+        }
+        if wm_hit_test_titlebar(best, wm_mouse_x, wm_mouse_y) == 1 {
+            let addr = WM_TABLE_ADDR + best * 128;
+            wm_dragging = 1;
+            wm_drag_win = best;
+            wm_drag_off_x = wm_mouse_x - mem_read_u64(addr + 8);
+            wm_drag_off_y = wm_mouse_y - mem_read_u64(addr + 16);
+            return 0;
+        }
+        // Route content area clicks to app modules
+        if uiinst_is_open() == 1 {
+            if best == uiinst_win_id {
+                uiinst_handle_click(wm_mouse_x, wm_mouse_y);
+                return 0;
+            }
+        }
     }
     return 0;
 }
@@ -175,11 +543,23 @@ fn wm_close_window(win_id) {
     if win_id >= wm_window_count { return 0; }
     let addr = WM_TABLE_ADDR + win_id * 128;
     mem_write_u64(addr + 48, 0);  // clear flags = invisible
+    mem_write_u64(addr + 80, 1);
+    if wm_drag_win == win_id {
+        wm_dragging = 0;
+        wm_drag_win = 0;
+    }
+    if wm_focused_id == win_id {
+        let next = wm_find_top_visible();
+        if next >= 0 {
+            wm_focus_window(next);
+        }
+    }
     return 0;
 }
 
 fn wm_move_window(win_id, new_x, new_y) {
-    if win_id < 0 || win_id >= wm_window_count { return 0 - 1; }
+    if win_id < 0 { return 0 - 1; }
+    if win_id >= wm_window_count { return 0 - 1; }
     let addr = WM_TABLE_ADDR + win_id * 128;
     mem_write_u64(addr + 8, new_x);
     mem_write_u64(addr + 16, new_y);
@@ -188,7 +568,8 @@ fn wm_move_window(win_id, new_x, new_y) {
 }
 
 fn wm_resize_window(win_id, new_w, new_h) {
-    if win_id < 0 || win_id >= wm_window_count { return 0 - 1; }
+    if win_id < 0 { return 0 - 1; }
+    if win_id >= wm_window_count { return 0 - 1; }
     let addr = WM_TABLE_ADDR + win_id * 128;
     mem_write_u64(addr + 24, new_w);
     mem_write_u64(addr + 32, new_h);
@@ -210,4 +591,4 @@ fn wm_render_all() {
 }
 
 print("wm.hl loaded");
-print("Window manager: 16 windows, stacking, mouse drag, move, resize, title bars");
+print("Window manager: topbar + taskbar + minimize/restore + focus + drag + close");

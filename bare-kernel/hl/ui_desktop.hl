@@ -1,0 +1,240 @@
+// ui_desktop.hl -- HicOS Desktop Orchestration Layer
+//
+// Manages the graphical desktop environment:
+//   - Topbar: brand, clock, status indicators
+//   - Dock: application launcher buttons + running window list
+//   - Desktop: background, right-click context, app launching
+//   - Integration with wm.hl, ui_terminal.hl, ui_dialog.hl
+//
+// This module sits above wm.hl and provides the user-facing desktop logic.
+
+let mut uidsk_initialized = 0;
+let mut uidsk_clock_tick = 0;
+let mut uidsk_clock_text = "00:00";
+
+// App launcher entries in the dock (left side, before window buttons)
+let UIDSK_MAX_APPS = 8;
+let UIDSK_APP_TERMINAL = 0;
+let UIDSK_APP_INSTALLER = 1;
+let UIDSK_APP_SYSMON = 2;
+let mut uidsk_app_count = 3;
+
+let UIDSK_LAUNCH_BTN_W = 52;
+let UIDSK_LAUNCH_BTN_H = 28;
+let UIDSK_LAUNCH_PAD = 4;
+
+fn uidsk_app_label(app_id) {
+    if app_id == UIDSK_APP_TERMINAL { return "Term"; }
+    if app_id == UIDSK_APP_INSTALLER { return "Inst"; }
+    if app_id == UIDSK_APP_SYSMON { return "Mon"; }
+    return "?";
+}
+
+fn uidsk_init() {
+    uidsk_initialized = 1;
+    uidsk_update_clock();
+    return 0;
+}
+
+// --- Clock ---
+fn uidsk_update_clock() {
+    let t = rtc_read_time();
+    let h = t[3];
+    let m = t[4];
+    let mut h_str = to_string(h);
+    let mut m_str = to_string(m);
+    if h < 10 { h_str = "0" + h_str; }
+    if m < 10 { m_str = "0" + m_str; }
+    uidsk_clock_text = h_str + ":" + m_str;
+    return 0;
+}
+
+fn uidsk_draw_topbar() {
+    let top_h = ui_theme_topbar_height();
+    let ty = (top_h - 16) / 2;
+
+    // Brand at left
+    ui_draw_text(8, ty, "HicOS", ui_theme_text_color(), 0);
+
+    // Clock at right
+    let clock_w = ui_text_width(uidsk_clock_text);
+    ui_draw_text(vesa_width - clock_w - 12, ty, uidsk_clock_text, ui_theme_text_color(), 0);
+
+    // Window count indicator
+    let wc = wm_get_window_count();
+    let wc_str = to_string(wc) + "w";
+    let wc_w = ui_text_width(wc_str);
+    ui_draw_text(vesa_width - clock_w - wc_w - 28, ty, wc_str, ui_theme_text_muted_color(), 0);
+
+    return 0;
+}
+
+fn uidsk_draw_app_launchers() {
+    let dock_h = ui_theme_dock_height();
+    let dock_y = vesa_height - dock_h;
+    let btn_y = dock_y + (dock_h - UIDSK_LAUNCH_BTN_H) / 2;
+    let mut x = UIDSK_LAUNCH_PAD;
+    let mut i = 0;
+    while i < uidsk_app_count {
+        let label = uidsk_app_label(i);
+        ui_button(x, btn_y, UIDSK_LAUNCH_BTN_W, UIDSK_LAUNCH_BTN_H, label);
+        x = x + UIDSK_LAUNCH_BTN_W + UIDSK_LAUNCH_PAD;
+        i = i + 1;
+    }
+    // Separator between launchers and window buttons
+    ui_separator_v(x, dock_y + 4, dock_h - 8);
+    return x + UIDSK_LAUNCH_PAD;
+}
+
+fn uidsk_draw_window_buttons(start_x) {
+    let dock_h = ui_theme_dock_height();
+    let dock_y = vesa_height - dock_h;
+    let btn_y = dock_y + (dock_h - WM_DOCK_BTN_H) / 2;
+    let mut x = start_x;
+    let mut i = 0;
+    while i < wm_window_count {
+        let addr = WM_TABLE_ADDR + i * 128;
+        let flags = mem_read_u64(addr + 48);
+        if wm_is_visible(flags) == 1 {
+            let mut bg = ui_theme_border_color();
+            if i == wm_focused_id {
+                if wm_is_minimized(flags) == 0 {
+                    bg = ui_theme_accent_color();
+                }
+            }
+            vesa_fill_rect(x, btn_y, WM_DOCK_BTN_W, WM_DOCK_BTN_H, bg);
+            vesa_rect(x, btn_y, WM_DOCK_BTN_W, WM_DOCK_BTN_H, ui_theme_panel_color());
+            // Window title label (abbreviated)
+            let win_title = wm_get_title(i);
+            if len(win_title) == 0 { win_title = to_string(i); }
+            let max_c = (WM_DOCK_BTN_W - 8) / 8;
+            if len(win_title) > max_c { win_title = substr(win_title, 0, max_c); }
+            let tw = ui_text_width(win_title);
+            ui_draw_text(x + (WM_DOCK_BTN_W - tw) / 2, btn_y + 6, win_title, ui_theme_text_color(), 0);
+            x = x + WM_DOCK_BTN_W + WM_DOCK_BTN_PAD;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// --- Hit testing ---
+fn uidsk_hit_launcher(px, py) {
+    let dock_h = ui_theme_dock_height();
+    let dock_y = vesa_height - dock_h;
+    let btn_y = dock_y + (dock_h - UIDSK_LAUNCH_BTN_H) / 2;
+    if py < btn_y { return 0 - 1; }
+    if py >= btn_y + UIDSK_LAUNCH_BTN_H { return 0 - 1; }
+    let mut x = UIDSK_LAUNCH_PAD;
+    let mut i = 0;
+    while i < uidsk_app_count {
+        if px >= x {
+            if px < x + UIDSK_LAUNCH_BTN_W { return i; }
+        }
+        x = x + UIDSK_LAUNCH_BTN_W + UIDSK_LAUNCH_PAD;
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn uidsk_launcher_end_x() {
+    return UIDSK_LAUNCH_PAD + uidsk_app_count * (UIDSK_LAUNCH_BTN_W + UIDSK_LAUNCH_PAD) + UIDSK_LAUNCH_PAD;
+}
+
+// --- App launching ---
+fn uidsk_launch_app(app_id) {
+    if app_id == UIDSK_APP_TERMINAL {
+        if uiterm_is_open() == 0 {
+            uiterm_open();
+        } else {
+            wm_focus_window(uiterm_win_id);
+        }
+        return 0;
+    }
+    if app_id == UIDSK_APP_INSTALLER {
+        if uiinst_is_open() == 0 {
+            uiinst_open();
+        } else {
+            wm_focus_window(uiinst_win_id);
+        }
+        return 0;
+    }
+    if app_id == UIDSK_APP_SYSMON {
+        if uismon_is_open() == 0 {
+            uismon_open();
+        } else {
+            wm_focus_window(uismon_win_id);
+        }
+        return 0;
+    }
+    return 0 - 1;
+}
+
+// --- Desktop tick (called from compositor) ---
+fn uidsk_tick() {
+    if uidsk_initialized == 0 { return 0; }
+    uidsk_clock_tick = uidsk_clock_tick + 1;
+    // Update clock every ~100 ticks (1 second at 100Hz)
+    if uidsk_clock_tick >= 100 {
+        uidsk_clock_tick = 0;
+        uidsk_update_clock();
+    }
+    uismon_tick();
+    ui_notify_tick();
+    return 0;
+}
+
+// --- Desktop draw (replaces wm_draw_desktop_chrome when active) ---
+fn uidsk_draw_chrome() {
+    let top_h = ui_theme_topbar_height();
+    let dock_h = ui_theme_dock_height();
+
+    // Topbar
+    vesa_fill_rect(0, 0, vesa_width, top_h, ui_theme_panel_color());
+    vesa_fill_rect(0, top_h - 1, vesa_width, 1, ui_theme_border_color());
+    uidsk_draw_topbar();
+
+    // Dock
+    vesa_fill_rect(0, vesa_height - dock_h, vesa_width, dock_h, ui_theme_panel_color());
+    vesa_fill_rect(0, vesa_height - dock_h, vesa_width, 1, ui_theme_border_color());
+    let win_start = uidsk_draw_app_launchers();
+    uidsk_draw_window_buttons(win_start);
+
+    return 0;
+}
+
+// --- Desktop click handler ---
+fn uidsk_handle_click(mx, my) {
+    // Check dialog first
+    if ui_dialog_is_open() == 1 {
+        ui_dialog_click(mx, my);
+        return 1;
+    }
+    // Check app launcher
+    let app = uidsk_hit_launcher(mx, my);
+    if app >= 0 {
+        uidsk_launch_app(app);
+        return 1;
+    }
+    return 0;
+}
+
+fn uidsk_handle_key(key) {
+    if ui_dialog_is_open() == 1 {
+        ui_dialog_key(key);
+        return 1;
+    }
+    return 0;
+}
+
+fn uidsk_info() {
+    print("Desktop:");
+    print("  Initialized: " + to_string(uidsk_initialized));
+    print("  Clock:       " + uidsk_clock_text);
+    print("  App count:   " + to_string(uidsk_app_count));
+    print("  Windows:     " + to_string(wm_get_window_count()));
+    return 0;
+}
+
+print("ui_desktop.hl loaded");
+print("Desktop: topbar clock + app launchers + window buttons + dialog routing");

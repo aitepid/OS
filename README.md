@@ -4,16 +4,16 @@
 
 ## 当前状态
 
-- 代码仓库包含 `190` 个 `.hl` 文件（共 `49,700` 行）
+- 代码仓库包含 `198` 个 `.hl` 文件（共 `46,499` 行）
   - 根目录：`68` 个（含自举编译器、标准库、子系统模块、测试与策划案）
-  - `bare-kernel/hl/`：`122` 个内核模块（`38,750` 行，源码定义 `1,600` 个函数）
-- `kernel_entry.hl`：`10,609` 行
-- `hl-bootstrap.hl`：`4,572` 行（自举编译器/工具链，编译管线统计 `215` 个函数）
-- `stdlib.hl`：`1,545` 行（标准库，编译管线统计 `144` 个函数）
-- `kinterp.hl`：`1,341` 行（树遍历 + IR VM 双执行引擎）
-- `scripts/` 下有 `22` 个 PowerShell 构建/验证脚本（共 `9,965` 行）
-- Shell + 内核命令总数：`113`（去重后）
-- 当前功能里程碑：`123`（VGA 完整交互闭环 + USB 键盘），其后已完成多轮工程化修复与回归补强
+  - `bare-kernel/hl/`：`130` 个内核模块（`36,455` 行，编译产出 `1,700` 个函数）
+- `kernel_entry.hl`：`9,428` 行
+- `hl-bootstrap.hl`：`4,306` 行（自举编译器/工具链，`208` 个函数）
+- `stdlib.hl`：`1,385` 行（标准库，`143` 个函数）
+- `kinterp.hl`：`1,245` 行（树遍历 + IR VM 双执行引擎）
+- `scripts/` 下有 `28` 个 PowerShell 构建/验证脚本（共 `9,729` 行）
+- Shell 命令：`68`（`shell.hl` 中 `if cmd ==` 匹配数）
+- 当前功能里程碑：`130`（UI Phase 1-6 完成：主题 / 控件 / 对话框 / 桌面 / 终端 / 安装器 / 系统监控 / 通知）
 - 当前主构建/测试入口：`hl-bootstrap.cmd test`（封装 `scripts/hl-bootstrap-build-test.ps1`）
 - 三层架构：
   - `Layer A`：`scripts/rebuild-image.ps1` → 可引导 BIOS 镜像
@@ -24,9 +24,9 @@
 
 | 产物 | 大小 |
 |---|---:|
-| `hicos-hl.img`（BIOS） | 160,256 字节 |
+| `hicos-hl.img`（BIOS） | 162,816 字节（318 扇区） |
 | `hicos-uefi.img`（UEFI） | 34,603,008 字节 |
-| `kernel.bin` | 27,970 字节 |
+| `kernel.bin` | 30,704 字节 |
 
 ## 迭代 81-120：六阶段完成 + 高级特性验证接入 + 内核热补丁
 
@@ -82,11 +82,23 @@
 ### 迭代 123：VGA 完整交互闭环 + USB 键盘
 - 原生内核 VGA 真实滚屏（`rep movsb` 复制 3840 字节 + 清空末行，替代简单截断）
 - `_ke_putc()` 双输出：所有 H-L 内核命令输出自动同步到 VGA 文本缓冲区
-  - `help`、`ps`、`install` 等 113 条命令的输出均可在显示器上看到
+  - `help`、`ps`、`install` 等命令的输出均可在显示器上看到
 - `usb_kbd.hl`：USB HID 键盘驱动（Boot Protocol，8 字节报文）
   - HID Usage ID → ASCII 完整映射（字母/数字/符号/Shift 变体）
   - 自动检测 HID class=3 subclass=1 protocol=1
   - 轮询式输入 + 修饰键状态跟踪
+
+### 迭代 124-130：UI Phase 1-6 — 完整图形桌面环境
+- `ui_theme.hl`：统一视觉基线（Slate 配色系统 + 10 色板 + 间距常量）
+- `ui_controls.hl`：控件系统（按钮 / 标签 / 进度条 / 分隔线 / 徽章 / 命中检测）
+- `ui_dialog.hl`：模态对话框（INFO / CONFIRM / WARNING / ERROR + 键盘/鼠标导航）
+- `ui_terminal.hl`：图形终端（24×80 字符网格 + 光标 + 滚屏 + 命令输入）
+- `ui_installer.hl`：5 步图形安装器（Welcome→Detect→Confirm→Install→Complete）
+- `ui_sysmon.hl`：系统监控窗口（运行时间 / 内存 / 任务 / 窗口状态）
+- `ui_notify.hl`：Toast 通知系统（4 类型 × 4 并发 + 自动消失）
+- `ui_desktop.hl`：桌面编排层（顶栏时钟 + dock 启动器 + 窗口标题按钮）
+- `wm.hl`：窗口管理器增强（标题文字 / 拖拽 / 最小化 / 任务栏 / 点击路由）
+- `HicOS_UIServer.hl`：UI 服务器集成（IPC 完善 + 焦点通知 + 桌面 tick）
 
 ## 当前功能
 
@@ -106,10 +118,9 @@
 - Block cache（哈希LRU）、swap（增强时钟）
 - 内核热补丁（kmod：64 模块槽位 + trampoline 热替换）
 
-### Shell + 内核命令（113 唯一命令 + pipe）
+### Shell 命令（68 唯一命令 + pipe）
 - 环境变量、信号处理、命令历史、方向键导航
-- shell.hl（69 命令）：hostname / uname / date / netstat / arp / grep / heval / tcploop / dnstest / advtest / lsmod / kmodtest / ...
-- kernel_entry.hl（72 命令）：compile / lex / parse / malloc / palloc / sha256 / tls / wget / browse / lsmod / kmodtest / ...
+- shell.hl（68 cmd== 匹配）：hostname / uname / date / netstat / arp / grep / heval / tcploop / dnstest / advtest / lsmod / kmodtest / ...
 
 ## 推荐构建方式
 
@@ -130,16 +141,17 @@ powershell -ExecutionPolicy Bypass -File .\scripts\qemu-smoke.ps1
 ```text
 HicOS/
 ├─ bare-kernel/
-│  ├─ hl/                      # 118 个内核模块（37,711 行）
-│  └─ kernel.bin              # 编译产物（27,970 字节）
-├─ scripts/                   # 22 个构建/验证脚本（9,965 行）
-├─ hl-bootstrap.hl            # 自举编译器（4,572 行）
-├─ stdlib.hl                  # 标准库（1,545 行）
+│  ├─ hl/                      # 130 个内核模块（36,455 行）
+│  └─ kernel.bin              # 编译产物（30,704 字节）
+├─ scripts/                   # 28 个构建/验证脚本（9,729 行）
+├─ IP-Protection/             # 60 个知识产权文件
+├─ hl-bootstrap.hl            # 自举编译器（4,306 行）
+├─ stdlib.hl                  # 标准库（1,385 行）
 ├─ HicOS_*.hl                 # 27 个子系统模块
 ├─ test_*.hl / test-*.hl      # 19 个测试文件
-├─ hicos-hl.img               # BIOS 镜像
-├─ hicos-uefi.img             # UEFI 镜像
-└─ *.md                       # 8 个文档
+├─ hicos-hl.img               # BIOS 镜像（162,816 字节）
+├─ hicos-uefi.img             # UEFI 镜像（33 MB）
+└─ *.md                       # 10 个文档
 ```
 
 ## 相关文档
@@ -148,5 +160,6 @@ HicOS/
 - `ARCHITECTURE.md`：三层架构说明
 - `ROADMAP.md`：已完成阶段与路线图
 - `CHANGELOG.md`：迭代更新记录
-- `PROJECT_ADVANCEMENT_PLAN.hl`：推进策划案
+- `UI_DESIGN_PLAN.md`：UI 设计策划案
 - `HILBERT_LANG_BNF.md`：语言语法规范
+- `PROJECT_ADVANCEMENT_PLAN.hl`：推进策划案

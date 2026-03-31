@@ -1,0 +1,176 @@
+// ui_controls.hl -- HicOS UI Basic Controls
+//
+// Provides fundamental UI widgets rendered on VESA framebuffer.
+// All controls use ui_theme colors and metrics.
+//
+// Controls:
+//   Label       -- static text
+//   Button      -- clickable rectangle with label
+//   ProgressBar -- horizontal fill bar with percentage
+//   Separator   -- horizontal or vertical divider line
+//
+// Font: 8x16 bitmap from kernel_entry (_ke_vesa_draw_char)
+// All coordinates are absolute screen pixels.
+
+let UI_CTRL_FONT_W = 8;
+let UI_CTRL_FONT_H = 16;
+
+// Draw a single 8x16 character at pixel (px, py) using the kernel font.
+// Delegates to the native kernel bitmap font (8x16 glyphs at 0x310100).
+fn ui_draw_char(px, py, ch, fg, bg) {
+    // Use kernel bitmap font if available (8x16 glyphs at 0x310100)
+    let font_base = 3211520;
+    let glyph_off = (ch - 32) * 16;
+    if ch < 32 { return 0; }
+    if ch > 126 { return 0; }
+    let mut row = 0;
+    while row < 16 {
+        let bits = mem_read_u8(font_base + glyph_off + row);
+        let mut col = 0;
+        while col < 8 {
+            let mut b = bits;
+            let mut s = 7 - col;
+            while s > 0 { b = b / 2; s = s - 1; }
+            if b % 2 == 1 {
+                vesa_putpixel(px + col, py + row, fg);
+            } else {
+                if bg != 0 {
+                    vesa_putpixel(px + col, py + row, bg);
+                }
+            }
+            col = col + 1;
+        }
+        row = row + 1;
+    }
+    return 0;
+}
+
+// Draw a string starting at (px, py). Returns width in pixels drawn.
+fn ui_draw_text(px, py, text, fg, bg) {
+    let mut x = px;
+    let mut i = 0;
+    while i < len(text) {
+        let ch = char_at(text, i);
+        ui_draw_char(x, py, ch, fg, bg);
+        x = x + UI_CTRL_FONT_W;
+        i = i + 1;
+    }
+    return x - px;
+}
+
+// Measure text width in pixels
+fn ui_text_width(text) {
+    return len(text) * UI_CTRL_FONT_W;
+}
+
+// --- Label ---
+fn ui_label(x, y, text) {
+    ui_draw_text(x, y, text, ui_theme_text_color(), 0);
+    return 0;
+}
+
+fn ui_label_colored(x, y, text, fg) {
+    ui_draw_text(x, y, text, fg, 0);
+    return 0;
+}
+
+// --- Button ---
+// Draw a button rectangle with centered label.
+// Returns 1 if point (mx, my) is inside (for hit testing), 0 otherwise.
+fn ui_button(x, y, w, h, label) {
+    let bg = ui_theme_panel_color();
+    let border = ui_theme_border_color();
+    let fg = ui_theme_text_color();
+    vesa_fill_rect(x, y, w, h, bg);
+    vesa_rect(x, y, w, h, border);
+    // Center text vertically and horizontally
+    let tw = ui_text_width(label);
+    let tx = x + (w - tw) / 2;
+    let ty = y + (h - UI_CTRL_FONT_H) / 2;
+    ui_draw_text(tx, ty, label, fg, 0);
+    return 0;
+}
+
+fn ui_button_active(x, y, w, h, label) {
+    let bg = ui_theme_accent_color();
+    let border = ui_theme_border_color();
+    let fg = ui_theme_surface_color();
+    vesa_fill_rect(x, y, w, h, bg);
+    vesa_rect(x, y, w, h, border);
+    let tw = ui_text_width(label);
+    let tx = x + (w - tw) / 2;
+    let ty = y + (h - UI_CTRL_FONT_H) / 2;
+    ui_draw_text(tx, ty, label, fg, 0);
+    return 0;
+}
+
+fn ui_button_hit(x, y, w, h, mx, my) {
+    if mx >= x {
+        if mx < x + w {
+            if my >= y {
+                if my < y + h { return 1; }
+            }
+        }
+    }
+    return 0;
+}
+
+// --- ProgressBar ---
+// Draw a horizontal progress bar. pct = 0..100.
+fn ui_progress_bar(x, y, w, h, pct) {
+    let bg = ui_theme_border_color();
+    let fill = ui_theme_accent_color();
+    if pct > 100 { pct = 100; }
+    if pct < 0 { pct = 0; }
+    vesa_fill_rect(x, y, w, h, bg);
+    let fill_w = w * pct / 100;
+    if fill_w > 0 {
+        vesa_fill_rect(x, y, fill_w, h, fill);
+    }
+    // Draw percentage text centered
+    let label = to_string(pct) + "%";
+    let tw = ui_text_width(label);
+    let tx = x + (w - tw) / 2;
+    let ty = y + (h - UI_CTRL_FONT_H) / 2;
+    ui_draw_text(tx, ty, label, ui_theme_text_color(), 0);
+    return 0;
+}
+
+// --- Separator ---
+fn ui_separator_h(x, y, w) {
+    vesa_fill_rect(x, y, w, 1, ui_theme_border_color());
+    return 0;
+}
+
+fn ui_separator_v(x, y, h) {
+    vesa_fill_rect(x, y, 1, h, ui_theme_border_color());
+    return 0;
+}
+
+// --- Status badge ---
+fn ui_badge_ok(x, y, text) {
+    let bg = ui_theme_success_color();
+    let w = ui_text_width(text) + 8;
+    vesa_fill_rect(x, y, w, 20, bg);
+    ui_draw_text(x + 4, y + 2, text, ui_theme_surface_color(), 0);
+    return 0;
+}
+
+fn ui_badge_warn(x, y, text) {
+    let bg = ui_theme_warning_color();
+    let w = ui_text_width(text) + 8;
+    vesa_fill_rect(x, y, w, 20, bg);
+    ui_draw_text(x + 4, y + 2, text, ui_theme_surface_color(), 0);
+    return 0;
+}
+
+fn ui_badge_err(x, y, text) {
+    let bg = ui_theme_error_color();
+    let w = ui_text_width(text) + 8;
+    vesa_fill_rect(x, y, w, 20, bg);
+    ui_draw_text(x + 4, y + 2, text, ui_theme_surface_color(), 0);
+    return 0;
+}
+
+print("ui_controls.hl loaded");
+print("UI controls: label, button, progress bar, separator, badge");

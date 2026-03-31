@@ -7,8 +7,8 @@ HicOS is a three-layer experimental x86_64 OS written entirely in Hilbert-Lang.
 | Layer | Medium | Current Role |
 |---|---|---|
 | A | `scripts/rebuild-image.ps1` → `hicos-hl.img` | BIOS image generation chain |
-| B | `hl-bootstrap.hl` (4,572 lines) | Bootstrap compiler/interpreter/toolchain |
-| C | `bare-kernel/hl/*.hl` (118 modules, 37,711 lines) | Kernel source → `kernel.bin` (27,970 bytes) |
+| B | `hl-bootstrap.hl` (4,306 lines, 208 fn) | Bootstrap compiler/interpreter/toolchain |
+| C | `bare-kernel/hl/*.hl` (130 modules, 36,455 lines) | Kernel source → `kernel.bin` (30,704 bytes) |
 
 ## Boot Chain
 
@@ -29,37 +29,38 @@ stage1 / MBR
 OVMF → GPT + ESP → BOOTX64.EFI → UEFI boot output
 ```
 
-## Codebase Metrics (post-iteration-123 sync)
+## Codebase Metrics (post-iteration-130 sync)
 
 | Metric | Value |
 |---|---:|
-| Total `.hl` files | 190 |
+| Total `.hl` files | 198 |
 | Root `.hl` files | 68 |
-| Kernel modules | 122 |
-| Total H-L lines | 49,700 |
-| Root H-L lines | 10,946 |
-| Kernel lines | 38,750 |
-| Kernel functions (source) | 1,600 |
-| `kernel_entry.hl` lines | 10,609 |
-| `hl-bootstrap.hl` lines | 4,572 |
-| `stdlib.hl` lines | 1,545 |
-| `kinterp.hl` lines | 1,341 |
-| `scripts/*.ps1` | 22 |
-| PS1 lines | 9,965 |
-| Shell + kernel commands (unique) | 113 |
+| Kernel modules | 130 |
+| Total H-L lines | 46,499 |
+| Root H-L lines | 10,044 |
+| Kernel lines | 36,455 |
+| Compiled functions | 1,700 |
+| Linker symbols | 2,003 |
+| `kernel_entry.hl` lines | 9,428 |
+| `hl-bootstrap.hl` lines | 4,306 (208 fn) |
+| `stdlib.hl` lines | 1,385 (143 fn) |
+| `kinterp.hl` lines | 1,245 |
+| `scripts/*.ps1` | 28 (9,729 lines) |
+| Shell commands (`if cmd ==`) | 68 |
 | HicOS_*.hl subsystem modules | 27 |
 | test_*.hl / test-*.hl | 19 |
-| Total active repo files (excl. `.git/.vs/archive`) | 284 |
+| IP-Protection files | 60 |
+| `.md` documents | 10 |
 
 ## Key Source Locations
 
-- `bare-kernel/hl/kernel_entry.hl` — Kernel entry, interrupt init, command dispatch (10,609 lines)
+- `bare-kernel/hl/kernel_entry.hl` — Kernel entry, interrupt init, command dispatch (9,428 lines)
 - `bare-kernel/hl/kernel_init.hl` — Subsystem initialization sequence
-- `bare-kernel/hl/shell.hl` — Serial shell (69 commands + pipe)
-- `bare-kernel/hl/kinterp.hl` — Kernel interpreter (1,341 lines, tree-walk + IR VM)
+- `bare-kernel/hl/shell.hl` — Serial shell (68 commands + pipe)
+- `bare-kernel/hl/kinterp.hl` — Kernel interpreter (1,245 lines, tree-walk + IR VM)
 - `bare-kernel/hl/kmod.hl` — Kernel module hot-patching (64 slots, 256 trampolines)
-- `hl-bootstrap.hl` — Self-hosting compiler/toolchain (4,572 lines, 215 fn)
-- `stdlib.hl` — Standard library (1,545 lines, 144 fn)
+- `hl-bootstrap.hl` — Self-hosting compiler/toolchain (4,306 lines, 208 fn)
+- `stdlib.hl` — Standard library (1,385 lines, 143 fn)
 - `scripts/hl-bootstrap-build-test.ps1` — Primary build/test entry
 - `scripts/rebuild-image.ps1` — BIOS image rebuilder
 - `scripts/build-uefi-image.ps1` — UEFI image builder
@@ -131,18 +132,33 @@ Phase 6 incremental runtime upgrades:
 - `rebuild-image.ps1`: real VGA scroll (`rep movsb` 3840 bytes + clear row 24)
   - Both LF and col-wrap paths now trigger full scroll
 - `kernel_entry.hl`: `_ke_putc()` dual output — ALL H-L command output to VGA
-  - 113 shell commands now visible on VGA monitor
 - `usb_kbd.hl`: USB HID keyboard driver (Boot Protocol)
   - HID Usage ID → ASCII mapping (letters/numbers/symbols/Shift)
   - Auto-detect HID class=3/subclass=1/protocol=1
   - Poll-based input with modifier key tracking
 
+## Iterations 124-130: UI Phase 1-6 — Complete Graphical Desktop
+
+10 UI modules forming a full desktop environment:
+
+| Module | Role |
+|---|---|
+| `ui_theme.hl` | Slate color palette, spacing constants, 10 theme accessors |
+| `ui_controls.hl` | Buttons, labels, progress bars, separators, badges, hit-test |
+| `ui_dialog.hl` | Modal dialogs: INFO/CONFIRM/WARNING/ERROR + keyboard/mouse nav |
+| `ui_terminal.hl` | Graphical terminal: 24×80 char grid, cursor, scroll, input |
+| `ui_installer.hl` | 5-step graphical installer wizard with disk detection + progress |
+| `ui_sysmon.hl` | System monitor: uptime, memory bar, task counts, window stats |
+| `ui_notify.hl` | Toast notifications: 4 types × 4 concurrent, auto-dismiss |
+| `ui_desktop.hl` | Desktop orchestration: topbar clock, dock launchers, window titles |
+| `wm.hl` | Window manager: title text, drag, minimize, taskbar, click routing |
+| `HicOS_UIServer.hl` | UI server: IPC protocol, focus events, desktop tick integration |
+
 ## Verification
 
-All gates pass on the current maintenance baseline:
-- `hl-bootstrap-build-test.ps1` ✅
-- `boot-readiness.ps1` ✅
+All gates pass on the current iteration-130 baseline:
+- `hl-bootstrap-build-test.ps1` ✅ (132 modules, 1,700 fn, 2,003 symbols)
+- `validate-workspace.ps1` ✅ (198 HL, 130 kernel, 0 stub)
 - `runtime-path-readiness.ps1` ✅
-- `image-layout-readiness.ps1` ✅
 - `release-validate.ps1` ✅ 18/18
 

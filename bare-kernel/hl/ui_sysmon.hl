@@ -1,0 +1,156 @@
+// ui_sysmon.hl -- HicOS System Monitor Window
+//
+// Displays live system metrics in a wm window:
+//   - Uptime (from timer.hl)
+//   - Memory: free/total pages (from page_alloc.hl)
+//   - Tasks: running/ready/blocked counts (from task.hl)
+//   - Kernel: module count, function count
+//   - Window manager: open windows, focused id
+//
+// Auto-refreshes every ~2 seconds via dirty flag driven by uidsk_tick.
+
+let mut uismon_win_id = 0 - 1;
+let mut uismon_win_x = 200;
+let mut uismon_win_y = 80;
+let mut uismon_win_w = 360;
+let mut uismon_win_h = 300;
+let mut uismon_dirty = 1;
+let mut uismon_refresh_tick = 0;
+
+fn uismon_open() {
+    if uismon_win_id >= 0 { return uismon_win_id; }
+    uismon_win_id = wm_create_window(uismon_win_x, uismon_win_y, uismon_win_w, uismon_win_h, "System Monitor", 0);
+    uismon_dirty = 1;
+    return uismon_win_id;
+}
+
+fn uismon_close() {
+    if uismon_win_id >= 0 {
+        wm_close_window(uismon_win_id);
+        uismon_win_id = 0 - 1;
+    }
+    return 0;
+}
+
+fn uismon_is_open() {
+    if uismon_win_id >= 0 { return 1; }
+    return 0;
+}
+
+// Count tasks by state
+fn uismon_count_tasks(target_state) {
+    let mut count = 0;
+    let mut i = 0;
+    while i < MAX_TASKS {
+        let addr = task_addr(i);
+        let state = mem_read_u64(addr);
+        if state == target_state { count = count + 1; }
+        i = i + 1;
+    }
+    return count;
+}
+
+fn uismon_format_uptime(secs) {
+    let h = secs / 3600;
+    let m = (secs % 3600) / 60;
+    let s = secs % 60;
+    let mut h_s = to_string(h);
+    let mut m_s = to_string(m);
+    let mut s_s = to_string(s);
+    if h < 10 { h_s = "0" + h_s; }
+    if m < 10 { m_s = "0" + m_s; }
+    if s < 10 { s_s = "0" + s_s; }
+    return h_s + ":" + m_s + ":" + s_s;
+}
+
+fn uismon_render() {
+    if uismon_win_id < 0 { return 0; }
+    if uismon_dirty == 0 { return 0; }
+
+    let title_h = ui_theme_title_height();
+    let cx = uismon_win_x + 1;
+    let cy = uismon_win_y + title_h;
+    let cw = uismon_win_w - 2;
+    let fg = ui_theme_text_color();
+    let fg2 = ui_theme_text_muted_color();
+    let mut y = cy + 12;
+
+    // Section: System
+    ui_draw_text(cx + 12, y, "System", fg, 0);
+    y = y + 20;
+    ui_separator_h(cx + 12, y, cw - 24);
+    y = y + 8;
+
+    let up = uismon_format_uptime(uptime_secs());
+    ui_draw_text(cx + 16, y, "Uptime:   " + up, fg2, 0);
+    y = y + 18;
+
+    let t = rtc_read_time();
+    let time_str = to_string(t[3]) + ":" + to_string(t[4]) + ":" + to_string(t[5]);
+    ui_draw_text(cx + 16, y, "Clock:    " + time_str, fg2, 0);
+    y = y + 24;
+
+    // Section: Memory
+    ui_draw_text(cx + 12, y, "Memory", fg, 0);
+    y = y + 20;
+    ui_separator_h(cx + 12, y, cw - 24);
+    y = y + 8;
+
+    let free_pg = page_count_free();
+    let total_pg = TOTAL_PAGES;
+    let used_pg = total_pg - free_pg;
+    let pct = 0;
+    if total_pg > 0 { pct = used_pg * 100 / total_pg; }
+    ui_draw_text(cx + 16, y, "Pages:    " + to_string(used_pg) + " / " + to_string(total_pg) + " used", fg2, 0);
+    y = y + 18;
+    ui_progress_bar(cx + 16, y, cw - 32, 16, pct);
+    y = y + 24;
+
+    // Section: Tasks
+    ui_draw_text(cx + 12, y, "Tasks", fg, 0);
+    y = y + 20;
+    ui_separator_h(cx + 12, y, cw - 24);
+    y = y + 8;
+
+    let running = uismon_count_tasks(STATE_RUNNING);
+    let ready = uismon_count_tasks(STATE_READY);
+    let blocked = uismon_count_tasks(STATE_BLOCKED);
+    let dead = uismon_count_tasks(STATE_DEAD) + uismon_count_tasks(STATE_ZOMBIE);
+    ui_draw_text(cx + 16, y, "Running: " + to_string(running) + "  Ready: " + to_string(ready), fg2, 0);
+    y = y + 18;
+    ui_draw_text(cx + 16, y, "Blocked: " + to_string(blocked) + "  Dead: " + to_string(dead), fg2, 0);
+    y = y + 24;
+
+    // Section: Windows
+    ui_draw_text(cx + 12, y, "Windows", fg, 0);
+    y = y + 20;
+    ui_separator_h(cx + 12, y, cw - 24);
+    y = y + 8;
+
+    let wcount = wm_get_window_count();
+    let focused = wm_get_focused();
+    ui_draw_text(cx + 16, y, "Open: " + to_string(wcount) + "  Focused: " + to_string(focused), fg2, 0);
+
+    uismon_dirty = 0;
+    return 0;
+}
+
+fn uismon_tick() {
+    if uismon_win_id < 0 { return 0; }
+    uismon_refresh_tick = uismon_refresh_tick + 1;
+    if uismon_refresh_tick >= 200 {
+        uismon_refresh_tick = 0;
+        uismon_dirty = 1;
+    }
+    return 0;
+}
+
+fn uismon_info() {
+    print("System Monitor:");
+    print("  Window: " + to_string(uismon_win_id));
+    print("  Dirty:  " + to_string(uismon_dirty));
+    return 0;
+}
+
+print("ui_sysmon.hl loaded");
+print("System monitor: uptime, memory, tasks, windows");
