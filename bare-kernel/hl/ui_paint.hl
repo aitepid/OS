@@ -1,0 +1,378 @@
+// ui_paint.hl -- Graphical Paint Application
+//
+// Iteration 156: Pixel-level drawing canvas in a WM window.
+//
+// Layout (480x380 window):
+//   Top toolbar (32px):  tool buttons + color swatches + size controls + clear
+//   Canvas (448px tall): direct VESA pixel rendering
+//
+// Tools:
+//   0 = Pen    — free-hand pixel drawing
+//   1 = Eraser — draw in background color
+//   2 = Line   — rubber-band line (start point → current mouse)
+//   3 = Fill   — flood fill (BFS, max 4096 pixels)
+//
+// Color palette: 8 swatches (black, white, red, green, blue, yellow, orange, gray)
+// Brush sizes: 1, 2, 4 pixels
+//
+// WM integration:
+//   uipaint_open()         — open/init window
+//   uipaint_close()        — close window
+//   uipaint_draw()         — render toolbar (called from wm_draw_all)
+//   uipaint_key(k)         — keyboard shortcuts
+//   uipaint_mouse_move(mx,my) — drawing while mouse held
+//   uipaint_mouse_press(mx,my)— mouse button down
+//   uipaint_mouse_release()   — mouse button up
+
+let UIPAINT_WIN_X = 80;
+let UIPAINT_WIN_Y = 60;
+let UIPAINT_WIN_W = 480;
+let UIPAINT_WIN_H = 380;
+let UIPAINT_TOOLBAR_H = 36;
+let UIPAINT_CANVAS_X = 80;   // absolute: win_x
+let UIPAINT_CANVAS_Y = 96;   // absolute: win_y + title_bar(20) + toolbar(36)
+
+// State
+let mut uipaint_open_flag   = 0;
+let mut uipaint_tool        = 0;    // current tool
+let mut uipaint_color       = 0;    // foreground color (ARGB packed)
+let mut uipaint_brush       = 1;    // brush size in pixels
+let mut uipaint_pressing    = 0;    // mouse button held
+let mut uipaint_line_sx     = 0;    // line tool start X
+let mut uipaint_line_sy     = 0;    // line tool start Y
+let mut uipaint_dirty       = 0;    // toolbar needs redraw
+
+// Palette: 8 colors (0xAARRGGBB, alpha=FF)
+fn _uipaint_palette(idx) {
+    if idx == 0 { return 4278190080; }  // black   0xFF000000
+    if idx == 1 { return 4294967295; }  // white   0xFFFFFFFF
+    if idx == 2 { return 4294901760; }  // red     0xFFFF0000
+    if idx == 3 { return 4278255360; }  // green   0xFF00FF00
+    if idx == 4 { return 4278190335; }  // blue    0xFF0000FF
+    if idx == 5 { return 4294967040; }  // yellow  0xFFFFFF00
+    if idx == 6 { return 4294944000; }  // orange  0xFFFF6600
+    if idx == 7 { return 4286611584; }  // gray    0xFF808080
+    return 4278190080;
+}
+
+// ============================================================
+// Coordinate helpers
+// ============================================================
+
+// Canvas absolute rect
+fn _uipaint_canvas_x()  { return UIPAINT_WIN_X; }
+fn _uipaint_canvas_y()  { return UIPAINT_WIN_Y + 20 + UIPAINT_TOOLBAR_H; }
+fn _uipaint_canvas_w()  { return UIPAINT_WIN_W; }
+fn _uipaint_canvas_h()  { return UIPAINT_WIN_H - 20 - UIPAINT_TOOLBAR_H; }
+
+fn _uipaint_in_canvas(mx, my) {
+    let cx = _uipaint_canvas_x();
+    let cy = _uipaint_canvas_y();
+    if mx < cx { return 0; }
+    if my < cy { return 0; }
+    if mx >= cx + _uipaint_canvas_w() { return 0; }
+    if my >= cy + _uipaint_canvas_h() { return 0; }
+    return 1;
+}
+
+// ============================================================
+// Drawing primitives
+// ============================================================
+
+fn _uipaint_put_dot(x, y, color, size) {
+    let half = size / 2;
+    vesa_fill_rect(x - half, y - half, size, size, color);
+    return 0;
+}
+
+// Bresenham line
+fn _uipaint_draw_line(x0, y0, x1, y1, color, size) {
+    let mut dx = x1 - x0;
+    let mut dy = y1 - y0;
+    if dx < 0 { dx = 0 - dx; }
+    if dy < 0 { dy = 0 - dy; }
+    let mut sx = 1;
+    let mut sy = 1;
+    if x1 < x0 { sx = 0 - 1; }
+    if y1 < y0 { sy = 0 - 1; }
+    let mut err = dx - dy;
+    let mut cx = x0;
+    let mut cy = y0;
+    let mut steps = 0;
+    while steps < 1200 {
+        _uipaint_put_dot(cx, cy, color, size);
+        if cx == x1 { if cy == y1 { steps = 1200; } }
+        let e2 = err * 2;
+        if e2 > 0 - dy {
+            err = err - dy;
+            cx = cx + sx;
+        }
+        if e2 < dx {
+            err = err + dx;
+            cy = cy + sy;
+        }
+        steps = steps + 1;
+    }
+    return 0;
+}
+
+// Simple flood fill (BFS-style, max FILL_LIMIT pixels)
+let FILL_LIMIT = 4096;
+fn _uipaint_fill(sx, sy, target_color, fill_color) {
+    if target_color == fill_color { return 0; }
+    // Use a simple frontier queue (HL array)
+    let mut q = [[sx, sy]];
+    let mut visited = 0;
+    while len(q) > 0 {
+        if visited >= FILL_LIMIT { return 0; }
+        let pt = q[0];
+        let mut new_q = [];
+        let mut k = 1;
+        while k < len(q) { push(new_q, q[k]); k = k + 1; }
+        q = new_q;
+        let px = pt[0];
+        let py = pt[1];
+        // Check bounds (canvas)
+        if px >= _uipaint_canvas_x() {
+            if py >= _uipaint_canvas_y() {
+                if px < _uipaint_canvas_x() + _uipaint_canvas_w() {
+                    if py < _uipaint_canvas_y() + _uipaint_canvas_h() {
+                        vesa_putpixel(px, py, fill_color);
+                        visited = visited + 1;
+                        push(q, [px + 1, py]);
+                        push(q, [px - 1, py]);
+                        push(q, [px, py + 1]);
+                        push(q, [px, py - 1]);
+                    }
+                }
+            }
+        }
+    }
+    return visited;
+}
+
+// ============================================================
+// Toolbar rendering
+// ============================================================
+
+fn _uipaint_toolbar_draw() {
+    let wx = UIPAINT_WIN_X;
+    let wy = UIPAINT_WIN_Y + 20;  // below title bar
+    let bg  = ui_theme_panel_color();
+    let bdr = ui_theme_border_color();
+    let fg  = ui_theme_text_color();
+
+    // Toolbar background
+    vesa_fill_rect(wx, wy, UIPAINT_WIN_W, UIPAINT_TOOLBAR_H, bg);
+    vesa_rect(wx, wy, UIPAINT_WIN_W, UIPAINT_TOOLBAR_H, bdr);
+
+    // Tool buttons (4 buttons, 40px wide each)
+    let tool_labels = ["Pen", "Ersr", "Line", "Fill"];
+    let mut i = 0;
+    while i < 4 {
+        let bx = wx + 4 + i * 44;
+        let by = wy + 4;
+        if uipaint_tool == i {
+            ui_button_active(bx, by, 40, 28, tool_labels[i]);
+        } else {
+            ui_button(bx, by, 40, 28, tool_labels[i]);
+        }
+        i = i + 1;
+    }
+
+    // Color swatches (8 swatches, 20px each)
+    let swatch_x = wx + 4 + 4 * 44 + 8;
+    let mut j = 0;
+    while j < 8 {
+        let sx = swatch_x + j * 22;
+        let sy = wy + 6;
+        vesa_fill_rect(sx, sy, 18, 18, _uipaint_palette(j));
+        vesa_rect(sx, sy, 18, 18, bdr);
+        if uipaint_color == _uipaint_palette(j) {
+            // Active: bright border
+            vesa_rect(sx - 1, sy - 1, 20, 20, ui_theme_accent_color());
+        }
+        j = j + 1;
+    }
+
+    // Brush size buttons (3 sizes)
+    let sz_x = swatch_x + 8 * 22 + 8;
+    let sz_labels = ["1", "2", "4"];
+    let sz_vals   = [1, 2, 4];
+    let mut b = 0;
+    while b < 3 {
+        let bx = sz_x + b * 30;
+        let by = wy + 4;
+        if uipaint_brush == sz_vals[b] {
+            ui_button_active(bx, by, 26, 28, sz_labels[b]);
+        } else {
+            ui_button(bx, by, 26, 28, sz_labels[b]);
+        }
+        b = b + 1;
+    }
+
+    // Clear button (far right)
+    ui_button(wx + UIPAINT_WIN_W - 52, wy + 4, 48, 28, "Clear");
+    return 0;
+}
+
+// ============================================================
+// Main draw (called from wm_draw_all)
+// ============================================================
+
+fn uipaint_draw() {
+    if uipaint_open_flag == 0 { return 0; }
+    let wx = UIPAINT_WIN_X;
+    let wy = UIPAINT_WIN_Y;
+    let bdr = ui_theme_border_color();
+    // Window outline + title
+    vesa_rect(wx, wy, UIPAINT_WIN_W, UIPAINT_WIN_H, bdr);
+    vesa_fill_rect(wx, wy, UIPAINT_WIN_W, 20, ui_theme_panel_color());
+    ui_draw_text(wx + 8, wy + 2, "Paint", ui_theme_text_color(), 0);
+    // Canvas (only fill on first open, preserve pixels on redraw)
+    if uipaint_dirty == 0 {
+        vesa_fill_rect(_uipaint_canvas_x(), _uipaint_canvas_y(),
+            _uipaint_canvas_w(), _uipaint_canvas_h(), 4294967295);  // white
+        uipaint_dirty = 1;
+    }
+    _uipaint_toolbar_draw();
+    return 0;
+}
+
+// ============================================================
+// Input handlers
+// ============================================================
+
+fn uipaint_mouse_press(mx, my) {
+    if uipaint_open_flag == 0 { return 0; }
+    uipaint_pressing = 1;
+    // Toolbar hit test
+    let wy_tb = UIPAINT_WIN_Y + 20;
+    if my >= wy_tb { if my < wy_tb + UIPAINT_TOOLBAR_H {
+        _uipaint_toolbar_click(mx, my);
+        return 1;
+    }}
+    // Canvas drawing
+    if _uipaint_in_canvas(mx, my) == 1 {
+        if uipaint_tool == 2 {
+            // Line tool: record start
+            uipaint_line_sx = mx;
+            uipaint_line_sy = my;
+        }
+        if uipaint_tool == 0 { _uipaint_put_dot(mx, my, uipaint_color, uipaint_brush); }
+        if uipaint_tool == 1 { _uipaint_put_dot(mx, my, 4294967295, uipaint_brush * 3); }
+        if uipaint_tool == 3 { _uipaint_fill(mx, my, 0, uipaint_color); }
+    }
+    return 1;
+}
+
+fn uipaint_mouse_move(mx, my) {
+    if uipaint_open_flag == 0 { return 0; }
+    if uipaint_pressing == 0 { return 0; }
+    if _uipaint_in_canvas(mx, my) == 0 { return 0; }
+    if uipaint_tool == 0 { _uipaint_put_dot(mx, my, uipaint_color, uipaint_brush); }
+    if uipaint_tool == 1 { _uipaint_put_dot(mx, my, 4294967295, uipaint_brush * 3); }
+    // Line tool: no interim drawing (finalized on release)
+    return 1;
+}
+
+fn uipaint_mouse_release(mx, my) {
+    if uipaint_open_flag == 0 { return 0; }
+    uipaint_pressing = 0;
+    if uipaint_tool == 2 {
+        if _uipaint_in_canvas(uipaint_line_sx, uipaint_line_sy) == 1 {
+            _uipaint_draw_line(uipaint_line_sx, uipaint_line_sy, mx, my,
+                uipaint_color, uipaint_brush);
+        }
+    }
+    return 1;
+}
+
+fn _uipaint_toolbar_click(mx, my) {
+    let wx   = UIPAINT_WIN_X;
+    let wy   = UIPAINT_WIN_Y + 20;
+    // Tool buttons
+    let mut i = 0;
+    while i < 4 {
+        let bx = wx + 4 + i * 44;
+        if ui_button_hit(bx, wy + 4, 40, 28, mx, my) == 1 {
+            uipaint_tool = i;
+            _uipaint_toolbar_draw();
+            return 0;
+        }
+        i = i + 1;
+    }
+    // Color swatches
+    let swatch_x = wx + 4 + 4 * 44 + 8;
+    let mut j = 0;
+    while j < 8 {
+        let sx = swatch_x + j * 22;
+        if ui_button_hit(sx, wy + 6, 18, 18, mx, my) == 1 {
+            uipaint_color = _uipaint_palette(j);
+            _uipaint_toolbar_draw();
+            return 0;
+        }
+        j = j + 1;
+    }
+    // Brush size
+    let sz_x = swatch_x + 8 * 22 + 8;
+    let sz_vals = [1, 2, 4];
+    let mut b = 0;
+    while b < 3 {
+        if ui_button_hit(sz_x + b * 30, wy + 4, 26, 28, mx, my) == 1 {
+            uipaint_brush = sz_vals[b];
+            _uipaint_toolbar_draw();
+            return 0;
+        }
+        b = b + 1;
+    }
+    // Clear button
+    if ui_button_hit(wx + UIPAINT_WIN_W - 52, wy + 4, 48, 28, mx, my) == 1 {
+        vesa_fill_rect(_uipaint_canvas_x(), _uipaint_canvas_y(),
+            _uipaint_canvas_w(), _uipaint_canvas_h(), 4294967295);
+        return 0;
+    }
+    return 0;
+}
+
+fn uipaint_key(k) {
+    if uipaint_open_flag == 0 { return 0; }
+    if k == 27 { uipaint_close(); return 1; }  // Esc = close
+    if k == 112 { uipaint_tool = 0; _uipaint_toolbar_draw(); return 1; }  // 'p' = pen
+    if k == 101 { uipaint_tool = 1; _uipaint_toolbar_draw(); return 1; }  // 'e' = eraser
+    if k == 108 { uipaint_tool = 2; _uipaint_toolbar_draw(); return 1; }  // 'l' = line
+    if k == 102 { uipaint_tool = 3; _uipaint_toolbar_draw(); return 1; }  // 'f' = fill
+    if k == 99  {  // 'c' = clear canvas
+        vesa_fill_rect(_uipaint_canvas_x(), _uipaint_canvas_y(),
+            _uipaint_canvas_w(), _uipaint_canvas_h(), 4294967295);
+        return 1;
+    }
+    return 0;
+}
+
+// ============================================================
+// Lifecycle
+// ============================================================
+
+fn uipaint_open() {
+    uipaint_tool     = 0;
+    uipaint_color    = _uipaint_palette(0);  // black
+    uipaint_brush    = 2;
+    uipaint_pressing = 0;
+    uipaint_dirty    = 0;
+    uipaint_open_flag = 1;
+    uipaint_draw();
+    return 0;
+}
+
+fn uipaint_close() {
+    uipaint_open_flag = 0;
+    vesa_fill_rect(UIPAINT_WIN_X, UIPAINT_WIN_Y, UIPAINT_WIN_W, UIPAINT_WIN_H,
+        ui_theme_bg_color());
+    return 0;
+}
+
+fn uipaint_is_open() { return uipaint_open_flag; }
+
+print("ui_paint.hl loaded");
+print("Paint: pen/eraser/line/fill, 8-color palette, 3 brush sizes, 480x380 window");

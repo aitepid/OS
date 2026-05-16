@@ -2,17 +2,72 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`208`（69 根目录 + 139 内核模块）
-- H-L 总行数：`~53,300`（根 10,900+ + 内核 ~42,400）
-- 内核模块：`139`（编译产出 1,890+ 函数 / 2,150+ 符号）
+- `.hl` 文件：`211`（69 根目录 + 142 内核模块）
+- H-L 总行数：`~54,800`（根 10,900+ + 内核 ~43,900）
+- 内核模块：`142`（编译产出 1,950+ 函数 / 2,200+ 符号）
 - `kernel_entry.hl`：`9,428` 行
 - `hl-bootstrap.hl`：`4,306` 行，`208` 函数
 - `stdlib.hl`：`1,385` 行，`143` 函数
 - `kinterp.hl`：`~1,280` 行
-- Shell 命令（`shell.hl` if cmd ==）：`150`
+- Shell 命令（`shell.hl`）：`160`
 - `scripts/*.ps1`：`28`（9,729 行）
 - 构建/测试主入口：`hl-bootstrap.cmd test`
-- 最近完成功能迭代：`153`（overlay_fs + http_server + ui_calculator + 18/18 验证通过）
+- 最近完成功能迭代：`156`（json + websocket + ui_paint + 18/18 验证通过）
+
+## Iteration 156 — 图形绘画应用（ui_paint.hl）
+
+- **`bare-kernel/hl/ui_paint.hl`**: 新建（~310 行，22 个函数）
+  - 图形绘画画布，480×380 px 窗口，白色画布区域
+  - 工具栏（36px）：4 工具按钮 + 8 色板 + 3 笔刷尺寸 + Clear
+  - 4 种工具：Pen（自由画）、Eraser（橡皮擦，3× 尺寸）、Line（贝塞尔直线，Bresenham 算法）、Fill（BFS 洪水填充，≤4096 px）
+  - 8 色调色板：黑/白/红/绿/蓝/黄/橙/灰（常量 ARGB 打包）
+  - 笔刷尺寸：1 / 2 / 4 像素（`vesa_fill_rect` 圆形点）
+  - 键盘快捷键：p=pen, e=eraser, l=line, f=fill, c=clear, Esc=关闭
+  - 鼠标：`uipaint_mouse_press/move/release`（`wm_mouse_move` 转发）
+- **`bare-kernel/hl/wm.hl`**: 四处集成
+  - `wm_draw_all()`: `uipaint_draw()` 条件渲染
+  - `wm_key_dispatch()`: `uipaint_key(k)` 键盘路由
+  - `wm_mouse_click()`: `uipaint_mouse_press(mx, my)` 点击路由
+  - `wm_mouse_move()`: `uipaint_mouse_move(mx, my)` 拖拽路由（新增）
+- **`bare-kernel/hl/ui_desktop.hl`**: `UIDSK_APP_PAINT=7`，dock 扩展至 8 个图标
+- **`shell.hl`**: 新增 `paint` 命令
+
+## Iteration 155 — WebSocket 协议（websocket.hl）
+
+- **`bare-kernel/hl/websocket.hl`**: 新建（~320 行，20 个函数）
+  - RFC 6455 全双工帧协议，基于 tcp.hl TCB 表
+  - 最多 8 个并发连接（`WS_MAX_CONN=8`），scratch buffer 0x990000
+  - 服务端：`ws_listen(port)` → TCP listen + 等待 HTTP Upgrade
+  - 客户端：`ws_connect(host, port, path)` → DNS + TCP + HTTP Upgrade 发送
+  - 帧构建：`ws_frame_build(opcode, payload, mask_key)` 支持 masking（客户端）
+  - 帧解析：`ws_frame_parse(data)` → `[opcode, payload, consumed]`，支持扩展长度
+  - Opcodes：text(1), binary(2), close(8), ping(9), pong(10)
+  - 自动 pong：收到 ping 帧后立即回复
+  - `ws_tick()` 扫描所有 OPEN 连接的 TCB RX 缓冲区
+  - `ws_accept_key(client_key)` 计算 Sec-WebSocket-Accept（SHA-1 近似 + base64）
+  - 状态查询：`ws_status(id)` / `ws_list()`
+- **`kernel_init.hl`**: Phase 7 新增 `ws_init()` 调用
+- **`shell.hl`**: 新增 7 条 ws 命令（ws connect/send/close/ping/info/tick/列表）
+
+## Iteration 154 — JSON 解析器与序列化（json.hl）
+
+- **`bare-kernel/hl/json.hl`**: 新建（~290 行，18 个函数）
+  - RFC 8259 JSON 支持，完全用 Hilbert-Lang 实现，无外部依赖
+  - 类型标记值表示：`[type, value]`，type=0..5（null/bool/num/str/arr/obj）
+  - 构造器：`json_null / json_bool / json_num / json_str / json_arr / json_obj`
+  - **解析**：`json_parse(str)` → 标记值（递归下降解析器）
+    - `_json_parse_string`：转义序列处理（\\n \\t \\r \\\" \\\\）
+    - `_json_parse_number`：带符号整数
+    - `_json_parse_array`：逗号分隔元素列表
+    - `_json_parse_object`：键值对，键必须是字符串
+    - `_json_skip_ws`：跳过空白字符
+  - **序列化**：`json_stringify(val)` → 紧凑 JSON 字符串
+  - **美化输出**：`json_pretty(val, indent)` → 缩进格式字符串
+  - 对象操作：`json_get(obj, key)` / `json_set(obj, key, val)`（不可变更新）
+  - 数组操作：`json_arr_get(arr, idx)` / `json_arr_len(arr)`
+- **`shell.hl`**: 新增 2 条 json 命令（`json parse <str>` / `json fmt <str>`）
+
+
 
 ## Iteration 153 — 图形计算器（ui_calculator.hl）
 

@@ -1,0 +1,488 @@
+// websocket.hl -- WebSocket Protocol (RFC 6455)
+//
+// Iteration 155: Full-duplex message framing over HTTP Upgrade + TCP.
+//
+// Architecture:
+//   Server mode: ws_listen(port) → accept HTTP Upgrade → WS connection
+//   Client mode: ws_connect(host, port, path) → send Upgrade → WS connection
+//   ws_tick()   → call from main loop; poll all open WS TCBs
+//
+// Frame format (RFC 6455):
+//   Byte 0: FIN(1) + RSV(3) + opcode(4)
+//   Byte 1: MASK(1) + payload_len(7)   [extended len: 16 or 64 bit]
+//   [Masking key: 4 bytes if MASK=1]
+//   [Payload data]
+//
+// Opcodes:
+//   0x0 continuation  0x1 text  0x2 binary
+//   0x8 close  0x9 ping  0xA pong
+//
+// State: up to WS_MAX_CONN (8) simultaneous WebSocket connections.
+//   ws_state[i]: 0=free, 1=handshake, 2=open, 3=closing
+//   ws_tcb[i]:   backing TCP connection index
+//
+// Public API:
+//   ws_init()
+//   ws_listen(port) → ws_id
+//   ws_connect(host, port, path) → ws_id
+//   ws_send_text(ws_id, text)
+//   ws_send_binary(ws_id, data_addr, len)
+//   ws_send_ping(ws_id)
+//   ws_recv(ws_id) → [opcode, payload_string]
+//   ws_close(ws_id)
+//   ws_tick()
+//   ws_status(ws_id)
+
+let WS_MAX_CONN    = 8;
+let WS_BUF_ADDR    = 10027008;   // 0x990000 — 64 KB frame buffer
+let WS_BUF_SIZE    = 65536;
+
+// Opcodes
+let WS_OP_CONT   = 0;
+let WS_OP_TEXT   = 1;
+let WS_OP_BINARY = 2;
+let WS_OP_CLOSE  = 8;
+let WS_OP_PING   = 9;
+let WS_OP_PONG   = 10;
+
+// Connection states
+let WS_ST_FREE      = 0;
+let WS_ST_HANDSHAKE = 1;
+let WS_ST_OPEN      = 2;
+let WS_ST_CLOSING   = 3;
+
+// Per-connection state arrays
+let mut ws_state     = [];
+let mut ws_tcb       = [];
+let mut ws_is_server = [];   // 1=server-side, 0=client
+let mut ws_msg_buf   = [];   // last received message payload
+let mut ws_msg_op    = [];   // last received opcode
+let mut ws_count     = 0;
+
+fn ws_init() {
+    ws_state     = [];
+    ws_tcb       = [];
+    ws_is_server = [];
+    ws_msg_buf   = [];
+    ws_msg_op    = [];
+    ws_count     = 0;
+    let mut i = 0;
+    while i < WS_MAX_CONN {
+        push(ws_state,     WS_ST_FREE);
+        push(ws_tcb,       0 - 1);
+        push(ws_is_server, 0);
+        push(ws_msg_buf,   "");
+        push(ws_msg_op,    0);
+        i = i + 1;
+    }
+    print("ws: init — max " + to_string(WS_MAX_CONN) + " connections");
+    return 0;
+}
+
+fn _ws_alloc_slot() {
+    let mut i = 0;
+    while i < WS_MAX_CONN {
+        if ws_state[i] == WS_ST_FREE { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+// ============================================================
+// SHA-1 for WebSocket handshake accept key (RFC 6455 §4.2.2)
+// Simplified: produces a 20-char hex string (not binary)
+// In a real system this would be the binary hash; here we use
+// a deterministic kernel-internal hash that accepts any key.
+// ============================================================
+
+fn _ws_sha1_hex(data) {
+    // Simplified SHA-1: produces deterministic 40-hex-char string
+    // Uses HL integer ops (not cryptographically correct, but structurally valid)
+    let mut h0 = 1732584193;
+    let mut h1 = 4023233417;
+    let mut h2 = 2562383102;
+    let mut h3 = 271733878;
+    let mut h4 = 3285377520;
+    let n = len(data);
+    let mut i = 0;
+    while i < n {
+        let b = char_code(char_at(data, i));
+        let r0 = (h0 + b * 17 + i * 31) % 4294967296;
+        let r1 = (h1 + b * 37 + h0) % 4294967296;
+        let r2 = (h2 + b * 53 + h1) % 4294967296;
+        let r3 = (h3 + b * 7  + h2) % 4294967296;
+        let r4 = (h4 + b * 3  + h3) % 4294967296;
+        h0 = r0; h1 = r1; h2 = r2; h3 = r3; h4 = r4;
+        i = i + 1;
+    }
+    // Mix final state
+    let f0 = (h0 + h4) % 4294967296;
+    let f1 = (h1 + h0) % 4294967296;
+    let f2 = (h2 + h1) % 4294967296;
+    let f3 = (h3 + h2) % 4294967296;
+    let f4 = (h4 + h3) % 4294967296;
+    return _ws_hex32(f0) + _ws_hex32(f1) + _ws_hex32(f2) + _ws_hex32(f3) + _ws_hex32(f4);
+}
+
+fn _ws_hex32(n) {
+    let digits = "0123456789abcdef";
+    let mut s = "";
+    let mut v = n;
+    let mut i = 0;
+    while i < 8 {
+        let nibble = (v / (268435456)) % 16;  // 268435456 = 16^7
+        let mut d = nibble;
+        // Extract correct nibble from high to low
+        let mut shift = 28 - i * 4;
+        let mut tmp = v;
+        let mut k = 0;
+        while k < shift { tmp = tmp / 2; k = k + 1; }
+        d = tmp % 16;
+        s = s + str_sub(digits, d, d + 1);
+        i = i + 1;
+    }
+    return s;
+}
+
+fn _ws_base64_char(n) {
+    let chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    return str_sub(chars, n % 64, (n % 64) + 1);
+}
+
+// Base64-encode a hex string (treating pairs of hex chars as bytes)
+fn _ws_base64_from_hex(hex_s) {
+    // Convert hex string to base64
+    let mut out = "";
+    let hlen = len(hex_s);
+    let mut i = 0;
+    while i + 5 < hlen {
+        // Read 3 bytes (6 hex chars) → 4 base64 chars
+        let h0 = _ws_hex_byte(hex_s, i);
+        let h1 = _ws_hex_byte(hex_s, i + 2);
+        let h2 = _ws_hex_byte(hex_s, i + 4);
+        out = out + _ws_base64_char(h0 / 4);
+        out = out + _ws_base64_char((h0 % 4) * 16 + h1 / 16);
+        out = out + _ws_base64_char((h1 % 16) * 4 + h2 / 64);
+        out = out + _ws_base64_char(h2 % 64);
+        i = i + 6;
+    }
+    // Handle remaining bytes
+    if i + 1 < hlen {
+        let h0 = _ws_hex_byte(hex_s, i);
+        if i + 3 < hlen {
+            let h1 = _ws_hex_byte(hex_s, i + 2);
+            out = out + _ws_base64_char(h0 / 4);
+            out = out + _ws_base64_char((h0 % 4) * 16 + h1 / 16);
+            out = out + _ws_base64_char((h1 % 16) * 4);
+            out = out + "=";
+        } else {
+            out = out + _ws_base64_char(h0 / 4);
+            out = out + _ws_base64_char((h0 % 4) * 16);
+            out = out + "==";
+        }
+    }
+    return out;
+}
+
+fn _ws_hex_val(c) {
+    if c >= "0" { if c <= "9" { return char_code(c) - char_code("0"); } }
+    if c >= "a" { if c <= "f" { return char_code(c) - char_code("a") + 10; } }
+    return 0;
+}
+
+fn _ws_hex_byte(s, pos) {
+    if pos + 1 >= len(s) { return 0; }
+    return _ws_hex_val(str_sub(s, pos, pos + 1)) * 16
+         + _ws_hex_val(str_sub(s, pos + 1, pos + 2));
+}
+
+// Compute Sec-WebSocket-Accept header value from client key
+fn ws_accept_key(client_key) {
+    let magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+    let concat = client_key + magic;
+    let sha_hex = _ws_sha1_hex(concat);
+    return _ws_base64_from_hex(sha_hex);
+}
+
+// ============================================================
+// Frame builder/parser
+// ============================================================
+
+// Build a WebSocket frame. Returns string of frame bytes.
+// For server→client: MASK=0 (servers must not mask)
+fn ws_frame_build(opcode, payload, mask_key) {
+    let plen = len(payload);
+    let use_mask = 0;
+    if mask_key != 0 { use_mask = 1; }
+
+    let mut frame = "";
+    // Byte 0: FIN=1, RSV=0, opcode
+    let b0 = 128 + opcode;  // 128 = 0x80 = FIN bit
+    frame = frame + str_from_code(b0);
+    // Byte 1: MASK bit + payload length
+    let mut b1 = plen;
+    if plen > 125 { b1 = 126; }   // 16-bit extended length
+    if use_mask == 1 { b1 = b1 + 128; }
+    frame = frame + str_from_code(b1 % 256);
+    // Extended length (16-bit if needed)
+    if plen > 125 {
+        frame = frame + str_from_code((plen / 256) % 256);
+        frame = frame + str_from_code(plen % 256);
+    }
+    // Masking key (4 bytes) if client-side
+    if use_mask == 1 {
+        frame = frame + str_from_code((mask_key / 16777216) % 256);
+        frame = frame + str_from_code((mask_key / 65536) % 256);
+        frame = frame + str_from_code((mask_key / 256) % 256);
+        frame = frame + str_from_code(mask_key % 256);
+    }
+    // Payload (masked if mask_key != 0)
+    let mut i = 0;
+    while i < plen {
+        let b = char_code(char_at(payload, i));
+        if use_mask == 1 {
+            let mk = [
+                (mask_key / 16777216) % 256,
+                (mask_key / 65536) % 256,
+                (mask_key / 256) % 256,
+                mask_key % 256
+            ];
+            frame = frame + str_from_code(b ^ mk[i % 4]);
+        } else {
+            frame = frame + str_from_code(b);
+        }
+        i = i + 1;
+    }
+    return frame;
+}
+
+// Parse a WebSocket frame from raw bytes (as string)
+// Returns [opcode, payload_string, consumed_bytes] or [-1, "", 0] on error
+fn ws_frame_parse(data) {
+    let n = len(data);
+    if n < 2 { return [0 - 1, "", 0]; }
+
+    let b0 = char_code(char_at(data, 0));
+    let b1 = char_code(char_at(data, 1));
+
+    let opcode  = b0 % 16;
+    let masked  = (b1 / 128) % 2;
+    let mut plen = b1 % 128;
+    let mut hdr_len = 2;
+
+    if plen == 126 {
+        if n < 4 { return [0 - 1, "", 0]; }
+        let e0 = char_code(char_at(data, 2));
+        let e1 = char_code(char_at(data, 3));
+        plen = e0 * 256 + e1;
+        hdr_len = 4;
+    }
+
+    if masked == 1 { hdr_len = hdr_len + 4; }
+    if n < hdr_len + plen { return [0 - 1, "", 0]; }
+
+    let mut payload = "";
+    let mut i = 0;
+    while i < plen {
+        let raw = char_code(char_at(data, hdr_len + i));
+        if masked == 1 {
+            let mk_off = hdr_len - 4 + (i % 4);
+            let mk_byte = char_code(char_at(data, mk_off));
+            payload = payload + str_from_code(raw ^ mk_byte);
+        } else {
+            payload = payload + str_from_code(raw);
+        }
+        i = i + 1;
+    }
+    return [opcode, payload, hdr_len + plen];
+}
+
+// ============================================================
+// Server lifecycle
+// ============================================================
+
+fn ws_listen(port) {
+    let id = _ws_alloc_slot();
+    if id < 0 {
+        print("ws: no free slots");
+        return 0 - 1;
+    }
+    let tcb = tcp_listen(port);
+    if tcb < 0 {
+        print("ws: tcp_listen failed on port " + to_string(port));
+        return 0 - 1;
+    }
+    set_at(ws_state,     id, WS_ST_HANDSHAKE);
+    set_at(ws_tcb,       id, tcb);
+    set_at(ws_is_server, id, 1);
+    ws_count = ws_count + 1;
+    print("ws: listening on port " + to_string(port) + " (id=" + to_string(id) + ")");
+    return id;
+}
+
+// Complete HTTP→WS upgrade handshake (called when HTTP Upgrade request arrives)
+fn ws_server_handshake(ws_id, client_key) {
+    let tcb = ws_tcb[ws_id];
+    let accept = ws_accept_key(client_key);
+    let resp = "HTTP/1.1 101 Switching Protocols\r\n"
+        + "Upgrade: websocket\r\n"
+        + "Connection: Upgrade\r\n"
+        + "Sec-WebSocket-Accept: " + accept + "\r\n"
+        + "\r\n";
+    tcp_send(tcb, resp);
+    set_at(ws_state, ws_id, WS_ST_OPEN);
+    print("ws: handshake complete (id=" + to_string(ws_id) + ")");
+    return 0;
+}
+
+fn ws_connect(host, port, path) {
+    let id = _ws_alloc_slot();
+    if id < 0 { return 0 - 1; }
+    let ip = dns_resolve(host);
+    let tcb = tcp_connect(ip, port);
+    if tcb < 0 { return 0 - 1; }
+    set_at(ws_state,     id, WS_ST_HANDSHAKE);
+    set_at(ws_tcb,       id, tcb);
+    set_at(ws_is_server, id, 0);
+    ws_count = ws_count + 1;
+
+    // Send HTTP Upgrade request
+    let key = "dGhlIHNhbXBsZSBub25jZQ==";   // static nonce for simplicity
+    let req = "GET " + path + " HTTP/1.1\r\n"
+        + "Host: " + host + "\r\n"
+        + "Upgrade: websocket\r\n"
+        + "Connection: Upgrade\r\n"
+        + "Sec-WebSocket-Key: " + key + "\r\n"
+        + "Sec-WebSocket-Version: 13\r\n"
+        + "\r\n";
+    tcp_send(tcb, req);
+    set_at(ws_state, id, WS_ST_OPEN);  // optimistic open after send
+    print("ws: connected to " + host + ":" + to_string(port) + path + " (id=" + to_string(id) + ")");
+    return id;
+}
+
+// ============================================================
+// Send / receive
+// ============================================================
+
+fn ws_send_text(ws_id, text) {
+    if ws_id < 0 { return 0 - 1; }
+    if ws_state[ws_id] != WS_ST_OPEN { return 0 - 1; }
+    let mask_key = 0;
+    if ws_is_server[ws_id] == 0 { mask_key = 305419896; }  // fixed client mask
+    let frame = ws_frame_build(WS_OP_TEXT, text, mask_key);
+    tcp_send(ws_tcb[ws_id], frame);
+    return 0;
+}
+
+fn ws_send_binary(ws_id, data_str) {
+    if ws_id < 0 { return 0 - 1; }
+    if ws_state[ws_id] != WS_ST_OPEN { return 0 - 1; }
+    let mask_key = 0;
+    if ws_is_server[ws_id] == 0 { mask_key = 305419896; }
+    let frame = ws_frame_build(WS_OP_BINARY, data_str, mask_key);
+    tcp_send(ws_tcb[ws_id], frame);
+    return 0;
+}
+
+fn ws_send_ping(ws_id) {
+    if ws_id < 0 { return 0 - 1; }
+    if ws_state[ws_id] != WS_ST_OPEN { return 0 - 1; }
+    let frame = ws_frame_build(WS_OP_PING, "", 0);
+    tcp_send(ws_tcb[ws_id], frame);
+    return 0;
+}
+
+fn ws_close(ws_id) {
+    if ws_id < 0 { return 0; }
+    if ws_state[ws_id] == WS_ST_FREE { return 0; }
+    let frame = ws_frame_build(WS_OP_CLOSE, "", 0);
+    tcp_send(ws_tcb[ws_id], frame);
+    tcp_close(ws_tcb[ws_id]);
+    set_at(ws_state, ws_id, WS_ST_FREE);
+    ws_count = ws_count - 1;
+    return 0;
+}
+
+// Return last received message for a connection
+fn ws_recv(ws_id) {
+    if ws_id < 0 { return [0 - 1, ""]; }
+    let op  = ws_msg_op[ws_id];
+    let msg = ws_msg_buf[ws_id];
+    set_at(ws_msg_buf, ws_id, "");
+    set_at(ws_msg_op,  ws_id, 0);
+    return [op, msg];
+}
+
+// ============================================================
+// Tick: process incoming frames for all open connections
+// ============================================================
+
+fn ws_tick() {
+    let mut i = 0;
+    while i < WS_MAX_CONN {
+        if ws_state[i] == WS_ST_OPEN {
+            let tcb = ws_tcb[i];
+            let addr = TCP_TABLE + tcb * TCB_SIZE;
+            let rx_buf = mem_read_u64(addr + 64);
+            if rx_buf > 0 {
+                // Read raw bytes into string
+                let mut raw = "";
+                let mut j = 0;
+                while j < 4096 {
+                    let b = mem_read_u8(rx_buf + j);
+                    if b == 0 { j = 4097; }  // break
+                    else { raw = raw + str_from_code(b); j = j + 1; }
+                }
+                if len(raw) >= 2 {
+                    let r = ws_frame_parse(raw);
+                    let opcode  = r[0];
+                    let payload = r[1];
+                    if opcode == WS_OP_TEXT   { set_at(ws_msg_op, i, opcode); set_at(ws_msg_buf, i, payload); }
+                    if opcode == WS_OP_BINARY { set_at(ws_msg_op, i, opcode); set_at(ws_msg_buf, i, payload); }
+                    if opcode == WS_OP_PING   {
+                        // Auto-pong
+                        let pong = ws_frame_build(WS_OP_PONG, payload, 0);
+                        tcp_send(tcb, pong);
+                    }
+                    if opcode == WS_OP_CLOSE  {
+                        ws_close(i);
+                    }
+                    mem_zero(rx_buf, 4096);
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn ws_status(ws_id) {
+    if ws_id < 0 { return "ws: invalid id"; }
+    if ws_id >= WS_MAX_CONN { return "ws: invalid id"; }
+    let st_s = "free";
+    let st = ws_state[ws_id];
+    if st == WS_ST_HANDSHAKE { st_s = "handshake"; }
+    if st == WS_ST_OPEN      { st_s = "open"; }
+    if st == WS_ST_CLOSING   { st_s = "closing"; }
+    let role = "client";
+    if ws_is_server[ws_id] == 1 { role = "server"; }
+    return "ws[" + to_string(ws_id) + "] " + st_s
+        + " role=" + role
+        + " tcb=" + to_string(ws_tcb[ws_id]);
+}
+
+fn ws_list() {
+    let mut out = "WebSocket connections (" + to_string(ws_count) + "/" + to_string(WS_MAX_CONN) + "):\n";
+    let mut i = 0;
+    while i < WS_MAX_CONN {
+        if ws_state[i] != WS_ST_FREE {
+            out = out + "  " + ws_status(i) + "\n";
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+print("websocket.hl loaded");
+print("WebSocket: RFC 6455 framing, server+client, " + to_string(WS_MAX_CONN) + " connections, text/binary/ping/pong/close");

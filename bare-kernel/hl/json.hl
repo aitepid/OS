@@ -1,0 +1,353 @@
+// json.hl -- JSON Parser + Serializer
+//
+// Iteration 154: RFC 8259 JSON support for HicOS.
+// Used by: HTTP REST APIs, config files, IPC serialization.
+//
+// Value representation (type-tagged arrays):
+//   [JSON_NULL, 0]
+//   [JSON_BOOL, 0|1]
+//   [JSON_NUM,  integer]
+//   [JSON_STR,  "string"]
+//   [JSON_ARR,  [elem, elem, ...]]         -- each elem is a tagged value
+//   [JSON_OBJ,  [[key, val], [key, val]]]  -- key = plain string
+//
+// Public API:
+//   json_parse(str)           → tagged value (or JSON_NULL on error)
+//   json_stringify(val)       → string
+//   json_get(obj, key)        → tagged value (-1 = not found)
+//   json_set(obj, key, val)   → updated obj
+//   json_arr_get(arr, idx)    → tagged value
+//   json_arr_len(arr)         → integer
+//   json_type(val)            → type constant
+//   json_null() / json_bool(b) / json_num(n) / json_str(s)
+//   json_arr(items) / json_obj(pairs)
+
+let JSON_NULL = 0;
+let JSON_BOOL = 1;
+let JSON_NUM  = 2;
+let JSON_STR  = 3;
+let JSON_ARR  = 4;
+let JSON_OBJ  = 5;
+
+// Type-tag constructors
+fn json_null()   { return [JSON_NULL, 0]; }
+fn json_bool(b)  { return [JSON_BOOL, b]; }
+fn json_num(n)   { return [JSON_NUM,  n]; }
+fn json_str(s)   { return [JSON_STR,  s]; }
+fn json_arr(a)   { return [JSON_ARR,  a]; }
+fn json_obj(p)   { return [JSON_OBJ,  p]; }
+
+fn json_type(val) { return val[0]; }
+
+// Convenience: unwrap value
+fn json_val(val) { return val[1]; }
+
+// Get key from object; returns JSON_NULL if missing
+fn json_get(obj, key) {
+    if obj[0] != JSON_OBJ { return json_null(); }
+    let pairs = obj[1];
+    let mut i = 0;
+    while i < len(pairs) {
+        if pairs[i][0] == key { return pairs[i][1]; }
+        i = i + 1;
+    }
+    return json_null();
+}
+
+// Set/add key in object; returns new object
+fn json_set(obj, key, val) {
+    if obj[0] != JSON_OBJ { return obj; }
+    let pairs = obj[1];
+    let mut new_pairs = [];
+    let mut found = 0;
+    let mut i = 0;
+    while i < len(pairs) {
+        if pairs[i][0] == key {
+            push(new_pairs, [key, val]);
+            found = 1;
+        } else {
+            push(new_pairs, pairs[i]);
+        }
+        i = i + 1;
+    }
+    if found == 0 { push(new_pairs, [key, val]); }
+    return json_obj(new_pairs);
+}
+
+fn json_arr_get(arr, idx) {
+    if arr[0] != JSON_ARR { return json_null(); }
+    let a = arr[1];
+    if idx < 0 { return json_null(); }
+    if idx >= len(a) { return json_null(); }
+    return a[idx];
+}
+
+fn json_arr_len(arr) {
+    if arr[0] != JSON_ARR { return 0; }
+    return len(arr[1]);
+}
+
+// ============================================================
+// Parser
+// ============================================================
+
+// Skip whitespace; return new position
+fn _json_skip_ws(s, pos) {
+    let n = len(s);
+    let mut p = pos;
+    while p < n {
+        let c = char_at(s, p);
+        if c == " " { p = p + 1; }
+        else if c == "\t" { p = p + 1; }
+        else if c == "\n" { p = p + 1; }
+        else if c == "\r" { p = p + 1; }
+        else { return p; }
+    }
+    return p;
+}
+
+// Parse string starting at pos (pos points to opening '"')
+// Returns [string_value, new_pos]
+fn _json_parse_string(s, pos) {
+    let n = len(s);
+    let mut p = pos + 1;   // skip opening '"'
+    let mut result = "";
+    while p < n {
+        let c = char_at(s, p);
+        if c == "\"" { return [result, p + 1]; }
+        if c == "\\" {
+            if p + 1 < n {
+                let esc = char_at(s, p + 1);
+                if esc == "n"  { result = result + "\n"; p = p + 2; }
+                else if esc == "t"  { result = result + "\t"; p = p + 2; }
+                else if esc == "r"  { result = result + "\r"; p = p + 2; }
+                else if esc == "\"" { result = result + "\""; p = p + 2; }
+                else if esc == "\\" { result = result + "\\"; p = p + 2; }
+                else if esc == "/"  { result = result + "/";  p = p + 2; }
+                else { result = result + c; p = p + 1; }
+            } else {
+                result = result + c; p = p + 1;
+            }
+        } else {
+            result = result + c;
+            p = p + 1;
+        }
+    }
+    return [result, p];
+}
+
+// Parse number starting at pos
+fn _json_parse_number(s, pos) {
+    let n = len(s);
+    let mut p = pos;
+    let mut num_s = "";
+    let mut neg = 0;
+    if p < n {
+        if char_at(s, p) == "-" { neg = 1; p = p + 1; }
+    }
+    while p < n {
+        let c = char_at(s, p);
+        if c >= "0" { if c <= "9" { num_s = num_s + c; p = p + 1; } else { p = n; } }
+        else { p = n; }
+    }
+    // Restore loop-breaking (HL doesn't have break; used p=n as break)
+    // Reparse properly:
+    p = pos;
+    if neg == 1 { p = p + 1; }
+    num_s = "";
+    while p < len(s) {
+        let c = char_at(s, p);
+        if c >= "0" {
+            if c <= "9" { num_s = num_s + c; p = p + 1; }
+            else { p = len(s) + 1; }  // break signal
+        } else { p = len(s) + 1; }
+    }
+    // p is now past the number
+    let mut real_p = pos;
+    if neg == 1 { real_p = real_p + 1; }
+    real_p = real_p + len(num_s);
+    let v = parse_int(num_s);
+    if neg == 1 { return [0 - v, real_p]; }
+    return [v, real_p];
+}
+
+// Forward declaration (recursive parser)
+fn _json_parse_value(s, pos);
+
+fn _json_parse_array(s, pos) {
+    let mut p = pos + 1;   // skip '['
+    let mut items = [];
+    p = _json_skip_ws(s, p);
+    let n = len(s);
+    if p < n {
+        if char_at(s, p) == "]" { return [json_arr(items), p + 1]; }
+    }
+    while p < n {
+        let r = _json_parse_value(s, p);
+        push(items, r[0]);
+        p = _json_skip_ws(s, r[1]);
+        if p >= n { p = n; }
+        else {
+            let c = char_at(s, p);
+            if c == "]" { return [json_arr(items), p + 1]; }
+            if c == "," { p = p + 1; p = _json_skip_ws(s, p); }
+        }
+    }
+    return [json_arr(items), p];
+}
+
+fn _json_parse_object(s, pos) {
+    let mut p = pos + 1;   // skip '{'
+    let mut pairs = [];
+    p = _json_skip_ws(s, p);
+    let n = len(s);
+    if p < n {
+        if char_at(s, p) == "}" { return [json_obj(pairs), p + 1]; }
+    }
+    while p < n {
+        // Parse key
+        p = _json_skip_ws(s, p);
+        let kr = _json_parse_string(s, p);
+        let key = kr[0];
+        p = _json_skip_ws(s, kr[1]);
+        // Skip ':'
+        if p < n { if char_at(s, p) == ":" { p = p + 1; } }
+        p = _json_skip_ws(s, p);
+        // Parse value
+        let vr = _json_parse_value(s, p);
+        push(pairs, [key, vr[0]]);
+        p = _json_skip_ws(s, vr[1]);
+        if p >= n { p = n; }
+        else {
+            let c = char_at(s, p);
+            if c == "}" { return [json_obj(pairs), p + 1]; }
+            if c == "," { p = p + 1; }
+        }
+    }
+    return [json_obj(pairs), p];
+}
+
+fn _json_parse_value(s, pos) {
+    let p = _json_skip_ws(s, pos);
+    let n = len(s);
+    if p >= n { return [json_null(), p]; }
+    let c = char_at(s, p);
+    if c == "\"" { let r = _json_parse_string(s, p); return [json_str(r[0]), r[1]]; }
+    if c == "["  { return _json_parse_array(s, p); }
+    if c == "{"  { return _json_parse_object(s, p); }
+    if c == "t"  {
+        // true
+        if p + 4 <= n { return [json_bool(1), p + 4]; }
+        return [json_bool(1), p];
+    }
+    if c == "f"  {
+        // false
+        if p + 5 <= n { return [json_bool(0), p + 5]; }
+        return [json_bool(0), p];
+    }
+    if c == "n"  {
+        // null
+        if p + 4 <= n { return [json_null(), p + 4]; }
+        return [json_null(), p];
+    }
+    // number (includes '-')
+    let r = _json_parse_number(s, p);
+    return [json_num(r[0]), r[1]];
+}
+
+fn json_parse(s) {
+    let r = _json_parse_value(s, 0);
+    return r[0];
+}
+
+// ============================================================
+// Serializer
+// ============================================================
+
+fn _json_escape_string(s) {
+    let mut out = "";
+    let mut i = 0;
+    while i < len(s) {
+        let c = char_at(s, i);
+        if c == "\"" { out = out + "\\\""; }
+        else if c == "\\" { out = out + "\\\\"; }
+        else if c == "\n" { out = out + "\\n"; }
+        else if c == "\t" { out = out + "\\t"; }
+        else if c == "\r" { out = out + "\\r"; }
+        else { out = out + c; }
+        i = i + 1;
+    }
+    return out;
+}
+
+fn json_stringify(val) {
+    let t = val[0];
+    if t == JSON_NULL { return "null"; }
+    if t == JSON_BOOL {
+        if val[1] == 1 { return "true"; }
+        return "false";
+    }
+    if t == JSON_NUM  { return to_string(val[1]); }
+    if t == JSON_STR  { return "\"" + _json_escape_string(val[1]) + "\""; }
+    if t == JSON_ARR  {
+        let items = val[1];
+        let mut s = "[";
+        let mut i = 0;
+        while i < len(items) {
+            if i > 0 { s = s + ","; }
+            s = s + json_stringify(items[i]);
+            i = i + 1;
+        }
+        return s + "]";
+    }
+    if t == JSON_OBJ  {
+        let pairs = val[1];
+        let mut s = "{";
+        let mut i = 0;
+        while i < len(pairs) {
+            if i > 0 { s = s + ","; }
+            s = s + "\"" + _json_escape_string(pairs[i][0]) + "\":"
+                + json_stringify(pairs[i][1]);
+            i = i + 1;
+        }
+        return s + "}";
+    }
+    return "null";
+}
+
+// Pretty-print with indentation
+fn json_pretty(val, indent) {
+    let t = val[0];
+    let pad = "";
+    let mut k = 0;
+    while k < indent { let pad = pad + "  "; k = k + 1; }
+    if t == JSON_ARR {
+        let items = val[1];
+        if len(items) == 0 { return "[]"; }
+        let mut s = "[\n";
+        let mut i = 0;
+        while i < len(items) {
+            if i > 0 { s = s + ",\n"; }
+            s = s + pad + "  " + json_pretty(items[i], indent + 1);
+            i = i + 1;
+        }
+        return s + "\n" + pad + "]";
+    }
+    if t == JSON_OBJ {
+        let pairs = val[1];
+        if len(pairs) == 0 { return "{}"; }
+        let mut s = "{\n";
+        let mut i = 0;
+        while i < len(pairs) {
+            if i > 0 { s = s + ",\n"; }
+            s = s + pad + "  \"" + pairs[i][0] + "\": "
+                + json_pretty(pairs[i][1], indent + 1);
+            i = i + 1;
+        }
+        return s + "\n" + pad + "}";
+    }
+    return json_stringify(val);
+}
+
+print("json.hl loaded");
+print("JSON: parse + stringify + pretty, types: null/bool/num/str/arr/obj");

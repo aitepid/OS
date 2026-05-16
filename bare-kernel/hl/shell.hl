@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 150 commands + pipe operator (|):
+// 160 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -21,6 +21,9 @@
 //   Overlay FS: overlay  overlay new  overlay rm  overlay info
 //   HTTP Server: httpd  httpd start  httpd stop  httpd tick
 //   Calculator: calc
+//   Paint: paint (graphical canvas)
+//   JSON: json parse  json fmt
+//   WebSocket: ws  ws connect  ws send  ws close  ws ping  ws info  ws tick
 //   Shell pipe: cmd1 | cmd2
 
 fn shell_handle(cmd) {
@@ -50,6 +53,9 @@ fn shell_handle(cmd) {
         serial_print("HTTP Svr: httpd  httpd start  httpd stop  httpd tick");
         serial_print("UI Apps:  sysmon fileman editor edit calc  audiotest");
         serial_print("Calculator: calc (graphical 4-function)");
+        serial_print("Paint:    paint (graphical canvas: pen/eraser/line/fill)");
+        serial_print("JSON:     json parse <str>  json fmt <str>");
+        serial_print("WebSock:  ws  ws connect <host> <port> [path]  ws send <id> <msg>  ws close/ping/info/tick");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -636,6 +642,71 @@ fn shell_handle_ext(cmd) {
         return "Calculator opened";
     }
 
+    // --- Paint ---
+    if cmd == "paint" {
+        uipaint_open();
+        return "Paint opened";
+    }
+
+    // --- JSON ---
+    if str_starts_with(cmd, "json parse ") {
+        let s = str_sub(cmd, 11, len(cmd));
+        let v = json_parse(s);
+        return "type=" + to_string(json_type(v)) + " val=" + json_stringify(v);
+    }
+    if str_starts_with(cmd, "json fmt ") {
+        let s = str_sub(cmd, 9, len(cmd));
+        let v = json_parse(s);
+        return json_pretty(v, 0);
+    }
+
+    // --- WebSocket ---
+    if cmd == "ws" {
+        return ws_list();
+    }
+    if str_starts_with(cmd, "ws connect ") {
+        let rest = str_sub(cmd, 11, len(cmd));
+        let sp1  = str_find(rest, " ");
+        if sp1 < 0 { return "Usage: ws connect <host> <port> [path]"; }
+        let host = str_sub(rest, 0, sp1);
+        let rest2 = str_sub(rest, sp1 + 1, len(rest));
+        let sp2  = str_find(rest2, " ");
+        let port_s = rest2;
+        let path = "/";
+        if sp2 >= 0 { port_s = str_sub(rest2, 0, sp2); path = str_sub(rest2, sp2 + 1, len(rest2)); }
+        let port = parse_int(port_s);
+        let id = ws_connect(host, port, path);
+        if id < 0 { return "Error: ws_connect failed"; }
+        return "WebSocket id=" + to_string(id) + " connected";
+    }
+    if str_starts_with(cmd, "ws send ") {
+        let rest = str_sub(cmd, 8, len(cmd));
+        let sp = str_find(rest, " ");
+        if sp < 0 { return "Usage: ws send <id> <text>"; }
+        let id = parse_int(str_sub(rest, 0, sp));
+        let text = str_sub(rest, sp + 1, len(rest));
+        ws_send_text(id, text);
+        return "Sent to ws[" + to_string(id) + "]: " + text;
+    }
+    if str_starts_with(cmd, "ws close ") {
+        let id = parse_int(str_sub(cmd, 9, len(cmd)));
+        ws_close(id);
+        return "WebSocket " + to_string(id) + " closed";
+    }
+    if str_starts_with(cmd, "ws ping ") {
+        let id = parse_int(str_sub(cmd, 8, len(cmd)));
+        ws_send_ping(id);
+        return "Ping sent to ws[" + to_string(id) + "]";
+    }
+    if str_starts_with(cmd, "ws info ") {
+        let id = parse_int(str_sub(cmd, 8, len(cmd)));
+        return ws_status(id);
+    }
+    if cmd == "ws tick" {
+        ws_tick();
+        return "ws: tick processed";
+    }
+
     if cmd == "ctr" {
         return ctr_list();
     }
@@ -931,7 +1002,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 150 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc");
+print("shell.hl loaded -- 160 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws");
 
 // Main shell loop (called from kernel_init)
 
