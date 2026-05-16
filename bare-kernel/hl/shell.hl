@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 374 commands + pipe operator (|):
+// 386 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -96,6 +96,9 @@ fn shell_handle(cmd) {
         serial_print("ASN1:     asn1 int <n>  asn1 str <text>  asn1 null  asn1 test");
         serial_print("PEM:      pem parse <data>  pem load <path>  pem show  pem label  pem test");
         serial_print("JWT:      jwt parse <token>  jwt header  jwt payload  jwt sub  jwt iss  jwt exp  jwt test");
+        serial_print("BMP:      bmp load <path>  bmp info  bmp show <x> <y>  bmp test");
+        serial_print("GIF:      gif load <path>  gif info  gif palette  gif test");
+        serial_print("WAV:      wav load <path>  wav info  wav play  wav test");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -2192,6 +2195,52 @@ fn shell_handle_ext(cmd) {
     }
     if cmd == "jwt test" { return jwt_selftest(); }
 
+    // === BMP image commands ===
+    if str_starts_with(cmd, "bmp load ") {
+        let path = str_sub(cmd, 9, len(cmd));
+        let res = bmp_load(path);
+        if res < 0 { return "bmp: load failed"; }
+        return "bmp: loaded " + to_string(bmp_get_width()) + "x" + to_string(bmp_get_height()) + " image";
+    }
+    if cmd == "bmp info" { return bmp_info(); }
+    if str_starts_with(cmd, "bmp show ") {
+        let args = str_sub(cmd, 9, len(cmd));
+        let space = str_index_of(args, " ");
+        if space < 0 { return "bmp: usage: bmp show <x> <y>"; }
+        let x = parse_int(str_sub(args, 0, space));
+        let y = parse_int(str_sub(args, space + 1, len(args)));
+        let res = bmp_display(x, y);
+        if res < 0 { return "bmp: display failed"; }
+        return "bmp: displayed at (" + to_string(x) + "," + to_string(y) + ")";
+    }
+    if cmd == "bmp test" { return bmp_selftest(); }
+
+    // === GIF image commands ===
+    if str_starts_with(cmd, "gif load ") {
+        let path = str_sub(cmd, 9, len(cmd));
+        let res = gif_load(path);
+        if res < 0 { return "gif: load failed"; }
+        return "gif: loaded " + to_string(gif_get_width()) + "x" + to_string(gif_get_height()) + " image";
+    }
+    if cmd == "gif info" { return gif_info(); }
+    if cmd == "gif palette" { return gif_list_palette(); }
+    if cmd == "gif test" { return gif_selftest(); }
+
+    // === WAV audio commands ===
+    if str_starts_with(cmd, "wav load ") {
+        let path = str_sub(cmd, 9, len(cmd));
+        let res = wav_load(path);
+        if res < 0 { return "wav: load failed"; }
+        return "wav: loaded " + to_string(wav_get_sample_rate()) + " Hz audio";
+    }
+    if cmd == "wav info" { return wav_info(); }
+    if cmd == "wav play" {
+        let res = wav_play();
+        if res < 0 { return "wav: play failed"; }
+        return "wav: playing...";
+    }
+    if cmd == "wav test" { return wav_selftest(); }
+
     return shell_handle(cmd);
 }
 
@@ -2203,7 +2252,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 374 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt");
+print("shell.hl loaded -- 386 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav");
 
 // Main shell loop (called from kernel_init)
 

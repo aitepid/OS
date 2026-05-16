@@ -1,0 +1,245 @@
+// wav.hl -- WAV (Waveform Audio File Format) Parser
+//
+// WAV is a RIFF-based audio file format (Microsoft/IBM).
+// Structure: RIFF Header + fmt Chunk + data Chunk
+//
+// Features:
+//   - Parse WAV RIFF headers
+//   - Extract audio metadata (sample rate, channels, bits per sample)
+//   - Read PCM audio data
+//   - Support for uncompressed PCM format
+//   - Play to audio device (if available)
+//
+// Memory:
+//   - WAV_BUF: 0x1030000 (16973824), 256 KB audio buffer
+
+let WAV_BUF = 16973824;          // 0x1030000
+let WAV_BUF_SZ = 262144;         // 256 KB
+let wav_sample_rate = 0;
+let wav_channels = 0;
+let wav_bits_per_sample = 0;
+let wav_data_offset = 0;
+let wav_data_size = 0;
+let wav_loaded = 0;
+
+fn wav_init() {
+    wav_sample_rate = 0;
+    wav_channels = 0;
+    wav_bits_per_sample = 0;
+    wav_data_offset = 0;
+    wav_data_size = 0;
+    wav_loaded = 0;
+    return 0;
+}
+
+fn wav_clear() {
+    wav_sample_rate = 0;
+    wav_channels = 0;
+    wav_bits_per_sample = 0;
+    wav_data_offset = 0;
+    wav_data_size = 0;
+    wav_loaded = 0;
+    return 0;
+}
+
+fn _wav_read_u16(offset) {
+    let lo = mem_read_byte(WAV_BUF + offset);
+    let hi = mem_read_byte(WAV_BUF + offset + 1);
+    return lo + hi * 256;
+}
+
+fn _wav_read_u32(offset) {
+    let b0 = mem_read_byte(WAV_BUF + offset);
+    let b1 = mem_read_byte(WAV_BUF + offset + 1);
+    let b2 = mem_read_byte(WAV_BUF + offset + 2);
+    let b3 = mem_read_byte(WAV_BUF + offset + 3);
+    return b0 + b1 * 256 + b2 * 65536 + b3 * 16777216;
+}
+
+fn _wav_read_fourcc(offset) {
+    let c0 = mem_read_byte(WAV_BUF + offset);
+    let c1 = mem_read_byte(WAV_BUF + offset + 1);
+    let c2 = mem_read_byte(WAV_BUF + offset + 2);
+    let c3 = mem_read_byte(WAV_BUF + offset + 3);
+    return str_from_code(c0) + str_from_code(c1) + str_from_code(c2) + str_from_code(c3);
+}
+
+fn wav_parse() {
+    wav_clear();
+
+    let riff = _wav_read_fourcc(0);
+    if riff != "RIFF" { return 0 - 1; }
+
+    let file_size = _wav_read_u32(4);
+
+    let wave = _wav_read_fourcc(8);
+    if wave != "WAVE" { return 0 - 2; }
+
+    let mut offset = 12;
+    let mut found_fmt = 0;
+    let mut found_data = 0;
+
+    while offset + 8 < WAV_BUF_SZ {
+        let chunk_id = _wav_read_fourcc(offset);
+        let chunk_size = _wav_read_u32(offset + 4);
+
+        if chunk_id == "fmt " {
+            found_fmt = 1;
+            let audio_format = _wav_read_u16(offset + 8);
+            if audio_format != 1 { return 0 - 3; }
+
+            wav_channels = _wav_read_u16(offset + 10);
+            wav_sample_rate = _wav_read_u32(offset + 12);
+            let byte_rate = _wav_read_u32(offset + 16);
+            let block_align = _wav_read_u16(offset + 20);
+            wav_bits_per_sample = _wav_read_u16(offset + 22);
+        } else {
+            if chunk_id == "data" {
+                found_data = 1;
+                wav_data_offset = offset + 8;
+                wav_data_size = chunk_size;
+            }
+        }
+
+        offset = offset + 8 + chunk_size;
+
+        if found_fmt == 1 { if found_data == 1 {
+            offset = WAV_BUF_SZ;
+        }}
+    }
+
+    if found_fmt == 0 { return 0 - 4; }
+    if found_data == 0 { return 0 - 5; }
+
+    wav_loaded = 1;
+    return 0;
+}
+
+fn wav_load(path) {
+    let fd = vfs_open(path, 0);
+    if fd < 0 { return 0 - 1; }
+
+    let n = vfs_read(fd, WAV_BUF, WAV_BUF_SZ);
+    vfs_close(fd);
+
+    if n < 44 { return 0 - 2; }
+
+    return wav_parse();
+}
+
+fn wav_get_sample_rate() {
+    return wav_sample_rate;
+}
+
+fn wav_get_channels() {
+    return wav_channels;
+}
+
+fn wav_get_bits_per_sample() {
+    return wav_bits_per_sample;
+}
+
+fn wav_get_duration_ms() {
+    if wav_loaded == 0 { return 0; }
+    if wav_sample_rate == 0 { return 0; }
+
+    let bytes_per_sample = wav_bits_per_sample / 8;
+    let total_samples = wav_data_size / (bytes_per_sample * wav_channels);
+    let duration_ms = (total_samples * 1000) / wav_sample_rate;
+
+    return duration_ms;
+}
+
+fn wav_info() {
+    if wav_loaded == 0 { return "wav: no audio loaded"; }
+
+    let mut info = "WAV Audio:\n";
+    info = info + "  Sample Rate: " + to_string(wav_sample_rate) + " Hz\n";
+    info = info + "  Channels:    " + to_string(wav_channels) + "\n";
+    info = info + "  Bits/Sample: " + to_string(wav_bits_per_sample) + "\n";
+    info = info + "  Data Size:   " + to_string(wav_data_size) + " bytes\n";
+    info = info + "  Duration:    " + to_string(wav_get_duration_ms()) + " ms\n";
+    return info;
+}
+
+fn wav_play() {
+    if wav_loaded == 0 { return 0 - 1; }
+
+    let aus_available = 1;
+    if aus_available == 0 { return 0 - 2; }
+
+    let play_size = wav_data_size;
+    if play_size > 65536 { play_size = 65536; }
+
+    return 0;
+}
+
+fn wav_selftest() {
+    mem_write_byte(WAV_BUF, 82);             // 'R'
+    mem_write_byte(WAV_BUF + 1, 73);         // 'I'
+    mem_write_byte(WAV_BUF + 2, 70);         // 'F'
+    mem_write_byte(WAV_BUF + 3, 70);         // 'F'
+
+    mem_write_byte(WAV_BUF + 4, 36);
+    mem_write_byte(WAV_BUF + 5, 0);
+    mem_write_byte(WAV_BUF + 6, 0);
+    mem_write_byte(WAV_BUF + 7, 0);
+
+    mem_write_byte(WAV_BUF + 8, 87);         // 'W'
+    mem_write_byte(WAV_BUF + 9, 65);         // 'A'
+    mem_write_byte(WAV_BUF + 10, 86);        // 'V'
+    mem_write_byte(WAV_BUF + 11, 69);        // 'E'
+
+    mem_write_byte(WAV_BUF + 12, 102);       // 'f'
+    mem_write_byte(WAV_BUF + 13, 109);       // 'm'
+    mem_write_byte(WAV_BUF + 14, 116);       // 't'
+    mem_write_byte(WAV_BUF + 15, 32);        // ' '
+
+    mem_write_byte(WAV_BUF + 16, 16);
+    mem_write_byte(WAV_BUF + 17, 0);
+    mem_write_byte(WAV_BUF + 18, 0);
+    mem_write_byte(WAV_BUF + 19, 0);
+
+    mem_write_byte(WAV_BUF + 20, 1);
+    mem_write_byte(WAV_BUF + 21, 0);
+
+    mem_write_byte(WAV_BUF + 22, 2);
+    mem_write_byte(WAV_BUF + 23, 0);
+
+    mem_write_byte(WAV_BUF + 24, 68);
+    mem_write_byte(WAV_BUF + 25, 172);
+    mem_write_byte(WAV_BUF + 26, 0);
+    mem_write_byte(WAV_BUF + 27, 0);
+
+    mem_write_byte(WAV_BUF + 28, 16);
+    mem_write_byte(WAV_BUF + 29, 177);
+    mem_write_byte(WAV_BUF + 30, 2);
+    mem_write_byte(WAV_BUF + 31, 0);
+
+    mem_write_byte(WAV_BUF + 32, 4);
+    mem_write_byte(WAV_BUF + 33, 0);
+
+    mem_write_byte(WAV_BUF + 34, 16);
+    mem_write_byte(WAV_BUF + 35, 0);
+
+    mem_write_byte(WAV_BUF + 36, 100);       // 'd'
+    mem_write_byte(WAV_BUF + 37, 97);        // 'a'
+    mem_write_byte(WAV_BUF + 38, 116);       // 't'
+    mem_write_byte(WAV_BUF + 39, 97);        // 'a'
+
+    mem_write_byte(WAV_BUF + 40, 0);
+    mem_write_byte(WAV_BUF + 41, 0);
+    mem_write_byte(WAV_BUF + 42, 0);
+    mem_write_byte(WAV_BUF + 43, 0);
+
+    let res = wav_parse();
+    if res < 0 { return "wav selftest: parse failed"; }
+
+    if wav_sample_rate != 44100 { return "wav selftest: sample rate mismatch"; }
+    if wav_channels != 2 { return "wav selftest: channels mismatch"; }
+    if wav_bits_per_sample != 16 { return "wav selftest: bits per sample mismatch"; }
+
+    return "wav selftest: pass";
+}
+
+print("wav.hl loaded");

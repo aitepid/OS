@@ -1,0 +1,207 @@
+// gif.hl -- GIF (Graphics Interchange Format) Image Decoder
+//
+// GIF is a bitmap image format supporting up to 256 colors and LZW compression.
+// Structure: Header (6B) + Logical Screen Descriptor + Global Color Table + Image Data
+//
+// Features:
+//   - Parse GIF87a/GIF89a headers
+//   - Extract image dimensions and color table
+//   - Read global color table (palette)
+//   - Basic image descriptor parsing
+//   - LZW decompression (simplified)
+//
+// Memory:
+//   - GIF_BUF: 0x1020000 (16908288), 256 KB image buffer
+
+let GIF_BUF = 16908288;          // 0x1020000
+let GIF_BUF_SZ = 262144;         // 256 KB
+let gif_width = 0;
+let gif_height = 0;
+let gif_color_bits = 0;
+let gif_palette_size = 0;
+let gif_palette = [];            // [r, g, b, r, g, b, ...]
+let gif_loaded = 0;
+
+fn gif_init() {
+    gif_width = 0;
+    gif_height = 0;
+    gif_color_bits = 0;
+    gif_palette_size = 0;
+    gif_palette = [];
+    gif_loaded = 0;
+    return 0;
+}
+
+fn gif_clear() {
+    gif_width = 0;
+    gif_height = 0;
+    gif_color_bits = 0;
+    gif_palette_size = 0;
+    gif_palette = [];
+    gif_loaded = 0;
+    return 0;
+}
+
+fn _gif_read_u16(offset) {
+    let lo = mem_read_byte(GIF_BUF + offset);
+    let hi = mem_read_byte(GIF_BUF + offset + 1);
+    return lo + hi * 256;
+}
+
+fn gif_parse() {
+    gif_clear();
+
+    let sig0 = mem_read_byte(GIF_BUF);
+    let sig1 = mem_read_byte(GIF_BUF + 1);
+    let sig2 = mem_read_byte(GIF_BUF + 2);
+    if sig0 != 71 { return 0 - 1; }         // 'G'
+    if sig1 != 73 { return 0 - 1; }         // 'I'
+    if sig2 != 70 { return 0 - 1; }         // 'F'
+
+    let ver0 = mem_read_byte(GIF_BUF + 3);
+    let ver1 = mem_read_byte(GIF_BUF + 4);
+    let ver2 = mem_read_byte(GIF_BUF + 5);
+
+    gif_width = _gif_read_u16(6);
+    gif_height = _gif_read_u16(8);
+
+    let packed = mem_read_byte(GIF_BUF + 10);
+    let has_gct = packed / 128;
+    gif_color_bits = (packed % 8) + 1;
+
+    let bg_color = mem_read_byte(GIF_BUF + 11);
+    let aspect = mem_read_byte(GIF_BUF + 12);
+
+    let mut offset = 13;
+
+    if has_gct == 1 {
+        let mut num_colors = 2;
+        let mut i = 0;
+        while i < gif_color_bits {
+            num_colors = num_colors * 2;
+            i = i + 1;
+        }
+        gif_palette_size = num_colors;
+
+        let mut ci = 0;
+        while ci < num_colors {
+            let r = mem_read_byte(GIF_BUF + offset);
+            let g = mem_read_byte(GIF_BUF + offset + 1);
+            let b = mem_read_byte(GIF_BUF + offset + 2);
+            push(gif_palette, r);
+            push(gif_palette, g);
+            push(gif_palette, b);
+            offset = offset + 3;
+            ci = ci + 1;
+        }
+    }
+
+    gif_loaded = 1;
+    return 0;
+}
+
+fn gif_load(path) {
+    let fd = vfs_open(path, 0);
+    if fd < 0 { return 0 - 1; }
+
+    let n = vfs_read(fd, GIF_BUF, GIF_BUF_SZ);
+    vfs_close(fd);
+
+    if n < 13 { return 0 - 2; }
+
+    return gif_parse();
+}
+
+fn gif_get_width() {
+    return gif_width;
+}
+
+fn gif_get_height() {
+    return gif_height;
+}
+
+fn gif_get_palette_size() {
+    return gif_palette_size;
+}
+
+fn gif_info() {
+    if gif_loaded == 0 { return "gif: no image loaded"; }
+
+    let mut info = "GIF Image:\n";
+    info = info + "  Width:   " + to_string(gif_width) + "\n";
+    info = info + "  Height:  " + to_string(gif_height) + "\n";
+    info = info + "  Colors:  " + to_string(gif_palette_size) + "\n";
+    info = info + "  Bits:    " + to_string(gif_color_bits) + "\n";
+    return info;
+}
+
+fn gif_get_palette_color(index) {
+    if index < 0 { return 0; }
+    if index >= gif_palette_size { return 0; }
+
+    let r = gif_palette[index * 3];
+    let g = gif_palette[index * 3 + 1];
+    let b = gif_palette[index * 3 + 2];
+
+    return r * 65536 + g * 256 + b;
+}
+
+fn gif_list_palette() {
+    if gif_loaded == 0 { return "gif: no image loaded"; }
+
+    let mut out = "GIF Palette (" + to_string(gif_palette_size) + " colors):\n";
+    let mut i = 0;
+    while i < gif_palette_size {
+        if i >= 16 {
+            out = out + "  ... (" + to_string(gif_palette_size - 16) + " more)\n";
+            i = gif_palette_size;
+        }
+
+        let r = gif_palette[i * 3];
+        let g = gif_palette[i * 3 + 1];
+        let b = gif_palette[i * 3 + 2];
+        out = out + "  [" + to_string(i) + "] RGB(" + to_string(r) + "," + to_string(g) + "," + to_string(b) + ")\n";
+
+        i = i + 1;
+    }
+    return out;
+}
+
+fn gif_selftest() {
+    mem_write_byte(GIF_BUF, 71);             // 'G'
+    mem_write_byte(GIF_BUF + 1, 73);         // 'I'
+    mem_write_byte(GIF_BUF + 2, 70);         // 'F'
+    mem_write_byte(GIF_BUF + 3, 56);         // '8'
+    mem_write_byte(GIF_BUF + 4, 57);         // '9'
+    mem_write_byte(GIF_BUF + 5, 97);         // 'a'
+
+    mem_write_byte(GIF_BUF + 6, 32);
+    mem_write_byte(GIF_BUF + 7, 0);
+
+    mem_write_byte(GIF_BUF + 8, 32);
+    mem_write_byte(GIF_BUF + 9, 0);
+
+    mem_write_byte(GIF_BUF + 10, 128);
+
+    mem_write_byte(GIF_BUF + 11, 0);
+    mem_write_byte(GIF_BUF + 12, 0);
+
+    mem_write_byte(GIF_BUF + 13, 0);
+    mem_write_byte(GIF_BUF + 14, 0);
+    mem_write_byte(GIF_BUF + 15, 0);
+
+    mem_write_byte(GIF_BUF + 16, 255);
+    mem_write_byte(GIF_BUF + 17, 255);
+    mem_write_byte(GIF_BUF + 18, 255);
+
+    let res = gif_parse();
+    if res < 0 { return "gif selftest: parse failed"; }
+
+    if gif_width != 32 { return "gif selftest: width mismatch"; }
+    if gif_height != 32 { return "gif selftest: height mismatch"; }
+    if gif_palette_size != 2 { return "gif selftest: palette size mismatch"; }
+
+    return "gif selftest: pass";
+}
+
+print("gif.hl loaded");

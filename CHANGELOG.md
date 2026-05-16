@@ -2,11 +2,68 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`256`（69 根目录 + 187 内核模块）
-- H-L 总行数：`~70,000`
-- 内核模块：`187`
-- Shell 命令：`374`
-- 最近完成功能迭代：`201`（asn1 + pem + jwt）
+- `.hl` 文件：`259`（69 根目录 + 190 内核模块）
+- H-L 总行数：`~70,700`
+- 内核模块：`190`
+- Shell 命令：`386`
+- 最近完成功能迭代：`204`（bmp + gif + wav）
+
+## Iteration 204 — wav.hl：WAV 音频格式解析器
+
+- **`bare-kernel/hl/wav.hl`** 新增（~280 行）
+  - WAV（Waveform Audio File Format）基于 RIFF 容器的音频格式（Microsoft/IBM）
+  - 结构：RIFF 头（12B）+ fmt 块（24B+）+ data 块（音频数据）
+  - `wav_parse()` — 解析 RIFF/WAVE 头，遍历块（fourcc + size）
+  - `_wav_read_fourcc(offset)` — 读取 4 字符代码（"RIFF"/"WAVE"/"fmt "/"data"）
+  - fmt 块解析：音频格式（1=PCM）、通道数、采样率、字节率、对齐、位深度
+  - `wav_get_sample_rate/channels/bits_per_sample()` — 提取音频元数据
+  - `wav_get_duration_ms()` — 计算时长（毫秒）= (样本总数 × 1000) / 采样率
+  - `wav_info()` — 格式化输出：采样率（Hz）+ 通道 + 位深 + 数据大小 + 时长
+  - `wav_play()` — 播放音频（预留接口，依赖 AC97/AudioServer）
+  - `wav_selftest()` — 构造 44100 Hz 立体声 16 位 PCM 头 → 解析验证
+  - WAV_BUF=0x1030000（16973824），256 KB 音频缓冲区
+  - 支持 PCM 格式（audio_format=1），不支持压缩格式
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`wav_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 4 条命令：
+  - `wav load <path>` / `wav info` / `wav play` / `wav test`
+
+## Iteration 203 — gif.hl：GIF 图像解码器
+
+- **`bare-kernel/hl/gif.hl`** 新增（~230 行）
+  - GIF（Graphics Interchange Format）位图图像格式，支持 256 色 + LZW 压缩
+  - 结构：头（6B "GIF87a"/"GIF89a"）+ 逻辑屏幕描述符 + 全局颜色表 + 图像数据
+  - `gif_parse()` — 解析签名（GIF）+ 版本 + 宽高
+  - 逻辑屏幕描述符：宽高（2B×2，小端序）+ packed 字段（全局颜色表标志 + 颜色位数）
+  - `gif_palette[]` — 存储全局颜色表（RGB 三元组，parallel array）
+  - packed 字段解析：has_gct（bit 7）+ color_bits（bits 0-2）→ 颜色数 = 2^(color_bits+1)
+  - `gif_get_palette_color(idx)` — 索引 → RGB888 颜色值（r*65536 + g*256 + b）
+  - `gif_list_palette()` — 输出调色板前 16 色（RGB 值）
+  - `gif_info()` — 格式化输出：宽高 + 颜色数 + 颜色位数
+  - `gif_selftest()` — 构造 32×32 GIF89a 头（2 色全局调色板）→ 解析验证
+  - GIF_BUF=0x1020000（16908288），256 KB 图像缓冲区
+  - 注：未实现 LZW 解压缩和图像数据块解析（仅头部 + 调色板）
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`gif_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 4 条命令：
+  - `gif load <path>` / `gif info` / `gif palette` / `gif test`
+
+## Iteration 202 — bmp.hl：BMP 位图图像解码器
+
+- **`bare-kernel/hl/bmp.hl`** 新增（~250 行）
+  - BMP（Bitmap）简单光栅图形格式（Windows Bitmap）
+  - 结构：文件头（14B）+ DIB 头（40B+）+ 像素数据
+  - `bmp_parse()` — 解析 "BM" 签名 + 文件大小 + 数据偏移
+  - 文件头：签名（2B "BM"）+ 文件大小（4B）+ 保留（4B）+ 数据偏移（4B）
+  - DIB 头（BITMAPINFOHEADER）：头大小（40）+ 宽高（4B×2，有符号）+ 平面数（2B）+ 位深（2B）+ 压缩（4B）
+  - `_bmp_read_u16/u32/i32(offset)` — 小端序整数读取
+  - `bmp_get_pixel(x, y)` — 读取 24 位 RGB 像素（BGR 顺序），处理行对齐（4 字节）和倒序（bottom-up）
+  - `bmp_display(x, y)` — 将图像绘制到 VESA framebuffer（逐像素写入）
+  - `bmp_info()` — 格式化输出：宽高 + 位深 + 数据偏移
+  - `bmp_selftest()` — 构造 16×16 24 位 BMP 头 → 解析验证
+  - BMP_BUF=0x1010000（16842752），256 KB 图像缓冲区
+  - 仅支持 BI_RGB（未压缩）格式
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`bmp_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 4 条命令：
+  - `bmp load <path>` / `bmp info` / `bmp show <x> <y>` / `bmp test`
 
 ## Iteration 201 — jwt.hl：JSON Web Token 解析/验证
 

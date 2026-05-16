@@ -1,0 +1,225 @@
+// bmp.hl -- BMP (Bitmap) Image Format Decoder
+//
+// BMP is a simple raster graphics format (Windows Bitmap).
+// Structure: File Header (14B) + DIB Header (40B+) + Pixel Data
+//
+// Features:
+//   - Parse BMP file headers (file header + DIB header)
+//   - Extract image metadata (width, height, bits per pixel)
+//   - Read 24-bit RGB pixel data (uncompressed)
+//   - Display to framebuffer (if available)
+//   - Support BI_RGB (uncompressed) format
+//
+// Memory:
+//   - BMP_BUF: 0x1010000 (16842752), 256 KB image buffer
+
+let BMP_BUF = 16842752;          // 0x1010000
+let BMP_BUF_SZ = 262144;         // 256 KB
+let bmp_width = 0;
+let bmp_height = 0;
+let bmp_bpp = 0;                 // bits per pixel
+let bmp_data_offset = 0;
+let bmp_loaded = 0;
+
+fn bmp_init() {
+    bmp_width = 0;
+    bmp_height = 0;
+    bmp_bpp = 0;
+    bmp_data_offset = 0;
+    bmp_loaded = 0;
+    return 0;
+}
+
+fn bmp_clear() {
+    bmp_width = 0;
+    bmp_height = 0;
+    bmp_bpp = 0;
+    bmp_data_offset = 0;
+    bmp_loaded = 0;
+    return 0;
+}
+
+fn _bmp_read_u16(offset) {
+    let lo = mem_read_byte(BMP_BUF + offset);
+    let hi = mem_read_byte(BMP_BUF + offset + 1);
+    return lo + hi * 256;
+}
+
+fn _bmp_read_u32(offset) {
+    let b0 = mem_read_byte(BMP_BUF + offset);
+    let b1 = mem_read_byte(BMP_BUF + offset + 1);
+    let b2 = mem_read_byte(BMP_BUF + offset + 2);
+    let b3 = mem_read_byte(BMP_BUF + offset + 3);
+    return b0 + b1 * 256 + b2 * 65536 + b3 * 16777216;
+}
+
+fn _bmp_read_i32(offset) {
+    let val = _bmp_read_u32(offset);
+    if val >= 2147483648 {
+        return val - 4294967296;
+    }
+    return val;
+}
+
+fn bmp_parse() {
+    bmp_clear();
+
+    let sig0 = mem_read_byte(BMP_BUF);
+    let sig1 = mem_read_byte(BMP_BUF + 1);
+    if sig0 != 66 { return 0 - 1; }         // 'B'
+    if sig1 != 77 { return 0 - 1; }         // 'M'
+
+    let file_size = _bmp_read_u32(2);
+    bmp_data_offset = _bmp_read_u32(10);
+
+    let dib_header_size = _bmp_read_u32(14);
+    if dib_header_size < 40 { return 0 - 2; }
+
+    bmp_width = _bmp_read_i32(18);
+    bmp_height = _bmp_read_i32(22);
+    let planes = _bmp_read_u16(26);
+    bmp_bpp = _bmp_read_u16(28);
+    let compression = _bmp_read_u32(30);
+
+    if compression != 0 { return 0 - 3; }   // BI_RGB only
+
+    if bmp_width < 0 { bmp_width = 0 - bmp_width; }
+    if bmp_height < 0 { bmp_height = 0 - bmp_height; }
+
+    bmp_loaded = 1;
+    return 0;
+}
+
+fn bmp_load(path) {
+    let fd = vfs_open(path, 0);
+    if fd < 0 { return 0 - 1; }
+
+    let n = vfs_read(fd, BMP_BUF, BMP_BUF_SZ);
+    vfs_close(fd);
+
+    if n < 54 { return 0 - 2; }
+
+    return bmp_parse();
+}
+
+fn bmp_get_width() {
+    return bmp_width;
+}
+
+fn bmp_get_height() {
+    return bmp_height;
+}
+
+fn bmp_get_bpp() {
+    return bmp_bpp;
+}
+
+fn bmp_info() {
+    if bmp_loaded == 0 { return "bmp: no image loaded"; }
+
+    let mut info = "BMP Image:\n";
+    info = info + "  Width:  " + to_string(bmp_width) + "\n";
+    info = info + "  Height: " + to_string(bmp_height) + "\n";
+    info = info + "  BPP:    " + to_string(bmp_bpp) + "\n";
+    info = info + "  Offset: " + to_string(bmp_data_offset) + "\n";
+    return info;
+}
+
+fn bmp_get_pixel(x, y) {
+    if bmp_loaded == 0 { return 0; }
+    if x < 0 { return 0; }
+    if y < 0 { return 0; }
+    if x >= bmp_width { return 0; }
+    if y >= bmp_height { return 0; }
+
+    if bmp_bpp != 24 { return 0; }
+
+    let row_size = bmp_width * 3;
+    let padding = row_size % 4;
+    if padding != 0 { row_size = row_size + (4 - padding); }
+
+    let flipped_y = bmp_height - 1 - y;
+    let pixel_offset = bmp_data_offset + flipped_y * row_size + x * 3;
+
+    let b = mem_read_byte(BMP_BUF + pixel_offset);
+    let g = mem_read_byte(BMP_BUF + pixel_offset + 1);
+    let r = mem_read_byte(BMP_BUF + pixel_offset + 2);
+
+    return r * 65536 + g * 256 + b;
+}
+
+fn bmp_display(x_pos, y_pos) {
+    if bmp_loaded == 0 { return 0 - 1; }
+
+    let fb_base = vesa_get_fb();
+    if fb_base == 0 { return 0 - 2; }
+
+    let fb_width = vesa_get_width();
+    let fb_height = vesa_get_height();
+
+    let mut y = 0;
+    while y < bmp_height {
+        if y_pos + y >= fb_height { y = bmp_height; }
+
+        let mut x = 0;
+        while x < bmp_width {
+            if x_pos + x >= fb_width { x = bmp_width; }
+
+            let color = bmp_get_pixel(x, y);
+            let fb_offset = (y_pos + y) * fb_width + (x_pos + x);
+            mem_write_dword(fb_base + fb_offset * 4, color);
+
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+
+    return 0;
+}
+
+fn bmp_selftest() {
+    mem_write_byte(BMP_BUF, 66);             // 'B'
+    mem_write_byte(BMP_BUF + 1, 77);         // 'M'
+
+    mem_write_byte(BMP_BUF + 10, 54);
+    mem_write_byte(BMP_BUF + 11, 0);
+    mem_write_byte(BMP_BUF + 12, 0);
+    mem_write_byte(BMP_BUF + 13, 0);
+
+    mem_write_byte(BMP_BUF + 14, 40);
+    mem_write_byte(BMP_BUF + 15, 0);
+    mem_write_byte(BMP_BUF + 16, 0);
+    mem_write_byte(BMP_BUF + 17, 0);
+
+    mem_write_byte(BMP_BUF + 18, 16);
+    mem_write_byte(BMP_BUF + 19, 0);
+    mem_write_byte(BMP_BUF + 20, 0);
+    mem_write_byte(BMP_BUF + 21, 0);
+
+    mem_write_byte(BMP_BUF + 22, 16);
+    mem_write_byte(BMP_BUF + 23, 0);
+    mem_write_byte(BMP_BUF + 24, 0);
+    mem_write_byte(BMP_BUF + 25, 0);
+
+    mem_write_byte(BMP_BUF + 26, 1);
+    mem_write_byte(BMP_BUF + 27, 0);
+
+    mem_write_byte(BMP_BUF + 28, 24);
+    mem_write_byte(BMP_BUF + 29, 0);
+
+    mem_write_byte(BMP_BUF + 30, 0);
+    mem_write_byte(BMP_BUF + 31, 0);
+    mem_write_byte(BMP_BUF + 32, 0);
+    mem_write_byte(BMP_BUF + 33, 0);
+
+    let res = bmp_parse();
+    if res < 0 { return "bmp selftest: parse failed"; }
+
+    if bmp_width != 16 { return "bmp selftest: width mismatch"; }
+    if bmp_height != 16 { return "bmp selftest: height mismatch"; }
+    if bmp_bpp != 24 { return "bmp selftest: bpp mismatch"; }
+
+    return "bmp selftest: pass";
+}
+
+print("bmp.hl loaded");
