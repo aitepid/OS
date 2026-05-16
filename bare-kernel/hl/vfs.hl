@@ -159,6 +159,18 @@ fn vfs_init() {
     return 0;
 }
 
+// Mount an ext4 filesystem (fs_type = 3) at path_prefix using AHCI port
+fn vfs_mount_ext4(mount_path, ahci_port) {
+    let ok = ext4_init(ahci_port);
+    if ok == 1 {
+        vfs_mount(mount_path, 3, ahci_port);
+        print("Mounted ext4 at " + mount_path + " (port " + to_string(ahci_port) + ")");
+        return 1;
+    }
+    print("Failed to mount ext4 at " + mount_path);
+    return 0;
+}
+
 fn vfs_mount(path_prefix, fs_type, device_id) {
     if mount_count >= MAX_MOUNTS { return 0; }
     let addr = MOUNT_TABLE + mount_count * 64;
@@ -169,6 +181,13 @@ fn vfs_mount(path_prefix, fs_type, device_id) {
     // Insert into Trie
     _trie_insert_path(path_prefix, mount_count);
     mount_count = mount_count + 1;
+    return 1;
+}
+
+// Mount procfs pseudo-filesystem (fs_type = 4) at path_prefix
+fn vfs_mount_procfs(mount_path) {
+    vfs_mount(mount_path, 4, 0);
+    print("Mounted procfs at " + mount_path);
     return 1;
 }
 
@@ -199,6 +218,7 @@ fn vfs_mount_fat16(mount_path, device_id) {
 fn vfs_open(path, flags) {
     let mount_info = vfs_resolve(path);
     let mount_idx = mount_info[0];
+    let fs_type = mem_read_u64(MOUNT_TABLE + mount_idx * 64 + 16);
 
     let mut fd = 0;
     while fd < MAX_OPEN_FILES {
@@ -206,9 +226,27 @@ fn vfs_open(path, flags) {
         let f = mem_read_u64(addr);
         if f == 0 {
             mem_write_u64(addr, 1);
-            mem_write_u64(addr + 8, mem_read_u64(MOUNT_TABLE + mount_idx * 64 + 16));
+            mem_write_u64(addr + 8, fs_type);
             mem_write_u64(addr + 24, 0);
             mem_write_u64(addr + 40, 1);
+            if fs_type == 3 {
+                // ext4: resolve inode and store in fd table
+                let ino = ext4_resolve(path);
+                mem_write_u64(addr + 16, ino);
+                // get file size from inode
+                let iaddr = ext4_read_inode(ino);
+                let fsz = 0;
+                if iaddr != 0 { mem_write_u64(addr + 32, mem_read_u32(iaddr + 4)); }
+            } else if fs_type == 4 {
+                // procfs: store path string hash as inode; size unknown until read
+                mem_write_u64(addr + 16, 0);
+                mem_write_u64(addr + 32, 65536);
+                mem_write_string(addr + 48, path);   // stash path for vfs_read
+            } else {
+                mem_write_u64(addr + 16, mem_read_u64(MOUNT_TABLE + mount_idx * 64 + 16));
+            }
+            // Emit inotify IN_OPEN
+            inotify_emit(path, 32, path);
             return fd;
         }
         fd = fd + 1;
@@ -230,6 +268,31 @@ fn vfs_read(fd, buf, count) {
     }
     if fs_type == 1 {
         bytes_read = 0;
+    }
+    if fs_type == 3 {
+        // ext4: read file into EXT4_BLOCK_BUF, then return substring
+        let total = ext4_read_file(inode, 0);
+        if total > 0 {
+            let want = count;
+            if pos + want > total { bytes_read = total - pos; }
+            else { bytes_read = want; }
+            // Caller expects a string; return string from EXT4_BLOCK_BUF
+            bytes_read = total;
+        }
+    }
+    if fs_type == 4 {
+        // procfs: generate content by calling procfs_read with stored path
+        let proc_path = mem_read_string(addr + 48, 128);
+        let content = procfs_read(proc_path);
+        bytes_read = len(content);
+        // Write content to caller's buffer if it's a real address
+        if buf != 0 {
+            let mut ci = 0;
+            while ci < bytes_read {
+                mem_write_u8(buf + ci, str_char_at(content, ci));
+                ci = ci + 1;
+            }
+        }
     }
     mem_write_u64(addr + 24, pos + bytes_read);
     return bytes_read;
@@ -253,6 +316,11 @@ fn vfs_write(fd, data, count) {
     let old_size = mem_read_u64(addr + 32);
     if pos + bytes_written > old_size {
         mem_write_u64(addr + 32, pos + bytes_written);
+    }
+    // Emit inotify IN_MODIFY for all active writes
+    if bytes_written > 0 {
+        let path_hint = mem_read_string(addr + 48, 128);
+        inotify_emit(path_hint, 2, path_hint);
     }
     return bytes_written;
 }
@@ -299,6 +367,28 @@ fn vfs_stat(path) {
             i = i + 1;
         }
     }
+    if fs_type == 3 {
+        let ino = ext4_resolve(path);
+        if ino > 0 {
+            let iaddr = ext4_read_inode(ino);
+            if iaddr != 0 {
+                let fsize = mem_read_u32(iaddr + 4);
+                let mode  = mem_read_u16(iaddr + 0);
+                let ftype = 1;
+                // mode bit 14 = directory (0x4000)
+                if (mode / 16384) % 2 == 1 { return [fsize, 2, ino, 0]; }
+                return [fsize, 1, ino, 0];
+            }
+        }
+    }
+    if fs_type == 4 {
+        // procfs: directories are /proc and /proc/net; files have known sizes
+        let parts = _vfs_split_path(path);
+        if len(parts) <= 1 { return [0, 2, 0, 0]; }  // /proc itself is a dir
+        if parts[1] == "net" { return [0, 2, 0, 0]; }  // /proc/net is a dir
+        let content = procfs_read(path);
+        return [len(content), 1, 0, 0];
+    }
     return [0, 0, 0, 0];
 }
 
@@ -316,29 +406,71 @@ fn vfs_readdir(path) {
         }
         return names;
     }
+    if fs_type == 3 {
+        // ext4: resolve directory inode and list
+        let ino = ext4_resolve(path);
+        if ino > 0 {
+            let entries = ext4_list_dir(ino);
+            let mut names = [];
+            let mut i = 0;
+            while i < len(entries) {
+                let name = entries[i][0];
+                if name != "." {
+                    if name != ".." {
+                        push(names, name);
+                    }
+                }
+                i = i + 1;
+            }
+            return names;
+        }
+    }
+    if fs_type == 4 {
+        // procfs: return static list of /proc entries
+        let parts = _vfs_split_path(path);
+        if len(parts) <= 1 {
+            // listing /proc
+            return ["version", "uptime", "meminfo", "cpuinfo", "mounts", "stat", "net", "self"];
+        }
+        if len(parts) == 2 {
+            if parts[1] == "net" { return ["arp", "tcp"]; }
+            if parts[1] == "self" { return ["status"]; }
+        }
+        return [];
+    }
     return [];
 }
 
 fn vfs_mkdir(path) {
     let mount_info = vfs_resolve(path);
     let fs_type = mem_read_u64(MOUNT_TABLE + mount_info[0] * 64 + 16);
-    if fs_type == 0 { return ramfs_mkdir(path); }
-    if fs_type == 1 { return fat16_create_file(path, 1); }
-    return 0 - 1;
+    let result = 0 - 1;
+    if fs_type == 0 { result = ramfs_mkdir(path); }
+    if fs_type == 1 { result = fat16_create_file(path, 1); }
+    if fs_type == 3 { return 0 - 1; }  // ext4 is read-only
+    if fs_type == 4 { return 0 - 1; }  // procfs is read-only
+    if result == 0 { inotify_emit(path, 256, path); }
+    return result;
 }
 
 fn vfs_unlink(path) {
     let mount_info = vfs_resolve(path);
     let fs_type = mem_read_u64(MOUNT_TABLE + mount_info[0] * 64 + 16);
-    if fs_type == 0 { return ramfs_unlink(path); }
+    let result = 0 - 1;
+    if fs_type == 0 { result = ramfs_unlink(path); }
     if fs_type == 1 {
         let files = fat16_list_root();
         let mut i = 0;
         while i < len(files) {
-            if files[i][0] == path { return fat16_delete_file(i); }
+            if files[i][0] == path { result = fat16_delete_file(i); }
             i = i + 1;
         }
     }
+    if fs_type == 3 { return 0 - 1; }  // ext4 is read-only
+    if fs_type == 4 { return 0 - 1; }  // procfs is read-only
+    if result == 0 { inotify_emit(path, 512, path); }
+    return result;
+}
     return 0 - 1;
 }
 

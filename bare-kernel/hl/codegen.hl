@@ -896,6 +896,371 @@ fn compile_stmt_to_ir(node) {
     return 0;
 }
 
+// === IR → x86_64 emission (Phase 4 of compile_native) ===
+// Translates each live IR instruction into native x86_64 bytes.
+// Virtual registers are mapped to physical registers (via regalloc) or
+// spill slots on the frame stack.
+
+let mut ir_cg_label_pos = [];  // [[label_id, buf_offset], ...]
+let mut ir_cg_patches = [];    // [[patch_byte_offset, label_id], ...]
+
+fn ir_cg_init() {
+    ir_cg_label_pos = [];
+    ir_cg_patches = [];
+    return 0;
+}
+
+// Get physical register for virtual register id (returns -1 if spilled)
+fn ir_cg_phys(tmp_id) {
+    return ra_get_reg(to_string(tmp_id));
+}
+
+// Load virtual register value into RAX (0)
+fn ir_cg_load(buf, tmp_id) {
+    let preg = ir_cg_phys(tmp_id);
+    if preg >= 0 {
+        if preg != 0 { x86enc.emit_mov_r64_r64(buf, 0, preg); }
+        return 0;
+    }
+    let sp = ra_get_spill(to_string(tmp_id));
+    x86enc.emit_mov_r64_mem_disp8(buf, 0, 5, sp);
+    return 0;
+}
+
+// Load virtual register value into a specific physical register
+fn ir_cg_load_into(buf, phys, tmp_id) {
+    let preg = ir_cg_phys(tmp_id);
+    if preg >= 0 {
+        if preg != phys { x86enc.emit_mov_r64_r64(buf, phys, preg); }
+        return 0;
+    }
+    let sp = ra_get_spill(to_string(tmp_id));
+    x86enc.emit_mov_r64_mem_disp8(buf, phys, 5, sp);
+    return 0;
+}
+
+// Store RAX (0) into virtual register's location
+fn ir_cg_store(buf, tmp_id) {
+    let preg = ir_cg_phys(tmp_id);
+    if preg >= 0 {
+        if preg != 0 { x86enc.emit_mov_r64_r64(buf, preg, 0); }
+        return 0;
+    }
+    let sp = ra_get_spill(to_string(tmp_id));
+    x86enc.emit_mov_mem_disp8_r64(buf, 5, sp, 0);
+    return 0;
+}
+
+fn ir_cg_define_label(lbl_id, buf_off) {
+    push(ir_cg_label_pos, [lbl_id, buf_off]);
+    return 0;
+}
+
+fn ir_cg_add_patch(patch_off, lbl_id) {
+    push(ir_cg_patches, [patch_off, lbl_id]);
+    return 0;
+}
+
+// Back-patch all recorded jump targets
+fn ir_cg_patch_labels(buf) {
+    let mut pi = 0;
+    while pi < len(ir_cg_patches) {
+        let patch_off = ir_cg_patches[pi][0];
+        let lbl_id    = ir_cg_patches[pi][1];
+        let mut lbl_pos = 0;
+        let mut li = 0;
+        while li < len(ir_cg_label_pos) {
+            if ir_cg_label_pos[li][0] == lbl_id {
+                lbl_pos = ir_cg_label_pos[li][1];
+                li = len(ir_cg_label_pos);
+            }
+            li = li + 1;
+        }
+        let rel = lbl_pos - patch_off - 4;
+        buf[0][patch_off]     =  rel % 256;
+        buf[0][patch_off + 1] = (rel / 256) % 256;
+        buf[0][patch_off + 2] = (rel / 65536) % 256;
+        buf[0][patch_off + 3] = (rel / 16777216) % 256;
+        pi = pi + 1;
+    }
+    return 0;
+}
+
+// ABI argument registers: RDI RSI RDX RCX R8 R9
+let IR_ABI_REGS = [7, 6, 2, 1, 8, 9];
+
+// Emit x86_64 code for a single IR instruction
+fn ir_emit_x86(buf, idx) {
+    let op  = ir_op[idx];
+    let dst = ir_dst[idx];
+    let s1  = ir_src1[idx];
+    let s2  = ir_src2[idx];
+
+    // IR_CONST: dst = immediate value
+    if op == IR_CONST {
+        x86enc.emit_mov_r64_imm64(buf, 0, s1);
+        ir_cg_store(buf, dst);
+        return 0;
+    }
+    // IR_COPY: dst = src
+    if op == IR_COPY {
+        ir_cg_load(buf, s1);
+        ir_cg_store(buf, dst);
+        return 0;
+    }
+    // IR_ADD: dst = s1 + s2
+    if op == IR_ADD {
+        ir_cg_load(buf, s1);
+        ir_cg_load_into(buf, 3, s2);
+        x86enc.emit_add_r64_r64(buf, 0, 3);
+        ir_cg_store(buf, dst);
+        return 0;
+    }
+    // IR_SUB: dst = s1 - s2
+    if op == IR_SUB {
+        ir_cg_load(buf, s1);
+        ir_cg_load_into(buf, 3, s2);
+        x86enc.emit_sub_r64_r64(buf, 0, 3);
+        ir_cg_store(buf, dst);
+        return 0;
+    }
+    // IR_MUL: dst = s1 * s2
+    if op == IR_MUL {
+        ir_cg_load(buf, s1);
+        ir_cg_load_into(buf, 3, s2);
+        x86enc.emit_imul_r64_r64(buf, 0, 3);
+        ir_cg_store(buf, dst);
+        return 0;
+    }
+    // IR_DIV: dst = s1 / s2 (quotient in RAX after cqo + idiv)
+    if op == IR_DIV {
+        ir_cg_load(buf, s1);
+        ir_cg_load_into(buf, 3, s2);
+        x86enc.emit_cqo(buf);
+        x86enc.emit_idiv_r64(buf, 3);
+        ir_cg_store(buf, dst);
+        return 0;
+    }
+    // IR_MOD: dst = s1 % s2 (remainder lands in RDX)
+    if op == IR_MOD {
+        ir_cg_load(buf, s1);
+        ir_cg_load_into(buf, 3, s2);
+        x86enc.emit_cqo(buf);
+        x86enc.emit_idiv_r64(buf, 3);
+        x86enc.emit_mov_r64_r64(buf, 0, 2);   // mov rax, rdx
+        ir_cg_store(buf, dst);
+        return 0;
+    }
+    // IR_NEG: dst = -s1
+    if op == IR_NEG {
+        ir_cg_load(buf, s1);
+        x86enc.emit_neg_r64(buf, 0);
+        ir_cg_store(buf, dst);
+        return 0;
+    }
+    // IR_NOT: dst = !s1  (logical: 0→1, non-zero→0)
+    if op == IR_NOT {
+        ir_cg_load(buf, s1);
+        x86enc.emit_test_r64_r64(buf, 0, 0);
+        x86enc.emit_sete_al(buf);
+        x86enc.emit_movzx_rax_al(buf);
+        ir_cg_store(buf, dst);
+        return 0;
+    }
+    // IR_AND: dst = s1 & s2
+    if op == IR_AND {
+        ir_cg_load(buf, s1);
+        ir_cg_load_into(buf, 3, s2);
+        x86enc.buf_emit(buf, 72); x86enc.buf_emit(buf, 33); x86enc.buf_emit(buf, 216); // and rax, rbx
+        ir_cg_store(buf, dst);
+        return 0;
+    }
+    // IR_OR: dst = s1 | s2
+    if op == IR_OR {
+        ir_cg_load(buf, s1);
+        ir_cg_load_into(buf, 3, s2);
+        x86enc.buf_emit(buf, 72); x86enc.buf_emit(buf, 9);  x86enc.buf_emit(buf, 216); // or rax, rbx
+        ir_cg_store(buf, dst);
+        return 0;
+    }
+    // IR_XOR: dst = s1 ^ s2
+    if op == IR_XOR {
+        ir_cg_load(buf, s1);
+        ir_cg_load_into(buf, 3, s2);
+        x86enc.emit_xor_r64_r64(buf, 0, 3);
+        ir_cg_store(buf, dst);
+        return 0;
+    }
+    // IR_SHL: dst = s1 << s2  (x86 requires shift count in CL)
+    if op == IR_SHL {
+        ir_cg_load_into(buf, 1, s2);             // rcx = shift count
+        ir_cg_load(buf, s1);                     // rax = value
+        x86enc.buf_emit(buf, 72); x86enc.buf_emit(buf, 211); x86enc.buf_emit(buf, 224); // shl rax, cl
+        ir_cg_store(buf, dst);
+        return 0;
+    }
+    // IR_SHR: dst = s1 >> s2  (arithmetic)
+    if op == IR_SHR {
+        ir_cg_load_into(buf, 1, s2);
+        ir_cg_load(buf, s1);
+        x86enc.buf_emit(buf, 72); x86enc.buf_emit(buf, 211); x86enc.buf_emit(buf, 248); // sar rax, cl
+        ir_cg_store(buf, dst);
+        return 0;
+    }
+    // Comparison ops — result is 0 or 1
+    if op == IR_CMP_EQ {
+        ir_cg_load(buf, s1); ir_cg_load_into(buf, 3, s2);
+        x86enc.emit_cmp_r64_r64(buf, 0, 3);
+        x86enc.emit_sete_al(buf); x86enc.emit_movzx_rax_al(buf);
+        ir_cg_store(buf, dst); return 0;
+    }
+    if op == IR_CMP_NE {
+        ir_cg_load(buf, s1); ir_cg_load_into(buf, 3, s2);
+        x86enc.emit_cmp_r64_r64(buf, 0, 3);
+        x86enc.emit_setne_al(buf); x86enc.emit_movzx_rax_al(buf);
+        ir_cg_store(buf, dst); return 0;
+    }
+    if op == IR_CMP_LT {
+        ir_cg_load(buf, s1); ir_cg_load_into(buf, 3, s2);
+        x86enc.emit_cmp_r64_r64(buf, 0, 3);
+        x86enc.emit_setl_al(buf); x86enc.emit_movzx_rax_al(buf);
+        ir_cg_store(buf, dst); return 0;
+    }
+    if op == IR_CMP_LE {
+        ir_cg_load(buf, s1); ir_cg_load_into(buf, 3, s2);
+        x86enc.emit_cmp_r64_r64(buf, 0, 3);
+        x86enc.emit_setle_al(buf); x86enc.emit_movzx_rax_al(buf);
+        ir_cg_store(buf, dst); return 0;
+    }
+    if op == IR_CMP_GT {
+        ir_cg_load(buf, s1); ir_cg_load_into(buf, 3, s2);
+        x86enc.emit_cmp_r64_r64(buf, 0, 3);
+        x86enc.emit_setg_al(buf); x86enc.emit_movzx_rax_al(buf);
+        ir_cg_store(buf, dst); return 0;
+    }
+    if op == IR_CMP_GE {
+        ir_cg_load(buf, s1); ir_cg_load_into(buf, 3, s2);
+        x86enc.emit_cmp_r64_r64(buf, 0, 3);
+        x86enc.emit_setge_al(buf); x86enc.emit_movzx_rax_al(buf);
+        ir_cg_store(buf, dst); return 0;
+    }
+    // IR_LABEL: record label's byte position for back-patching
+    if op == IR_LABEL {
+        ir_cg_define_label(dst, x86enc.buf_len(buf));
+        return 0;
+    }
+    // IR_JMP: unconditional jump (patched after full emission)
+    if op == IR_JMP {
+        x86enc.buf_emit(buf, 233);               // JMP rel32
+        ir_cg_add_patch(x86enc.buf_len(buf), dst);
+        x86enc.buf_emit32(buf, 0);
+        return 0;
+    }
+    // IR_JZ: jump if zero
+    if op == IR_JZ {
+        ir_cg_load(buf, s1);
+        x86enc.emit_test_r64_r64(buf, 0, 0);
+        x86enc.buf_emit(buf, 15); x86enc.buf_emit(buf, 132); // JE rel32
+        ir_cg_add_patch(x86enc.buf_len(buf), s2);
+        x86enc.buf_emit32(buf, 0);
+        return 0;
+    }
+    // IR_JNZ: jump if not zero
+    if op == IR_JNZ {
+        ir_cg_load(buf, s1);
+        x86enc.emit_test_r64_r64(buf, 0, 0);
+        x86enc.buf_emit(buf, 15); x86enc.buf_emit(buf, 133); // JNE rel32
+        ir_cg_add_patch(x86enc.buf_len(buf), s2);
+        x86enc.buf_emit32(buf, 0);
+        return 0;
+    }
+    // IR_ARG: place argument n (dst) = src (s1) into ABI register
+    if op == IR_ARG {
+        ir_cg_load(buf, s1);
+        if dst < 6 {
+            x86enc.emit_mov_r64_r64(buf, IR_ABI_REGS[dst], 0);
+        } else {
+            x86enc.emit_push_r64(buf, 0);        // stack args beyond 6th
+        }
+        return 0;
+    }
+    // IR_CALL: call function; result in RAX → dst
+    if op == IR_CALL {
+        x86enc.buf_emit(buf, 232);
+        x86enc.buf_emit32(buf, 0);               // linker patches target
+        ir_cg_store(buf, dst);
+        return 0;
+    }
+    // IR_RET: return value
+    if op == IR_RET {
+        ir_cg_load(buf, s1);
+        emit_epilogue(buf);
+        return 0;
+    }
+    // IR_LOAD: dst = *src1
+    if op == IR_LOAD {
+        ir_cg_load(buf, s1);
+        x86enc.buf_emit(buf, 72); x86enc.buf_emit(buf, 139); x86enc.buf_emit(buf, 0); // mov rax, [rax]
+        ir_cg_store(buf, dst);
+        return 0;
+    }
+    // IR_STORE: *src1 = src2
+    if op == IR_STORE {
+        ir_cg_load(buf, s1);
+        x86enc.emit_push_r64(buf, 0);
+        ir_cg_load(buf, s2);
+        x86enc.emit_pop_r64(buf, 3);
+        x86enc.buf_emit(buf, 72); x86enc.buf_emit(buf, 137); x86enc.buf_emit(buf, 3); // mov [rbx], rax
+        return 0;
+    }
+    // IR_ALLOC: dst = kmalloc(s1 bytes)
+    if op == IR_ALLOC {
+        x86enc.emit_mov_r64_imm32(buf, 0, s1);
+        x86enc.emit_mov_r64_r64(buf, 7, 0);     // mov rdi, rax (size arg)
+        x86enc.buf_emit(buf, 232); x86enc.buf_emit32(buf, 0); // call kmalloc
+        ir_cg_store(buf, dst);
+        return 0;
+    }
+    // IR_ARRAY_GET: dst = arr[idx]  (arr=s1, idx=s2)
+    if op == IR_ARRAY_GET {
+        ir_cg_load(buf, s1);                    // rax = array ptr
+        x86enc.emit_push_r64(buf, 0);
+        ir_cg_load(buf, s2);                    // rax = index
+        x86enc.emit_pop_r64(buf, 3);            // rbx = array ptr
+        // rax = index * 8 + 8 + rbx  →  element address
+        x86enc.buf_emit(buf, 72); x86enc.buf_emit(buf, 105); x86enc.buf_emit(buf, 192);
+        x86enc.buf_emit32(buf, 8);              // imul rax, rax, 8
+        x86enc.emit_add_r64_imm8(buf, 0, 8);   // add rax, 8 (skip length header)
+        x86enc.emit_add_r64_r64(buf, 0, 3);    // add rax, rbx
+        x86enc.buf_emit(buf, 72); x86enc.buf_emit(buf, 139); x86enc.buf_emit(buf, 0); // mov rax, [rax]
+        ir_cg_store(buf, dst);
+        return 0;
+    }
+    // IR_ARRAY_SET: arr[off] = val  (arr=dst, off=s1, val=s2)
+    if op == IR_ARRAY_SET {
+        ir_cg_load(buf, dst);                   // rax = array ptr
+        x86enc.emit_push_r64(buf, 0);
+        ir_cg_load(buf, s1);                    // rax = byte offset
+        x86enc.emit_pop_r64(buf, 3);            // rbx = array ptr
+        x86enc.emit_add_r64_r64(buf, 0, 3);    // rax = target address
+        x86enc.emit_push_r64(buf, 0);
+        ir_cg_load(buf, s2);                    // rax = value
+        x86enc.emit_pop_r64(buf, 3);            // rbx = address
+        x86enc.buf_emit(buf, 72); x86enc.buf_emit(buf, 137); x86enc.buf_emit(buf, 3); // mov [rbx], rax
+        return 0;
+    }
+    // IR_PRINT: serial output of s1
+    if op == IR_PRINT {
+        ir_cg_load(buf, s1);
+        x86enc.emit_mov_r64_r64(buf, 7, 0);    // mov rdi, rax
+        x86enc.buf_emit(buf, 232); x86enc.buf_emit32(buf, 0); // call serial_write
+        return 0;
+    }
+    // IR_STR_CONST / IR_NOP / IR_PHI: no-op or unimplemented
+    return 0;
+}
+
+
 // Full native compilation: AST -> IR -> optimize -> regalloc -> x86_64
 fn compile_native(buf, ast) {
     // Phase 1: Lower AST to IR
@@ -942,13 +1307,15 @@ fn compile_native(buf, ast) {
     let spill_bytes = regalloc_run();
 
     // Phase 4: Emit x86_64 from optimized IR + regalloc
+    ir_cg_init();
     i = 0;
     while i < ir_count {
         if ir_dead[i] == 0 {
-            // ir_emit_x86(buf, i);
+            ir_emit_x86(buf, i);
         }
         i = i + 1;
     }
+    ir_cg_patch_labels(buf);
 
     return optimized;
 }

@@ -131,6 +131,48 @@ fn serial_read_line() {
     return buf;
 }
 
+// Read a line as a string (blocking, with echo)
+fn serial_readline() {
+    let mut result = "";
+    let mut done = 0;
+    while done == 0 {
+        let ch = serial_read_byte();
+        if ch == 13 { done = 1; }
+        else { if ch == 10 { done = 1; }
+        else { if ch == 8 {
+            if len(result) > 0 {
+                result = str_sub(result, 0, len(result) - 1);
+                serial_write_byte(8); serial_write_byte(32); serial_write_byte(8);
+            }
+        } else { if ch >= 32 {
+            result = result + str_from_code(ch);
+            serial_write_byte(ch);
+        } } } }
+    }
+    serial_write_byte(13); serial_write_byte(10);
+    return result;
+}
+
+// Read a line as a string (no echo — for passwords)
+fn serial_readline_noecho() {
+    let mut result = "";
+    let mut done = 0;
+    while done == 0 {
+        let ch = serial_read_byte();
+        if ch == 13 { done = 1; }
+        else { if ch == 10 { done = 1; }
+        else { if ch == 8 {
+            if len(result) > 0 {
+                result = str_sub(result, 0, len(result) - 1);
+            }
+        } else { if ch >= 32 {
+            result = result + str_from_code(ch);
+        } } } }
+    }
+    serial_write_byte(13); serial_write_byte(10);
+    return result;
+}
+
 // Self-test
 print("serial.hl loaded");
 print("COM1 base: 0x" + to_string(COM1));

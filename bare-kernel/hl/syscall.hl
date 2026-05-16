@@ -35,6 +35,13 @@ let SYS_SLEEP     = 7;
 let SYS_MMAP      = 16;
 let SYS_MUNMAP    = 17;
 let SYS_BRK       = 18;
+let SYS_MPROTECT  = 19;
+
+// Process (extra)
+let SYS_SIGNAL    = 85;
+let SYS_SIGRETURN = 86;
+let SYS_SIGBLOCK  = 87;
+let SYS_SIGUNBLOCK = 88;
 
 // I/O
 let SYS_READ      = 32;
@@ -53,12 +60,32 @@ let SYS_STAT      = 64;
 let SYS_READDIR   = 65;
 let SYS_MKDIR     = 66;
 let SYS_UNLINK    = 67;
+let SYS_SOCKET    = 68;
+let SYS_BIND      = 69;
+let SYS_CONNECT   = 70;
+let SYS_ACCEPT    = 71;
+let SYS_SENDTO    = 72;
+let SYS_RECVFROM  = 73;
+let SYS_LSEEK     = 62;
+let SYS_FSTAT     = 63;
 
 // Hilbert-specific
 let SYS_HILBERT_ENCODE = 80;
 let SYS_HILBERT_DECODE = 81;
 let SYS_HILBERT_DIST   = 82;
 let SYS_UPTIME         = 83;
+
+// User/process
+let SYS_GETUID    = 10;
+let SYS_GETGID    = 11;
+let SYS_SETUID    = 12;
+
+// inotify
+let SYS_INOTIFY_INIT      = 90;
+let SYS_INOTIFY_ADD_WATCH = 91;
+let SYS_INOTIFY_RM_WATCH  = 92;
+let SYS_INOTIFY_READ      = 93;
+let SYS_INOTIFY_CLOSE     = 94;
 
 // Meta
 let SYS_VERSION        = 255;
@@ -105,8 +132,8 @@ fn syscall_dispatch(num, arg0, arg1, arg2) {
 
     if num == SYS_WRITE {
         // arg0 = fd, arg1 = buffer address, arg2 = length
-        if arg0 == 1 {
-            // Validate user pointer before reading
+        if arg0 == 1 || arg0 == 2 {
+            // stdout or stderr -> serial
             if syscall_validate_ptr(arg1, arg2) == 0 { return 0 - 14; } // -EFAULT
             let mut wi = 0;
             while wi < arg2 {
@@ -115,6 +142,12 @@ fn syscall_dispatch(num, arg0, arg1, arg2) {
                 wi = wi + 1;
             }
             return arg2;
+        }
+        // Regular file descriptor
+        if arg0 > 2 {
+            if syscall_validate_ptr(arg1, arg2) == 0 { return 0 - 14; }
+            let data = mem_read_string(arg1, arg2);
+            return vfs_write(arg0, data, arg2);
         }
         return 0;
     }
@@ -133,23 +166,26 @@ fn syscall_dispatch(num, arg0, arg1, arg2) {
             }
             return 0;
         }
+        // Regular file descriptor
+        if arg0 > 0 {
+            if syscall_validate_ptr(arg1, arg2) == 0 { return 0 - 14; }
+            return vfs_read(arg0, arg1, arg2);
+        }
         return 0;
     }
 
     if num == SYS_MMAP {
-        let addr = page_alloc();
-        if arg1 > 4096 {
-            // Allocate multiple pages
-            let pages = (arg1 + 4095) / 4096;
-            let mut pi = 1;
-            while pi < pages { page_alloc(); pi = pi + 1; }
-        }
-        return addr;
+        // arg0 = addr (hint), arg1 = length, arg2 = prot
+        // Use sys_mmap from mmap.hl (demand paging, lazy allocation)
+        return sys_mmap(arg0, arg1, arg2, MAP_PRIVATE, 0 - 1, 0);
     }
 
     if num == SYS_MUNMAP {
-        page_free(arg0);
-        return 0;
+        return sys_munmap(arg0, arg1);
+    }
+
+    if num == SYS_MPROTECT {
+        return sys_mprotect(arg0, arg1, arg2);
     }
 
     if num == SYS_UPTIME {
@@ -181,6 +217,56 @@ fn syscall_dispatch(num, arg0, arg1, arg2) {
     if num == SYS_READDIR { return vfs_readdir(arg0); }
     if num == SYS_MKDIR { return vfs_mkdir(arg0); }
     if num == SYS_UNLINK { return vfs_unlink(arg0); }
+    if num == SYS_LSEEK { return vfs_seek(arg0, arg1, arg2); }
+    if num == SYS_FSTAT {
+        // stat by fd: read path or inode from fd table
+        let faddr = VFS_TABLE + arg0 * VFS_ENTRY_SIZE;
+        let valid = mem_read_u64(faddr);
+        if valid == 0 { return 0 - 9; }   // -EBADF
+        let fsize = mem_read_u64(faddr + 32);
+        let ftype = 1;  // file
+        // Write [size, type] to user buffer at arg1
+        if arg1 > 0 {
+            mem_write_u64(arg1, fsize);
+            mem_write_u64(arg1 + 8, ftype);
+        }
+        return 0;
+    }
+
+    // --- Socket stubs (returns -ENOSYS for now, placeholders) ---
+    if num == SYS_SOCKET  { return sys_socket(arg0, arg1, arg2); }
+    if num == SYS_BIND    { return sys_bind(arg0, arg1, arg2); }
+    if num == SYS_CONNECT { return sys_connect(arg0, arg1, arg2); }
+    if num == SYS_ACCEPT  { return sys_accept(arg0); }
+    if num == SYS_SENDTO  { return sys_send(arg0, arg1, arg2); }
+    if num == SYS_RECVFROM { return sys_recv(arg0, arg1, arg2); }
+
+    // --- User / credentials ---
+    if num == SYS_GETUID { return current_uid; }
+    if num == SYS_GETGID { return current_gid; }
+    if num == SYS_SETUID {
+        if current_uid == 0 { current_uid = arg0; return 0; }
+        return 0 - 1;   // -EPERM
+    }
+
+    // --- inotify ---
+    if num == SYS_INOTIFY_INIT      { return sys_inotify_init(); }
+    if num == SYS_INOTIFY_ADD_WATCH { return sys_inotify_add_watch(arg0, arg1, arg2); }
+    if num == SYS_INOTIFY_RM_WATCH  { return sys_inotify_rm_watch(arg0, arg1); }
+    if num == SYS_INOTIFY_READ {
+        let evts = sys_inotify_read(arg0);
+        // Write array length to arg1, event pairs starting at arg1+8
+        if arg1 > 0 {
+            mem_write_u64(arg1, len(evts));
+            let mut ei = 0;
+            while ei < len(evts) {
+                mem_write_u64(arg1 + 8 + ei * 8, evts[ei]);
+                ei = ei + 1;
+            }
+        }
+        return len(evts);
+    }
+    if num == SYS_INOTIFY_CLOSE { return sys_inotify_close(arg0); }
 
     // --- Memory ---
     if num == SYS_BRK {
@@ -201,6 +287,12 @@ fn syscall_dispatch(num, arg0, arg1, arg2) {
         // Encode version as (major << 16) | (minor << 8) | patch
         return ABI_MAJOR * 65536 + ABI_MINOR * 256 + ABI_PATCH;
     }
+
+    // --- Signal ---
+    if num == SYS_SIGNAL    { return signal_handler(arg0, arg1); }
+    if num == SYS_SIGRETURN { return 0; }  // context restore is done in native handler
+    if num == SYS_SIGBLOCK  { return signal_block(arg0); }
+    if num == SYS_SIGUNBLOCK { return signal_unblock(arg0); }
 
     // Unknown syscall
     return 0;

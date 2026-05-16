@@ -137,9 +137,50 @@ fn vesa_clear(color) {
     return 0;
 }
 
+// Fast fill_rect: writes each row with mem_set32 instead of pixel-by-pixel
+fn vesa_fill_rect_fast(x, y, w, h, color) {
+    if vesa_enabled == 0 { return 0; }
+    let mut row = y;
+    while row < y + h {
+        if row >= 0 {
+            if row < vesa_height {
+                let cx = x;
+                let mut cw = w;
+                if cx < 0 { cw = cw + cx; }
+                if cx + cw > vesa_width { cw = vesa_width - cx; }
+                if cw > 0 {
+                    let row_addr = vesa_fb_addr + row * vesa_pitch + cx * 4;
+                    mem_set32(row_addr, color, cw);
+                }
+            }
+        }
+        row = row + 1;
+    }
+    return 0;
+}
+
+// Point VESA framebuffer at GPU-backed memory after gpu_init().
+// Call this once after gpu_init() succeeds to bridge both subsystems.
+fn vesa_gpu_mode(gpu_fb_addr, gpu_w, gpu_h) {
+    vesa_fb_addr = gpu_fb_addr;
+    vesa_width   = gpu_w;
+    vesa_height  = gpu_h;
+    vesa_pitch   = gpu_w * 4;
+    vesa_bpp     = 32;
+    vesa_enabled = 1;
+    print("vesa: GPU bridge active fb=0x" + format_hex(gpu_fb_addr, 8) +
+          " " + to_string(gpu_w) + "x" + to_string(gpu_h));
+    return 0;
+}
+
+// Return the framebuffer byte address of the start of scan line y
+fn vesa_line_addr(y) {
+    return vesa_fb_addr + y * vesa_pitch;
+}
+
 // Draw horizontal line
 fn vesa_hline(x, y, w, color) {
-    vesa_fill_rect(x, y, w, 1, color);
+    vesa_fill_rect_fast(x, y, w, 1, color);
     return 0;
 }
 

@@ -472,6 +472,55 @@ fn task_timer_tick() {
     return 0;
 }
 
+// Count active (non-free) tasks
+fn task_count_active() {
+    let mut count = 0;
+    let mut i = 0;
+    while i < MAX_TASKS {
+        let state = mem_read_u64(task_addr(i));
+        if state != STATE_FREE { count = count + 1; }
+        i = i + 1;
+    }
+    return count;
+}
+
+// Get task name string from task name_ptr field
+fn task_name(idx) {
+    let addr = task_addr(idx);
+    let state = mem_read_u64(addr);
+    if state == STATE_FREE { return ""; }
+    // Name stored inline at offset 32 (16 bytes of GPR context before real name)
+    // Use a fallback: read from addr+184 if non-zero, else return "task<N>"
+    let name_ptr = mem_read_u64(addr + 184);
+    if name_ptr != 0 {
+        return mem_read_string(name_ptr, 32);
+    }
+    // Default name based on index
+    if idx == 0 { return "idle"; }
+    return "task" + to_string(idx);
+}
+
+// Return list of all tasks as [[pid, state, name], ...]
+fn task_list_all() {
+    let mut list = [];
+    let state_names = ["free", "ready", "running", "blocked", "dead", "zombie"];
+    let mut i = 0;
+    while i < MAX_TASKS {
+        let addr = task_addr(i);
+        let state = mem_read_u64(addr);
+        if state != STATE_FREE {
+            let pid = mem_read_u64(addr + 8);
+            let sname = "unknown";
+            if state >= 0 {
+                if state <= 5 { sname = state_names[state]; }
+            }
+            push(list, [pid, sname, task_name(i)]);
+        }
+        i = i + 1;
+    }
+    return list;
+}
+
 // Self-test
 print("task.hl loaded");
 print("Task table at: 0x" + to_string(TASK_TABLE));

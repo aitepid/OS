@@ -8,72 +8,139 @@
 //   /proc/uptime      -- seconds since boot
 //   /proc/meminfo     -- memory statistics
 //   /proc/cpuinfo     -- CPU information
-//   /proc/mounts      -- mounted filesystems
+//   /proc/mounts      -- mounted filesystems (dynamically from VFS mount table)
 //   /proc/stat        -- scheduler statistics
 //   /proc/net/arp     -- ARP table
 //   /proc/net/tcp     -- TCP connections
 //   /proc/self/status -- current task info
 //   /proc/<pid>/status -- per-task info
 
+let PROCFS_FS_NAMES = ["ramfs", "fat16", "devfs", "ext4", "procfs", "tmpfs"];
+
 fn procfs_init() {
-    // Register /proc as a VFS mount point
-    // vfs_mount("/proc", "procfs", 0);
+    // Register /proc as a VFS mount point (fs_type = 4)
+    vfs_mount_procfs("/proc");
     return 0;
 }
 
 fn procfs_read(path) {
     if path == "/proc/version" {
-        return "HicOS 4.0 (Hilbert-Lang Kernel, 99 modules, x86_64)";
+        return "HicOS 6.0 (Hilbert-Lang Kernel, 130 modules, x86_64)";
     }
 
     if path == "/proc/uptime" {
         let secs = uptime_secs();
-        return to_string(secs) + " " + to_string(secs);  // uptime idle_time
+        let idle = secs / 2;  // approximate idle as half
+        return to_string(secs) + "." + "00 " + to_string(idle) + ".00";
     }
 
     if path == "/proc/meminfo" {
-        let total_kb = 32768 * 4;  // 128 MB
-        let free_kb = (32768 - 1025) * 4;
-        return "MemTotal: " + to_string(total_kb) + " kB\n"
-             + "MemFree:  " + to_string(free_kb) + " kB\n"
-             + "SwapTotal: 65536 kB\n"
-             + "SwapFree:  " + to_string((16384 - swap_used) * 4) + " kB\n";
+        let free_pages = page_count_free();
+        let total_pages = free_pages + 1025;
+        let total_kb = total_pages * 4;
+        let free_kb = free_pages * 4;
+        let used_kb = total_kb - free_kb;
+        let swap_free_kb = (16384 - swap_used) * 4;
+        return "MemTotal:     " + to_string(total_kb) + " kB\n"
+             + "MemFree:      " + to_string(free_kb) + " kB\n"
+             + "MemUsed:      " + to_string(used_kb) + " kB\n"
+             + "SwapTotal:    65536 kB\n"
+             + "SwapFree:     " + to_string(swap_free_kb) + " kB\n";
     }
 
     if path == "/proc/cpuinfo" {
-        return "processor: 0\n"
-             + "model name: H-L Virtual CPU @ 100 MHz\n"
-             + "cpu cores: " + to_string(smp_cpu_count()) + "\n";
+        let ncpus = smp_cpu_count();
+        let mut out = "";
+        let mut i = 0;
+        while i < ncpus {
+            out = out + "processor\t: " + to_string(i) + "\n"
+                      + "model name\t: H-L Virtual CPU @ 100 MHz\n"
+                      + "cpu MHz\t\t: 100\n"
+                      + "cache size\t: 64 KB\n"
+                      + "\n";
+            i = i + 1;
+        }
+        return out;
     }
 
     if path == "/proc/mounts" {
-        return "ramfs / ramfs rw 0 0\n"
-             + "devfs /dev devfs rw 0 0\n"
-             + "procfs /proc procfs ro 0 0\n";
+        // Dynamically query the VFS mount table
+        let mut out = "";
+        let mut i = 0;
+        while i < mount_count {
+            let addr = MOUNT_TABLE + i * 64;
+            let valid = mem_read_u64(addr);
+            if valid == 1 {
+                let fs_type = mem_read_u64(addr + 16);
+                let mount_path = mem_read_string(addr + 8, 64);
+                let fs_name = "unknown";
+                if fs_type < len(PROCFS_FS_NAMES) {
+                    fs_name = PROCFS_FS_NAMES[fs_type];
+                }
+                let rw = "rw";
+                if fs_type == 3 { rw = "ro"; }  // ext4 is read-only
+                if fs_type == 4 { rw = "ro"; }  // procfs is read-only
+                out = out + fs_name + " " + mount_path + " " + fs_name + " " + rw + " 0 0\n";
+            }
+            i = i + 1;
+        }
+        return out;
     }
 
     if path == "/proc/stat" {
-        return "tasks: 64 max\n"
-             + "scheduler: CFS\n"
-             + "context_switches: 0\n";
+        let ticks = get_ticks();
+        let active = task_count_active();
+        return "cpu  " + to_string(ticks) + " 0 0 0 0 0 0\n"
+             + "processes " + to_string(active) + "\n"
+             + "running " + to_string(active) + "\n";
     }
 
     if path == "/proc/net/arp" {
-        return "IP address    HW address         Flags\n";
+        let tbl = arp_table_snapshot();
+        let mut out = "IP address       HW type  HW address         Flags  Device\n";
+        let mut i = 0;
+        while i < len(tbl) {
+            out = out + tbl[i][0] + "  0x1  " + tbl[i][1] + "  0x2  eth0\n";
+            i = i + 1;
+        }
+        return out;
     }
 
     if path == "/proc/net/tcp" {
-        return "sl  local_address  rem_address  st\n";
+        return "sl  local_address  rem_address  st  tx_queue rx_queue\n"
+             + tcp_connections_summary();
     }
 
     if path == "/proc/self/status" {
-        return "Pid: " + to_string(current_task) + "\n"
-             + "Uid: " + to_string(current_uid) + "\n"
-             + "Gid: " + to_string(current_gid) + "\n";
+        return "Name:\tshell\n"
+             + "Pid:\t" + to_string(current_task) + "\n"
+             + "PPid:\t0\n"
+             + "Uid:\t" + to_string(current_uid) + "\n"
+             + "Gid:\t" + to_string(current_gid) + "\n"
+             + "VmRSS:\t4096 kB\n";
+    }
+
+    // /proc/<pid>/status  — look up task by PID
+    let parts = _vfs_split_path(path);
+    if len(parts) == 3 {
+        if parts[2] == "status" {
+            let pid = parse_int(parts[1]);
+            if pid >= 0 {
+                let taddr = task_addr(pid);
+                let tstate = mem_read_u64(taddr + 8);
+                let tname = mem_read_string(taddr + 32, 32);
+                return "Name:\t" + tname + "\n"
+                     + "Pid:\t" + to_string(pid) + "\n"
+                     + "State:\t" + to_string(tstate) + "\n"
+                     + "Uid:\t0\n"
+                     + "Gid:\t0\n";
+            }
+        }
     }
 
     return "";  // unknown proc file
 }
 
 print("procfs.hl loaded");
-print("/proc: version uptime meminfo cpuinfo mounts stat net/arp net/tcp self/status");
+print("/proc: version uptime meminfo cpuinfo mounts stat net/arp net/tcp self/status <pid>/status");
+

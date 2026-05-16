@@ -142,6 +142,42 @@ fn signal_deliver() {
     return 0;
 }
 
+// Initialize signal subsystem (zero all handler tables)
+fn signal_init_subsystem() {
+    let htable_base = 3407872;  // 0x340000
+    let total = 64 * HANDLER_TABLE_SIZE;
+    mem_zero(htable_base, total);
+    return 0;
+}
+
+// Check pending signals for any task (called from scheduler tick)
+fn signal_check_task(task_idx) {
+    let addr = task_addr(task_idx);
+    let state = mem_read_u64(addr);
+    if state == 0 { return 0; }  // STATE_FREE
+    let pending = mem_read_u64(addr + 200);
+    if pending == 0 { return 0; }
+    let blocked = mem_read_u64(addr + 208);
+    let deliverable = pending;  // simplified: check if any pending & ~blocked
+    // If SIGKILL pending, forcibly kill task
+    let sigkill_bit = _sig_bit(SIGKILL);
+    if (pending / sigkill_bit) % 2 == 1 {
+        mem_write_u64(addr, 4);  // STATE_DEAD
+        rq_remove(task_idx);
+    }
+    // If SIGTERM pending and no handler, kill
+    let sigterm_bit = _sig_bit(SIGTERM);
+    if (pending / sigterm_bit) % 2 == 1 {
+        let htable = 3407872 + task_idx * HANDLER_TABLE_SIZE;
+        let handler = mem_read_u64(htable + SIGTERM * 8);
+        if handler == 0 {
+            mem_write_u64(addr, 4);  // STATE_DEAD
+            rq_remove(task_idx);
+        }
+    }
+    return 0;
+}
+
 print("signal.hl loaded");
 print("Signals: 1-" + to_string(MAX_SIGNALS - 1));
 print("SIGKILL=" + to_string(SIGKILL) + " SIGTERM=" + to_string(SIGTERM));

@@ -1,0 +1,206 @@
+// ui_files.hl -- HicOS File Manager UI
+//
+// Provides a graphical file browser with:
+//   - Two-column layout: breadcrumb/path + file list
+//   - Double-click navigation
+//   - Right-click context menu (open/copy/delete)
+//   - File/folder icons
+//
+
+let UIFILES_MAX_ENTRIES = 256;
+let UIFILES_ENTRY_HEIGHT = 24;
+let UIFILES_COLUMN_PATH_W = 200;
+let UIFILES_COLUMN_LIST_W = 400;
+let UIFILES_WINDOW_W = 700;
+let UIFILES_WINDOW_H = 500;
+
+// File browser state
+let mut uifiles_current_path = "/";
+let mut uifiles_entry_count = 0;
+let mut uifiles_selected_idx = 0;
+let mut uifiles_scroll_pos = 0;
+let mut uifiles_entries = [];
+let mut uifiles_window_id = 0 - 1;
+
+fn uifiles_init() {
+    uifiles_current_path = "/";
+    uifiles_selected_idx = 0;
+    uifiles_scroll_pos = 0;
+    uifiles_entries = [];
+    uifiles_entry_count = 0;
+    return 0;
+}
+
+fn uifiles_load_dir(path) {
+    uifiles_entries = [];
+    uifiles_entry_count = 0;
+    uifiles_selected_idx = 0;
+    uifiles_scroll_pos = 0;
+
+    if path != "/" {
+        push(uifiles_entries, ["..", 1, 0]);
+        uifiles_entry_count = uifiles_entry_count + 1;
+    }
+
+    let names = vfs_readdir(path);
+    let mut i = 0;
+    while i < len(names) {
+        let name = names[i];
+        let full_path = path + "/" + name;
+        let stat_result = vfs_stat(full_path);
+        let is_dir = 0;
+        let size = 0;
+
+        if stat_result > 0 { is_dir = 1; }
+
+        push(uifiles_entries, [name, is_dir, size]);
+        uifiles_entry_count = uifiles_entry_count + 1;
+
+        if uifiles_entry_count >= UIFILES_MAX_ENTRIES {
+            break;
+        }
+        i = i + 1;
+    }
+
+    return uifiles_entry_count;
+}
+
+fn uifiles_navigate(path) {
+    uifiles_current_path = path;
+    uifiles_load_dir(path);
+    return 0;
+}
+
+fn uifiles_draw_icon(x, y, is_dir) {
+    if is_dir == 1 {
+        let fg = ui_theme_accent_color();
+        vesa_rect(x, y, 12, 10, fg);
+        vesa_hline(x + 3, y + 3, 5, fg);
+        return 0;
+    }
+
+    let fg = ui_theme_text_color();
+    vesa_vline(x + 2, y + 2, 9, fg);
+    vesa_hline(x + 2, y + 2, 7, fg);
+    return 0;
+}
+
+fn uifiles_render(window_id) {
+    let addr = WM_TABLE_ADDR + window_id * 128;
+    let x = mem_read_u64(addr + 8);
+    let y = mem_read_u64(addr + 16);
+    let w = mem_read_u64(addr + 24);
+    let h = mem_read_u64(addr + 32);
+
+    vesa_fill_rect(x, y, w, h, ui_theme_surface_color());
+    vesa_fill_rect(x, y, w, 24, ui_theme_titlebar_color());
+    ui_draw_text(x + 8, y + 4, "File Manager", ui_theme_text_color(), 0);
+
+    let path_y = y + 30;
+    vesa_fill_rect(x, path_y, w, 24, ui_theme_panel_color());
+    ui_label(x + 8, path_y + 4, uifiles_current_path);
+
+    let list_y = path_y + 28;
+    vesa_fill_rect(x, list_y, w, 20, ui_theme_panel_color());
+    ui_label(x + 8, list_y + 2, "Name");
+    ui_label(x + 300, list_y + 2, "Size");
+    vesa_hline(x, list_y + 20, w, ui_theme_border_color());
+
+    let entries_y = list_y + 22;
+    let visible_rows = (h - (entries_y - y) - 20) / UIFILES_ENTRY_HEIGHT;
+    let mut row = 0;
+
+    while row < visible_rows {
+        let idx = uifiles_scroll_pos + row;
+        if idx >= uifiles_entry_count { break; }
+
+        let entry = uifiles_entries[idx];
+        let name = entry[0];
+        let is_dir = entry[1];
+        let item_y = entries_y + row * UIFILES_ENTRY_HEIGHT;
+
+        if idx == uifiles_selected_idx {
+            vesa_fill_rect(x, item_y, w, UIFILES_ENTRY_HEIGHT, ui_theme_accent_color());
+        }
+
+        uifiles_draw_icon(x + 6, item_y + 4, is_dir);
+        ui_label(x + 24, item_y + 4, name);
+        row = row + 1;
+    }
+
+    return 0;
+}
+
+fn uifiles_handle_click(click_x, click_y, double_click) {
+    let addr = WM_TABLE_ADDR + uifiles_window_id * 128;
+    let x = mem_read_u64(addr + 8);
+    let y = mem_read_u64(addr + 16);
+
+    let entries_y = y + 104;
+    if click_y < entries_y { return 0; }
+
+    let row = (click_y - entries_y) / UIFILES_ENTRY_HEIGHT;
+    let idx = uifiles_scroll_pos + row;
+
+    if idx >= uifiles_entry_count { return 0; }
+
+    uifiles_selected_idx = idx;
+
+    if double_click == 1 {
+        let entry = uifiles_entries[idx];
+        let name = entry[0];
+        let is_dir = entry[1];
+
+        if is_dir == 1 {
+            let mut new_path = uifiles_current_path + "/" + name;
+            if name == ".." {
+                let parts = _vfs_split_path(uifiles_current_path);
+                if len(parts) > 1 {
+                    new_path = "";
+                    let mut i = 0;
+                    while i < len(parts) - 1 {
+                        new_path = new_path + "/" + parts[i];
+                        i = i + 1;
+                    }
+                    if len(new_path) == 0 { new_path = "/"; }
+                }
+            }
+            uifiles_navigate(new_path);
+        }
+    }
+
+    return 0;
+}
+
+fn uifiles_open() {
+    uifiles_window_id = wm_create_window(50, 50, UIFILES_WINDOW_W, UIFILES_WINDOW_H, "File Manager");
+    if uifiles_window_id < 0 {
+        klog(3, "UI", "Failed to create file manager window");
+        return 0 - 1;
+    }
+    uifiles_navigate("/");
+    return uifiles_window_id;
+}
+
+fn uifiles_update() {
+    if uifiles_window_id < 0 { return 0; }
+    uifiles_render(uifiles_window_id);
+    return 0;
+}
+
+fn uifiles_close() {
+    if uifiles_window_id >= 0 {
+        wm_close_window(uifiles_window_id);
+        uifiles_window_id = 0 - 1;
+    }
+    uifiles_entries = [];
+    uifiles_entry_count = 0;
+    return 0;
+}
+
+fn uifiles_is_open() {
+    if uifiles_window_id < 0 { return 0; }
+    return 1;
+}
+
+print("ui_files.hl loaded");

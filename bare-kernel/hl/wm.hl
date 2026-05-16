@@ -412,12 +412,18 @@ fn wm_draw_all() {
     if uiinst_is_open() == 1 { uiinst_render(); }
     // Render system monitor if open
     if uismon_is_open() == 1 { uismon_render(); }
+    // Render file manager if open
+    if uifiles_is_open() == 1 { uifiles_render(); }
+    // Render settings center if open
+    if uisettings_is_open() == 1 { uisettings_render(); }
     // Toast notifications
     ui_notify_render();
     // Modal dialog overlay
     if ui_dialog_is_open() == 1 { ui_dialog_render(); }
     // Draw mouse cursor on top
     wm_draw_cursor(wm_mouse_x, wm_mouse_y);
+    // Push GPU-backed framebuffer to display if VirtIO-GPU is active
+    if gpu_initialized == 1 { gpu_flip(); }
     return 0;
 }
 
@@ -534,6 +540,12 @@ fn wm_mouse_click(button) {
                 return 0;
             }
         }
+        if uisettings_is_open() == 1 {
+            if best == uisettings_win_id {
+                uisettings_handle_click(wm_mouse_x, wm_mouse_y);
+                return 0;
+            }
+        }
     }
     return 0;
 }
@@ -585,10 +597,93 @@ fn wm_get_window_count() {
     return wm_window_count;
 }
 
+// Window coordinate accessors used by UI modules for rendering
+fn wm_win_x(win_id) {
+    if win_id < 0 { return 0; }
+    if win_id >= wm_window_count { return 0; }
+    return mem_read_u64(WM_TABLE_ADDR + win_id * 128 + 8);
+}
+
+fn wm_win_y(win_id) {
+    if win_id < 0 { return 0; }
+    if win_id >= wm_window_count { return 0; }
+    return mem_read_u64(WM_TABLE_ADDR + win_id * 128 + 16);
+}
+
+fn wm_win_w(win_id) {
+    if win_id < 0 { return 0; }
+    if win_id >= wm_window_count { return 0; }
+    return mem_read_u64(WM_TABLE_ADDR + win_id * 128 + 24);
+}
+
+fn wm_win_h(win_id) {
+    if win_id < 0 { return 0; }
+    if win_id >= wm_window_count { return 0; }
+    return mem_read_u64(WM_TABLE_ADDR + win_id * 128 + 32);
+}
+
+// Destroy a window — alias for wm_close_window (for semantic clarity)
+fn wm_destroy_window(win_id) {
+    wm_close_window(win_id);
+    return 0;
+}
+
+// Route a keyboard scancode to the currently focused UI module
+fn wm_key_dispatch(key) {
+    // Focused overlay modules get priority
+    if ui_dialog_is_open() == 1 {
+        ui_dialog_key(key);
+        return 0;
+    }
+    if uismon_is_open() == 1 {
+        if wm_focused_id == uismon_win_id {
+            uismon_handle_key(key);
+            return 0;
+        }
+    }
+    if uifiles_is_open() == 1 {
+        if wm_focused_id == uifiles_win_id {
+            uifiles_handle_key(key);
+            return 0;
+        }
+    }
+    if uisettings_is_open() == 1 {
+        if wm_focused_id == uisettings_win_id {
+            uisettings_handle_key(key);
+            return 0;
+        }
+    }
+    if uiterm_is_open() == 1 {
+        if wm_focused_id == uiterm_win_id {
+            uiterm_handle_key(key);
+            return 0;
+        }
+    }
+    if uiinst_is_open() == 1 {
+        uiinst_handle_key(key);
+        return 0;
+    }
+    return 0;
+}
+
 fn wm_render_all() {
     wm_draw_all();
     return 0;
 }
 
+// Open default terminal window at boot (positioned after topbar)
+fn wm_open_terminal_window() {
+    let top_h = ui_theme_topbar_height();
+    let margin = 20;
+    let w = 640;
+    let h = 400;
+    let win_id = wm_create_window(margin, top_h + margin, w, h, "Terminal", 0);
+    if win_id >= 0 {
+        uiterm_open(win_id);
+        wm_render_all();
+    }
+    return win_id;
+}
+
 print("wm.hl loaded");
-print("Window manager: topbar + taskbar + minimize/restore + focus + drag + close");
+print("Window manager: topbar + taskbar + minimize/restore + focus + drag + close + key dispatch");

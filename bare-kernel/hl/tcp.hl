@@ -602,6 +602,42 @@ fn tcp_loopback_status() {
     return "TCP loopback: FAIL";
 }
 
+// Return summary of all non-closed TCP connections (multi-line string)
+fn tcp_connections_summary() {
+    let state_names = ["CLOSED", "LISTEN", "SYN_SENT", "SYN_RCVD", "ESTABLISHED",
+                       "FIN_WAIT1", "FIN_WAIT2", "CLOSE_WAIT", "CLOSING", "LAST_ACK", "TIME_WAIT"];
+    let mut out = "";
+    let mut i = 0;
+    while i < MAX_TCP {
+        let addr = TCP_TABLE + i * TCB_SIZE;
+        let state = mem_read_u64(addr);
+        if state != TCP_CLOSED {
+            let local_ip  = mem_read_u32(addr + 8);
+            let local_port = mem_read_u32(addr + 12);
+            let rem_ip    = mem_read_u32(addr + 16);
+            let rem_port  = mem_read_u32(addr + 20);
+            let cwnd      = mem_read_u64(addr + 128);
+            let sname = "UNKNOWN";
+            if state >= 0 {
+                if state <= 10 { sname = state_names[state]; }
+            }
+            let lip_s = to_string((local_ip / 16777216) % 256) + "."
+                      + to_string((local_ip / 65536) % 256) + "."
+                      + to_string((local_ip / 256) % 256) + "."
+                      + to_string(local_ip % 256) + ":" + to_string(local_port);
+            let rip_s = to_string((rem_ip / 16777216) % 256) + "."
+                      + to_string((rem_ip / 65536) % 256) + "."
+                      + to_string((rem_ip / 256) % 256) + "."
+                      + to_string(rem_ip % 256) + ":" + to_string(rem_port);
+            out = out + to_string(i) + "  " + lip_s + "  " + rip_s
+                      + "  " + sname + "  cwnd=" + to_string(cwnd) + "\n";
+        }
+        i = i + 1;
+    }
+    if out == "" { out = "(no active connections)\n"; }
+    return out;
+}
+
 print("tcp.hl loaded (Reno congestion control)");
 print("Max connections: " + to_string(MAX_TCP));
 print("MSS: " + to_string(TCP_MSS) + " Init cwnd: " + to_string(TCP_INIT_CWND));

@@ -206,5 +206,54 @@ fn pty_status() {
            " PTY pairs active, " + to_string(attached) + " attached";
 }
 
+// Drain all master-to-slave bytes, collect into line, run shell on newline.
+// Returns string of output that should be written back to slave (for display).
+fn pty_exec_input(id) {
+    if id < 0 { return ""; }
+    if id >= PTY_MAX { return ""; }
+    if pty_active[id] == 0 { return ""; }
+    let mut line = "";
+    let mut done = 0;
+    while done == 0 {
+        let b = pty_slave_read(id);
+        if b < 0 {
+            done = 1;
+        } else {
+            if b == 13 || b == 10 {
+                // End of line — dispatch to shell
+                done = 1;
+                let result = shell_handle_ext(line);
+                // Write result bytes back to slave->master (for terminal display)
+                let mut ri = 0;
+                while ri < len(result) {
+                    pty_slave_write(id, str_char_at(result, ri));
+                    ri = ri + 1;
+                }
+                // Write trailing newline
+                pty_slave_write(id, 10);
+                return result;
+            } else {
+                line = line + str_from_code(b);
+            }
+        }
+    }
+    return "";
+}
+
+// Open a new PTY and attach to current task (master) and a new slave task.
+// Returns [master_fd, slave_fd, pty_id].
+fn pty_open_pair() {
+    let id = pty_alloc();
+    if id < 0 { return [0 - 1, 0 - 1, 0 - 1]; }
+    // Allocate fake fds (use pty_id shifted into high range to avoid VFS collision)
+    let mfd = 64 + id * 2;
+    let sfd = 65 + id * 2;
+    pty_master_fd[id] = mfd;
+    pty_slave_fd[id] = sfd;
+    pty_master_task[id] = current_task;
+    pty_slave_task[id] = 0 - 1;
+    return [mfd, sfd, id];
+}
+
 print("pty.hl loaded");
-print("PTY: " + to_string(PTY_MAX) + " pairs, cooked/raw mode, echo, attach/detach");
+print("PTY: " + to_string(PTY_MAX) + " pairs, cooked/raw mode, echo, attach/detach, shell-exec");

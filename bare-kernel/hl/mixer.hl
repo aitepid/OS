@@ -23,6 +23,13 @@ let mixer_volume = [255, 255, 255, 255, 255, 255, 255, 255]; // 0-255
 let mixer_loop = [0, 0, 0, 0, 0, 0, 0, 0];
 let mixer_pan = [128, 128, 128, 128, 128, 128, 128, 128]; // 0=left, 128=center, 255=right
 
+// Clamp value to [lo, hi] range
+fn mixer_clamp(v, lo, hi) {
+    if v < lo { return lo; }
+    if v > hi { return hi; }
+    return v;
+}
+
 fn mixer_init() {
     mixer_stream_count = 0;
     let mut i = 0;
@@ -79,49 +86,60 @@ fn mixer_set_pan(stream_id, pan) {
 // Mix all active streams into output buffer
 // Called by AC97 DMA interrupt handler
 fn mixer_mix(num_samples) {
-    // Clear output buffer
+    // Clear output buffer (stereo: L+R = 2 i16 samples per frame = 4 bytes)
     let mut s = 0;
-    while s < num_samples * 2 { // stereo = 2 samples per frame
+    while s < num_samples * 2 {
         mem_write_i16(MIXER_OUTPUT_ADDR + s * 2, 0);
         s = s + 1;
     }
 
-    // Mix each active stream
+    // Mix each active stream into the output buffer
     let mut i = 0;
     while i < MIXER_MAX_STREAMS {
         if mixer_active[i] == 1 {
-            let mut s = 0;
-            while s < num_samples {
-                let pos = mixer_position[i] + s;
-                if pos >= mixer_buf_len[i] {
-                    if mixer_loop[i] == 1 {
-                        // pos = pos % mixer_buf_len[i];
-                    } else {
-                        mixer_active[i] = 0;
-                        break;
+            let mut si = 0;
+            let mut stream_done = 0;
+            while si < num_samples {
+                if stream_done == 0 {
+                    let pos = mixer_position[i] + si;
+                    if pos >= mixer_buf_len[i] {
+                        if mixer_loop[i] == 1 {
+                            // Wrap position (looping stream)
+                            mixer_position[i] = 0;
+                        } else {
+                            // Stream exhausted: deactivate and stop mixing
+                            mixer_active[i] = 0;
+                            mixer_stream_count = mixer_stream_count - 1;
+                            stream_done = 1;
+                        }
+                    }
+                    if stream_done == 0 {
+                        let real_pos = mixer_position[i] + si;
+                        let sample = mem_read_i16(mixer_buf_addr[i] + real_pos * 2);
+                        // Apply per-stream volume (0-255)
+                        let scaled = sample * mixer_volume[i] / 255;
+                        // Pan: left_vol = (256 - pan), right_vol = pan
+                        let left_vol  = 256 - mixer_pan[i];
+                        let right_vol = mixer_pan[i];
+                        // Mix into output buffer with saturation clamping
+                        let out_off = MIXER_OUTPUT_ADDR + si * 4;
+                        let cur_l = mem_read_i16(out_off);
+                        let cur_r = mem_read_i16(out_off + 2);
+                        mem_write_i16(out_off,     mixer_clamp(cur_l + scaled * left_vol  / 256, -32768, 32767));
+                        mem_write_i16(out_off + 2, mixer_clamp(cur_r + scaled * right_vol / 256, -32768, 32767));
                     }
                 }
-                // Read sample from stream buffer
-                // let sample = mem_read_i16(mixer_buf_addr[i] + pos * 2);
-                // Apply volume: sample = sample * mixer_volume[i] / 255
-                // Apply pan to L/R channels
-                // let left_vol = (256 - mixer_pan[i]);
-                // let right_vol = mixer_pan[i];
-                // Add to output buffer (with clamping)
-                // let out_off = MIXER_OUTPUT_ADDR + s * 4;
-                // let cur_l = mem_read_i16(out_off);
-                // let cur_r = mem_read_i16(out_off + 2);
-                mem_write_i16(out_off, clamp(cur_l + sample * left_vol / 256, -32768, 32767));
-                mem_write_i16(out_off + 2, clamp(cur_r + sample * right_vol / 256, -32768, 32767));
-                s = s + 1;
+                si = si + 1;
             }
-            mixer_position[i] = mixer_position[i] + num_samples;
+            if stream_done == 0 {
+                mixer_position[i] = mixer_position[i] + num_samples;
+            }
         }
         i = i + 1;
     }
 
-    // Send output buffer to AC97 DMA
-    // ac97_submit_buffer(MIXER_OUTPUT_ADDR, num_samples);
+    // Submit mixed buffer to AC97 DMA for playback
+    ac97_play(MIXER_OUTPUT_ADDR, num_samples);
     return 0;
 }
 
@@ -136,4 +154,4 @@ fn mixer_status() {
 }
 
 print("mixer.hl loaded");
-print("Audio mixer: " + to_string(MIXER_MAX_STREAMS) + " streams, volume, pan, loop");
+print("Audio mixer: " + to_string(MIXER_MAX_STREAMS) + " streams, volume, pan, loop, saturation clamp");

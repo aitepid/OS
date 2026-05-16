@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 69 commands + pipe operator (|):
+// 73 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -11,6 +11,7 @@
 //   services svc(start/stop/status) kinfo run kill mkdir rm
 //   history hostname netstat grep disk_info format install advtest
 //   tcploop dnstest heval lsmod kmodtest
+//   UI: sysmon files audiotest settings
 //   Shell pipe: cmd1 | cmd2
 
 fn shell_handle(cmd) {
@@ -20,17 +21,21 @@ fn shell_handle(cmd) {
         serial_print("Memory:   free heap meminfo");
         serial_print("Tasks:    ps kill run (kill sends SIGTERM by default)");
         serial_print("Signals:  SIGTERM=15 SIGKILL=9 SIGSTOP=19 SIGCONT=18");
-        serial_print("Files:    ls cat echo mkdir rm");
+        serial_print("Files:    ls [path] cat echo  echo <text> > <file>  mkdir rm  fm (graphical)");
+        serial_print("Proc:     mounts (dynamic) | cat /proc/meminfo etc.");
         serial_print("Disk:     disk_info format install");
         serial_print("Network:  ifconfig ping dns arp netstat");
+        serial_print("Firewall: fw  firewall  fw allow|block <port>  fw flush  fw policy input|output drop|accept");
         serial_print("Hardware: lspci lsusb cpus dev beep ahci usb acpi");
         serial_print("Services: services svc start|stop|status <name>");
+        serial_print("FS Events:inotify  watch <path>  pty [alloc|info <id>]");
+        serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
     }
 
     if cmd == "ver" {
-        return "HicOS 6.0 -- Hilbert-Lang Kernel (114 modules, pure H-L, zero deps)";
+        return "HicOS 6.0 -- Hilbert-Lang Kernel (132 modules, pure H-L, zero deps)";
     }
 
     if cmd == "uptime" {
@@ -58,8 +63,21 @@ fn shell_handle(cmd) {
     }
 
     if cmd == "ps" {
-        task_list();
-        return "Tasks: " + to_string(task_count()) + "/" + to_string(MAX_TASKS);
+        let tasks = task_list_all();
+        let mut out = "PID  STATE    NAME\n";
+        let mut i = 0;
+        while i < len(tasks) {
+            let t = tasks[i];
+            let pid_s = to_string(t[0]);
+            let mut ps = pid_s;
+            while len(ps) < 4 { ps = ps + " "; }
+            let mut ss = t[1];
+            while len(ss) < 8 { ss = ss + " "; }
+            out = out + ps + " " + ss + " " + t[2] + "\n";
+            i = i + 1;
+        }
+        out = out + "Total: " + to_string(task_count_active()) + "/" + to_string(MAX_TASKS);
+        return out;
     }
 
     if cmd == "cpus" {
@@ -67,7 +85,7 @@ fn shell_handle(cmd) {
     }
 
     if cmd == "mount" {
-        return "/        ramfs\n/dev     devfs\n/mnt     (none)";
+        return procfs_read("/proc/mounts");
     }
 
     if cmd == "lspci" {
@@ -95,9 +113,15 @@ fn shell_handle(cmd) {
     }
 
     if cmd == "ls" {
-        let files = fs_list(0);
-        if len(files) == 0 { return "(empty)"; }
-        return to_string(len(files)) + " entries in /";
+        let names = vfs_readdir("/");
+        if len(names) == 0 { return "(empty)"; }
+        let mut out = "";
+        let mut i = 0;
+        while i < len(names) {
+            out = out + names[i] + "  ";
+            i = i + 1;
+        }
+        return out;
     }
 
     if cmd == "hilbert" {
@@ -172,8 +196,43 @@ fn shell_handle(cmd) {
     }
 
     // --- File operations with arguments ---
+    if str_starts_with(cmd, "ls ") {
+        let path = str_sub(cmd, 3, len(cmd));
+        let names = vfs_readdir(path);
+        if len(names) == 0 { return path + ": (empty)"; }
+        let mut out = "";
+        let mut i = 0;
+        while i < len(names) {
+            out = out + names[i] + "  ";
+            i = i + 1;
+        }
+        return out;
+    }
+
     if str_starts_with(cmd, "cat ") {
         let path = str_sub(cmd, 4, len(cmd));
+        let mount_info = vfs_resolve(path);
+        let fs_type = mem_read_u64(MOUNT_TABLE + mount_info[0] * 64 + 16);
+        if fs_type == 3 {
+            // ext4: use ext4_read_path directly, return string from buffer
+            let nbytes = ext4_read_path(path, 65536);
+            if nbytes == 0 { return "Error: cannot read " + path; }
+            // Build string from EXT4_BLOCK_BUF
+            let mut out = "";
+            let mut ci = 0;
+            while ci < nbytes {
+                let ch = mem_read_u8(EXT4_BLOCK_BUF + ci);
+                if ch != 0 { out = out + str_from_code(ch); }
+                ci = ci + 1;
+            }
+            return out;
+        }
+        if fs_type == 4 {
+            // procfs: call procfs_read directly
+            let content = procfs_read(path);
+            if content == "" { return "cat: " + path + ": No such file"; }
+            return content;
+        }
         let fd = vfs_open(path, 0);
         if fd < 0 { return "Error: cannot open " + path; }
         let stat = vfs_stat(path);
@@ -260,7 +319,22 @@ fn shell_handle_ext(cmd) {
         return "HOME=/root PATH=/bin:/usr/bin SHELL=/bin/sh USER=root TERM=vt100";
     }
     if cmd == "proc" {
-        return procfs_read("/proc/version");
+        // List /proc contents
+        let entries = vfs_readdir("/proc");
+        let mut out = "/proc contents:\n";
+        let mut i = 0;
+        while i < len(entries) {
+            out = out + "  " + entries[i] + "\n";
+            i = i + 1;
+        }
+        return out;
+    }
+    if str_starts_with(cmd, "proc ") {
+        let arg = str_sub(cmd, 5, len(cmd));
+        // If starts with / use as-is, else prepend /proc/
+        let path = arg;
+        if str_char_at(arg, 0) != 47 { path = "/proc/" + arg; }
+        return procfs_read(path);
     }
     if cmd == "meminfo" {
         return procfs_read("/proc/meminfo");
@@ -291,6 +365,55 @@ fn shell_handle_ext(cmd) {
     }
     if cmd == "fw" {
         return nf_status();
+    }
+    if cmd == "firewall" {
+        // Detailed firewall report
+        let mut out = "=== Netfilter Status ===\n" + nf_status() + "\n";
+        out = out + "Rules:\n";
+        let mut ri = 0;
+        while ri < nf_rule_count {
+            if nf_active[ri] == 1 {
+                let chain_s = "INPUT";
+                if nf_chain[ri] == 1 { chain_s = "OUTPUT"; }
+                if nf_chain[ri] == 2 { chain_s = "FORWARD"; }
+                let action_s = "ACCEPT";
+                if nf_action[ri] == 2 { action_s = "DROP"; }
+                if nf_action[ri] == 3 { action_s = "REJECT"; }
+                if nf_action[ri] == 4 { action_s = "LOG"; }
+                out = out + "  [" + to_string(ri) + "] " + chain_s
+                          + " dport=" + to_string(nf_dport_min[ri])
+                          + "-" + to_string(nf_dport_max[ri])
+                          + " " + action_s
+                          + " hits=" + to_string(nf_match_count[ri]) + "\n";
+            }
+            ri = ri + 1;
+        }
+        return out;
+    }
+    if str_starts_with(cmd, "fw allow ") {
+        let port = parse_int(str_sub(cmd, 9, len(cmd)));
+        nf_add_rule(NF_CHAIN_INPUT, NF_PROTO_TCP, 0, 0, 0, 0, 0, 65535, port, port, NF_ACCEPT);
+        return "Added INPUT ACCEPT tcp dport=" + to_string(port);
+    }
+    if str_starts_with(cmd, "fw block ") {
+        let port = parse_int(str_sub(cmd, 9, len(cmd)));
+        nf_add_rule(NF_CHAIN_INPUT, NF_PROTO_TCP, 0, 0, 0, 0, 0, 65535, port, port, NF_DROP);
+        return "Added INPUT DROP tcp dport=" + to_string(port);
+    }
+    if cmd == "fw flush" {
+        netfilter_init();
+        return "Firewall rules flushed (default policies restored)";
+    }
+    if str_starts_with(cmd, "fw policy ") {
+        // fw policy input accept|drop
+        let arg = str_sub(cmd, 10, len(cmd));
+        let chain = NF_CHAIN_INPUT;
+        if str_starts_with(arg, "output ") { chain = NF_CHAIN_OUTPUT; }
+        if str_starts_with(arg, "forward ") { chain = NF_CHAIN_FORWARD; }
+        let action = NF_ACCEPT;
+        if _str_contains(arg, "drop") { action = NF_DROP; }
+        nf_set_policy(chain, action);
+        return "Policy set";
     }
     if cmd == "rand" {
         return to_string(random_u32());
@@ -361,6 +484,129 @@ fn shell_handle_ext(cmd) {
         kmod_selftest();
         return "";
     }
+    if cmd == "sysmon" {
+        uismon_open();
+        return "System Monitor opened";
+    }
+    if cmd == "files" {
+        uifiles_open();
+        return "File Manager opened";
+    }
+    if cmd == "audiotest" {
+        ac97_beep(440, 500);
+        return "Audio test: 440 Hz 500 ms";
+    }
+    if cmd == "settings" {
+        uisettings_open();
+        return "Settings opened";
+    }
+    if cmd == "gpu" {
+        if gpu_initialized == 1 {
+            print("GPU: " + to_string(gpu_display_w) + "x" + to_string(gpu_display_h) +
+                  " fb=0x" + format_hex(gpu_fb_base(), 8) + " [active]");
+        } else {
+            print("GPU: not initialized");
+        }
+        return "";
+    }
+    if cmd == "ext4" {
+        if ext4_ready == 1 {
+            print("ext4: mounted  block_size=" + to_string(ext4_block_size) +
+                  " inode_size=" + to_string(ext4_inode_size));
+            let root_ents = ext4_list_dir(EXT4_ROOT_INODE);
+            let mut ri = 0;
+            while ri < len(root_ents) {
+                print("  " + root_ents[ri][0]);
+                ri = ri + 1;
+            }
+        } else {
+            print("ext4: not mounted");
+        }
+        return "";
+    }
+    // --- echo with redirect: echo <text> > <path> ---
+    if str_starts_with(cmd, "echo ") {
+        let rest = str_sub(cmd, 5, len(cmd));
+        // Check for > redirect
+        let mut redir_pos = 0 - 1;
+        let mut gi = 0;
+        while gi < len(rest) {
+            if str_char_at(rest, gi) == 62 { redir_pos = gi; gi = len(rest); }
+            else { gi = gi + 1; }
+        }
+        if redir_pos >= 0 {
+            let text = str_sub(rest, 0, redir_pos - 1);
+            let rpath_raw = str_sub(rest, redir_pos + 1, len(rest));
+            let mut rpath = rpath_raw;
+            if len(rpath_raw) > 0 {
+                if str_char_at(rpath_raw, 0) == 32 { rpath = str_sub(rpath_raw, 1, len(rpath_raw)); }
+            }
+            let wfd = vfs_open(rpath, 577);  // O_CREAT|O_WRONLY|O_TRUNC
+            if wfd < 0 { return "Error: cannot write to " + rpath; }
+            vfs_write(wfd, text, len(text));
+            vfs_close(wfd);
+            return "";
+        }
+        return rest;
+    }
+    // --- inotify: show inotify subsystem status ---
+    if cmd == "inotify" {
+        let ic = inotify_inst_count;
+        let wc = watch_count;
+        let qc = evt_count;
+        print("inotify: instances=" + to_string(ic) + " watches=" + to_string(wc) + " queued_events=" + to_string(qc));
+        return "";
+    }
+    if cmd == "pty" {
+        print(pty_status());
+        return "";
+    }
+    if str_starts_with(cmd, "pty ") {
+        let ptycmd = str_sub(cmd, 4, len(cmd));
+        if ptycmd == "alloc" {
+            let pair = pty_open_pair();
+            print("PTY allocated: id=" + to_string(pair[2]) + " mfd=" + to_string(pair[0]) + " sfd=" + to_string(pair[1]));
+            return "";
+        }
+        if str_starts_with(ptycmd, "info ") {
+            let pid_s = str_sub(ptycmd, 5, len(ptycmd));
+            print(pty_info(parse_int(pid_s)));
+            return "";
+        }
+        return "Usage: pty | pty alloc | pty info <id>";
+    }
+    // --- watch <path>: add inotify watch and show events ---
+    if str_starts_with(cmd, "watch ") {
+        let wpath = str_sub(cmd, 6, len(cmd));
+        let inst = sys_inotify_init();
+        sys_inotify_add_watch(inst, wpath, 4095);
+        print("Watching: " + wpath + "  (inst=" + to_string(inst) + ", sampling 10 polls)");
+        let mut wdone = 0;
+        let mut wpoll = 0;
+        while wdone == 0 {
+            let evts = sys_inotify_read(inst);
+            let mut ei = 0;
+            while ei + 1 < len(evts) {
+                let emask = evts[ei];
+                let ename = evts[ei + 1];
+                print("EVENT mask=" + to_string(emask) + " name=" + ename);
+                ei = ei + 2;
+            }
+            wpoll = wpoll + 1;
+            if wpoll >= 10 { wdone = 1; }
+        }
+        sys_inotify_close(inst);
+        return "";
+    }
+    if cmd == "fm" || cmd == "fileman" {
+        // Open graphical file manager window
+        uifiles_init();
+        let win_id = uifiles_open();
+        if win_id < 0 {
+            return "Failed to open file manager";
+        }
+        return "File manager opened (window " + to_string(win_id) + ")";
+    }
     return shell_handle(cmd);
 }
 
@@ -372,9 +618,147 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 69 commands");
+print("shell.hl loaded -- 87 commands + pipe(|) + echo>redirect + inotify + watch + pty");
 
 // Main shell loop (called from kernel_init)
+
+// Handle pipe: "cmd1 | cmd2" — execute cmd1, pass result to cmd2
+fn shell_handle_pipe(pipeline) {
+    // Find | separator
+    let mut pipe_pos = 0 - 1;
+    let mut i = 0;
+    while i < len(pipeline) {
+        if str_char_at(pipeline, i) == 124 {  // '|' = ASCII 124
+            pipe_pos = i;
+            i = len(pipeline); // break
+        } else {
+            i = i + 1;
+        }
+    }
+    if pipe_pos < 0 { return ""; }  // no pipe found
+
+    let cmd1 = str_sub(pipeline, 0, pipe_pos - 1);
+    let cmd2_raw = str_sub(pipeline, pipe_pos + 1, len(pipeline));
+    // Trim leading space from cmd2
+    let mut cmd2 = cmd2_raw;
+    if len(cmd2_raw) > 0 {
+        if str_char_at(cmd2_raw, 0) == 32 { cmd2 = str_sub(cmd2_raw, 1, len(cmd2_raw)); }
+    }
+
+    // Execute left side
+    let mut left = shell_handle(cmd1);
+    if left == "" { left = shell_handle_ext(cmd1); }
+
+    // Execute right side with left as context
+    if cmd2 == "wc" {
+        // Count lines, words, chars
+        let mut lines = 0;
+        let mut words = 0;
+        let mut in_word = 0;
+        let mut ci = 0;
+        while ci < len(left) {
+            let ch = str_char_at(left, ci);
+            if ch == 10 { lines = lines + 1; }
+            if ch == 32 || ch == 9 || ch == 10 {
+                in_word = 0;
+            } else {
+                if in_word == 0 { words = words + 1; }
+                in_word = 1;
+            }
+            ci = ci + 1;
+        }
+        return to_string(lines) + " " + to_string(words) + " " + to_string(len(left));
+    }
+
+    if str_starts_with(cmd2, "grep ") {
+        let pattern = str_sub(cmd2, 5, len(cmd2));
+        // Split left by newline, filter lines containing pattern
+        let mut out = "";
+        let mut line = "";
+        let mut ci = 0;
+        while ci < len(left) {
+            let ch = str_char_at(left, ci);
+            if ch == 10 {
+                if str_starts_with(line, pattern) || _str_contains(line, pattern) {
+                    out = out + line + "\n";
+                }
+                line = "";
+            } else {
+                line = line + str_from_code(ch);
+            }
+            ci = ci + 1;
+        }
+        if len(line) > 0 {
+            if _str_contains(line, pattern) { out = out + line; }
+        }
+        return out;
+    }
+
+    if cmd2 == "head" {
+        // Return first 10 lines
+        let mut out = "";
+        let mut line = "";
+        let mut count = 0;
+        let mut ci = 0;
+        while ci < len(left) {
+            let ch = str_char_at(left, ci);
+            if ch == 10 {
+                out = out + line + "\n";
+                line = "";
+                count = count + 1;
+                if count >= 10 { ci = len(left); }  // break
+            } else {
+                line = line + str_from_code(ch);
+            }
+            ci = ci + 1;
+        }
+        return out;
+    }
+
+    if cmd2 == "tail" {
+        // Return last 10 lines
+        let mut lines = [];
+        let mut line = "";
+        let mut ci = 0;
+        while ci < len(left) {
+            let ch = str_char_at(left, ci);
+            if ch == 10 {
+                push(lines, line);
+                line = "";
+            } else {
+                line = line + str_from_code(ch);
+            }
+            ci = ci + 1;
+        }
+        if len(line) > 0 { push(lines, line); }
+        let start = 0;
+        if len(lines) > 10 { start = len(lines) - 10; }
+        let mut out = "";
+        let mut i = start;
+        while i < len(lines) {
+            out = out + lines[i] + "\n";
+            i = i + 1;
+        }
+        return out;
+    }
+
+    // Unknown right side: just return left result
+    return left;
+}
+
+// Helper: check if haystack contains needle (simple linear search)
+fn _str_contains(haystack, needle) {
+    if len(needle) == 0 { return 1; }
+    if len(needle) > len(haystack) { return 0; }
+    let limit = len(haystack) - len(needle);
+    let mut i = 0;
+    while i <= limit {
+        if str_sub(haystack, i, i + len(needle)) == needle { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
 fn shell_main() {
     let mut running = 1;
     while running == 1 {
@@ -390,8 +774,14 @@ fn shell_main() {
                 if cmd == "shutdown" || cmd == "exit" {
                     running = 0;
                 } else {
-                    let result = shell_handle(cmd);
-                    if result == "" { result = shell_handle_ext(cmd); }
+                    let mut result = "";
+                    // Check for pipe operator
+                    if _str_contains(cmd, " | ") {
+                        result = shell_handle_pipe(cmd);
+                    } else {
+                        result = shell_handle(cmd);
+                        if result == "" { result = shell_handle_ext(cmd); }
+                    }
                     serial_print(result);
                     serial_print("HicOS> ");
                 }

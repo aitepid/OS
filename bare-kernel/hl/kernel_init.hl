@@ -9,7 +9,8 @@
 fn kernel_main() {
     // === Phase 0: Early hardware ===
     serial_init();         // serial.hl  -- COM1 for debug output
-    serial_print("HicOS 6.0 -- Hilbert-Lang Kernel (122 modules)");
+    syslog_init();         // syslog.hl  -- kernel ring-buffer logger
+    serial_print("HicOS 6.0 -- Hilbert-Lang Kernel (132 modules)");
     serial_print("Initializing subsystems...");
 
     // === Phase 0b: Boot mode detection ===
@@ -33,21 +34,26 @@ fn kernel_main() {
         page_alloc_init();     // page_alloc.hl -- bitmap frame allocator
     }
     hilbert_alloc_init();  // hilbert_alloc.hl
+    mmap_init();           // mmap.hl -- demand paging + COW mmap regions
     swap_init();           // swap.hl -- 64 MB swap partition
-    serial_print("  [ok] Memory: kmalloc + page_alloc + virt_mem + hilbert + swap");
+    serial_print("  [ok] Memory: kmalloc + page_alloc + virt_mem + hilbert + mmap + swap");
 
     // === Phase 3: Timer ===
     serial_print("  [ok] Timer: PIT 100 Hz + RTC");
 
     // === Phase 4: Task management ===
     task_init();           // task.hl -- task table (64 slots)
-    serial_print("  [ok] Tasks: 64 slots, CFS scheduler");
+    mlfq_init();           // sched.hl -- MLFQ scheduler (4 queues)
+    signal_init_subsystem(); // signal.hl -- per-task signal state
+    serial_print("  [ok] Tasks: 64 slots, CFS+MLFQ scheduler, signals");
 
     // === Phase 5: Filesystem ===
     fs_init();             // ramfs.hl -- RAM filesystem
     vfs_init();            // vfs.hl -- VFS layer
     devfs_init();          // devfs.hl -- /dev device nodes
-    serial_print("  [ok] Filesystem: ramfs + FAT16 + ext2 + VFS + devfs");
+    procfs_init();         // procfs.hl -- /proc virtual filesystem
+    inotify_init_subsystem(); // inotify.hl -- filesystem event notifications
+    serial_print("  [ok] Filesystem: ramfs + FAT16 + ext4 + VFS + devfs + procfs + inotify");
 
     // === Phase 6: Display ===
     if is_uefi == 1 {
@@ -56,7 +62,9 @@ fn kernel_main() {
         mouse_init();          // mouse.hl -- PS/2 mouse via IRQ12
         vesa_auto_init();      // vesa.hl -- VESA framebuffer
     }
-    serial_print("  [ok] Devices: keyboard + mouse + VESA/GOP");
+    font_sync_fb();            // font.hl -- sync glyph renderer to current framebuffer
+    wm_init();                 // wm.hl -- window manager, desktop chrome
+    serial_print("  [ok] Devices: keyboard + mouse + VESA/GOP + WM");
 
     // === Phase 7: PCI + Storage + Network + Audio ===
     pci_scan();            // pci.hl -- enumerate PCI bus
@@ -67,7 +75,23 @@ fn kernel_main() {
     ac97_init();           // audio.hl -- AC97 audio codec
     net_init();            // net.hl -- VirtIO-net + ARP
     dhcp_discover();       // dhcp.hl -- IP address
-    serial_print("  [ok] PCI + AHCI + ATA-PIO + USB + USB-KBD + AC97 + Net + DHCP");
+    netfilter_init();      // netfilter.hl -- packet filter (INPUT/OUTPUT/FORWARD)
+    // VirtIO-GPU: detect, init, and bridge to VESA framebuffer
+    let gpu_pci = gpu_detect();
+    if len(gpu_pci) == 3 {
+        let gok = gpu_init(gpu_pci[0], gpu_pci[1], gpu_pci[2]);
+        if gok == 1 {
+            vesa_gpu_mode(gpu_fb_base(), gpu_display_w, gpu_display_h);
+            font_sync_fb();    // font: re-sync to new GPU-backed framebuffer
+            serial_print("  [ok] VirtIO-GPU: " + to_string(gpu_display_w) + "x" + to_string(gpu_display_h));
+        }
+    }
+    // ext4: mount first AHCI SATA drive as root filesystem via VFS
+    let e4ok = vfs_mount_ext4("/", 0);
+    if e4ok == 1 {
+        serial_print("  [ok] ext4 root filesystem mounted via VFS");
+    }
+    serial_print("  [ok] PCI + AHCI + ATA-PIO + USB + USB-KBD + AC97 + Net + DHCP + netfilter");
 
     // === Phase 8: ACPI + SMP + RTC ===
     power_init();          // power.hl -- ACPI tables
@@ -77,9 +101,10 @@ fn kernel_main() {
 
     // === Phase 9: Usermode + Security ===
     tss_init();            // usermode.hl -- TSS for ring 3
+    syscall_msr_setup(0);  // usermode.hl -- STAR/LSTAR/FMASK for SYSCALL/SYSRET
     users_init();          // users.hl -- multi-user + permissions
     secboot_init();        // secure_boot.hl
-    serial_print("  [ok] Usermode + Secure Boot");
+    serial_print("  [ok] Usermode + SYSCALL MSRs + Secure Boot");
 
     // === Phase 10: Firmware + GPT ===
     firmware_init();       // firmware.hl
@@ -104,8 +129,14 @@ fn kernel_main() {
 
     // === Summary ===
     serial_print("");
-    serial_print("=== HicOS kernel initialized (122 modules) ===");
+    serial_print("=== HicOS kernel initialized (132 modules) ===");
     serial_print("");
+
+    // === Login ===
+    login_prompt();        // login.hl -- authenticate user before shell
+
+    // === Open terminal window on desktop ===
+    wm_open_terminal_window();  // wm.hl -- graphical terminal at startup
 
     // === Enter interactive shell ===
     serial_print("HicOS> ");

@@ -272,19 +272,30 @@ fn net_input(pkt) {
         if len(pkt) < offset + 20 { return 0; }
         let ihl = (pkt[offset] % 16) * 4;
         let proto = pkt[offset + 9];
+        let src_ip = ip_pack(pkt[offset+12], pkt[offset+13], pkt[offset+14], pkt[offset+15]);
+        let dst_ip = ip_pack(pkt[offset+16], pkt[offset+17], pkt[offset+18], pkt[offset+19]);
         let ip_payload_off = offset + ihl;
+        let mut src_port = 0;
+        let mut dst_port = 0;
+        if proto == IP_TCP || proto == IP_UDP {
+            if len(pkt) >= ip_payload_off + 4 {
+                src_port = pkt[ip_payload_off] * 256 + pkt[ip_payload_off + 1];
+                dst_port = pkt[ip_payload_off + 2] * 256 + pkt[ip_payload_off + 3];
+            }
+        }
+
+        // Netfilter INPUT hook
+        let nf_result = nf_match(NF_CHAIN_INPUT, proto, src_ip, dst_ip, src_port, dst_port, len(pkt));
+        if nf_result == NF_DROP { return 0; }
+        if nf_result == NF_REJECT { return 0; }
 
         if proto == IP_ICMP {
-            // Extract ICMP data
             let mut icmp_data = [];
             let mut i = ip_payload_off;
             while i < len(pkt) { push(icmp_data, pkt[i]); i = i + 1; }
             return icmp_input(icmp_data);
         }
         if proto == IP_UDP {
-            // Parse UDP header
-            if len(pkt) < ip_payload_off + 8 { return 0; }
-            let dst_port = pkt[ip_payload_off + 2] * 256 + pkt[ip_payload_off + 3];
             // DHCP response on port 68
             if dst_port == 68 {
                 let mut udp_data = [];
@@ -294,7 +305,6 @@ fn net_input(pkt) {
             }
         }
         if proto == IP_TCP {
-            let src_ip = ip_pack(pkt[offset+12], pkt[offset+13], pkt[offset+14], pkt[offset+15]);
             let mut tcp_data = [];
             let mut i = ip_payload_off;
             while i < len(pkt) { push(tcp_data, pkt[i]); i = i + 1; }

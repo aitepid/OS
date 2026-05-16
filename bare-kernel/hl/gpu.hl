@@ -38,89 +38,307 @@ let GPU_CMD_CTX_CREATE             = 512;   // 0x0200
 let GPU_CMD_CTX_DESTROY            = 513;
 let GPU_CMD_SUBMIT_3D              = 518;   // 0x0206
 
+// Response types
+let GPU_RESP_OK_NODATA   = 4352;   // 0x1100
+let GPU_RESP_OK_DISPINFO = 4353;   // 0x1101
+
 // Pixel format: B8G8R8A8_UNORM = 1, B8G8R8X8_UNORM = 2
 let GPU_FORMAT_BGRA = 1;
 
-let mut gpu_vq_addr = 0;        // virtqueue base
-let mut gpu_display_w = 0;
-let mut gpu_display_h = 0;
-let mut gpu_resource_id = 1;
+// VirtIO PCI config offsets (legacy)
+let GPU_VIRTIO_BAR          = 0;
+let GPU_Q_SELECT            = 14;
+let GPU_Q_SIZE              = 12;
+let GPU_Q_ADDR              = 8;
+let GPU_Q_NOTIFY            = 16;
+let GPU_DEV_STATUS          = 18;
+let GPU_GUEST_FEAT          = 4;
+let GPU_DEV_FEAT            = 0;
 
-// GPU command header (24 bytes):
-//   +0:  type (4)
-//   +4:  flags (4)
-//   +8:  fence_id (8)
-//   +16: ctx_id (4)
-//   +20: padding (4)
+// Descriptor flags
+let GPU_VRING_F_NEXT        = 1;
+let GPU_VRING_F_WRITE       = 2;
 
-fn gpu_init(pci_bus, pci_dev, pci_func) {
-    // 1. Setup VirtIO device (similar to virtio_net)
-    // 2. Send GET_DISPLAY_INFO to learn resolution
-    // 3. Create a 2D resource for the framebuffer
-    // 4. Attach backing memory
-    // 5. Set scanout
+// Fixed memory layout
+let GPU_CMD_BUF      = 9961472;   // 0x980000 — command buffer (4KB)
+let GPU_RESP_BUF     = 9965568;   // 0x981000 — response buffer (256B)
+let GPU_FB_ADDR      = 10485760;  // 0xA00000 — framebuffer backing (3MB for 1024x768x4)
 
-    gpu_display_w = 1024;
-    gpu_display_h = 768;
+let mut gpu_bar          = 0;
+let mut gpu_vq_addr      = 0;
+let mut gpu_vq_size      = 0;
+let mut gpu_vq_avail_idx = 0;
+let mut gpu_vq_used_last = 0;
+let mut gpu_desc_idx     = 0;
+let mut gpu_display_w    = 1024;
+let mut gpu_display_h    = 768;
+let mut gpu_resource_id  = 1;
+let mut gpu_fb_resource  = 0;
+let mut gpu_initialized  = 0;
+
+// === Low-level VirtIO queue helpers ===
+
+fn gpu_vq_desc_addr(i) {
+    return gpu_vq_addr + i * 16;
+}
+
+// avail ring base: after descriptor table (qsize * 16 bytes)
+fn gpu_avail_base() {
+    return gpu_vq_addr + gpu_vq_size * 16;
+}
+
+// used ring base: after avail ring, page-aligned
+fn gpu_used_base() {
+    let avail_end = gpu_avail_base() + 4 + gpu_vq_size * 2 + 2;
+    return ((avail_end + 4095) / 4096) * 4096;
+}
+
+// Submit a command buffer (cmd_addr/cmd_len) and expect a response (resp_addr)
+// Uses two chained descriptors: one read-only (cmd) + one write-only (resp)
+fn gpu_submit(cmd_addr, cmd_len, resp_addr, resp_len) {
+    let d0 = gpu_vq_desc_addr(gpu_desc_idx);
+    let d1 = gpu_vq_desc_addr(gpu_desc_idx + 1);
+
+    // Descriptor 0: command (device reads)
+    mem_write_u64(d0,      cmd_addr);
+    mem_write_u32(d0 + 8,  cmd_len);
+    mem_write_u16(d0 + 12, GPU_VRING_F_NEXT);
+    mem_write_u16(d0 + 14, gpu_desc_idx + 1);
+
+    // Descriptor 1: response (device writes)
+    mem_write_u64(d1,      resp_addr);
+    mem_write_u32(d1 + 8,  resp_len);
+    mem_write_u16(d1 + 12, GPU_VRING_F_WRITE);
+    mem_write_u16(d1 + 14, 0);
+
+    // Add head descriptor to available ring
+    let avail = gpu_avail_base();
+    let idx = mem_read_u16(avail + 2);
+    mem_write_u16(avail + 4 + (idx % gpu_vq_size) * 2, gpu_desc_idx);
+    mem_write_u16(avail + 2, idx + 1);
+    gpu_vq_avail_idx = idx + 1;
+
+    // Advance descriptor pointer (wrap within queue)
+    gpu_desc_idx = (gpu_desc_idx + 2) % gpu_vq_size;
+
+    // Notify device: control queue = 0
+    port_out_u16(gpu_bar + GPU_Q_NOTIFY, 0);
+
+    // Spin-wait for used ring to catch up (max ~100K iterations)
+    let mut spin = 0;
+    let mut done = 0;
+    while spin < 100000 {
+        if done == 0 {
+            let used_idx = mem_read_u16(gpu_used_base() + 2);
+            if used_idx != gpu_vq_used_last {
+                gpu_vq_used_last = used_idx;
+                done = 1;
+            }
+        }
+        spin = spin + 1;
+    }
     return 0;
+}
+
+// Write a 24-byte VirtIO-GPU command header at addr
+fn gpu_write_hdr(addr, cmd_type) {
+    mem_write_u32(addr,      cmd_type);  // type
+    mem_write_u32(addr + 4,  0);         // flags
+    mem_write_u64(addr + 8,  0);         // fence_id
+    mem_write_u32(addr + 16, 0);         // ctx_id
+    mem_write_u32(addr + 20, 0);         // padding
+    return 0;
+}
+
+// === GPU public API ===
+
+fn gpu_detect() {
+    let devices = pci_scan();
+    let mut i = 0;
+    while i < len(devices) {
+        let vendor = devices[i][3];
+        let devid  = devices[i][4];
+        if vendor == GPU_VENDOR && devid == GPU_DEVICE {
+            return [devices[i][0], devices[i][1], devices[i][2]];
+        }
+        i = i + 1;
+    }
+    return [];
 }
 
 fn gpu_create_resource(width, height) {
     let id = gpu_resource_id;
     gpu_resource_id = gpu_resource_id + 1;
-    // Build RESOURCE_CREATE_2D command:
-    //   header (24) + resource_id(4) + format(4) + width(4) + height(4)
-    // Send via virtqueue
+    // RESOURCE_CREATE_2D: header(24) + resource_id(4) + format(4) + width(4) + height(4) = 40 bytes
+    gpu_write_hdr(GPU_CMD_BUF, GPU_CMD_RESOURCE_CREATE_2D);
+    mem_write_u32(GPU_CMD_BUF + 24, id);
+    mem_write_u32(GPU_CMD_BUF + 28, GPU_FORMAT_BGRA);
+    mem_write_u32(GPU_CMD_BUF + 32, width);
+    mem_write_u32(GPU_CMD_BUF + 36, height);
+    gpu_submit(GPU_CMD_BUF, 40, GPU_RESP_BUF, 24);
     return id;
 }
 
 fn gpu_attach_backing(resource_id, mem_addr, mem_size) {
-    // Build RESOURCE_ATTACH_BACKING:
-    //   header (24) + resource_id(4) + nr_entries(4)
-    //   + entry: addr(8) + length(4) + padding(4)
+    // RESOURCE_ATTACH_BACKING: header(24) + resource_id(4) + nr_entries(4)
+    //   + entry[0]: addr(8) + length(4) + pad(4) = 52 bytes total
+    gpu_write_hdr(GPU_CMD_BUF, GPU_CMD_RESOURCE_ATTACH_BACKING);
+    mem_write_u32(GPU_CMD_BUF + 24, resource_id);
+    mem_write_u32(GPU_CMD_BUF + 28, 1);          // nr_entries = 1
+    mem_write_u64(GPU_CMD_BUF + 32, mem_addr);   // entry addr
+    mem_write_u32(GPU_CMD_BUF + 40, mem_size);   // entry length
+    mem_write_u32(GPU_CMD_BUF + 44, 0);          // padding
+    gpu_submit(GPU_CMD_BUF, 48, GPU_RESP_BUF, 24);
     return 0;
 }
 
 fn gpu_set_scanout(resource_id) {
-    // Build SET_SCANOUT:
-    //   header (24) + scanout_id(4) + resource_id(4) + rect(x,y,w,h each 4)
+    // SET_SCANOUT: header(24) + rect{x,y,w,h}(16) + scanout_id(4) + resource_id(4) = 48 bytes
+    gpu_write_hdr(GPU_CMD_BUF, GPU_CMD_SET_SCANOUT);
+    mem_write_u32(GPU_CMD_BUF + 24, 0);                // rect.x
+    mem_write_u32(GPU_CMD_BUF + 28, 0);                // rect.y
+    mem_write_u32(GPU_CMD_BUF + 32, gpu_display_w);    // rect.w
+    mem_write_u32(GPU_CMD_BUF + 36, gpu_display_h);    // rect.h
+    mem_write_u32(GPU_CMD_BUF + 40, 0);                // scanout_id = 0 (primary display)
+    mem_write_u32(GPU_CMD_BUF + 44, resource_id);
+    gpu_submit(GPU_CMD_BUF, 48, GPU_RESP_BUF, 24);
     return 0;
 }
 
 fn gpu_transfer(resource_id, x, y, w, h) {
-    // Build TRANSFER_TO_HOST_2D:
-    //   header (24) + rect(16) + offset(8) + resource_id(4) + padding(4)
+    // TRANSFER_TO_HOST_2D: header(24) + rect(16) + offset(8) + resource_id(4) + pad(4) = 56 bytes
+    let offset = (y * gpu_display_w + x) * 4;  // byte offset in framebuffer
+    gpu_write_hdr(GPU_CMD_BUF, GPU_CMD_TRANSFER_TO_HOST_2D);
+    mem_write_u32(GPU_CMD_BUF + 24, x);
+    mem_write_u32(GPU_CMD_BUF + 28, y);
+    mem_write_u32(GPU_CMD_BUF + 32, w);
+    mem_write_u32(GPU_CMD_BUF + 36, h);
+    mem_write_u64(GPU_CMD_BUF + 40, offset);
+    mem_write_u32(GPU_CMD_BUF + 48, resource_id);
+    mem_write_u32(GPU_CMD_BUF + 52, 0);
+    gpu_submit(GPU_CMD_BUF, 56, GPU_RESP_BUF, 24);
     return 0;
 }
 
 fn gpu_flush(resource_id, x, y, w, h) {
-    // Build RESOURCE_FLUSH:
-    //   header (24) + rect(16) + resource_id(4) + padding(4)
+    // RESOURCE_FLUSH: header(24) + rect(16) + resource_id(4) + pad(4) = 48 bytes
+    gpu_write_hdr(GPU_CMD_BUF, GPU_CMD_RESOURCE_FLUSH);
+    mem_write_u32(GPU_CMD_BUF + 24, x);
+    mem_write_u32(GPU_CMD_BUF + 28, y);
+    mem_write_u32(GPU_CMD_BUF + 32, w);
+    mem_write_u32(GPU_CMD_BUF + 36, h);
+    mem_write_u32(GPU_CMD_BUF + 40, resource_id);
+    mem_write_u32(GPU_CMD_BUF + 44, 0);
+    gpu_submit(GPU_CMD_BUF, 48, GPU_RESP_BUF, 24);
     return 0;
 }
 
-// High-level: blit a pixel buffer to screen
-fn gpu_blit(buf_addr, x, y, w, h) {
-    // 1. Transfer region from guest memory to host resource
-    // gpu_transfer(fb_resource, x, y, w, h);
-    // 2. Flush to display
-    // gpu_flush(fb_resource, x, y, w, h);
+// High-level: blit a dirty region from guest framebuffer to display
+fn gpu_blit(x, y, w, h) {
+    if gpu_initialized == 0 { return 0; }
+    gpu_transfer(gpu_fb_resource, x, y, w, h);
+    gpu_flush(gpu_fb_resource, x, y, w, h);
+    return 0;
+}
+
+// Full-screen blit (convenience wrapper)
+fn gpu_flip() {
+    gpu_blit(0, 0, gpu_display_w, gpu_display_h);
+    return 0;
+}
+
+// Return base address of the GPU-backed framebuffer
+fn gpu_fb_base() {
+    return GPU_FB_ADDR;
+}
+
+fn gpu_init(pci_bus, pci_dev, pci_func) {
+    // Read BAR0 (I/O port base, mask low 2 bits)
+    let bar0 = pci_bar(pci_bus, pci_dev, pci_func, 0);
+    gpu_bar = (bar0 / 4) * 4;
+
+    // VirtIO device reset
+    port_out_u8(gpu_bar + GPU_DEV_STATUS, 0);
+
+    // Acknowledge + driver
+    port_out_u8(gpu_bar + GPU_DEV_STATUS, 3);   // ACK | DRIVER
+
+    // Negotiate features (accept all)
+    let feat = port_in_u32(gpu_bar + GPU_DEV_FEAT);
+    port_out_u32(gpu_bar + GPU_GUEST_FEAT, feat);
+
+    // Setup control queue (queue 0)
+    port_out_u16(gpu_bar + GPU_Q_SELECT, 0);
+    gpu_vq_size = port_in_u16(gpu_bar + GPU_Q_SIZE);
+    if gpu_vq_size == 0 { gpu_vq_size = 64; }   // fallback
+
+    gpu_vq_addr = page_alloc_contiguous(4);
+    mem_zero(gpu_vq_addr, 16384);
+    port_out_u32(gpu_bar + GPU_Q_ADDR, gpu_vq_addr / 4096);
+
+    gpu_desc_idx     = 0;
+    gpu_vq_avail_idx = 0;
+    gpu_vq_used_last = 0;
+
+    // Driver OK
+    port_out_u8(gpu_bar + GPU_DEV_STATUS, 7);   // ACK | DRIVER | DRIVER_OK
+
+    // Determine display dimensions via GET_DISPLAY_INFO
+    gpu_write_hdr(GPU_CMD_BUF, GPU_CMD_GET_DISPLAY_INFO);
+    gpu_submit(GPU_CMD_BUF, 24, GPU_RESP_BUF, 128);
+    // Response: header(24) + [display_info per scanout: rect(16)+enabled(4)+flags(4)]
+    let w = mem_read_u32(GPU_RESP_BUF + 24 + 8);   // pmode.r.width
+    let h = mem_read_u32(GPU_RESP_BUF + 24 + 12);  // pmode.r.height
+    if w > 0 { gpu_display_w = w; }
+    if h > 0 { gpu_display_h = h; }
+
+    // Create framebuffer resource
+    gpu_fb_resource = gpu_create_resource(gpu_display_w, gpu_display_h);
+
+    // Clear framebuffer backing memory to black
+    let fb_size = gpu_display_w * gpu_display_h * 4;
+    mem_zero(GPU_FB_ADDR, fb_size);
+
+    // Attach guest framebuffer memory to resource
+    gpu_attach_backing(gpu_fb_resource, GPU_FB_ADDR, fb_size);
+
+    // Bind resource to scanout 0
+    gpu_set_scanout(gpu_fb_resource);
+
+    // Initial full-screen flush
+    gpu_transfer(gpu_fb_resource, 0, 0, gpu_display_w, gpu_display_h);
+    gpu_flush(gpu_fb_resource,   0, 0, gpu_display_w, gpu_display_h);
+
+    gpu_initialized = 1;
+    print("VirtIO-GPU: " + to_string(gpu_display_w) + "x" + to_string(gpu_display_h) + " framebuffer at 0xA00000");
     return 0;
 }
 
 // === 3D context (virgl) ===
 fn gpu_ctx_create(ctx_id) {
-    // Build CTX_CREATE: header + ctx_name_len(4) + name(64)
+    // CTX_CREATE: header(24) + name_len(4) + name(64) = 92 bytes
+    gpu_write_hdr(GPU_CMD_BUF, GPU_CMD_CTX_CREATE);
+    mem_write_u32(GPU_CMD_BUF + 24, 8);          // name_len
+    // Write ASCII "hicos3d" at name field
+    mem_write_u64(GPU_CMD_BUF + 28, 8026609778647380072); // "hicos3d"
+    gpu_submit(GPU_CMD_BUF, 92, GPU_RESP_BUF, 24);
     return 0;
 }
 
 fn gpu_submit_3d(ctx_id, cmd_buf, cmd_size) {
-    // Build SUBMIT_3D: header + size(4) + command buffer
-    // Commands use Gallium3D TGSI/NIR command stream
+    // SUBMIT_3D: header(24) + size(4) + pad(4) + command_data(cmd_size)
+    gpu_write_hdr(GPU_CMD_BUF, GPU_CMD_SUBMIT_3D);
+    mem_write_u32(GPU_CMD_BUF + 24, cmd_size);
+    mem_write_u32(GPU_CMD_BUF + 28, 0);
+    memcpy(GPU_CMD_BUF + 32, cmd_buf, cmd_size);
+    gpu_submit(GPU_CMD_BUF, 32 + cmd_size, GPU_RESP_BUF, 24);
     return 0;
 }
 
 fn gpu_ctx_destroy(ctx_id) {
+    gpu_write_hdr(GPU_CMD_BUF, GPU_CMD_CTX_DESTROY);
+    mem_write_u32(GPU_CMD_BUF + 24, ctx_id);
+    gpu_submit(GPU_CMD_BUF, 28, GPU_RESP_BUF, 24);
     return 0;
 }
 
