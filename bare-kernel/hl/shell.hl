@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 135 commands + pipe operator (|):
+// 150 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -18,6 +18,9 @@
 //   Seccomp:   seccomp  seccomp new  seccomp deny  seccomp apply
 //   Container: ctr  ctr new  ctr start  ctr stop  ctr rm  ctr exec  ctr info
 //   Clipboard: clipboard  clip copy  clip paste  clip hist
+//   Overlay FS: overlay  overlay new  overlay rm  overlay info
+//   HTTP Server: httpd  httpd start  httpd stop  httpd tick
+//   Calculator: calc
 //   Shell pipe: cmd1 | cmd2
 
 fn shell_handle(cmd) {
@@ -43,6 +46,10 @@ fn shell_handle(cmd) {
         serial_print("Seccomp:  seccomp  seccomp new <name>  seccomp deny <pid> <nr>  seccomp apply <tid> <pid>");
         serial_print("Container:ctr  ctr new <name> [root]  ctr start/stop/rm <id>  ctr exec <id> <cmd>  ctr info <id>");
         serial_print("Clipboard:clipboard  clip copy <text>  clip paste  clip hist");
+        serial_print("OverlayFS:overlay  overlay new <lower> <upper> <merged>  overlay rm <id>  overlay info <id>");
+        serial_print("HTTP Svr: httpd  httpd start  httpd stop  httpd tick");
+        serial_print("UI Apps:  sysmon fileman editor edit calc  audiotest");
+        serial_print("Calculator: calc (graphical 4-function)");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -573,6 +580,62 @@ fn shell_handle_ext(cmd) {
         if len(t) == 0 { return "(no history)"; }
         return "hist[0]: " + t;
     }
+
+    // --- Overlay FS ---
+    if cmd == "overlay" {
+        return overlay_list();
+    }
+    if str_starts_with(cmd, "overlay new ") {
+        let rest = str_sub(cmd, 12, len(cmd));
+        // "overlay new <lower> <upper> <merged>"
+        let s1 = str_find(rest, " ");
+        if s1 < 0 { return "Usage: overlay new <lower> <upper> <merged>"; }
+        let lower = str_sub(rest, 0, s1);
+        let rest2 = str_sub(rest, s1 + 1, len(rest));
+        let s2 = str_find(rest2, " ");
+        if s2 < 0 { return "Usage: overlay new <lower> <upper> <merged>"; }
+        let upper  = str_sub(rest2, 0, s2);
+        let merged = str_sub(rest2, s2 + 1, len(rest2));
+        let id = overlay_mount(lower, upper, merged);
+        if id < 0 { return "Error: overlay mount failed"; }
+        return "Overlay id=" + to_string(id) + " mounted at " + merged;
+    }
+    if str_starts_with(cmd, "overlay rm ") {
+        let id_s = str_sub(cmd, 11, len(cmd));
+        let id = parse_int(id_s);
+        overlay_umount(id);
+        return "Overlay " + to_string(id) + " unmounted";
+    }
+    if str_starts_with(cmd, "overlay info ") {
+        let id_s = str_sub(cmd, 13, len(cmd));
+        let id = parse_int(id_s);
+        return overlay_status(id);
+    }
+
+    // --- HTTP Server ---
+    if cmd == "httpd" {
+        return httpd_status();
+    }
+    if cmd == "httpd start" {
+        let r = httpd_init();
+        if r < 0 { return "Error: httpd failed to start"; }
+        return "httpd started on port " + to_string(HTTP_PORT);
+    }
+    if cmd == "httpd stop" {
+        httpd_stop();
+        return "httpd stopped";
+    }
+    if cmd == "httpd tick" {
+        httpd_tick();
+        return "httpd: tick processed";
+    }
+
+    // --- Calculator ---
+    if cmd == "calc" {
+        uicalc_open();
+        return "Calculator opened";
+    }
+
     if cmd == "ctr" {
         return ctr_list();
     }
@@ -868,7 +931,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 135 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard");
+print("shell.hl loaded -- 150 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc");
 
 // Main shell loop (called from kernel_init)
 

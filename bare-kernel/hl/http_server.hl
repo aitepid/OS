@@ -1,0 +1,267 @@
+// http_server.hl -- Minimal HTTP/1.1 Server
+//
+// Single-threaded, event-driven HTTP server built on tcp.hl.
+// Supports: GET, HEAD (static files from VFS + built-in routes).
+// Listens on HTTP_PORT (default 8080).
+//
+// Architecture:
+//   httpd_init()  -- prepare listen socket
+//   httpd_tick()  -- called from main loop; accept + process one request per call
+//   httpd_serve() -- parse request, dispatch handler, send response
+//
+// Built-in routes:
+//   GET /          → HTML welcome page
+//   GET /status    → plaintext kernel status
+//   GET /proc/*    → delegates to procfs_read()
+//   GET /<path>    → vfs_open + stream file
+//
+// Responses: 200 OK / 400 Bad Request / 404 Not Found / 405 Method Not Allowed
+
+let HTTP_PORT       = 8080;
+let HTTP_BUF_ADDR   = 9961472;   // 0x980000 -- 64 KB request/response buffer
+let HTTP_BUF_SIZE   = 65536;
+let HTTP_MAX_REQ    = 4096;      // max request header size
+
+// Server state
+let mut httpd_listen_tcb = 0 - 1;
+let mut httpd_running    = 0;
+let mut httpd_req_count  = 0;
+let mut httpd_err_count  = 0;
+
+// --- Response builders ---
+
+fn _httpd_status_line(code) {
+    if code == 200 { return "HTTP/1.1 200 OK\r\n"; }
+    if code == 400 { return "HTTP/1.1 400 Bad Request\r\n"; }
+    if code == 404 { return "HTTP/1.1 404 Not Found\r\n"; }
+    if code == 405 { return "HTTP/1.1 405 Method Not Allowed\r\n"; }
+    return "HTTP/1.1 500 Internal Server Error\r\n";
+}
+
+fn _httpd_headers(content_type, body_len) {
+    return "Content-Type: " + content_type + "\r\n"
+        + "Content-Length: " + to_string(body_len) + "\r\n"
+        + "Connection: close\r\n"
+        + "Server: HicOS/6.0\r\n"
+        + "\r\n";
+}
+
+fn _httpd_send_response(tcb_idx, code, content_type, body) {
+    let resp = _httpd_status_line(code) + _httpd_headers(content_type, len(body)) + body;
+    tcp_send(tcb_idx, resp);
+    return 0;
+}
+
+// --- Built-in route handlers ---
+
+fn _httpd_route_root() {
+    return "<html><head><title>HicOS</title></head><body>"
+        + "<h1>HicOS 6.0</h1>"
+        + "<p>Hilbert-Lang bare-metal x86_64 OS</p>"
+        + "<ul>"
+        + "<li><a href='/status'>/status</a> — Kernel status</li>"
+        + "<li><a href='/proc/version'>/proc/version</a> — Version</li>"
+        + "<li><a href='/proc/meminfo'>/proc/meminfo</a> — Memory</li>"
+        + "<li><a href='/proc/uptime'>/proc/uptime</a> — Uptime</li>"
+        + "</ul>"
+        + "</body></html>";
+}
+
+fn _httpd_route_status() {
+    let secs = uptime_secs();
+    let cpus = smp_cpu_count();
+    let free_p = page_count_free();
+    return "HicOS 6.0 kernel status\n"
+        + "uptime:  " + to_string(secs) + "s\n"
+        + "cpus:    " + to_string(cpus) + "\n"
+        + "free_pages: " + to_string(free_p) + " (" + to_string(free_p * 4) + " KB)\n"
+        + "net:     " + net_ip_string() + "\n"
+        + "requests: " + to_string(httpd_req_count) + "\n";
+}
+
+fn _httpd_serve_file(path) {
+    let fd = vfs_open(path, O_RDONLY);
+    if fd < 0 { return ""; }
+    let n = vfs_read(fd, HTTP_BUF_ADDR, HTTP_BUF_SIZE - 1);
+    vfs_close(fd);
+    if n <= 0 { return ""; }
+    // Build string from buffer
+    let mut s = "";
+    let mut i = 0;
+    while i < n {
+        let b = mem_read_u8(HTTP_BUF_ADDR + i);
+        if b > 0 { s = s + str_from_code(b); }
+        i = i + 1;
+    }
+    return s;
+}
+
+fn _httpd_content_type(path) {
+    if str_ends_with(path, ".html") { return "text/html"; }
+    if str_ends_with(path, ".htm")  { return "text/html"; }
+    if str_ends_with(path, ".css")  { return "text/css"; }
+    if str_ends_with(path, ".js")   { return "application/javascript"; }
+    if str_ends_with(path, ".json") { return "application/json"; }
+    return "text/plain";
+}
+
+// --- Request parser ---
+
+// Parse first line of HTTP request: "GET /path HTTP/1.1"
+// Returns [method, path] or ["",""] on error
+fn _httpd_parse_request(req) {
+    // Find first space (end of method)
+    let sp1 = str_find(req, " ");
+    if sp1 < 0 { return ["", ""]; }
+    let method = str_sub(req, 0, sp1);
+
+    // Find second space (end of path)
+    let rest = str_sub(req, sp1 + 1, len(req));
+    let sp2  = str_find(rest, " ");
+    if sp2 < 0 { return ["", ""]; }
+    let path = str_sub(rest, 0, sp2);
+
+    return [method, path];
+}
+
+// --- Core: serve one HTTP request on a connected TCB ---
+
+fn httpd_serve(tcb_idx, req) {
+    if len(req) < 4 {
+        _httpd_send_response(tcb_idx, 400, "text/plain", "Bad Request");
+        httpd_err_count = httpd_err_count + 1;
+        return 0;
+    }
+
+    let parsed = _httpd_parse_request(req);
+    let method = parsed[0];
+    let path   = parsed[1];
+
+    if len(method) == 0 {
+        _httpd_send_response(tcb_idx, 400, "text/plain", "Bad Request");
+        httpd_err_count = httpd_err_count + 1;
+        return 0;
+    }
+
+    // Only GET and HEAD supported
+    if method != "GET" {
+        if method != "HEAD" {
+            _httpd_send_response(tcb_idx, 405, "text/plain", "Method Not Allowed");
+            httpd_err_count = httpd_err_count + 1;
+            return 0;
+        }
+    }
+
+    httpd_req_count = httpd_req_count + 1;
+    klog(1, "httpd", method + " " + path);
+
+    // Built-in routes
+    if path == "/" {
+        let body = _httpd_route_root();
+        _httpd_send_response(tcb_idx, 200, "text/html", body);
+        return 0;
+    }
+
+    if path == "/status" {
+        let body = _httpd_route_status();
+        _httpd_send_response(tcb_idx, 200, "text/plain", body);
+        return 0;
+    }
+
+    // /proc/* routes → procfs_read
+    if str_starts_with(path, "/proc/") {
+        let body = procfs_read(path);
+        if len(body) > 0 {
+            _httpd_send_response(tcb_idx, 200, "text/plain", body);
+        } else {
+            _httpd_send_response(tcb_idx, 404, "text/plain", "Not Found");
+            httpd_err_count = httpd_err_count + 1;
+        }
+        return 0;
+    }
+
+    // VFS file serving
+    let body = _httpd_serve_file(path);
+    if len(body) > 0 {
+        let ct = _httpd_content_type(path);
+        _httpd_send_response(tcb_idx, 200, ct, body);
+    } else {
+        _httpd_send_response(tcb_idx, 404, "text/plain", "Not Found: " + path);
+        httpd_err_count = httpd_err_count + 1;
+    }
+    return 0;
+}
+
+// --- Server lifecycle ---
+
+fn httpd_init() {
+    httpd_listen_tcb = tcp_listen(HTTP_PORT);
+    if httpd_listen_tcb < 0 {
+        print("httpd: failed to bind port " + to_string(HTTP_PORT));
+        return 0 - 1;
+    }
+    httpd_running   = 1;
+    httpd_req_count = 0;
+    httpd_err_count = 0;
+    print("httpd: listening on port " + to_string(HTTP_PORT) + " (tcb=" + to_string(httpd_listen_tcb) + ")");
+    return 0;
+}
+
+fn httpd_stop() {
+    if httpd_listen_tcb >= 0 { tcp_close(httpd_listen_tcb); }
+    httpd_listen_tcb = 0 - 1;
+    httpd_running    = 0;
+    print("httpd: stopped (served " + to_string(httpd_req_count) + " requests, " + to_string(httpd_err_count) + " errors)");
+    return 0;
+}
+
+// Tick: check for incoming data on ESTABLISHED connections from our listen port
+// In practice called from the kernel main loop at network interrupt time.
+fn httpd_tick() {
+    if httpd_running == 0 { return 0; }
+
+    // Scan TCB table for ESTABLISHED connections on our port
+    let mut i = 0;
+    while i < 32 {
+        let addr  = TCP_TABLE + i * TCB_SIZE;
+        let state = mem_read_u64(addr);
+        let lport = mem_read_u32(addr + 12);
+        if state == 4 {   // TCP_ESTABLISHED = 4
+            if lport == HTTP_PORT {
+                // Read request from receive buffer (simplified: read the stored payload)
+                let rx_buf = mem_read_u64(addr + 64);  // rx_buf pointer in TCB
+                if rx_buf > 0 {
+                    // Build request string from buffer
+                    let mut req = "";
+                    let mut j = 0;
+                    while j < HTTP_MAX_REQ {
+                        let b = mem_read_u8(rx_buf + j);
+                        if b == 0 { break; }
+                        req = req + str_from_code(b);
+                        j = j + 1;
+                    }
+                    if len(req) > 3 {
+                        httpd_serve(i, req);
+                        // Clear receive buffer after serving
+                        mem_zero(rx_buf, HTTP_MAX_REQ);
+                        tcp_close(i);
+                    }
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn httpd_status() {
+    let st = "stopped";
+    if httpd_running == 1 { st = "running"; }
+    return "httpd: " + st
+        + " port=" + to_string(HTTP_PORT)
+        + " requests=" + to_string(httpd_req_count)
+        + " errors=" + to_string(httpd_err_count);
+}
+
+print("http_server.hl loaded");
+print("HTTP server: port " + to_string(HTTP_PORT) + ", GET/HEAD, VFS+procfs routing");

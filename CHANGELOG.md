@@ -2,17 +2,77 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`205`（69 根目录 + 136 内核模块）
-- H-L 总行数：`~52,800`（根 10,900+ + 内核 ~41,900）
-- 内核模块：`136`（编译产出 1,840+ 函数 / 2,100+ 符号）
+- `.hl` 文件：`208`（69 根目录 + 139 内核模块）
+- H-L 总行数：`~53,300`（根 10,900+ + 内核 ~42,400）
+- 内核模块：`139`（编译产出 1,890+ 函数 / 2,150+ 符号）
 - `kernel_entry.hl`：`9,428` 行
 - `hl-bootstrap.hl`：`4,306` 行，`208` 函数
 - `stdlib.hl`：`1,385` 行，`143` 函数
 - `kinterp.hl`：`~1,280` 行
-- Shell 命令（`shell.hl` if cmd ==）：`135`
+- Shell 命令（`shell.hl` if cmd ==）：`150`
 - `scripts/*.ps1`：`28`（9,729 行）
 - 构建/测试主入口：`hl-bootstrap.cmd test`
-- 最近完成功能迭代：`150`（clipboard + seccomp + 容器运行时完整 + 18/18 验证通过）
+- 最近完成功能迭代：`153`（overlay_fs + http_server + ui_calculator + 18/18 验证通过）
+
+## Iteration 153 — 图形计算器（ui_calculator.hl）
+
+- **`bare-kernel/hl/ui_calculator.hl`**: 新建（~290 行，20 个函数）
+  - 4 功能图形计算器（+ − × ÷），240×320 px 窗口
+  - 4×5 按键网格：数字 0-9、运算符、C / ±/ % / . / =
+  - 状态机：`uicalc_acc`（累加器）+ `uicalc_cur`（当前输入字符串）+ `uicalc_op`（待运算符）
+  - 键盘输入：数字键 0-9、+ - * / = Enter Backspace Esc（关闭）c（清空）
+  - 鼠标点击：`uicalc_click(mx, my)` 逐按钮命中测试
+  - 0 行按中宽按钮（`_uicalc_btn_w` 自适应）
+  - 除零保护：`uicalc_error = 1` → 显示 "Error"
+  - 运算符按钮使用 `ui_button_active`（accent 色），数字键使用 `ui_button`（panel 色）
+  - 当前运算符在显示区右上角实时提示
+- **`bare-kernel/hl/ui_desktop.hl`**: 新增 `UIDSK_APP_CALC=6`，dock 扩展至 7 个应用图标
+  - 点击 "Calc" 图标 → `uicalc_open()`，已开启则调用 `uicalc_draw()` 刷新
+- **`bare-kernel/hl/wm.hl`**: 三处集成
+  - `wm_draw_all()` 新增：`if uicalc_is_open() { uicalc_draw(); }`
+  - `wm_key_dispatch()` 新增：计算器捕获键盘（优先于窗口焦点）
+  - `wm_mouse_click()` 新增：`uicalc_click(mx, my)` 内容区点击路由
+- **`shell.hl`**: 新增 `calc` 命令（→ `uicalc_open()`），命令总数 149 → 150
+
+## Iteration 152 — 最小 HTTP/1.1 服务器（http_server.hl）
+
+- **`bare-kernel/hl/http_server.hl`**: 新建（~270 行，12 个函数）
+  - 监听端口 8080，使用 tcp.hl TCB 表
+  - 支持 GET / HEAD 方法（其余返回 405）
+  - 内建路由：`GET /` → HTML 欢迎页，`GET /status` → 纯文本内核状态
+  - `/proc/*` 路由 → `procfs_read(path)` 代理
+  - 任意路径 → `vfs_open + vfs_read` 静态文件服务
+  - MIME 类型推断：`.html/.css/.js/.json` + 默认 `text/plain`
+  - 全局计数器：`httpd_req_count / httpd_err_count`
+  - `httpd_tick()` 扫描 TCB 表 ESTABLISHED 连接，处理后关闭
+  - `httpd_status()` 返回状态字符串
+- **`kernel_init.hl`**: Phase 7 末尾新增 `httpd_init()` 调用
+- **`shell.hl`**: 新增 4 条 httpd 命令（145 → 149 total）
+  - `httpd`：显示状态
+  - `httpd start`：启动服务器（绑定端口）
+  - `httpd stop`：停止服务器（关闭 TCB）
+  - `httpd tick`：手动触发一次 tick
+
+## Iteration 151 — 联合挂载文件系统（overlay_fs.hl）
+
+- **`bare-kernel/hl/overlay_fs.hl`**: 新建（~300 行，14 个函数）
+  - Linux overlayfs / Docker overlay2 同款两层模型：lower（只读）+ upper（读写）+ merged（合并视图）
+  - 最多 8 个挂载实例（`OVERLAY_MAX=8`）
+  - `overlay_create / overlay_destroy / overlay_mount / overlay_umount`
+  - `overlay_resolve(merged_path)` → `[real_path, layer]`（upper 优先，whiteout 截止）
+  - 写时复制：`overlay_copy_up(id, rel)` 将 lower 文件复制至 upper 后可写
+  - 删除语义：upper 层创建 `.wh.<name>` 文件遮蔽 lower 条目
+  - 目录列表：`overlay_readdir` 合并 upper + lower，过滤 whiteout
+  - `overlay_list()` / `overlay_status(id)`：状态与诊断
+- **`bare-kernel/hl/vfs.hl`**: 新增 `fs_type=5` 分发（`vfs_readdir/mkdir/unlink` 均路由到 overlay 函数）
+- **`kernel_init.hl`**: Phase 5 新增 `overlay_init()` 调用（inotify 之后）
+- **`shell.hl`**: 新增 4 条 overlay 命令（135 → 145 total）
+  - `overlay`：列出所有 overlay 实例
+  - `overlay new <lower> <upper> <merged>`：创建并挂载
+  - `overlay rm <id>`：卸载实例
+  - `overlay info <id>`：查看实例详情
+
+
 
 ## Iteration 150 — 跨窗口剪贴板（clipboard.hl）
 

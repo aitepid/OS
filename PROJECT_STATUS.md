@@ -2,38 +2,32 @@
 
 ## 版本定位
 
-当前仓库处于 `v6.0` 发布线，功能里程碑为迭代 140（kernel_init修正+signal集成+mmap真实分发+WM启动终端窗口+sched_tick）。
+当前仓库处于 `v6.0` 发布线，最新功能里程碑为迭代 153（overlay_fs + http_server + ui_calculator）。
 
-## 本轮已核实状态（迭代 133 实测基线）
+## 本轮已核实状态（迭代 153 基线）
 
 ### 仓库规模（精确计数）
 
 | 指标 | 当前值 | 说明 |
 |---|---:|---|
-| 全部 `.hl` 文件 | 198 | 68 根目录 + 130 内核模块 |
-| H-L 总行数 | ~47,800 | 根 10,044 + 内核 ~37,756 |
-| `bare-kernel/hl/` 内核模块 | 130 | 编译进 `kernel.bin` |
+| 全部 `.hl` 文件 | 208 | 69 根目录 + 139 内核模块 |
+| H-L 总行数 | ~53,300 | 根 10,900+ + 内核 ~42,400 |
+| `bare-kernel/hl/` 内核模块 | 139 | 编译进 `kernel.bin` |
 | `kernel_entry.hl` 行数 | 9,428 | 内核入口 + 命令分发 |
-| 编译产出函数数 | 1,700+ | 编译管线实测 |
-| 链接符号数 | 2,003+ | linker 实测 |
+| 编译产出函数数 | 1,890+ | 编译管线实测 |
+| 链接符号数 | 2,150+ | linker 实测 |
 | `hl-bootstrap.hl` 行数 | 4,306 | 自举编译器（208 函数） |
 | `stdlib.hl` 行数 | 1,385 | 标准库（143 函数） |
-| `kinterp.hl` 行数 | ~1,280 | 内核解释器（词法器已修复） |
+| `kinterp.hl` 行数 | ~1,280 | 内核解释器 |
 | `scripts/*.ps1` | 28 | 构建/验证/诊断 |
 | PS1 总行数 | 9,729 | |
-| Shell 命令（`if cmd ==`） | 79+pipe+proc | shell.hl (管道+proc+ls/path+cat ext4+else-if) |
-| `HicOS_*.hl` 子系统模块 | 27 | |
-| `test_*.hl` / `test-*.hl` | 19 | |
-| `IP-Protection/` 文件数 | 60 | 知识产权文件 |
-| `.md` 文档 | 10 | |
+| Shell 命令数 | 150 | shell.hl（管道+overlay+httpd+calc） |
 
 ### 门禁结果
 
 | 验证项 | 结果 |
 |---|---|
-| `hl-bootstrap build` | ✅ 132 模块编译 + 镜像重建 |
-| `validate-workspace` | ✅ 198 HL / 130 模块 / 0 stub |
-| `runtime-path-readiness` | ✅ IDT/PIT/KBD + SYSCALL + 网络 + eBPF/TLS/QUIC |
+| `validate-workspace` | ✅ 208 HL / 139 模块 / 0 stub |
 | `release-validate` | ✅ 18/18 |
 
 ### 产物尺寸（实测）

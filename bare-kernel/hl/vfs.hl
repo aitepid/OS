@@ -438,6 +438,13 @@ fn vfs_readdir(path) {
         }
         return [];
     }
+    if fs_type == 5 {
+        // overlay_fs: get overlay instance from device_id, merge lower+upper
+        let ov_id = mem_read_u64(MOUNT_TABLE + mount_info[0] * 64 + 24);
+        if ov_id < 0 { return []; }
+        let rel = overlay_rel_path(ov_id, path);
+        return overlay_readdir(ov_id, rel);
+    }
     return [];
 }
 
@@ -449,6 +456,15 @@ fn vfs_mkdir(path) {
     if fs_type == 1 { result = fat16_create_file(path, 1); }
     if fs_type == 3 { return 0 - 1; }  // ext4 is read-only
     if fs_type == 4 { return 0 - 1; }  // procfs is read-only
+    if fs_type == 5 {
+        // overlay: mkdir in upper layer
+        let ov_id = mem_read_u64(MOUNT_TABLE + mount_info[0] * 64 + 24);
+        if ov_id >= 0 {
+            let rel = overlay_rel_path(ov_id, path);
+            let upath = overlay_upper_path(ov_id, rel);
+            result = ramfs_mkdir(upath);
+        }
+    }
     if result == 0 { inotify_emit(path, 256, path); }
     return result;
 }
@@ -468,6 +484,18 @@ fn vfs_unlink(path) {
     }
     if fs_type == 3 { return 0 - 1; }  // ext4 is read-only
     if fs_type == 4 { return 0 - 1; }  // procfs is read-only
+    if fs_type == 5 {
+        // overlay: create whiteout in upper to shadow lower file
+        let ov_id = mem_read_u64(MOUNT_TABLE + mount_info[0] * 64 + 24);
+        if ov_id >= 0 {
+            let rel = overlay_rel_path(ov_id, path);
+            // If file is in upper, delete it directly
+            let upath = overlay_upper_path(ov_id, rel);
+            let ust = vfs_stat(upath);
+            if ust[0] > 0 { result = ramfs_unlink(upath); }
+            else { result = overlay_whiteout(ov_id, rel); }
+        }
+    }
     if result == 0 { inotify_emit(path, 512, path); }
     return result;
 }

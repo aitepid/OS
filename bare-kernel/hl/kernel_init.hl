@@ -10,7 +10,7 @@ fn kernel_main() {
     // === Phase 0: Early hardware ===
     serial_init();         // serial.hl  -- COM1 for debug output
     syslog_init();         // syslog.hl  -- kernel ring-buffer logger
-    serial_print("HicOS 6.0 -- Hilbert-Lang Kernel (132 modules)");
+    serial_print("HicOS 6.0 -- Hilbert-Lang Kernel (137 modules)");
     serial_print("Initializing subsystems...");
 
     // === Phase 0b: Boot mode detection ===
@@ -54,7 +54,8 @@ fn kernel_main() {
     devfs_init();          // devfs.hl -- /dev device nodes
     procfs_init();         // procfs.hl -- /proc virtual filesystem
     inotify_init_subsystem(); // inotify.hl -- filesystem event notifications
-    serial_print("  [ok] Filesystem: ramfs + FAT16 + ext4 + VFS + devfs + procfs + inotify");
+    overlay_init();           // overlay_fs.hl -- union mount (lower/upper/merged CoW)
+    serial_print("  [ok] Filesystem: ramfs + FAT16 + ext4 + VFS + devfs + procfs + inotify + overlayfs");
 
     // === Phase 6: Display ===
     if is_uefi == 1 {
@@ -94,7 +95,8 @@ fn kernel_main() {
     if e4ok == 1 {
         serial_print("  [ok] ext4 root filesystem mounted via VFS");
     }
-    serial_print("  [ok] PCI + AHCI + ATA-PIO + USB + USB-KBD + AC97 + AudioServer + Net + DHCP + netfilter");
+    httpd_init();           // http_server.hl -- HTTP/1.1 server on port 8080
+    serial_print("  [ok] PCI + AHCI + ATA-PIO + USB + USB-KBD + AC97 + AudioServer + Net + DHCP + netfilter + httpd");
 
     // === Phase 8: ACPI + SMP + RTC ===
     power_init();          // power.hl -- ACPI tables
@@ -133,7 +135,7 @@ fn kernel_main() {
 
     // === Summary ===
     serial_print("");
-    serial_print("=== HicOS kernel initialized (132 modules) ===");
+    serial_print("=== HicOS kernel initialized (137 modules) ===");
     serial_print("");
 
     // === Login ===
@@ -244,5 +246,5 @@ fn kernel_main() {
 //   |-> shell        (serial, syscall, vfs, task, timer, rtc, env)
 
 print("kernel_init.hl loaded");
-print("Init sequence: 13 phases, 118 modules");
+print("Init sequence: 13 phases, 123 modules");
 kernel_main();
