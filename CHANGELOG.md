@@ -12,7 +12,26 @@
 - Shell 命令（`shell.hl` if cmd ==）：`79`
 - `scripts/*.ps1`：`28`（9,729 行）
 - 构建/测试主入口：`hl-bootstrap.cmd test`
-- 最近完成功能迭代：`142`（音频管道增强：BDL循环+主音量+mixer_beep+9条新Shell命令）
+- 最近完成功能迭代：`143`（GPU 2D blit + 脏区追踪 + 18/18 发布验证通过）
+
+## Iteration 143 — GPU 2D blit + 脏区追踪（vesa.hl）
+
+- **`vesa.hl`**: 脏区追踪 + blit 加速（新增 8 个函数）
+  - `vesa_dirty_{x1,y1,x2,y2}` + `vesa_dirty`：单 AABB 脏区状态
+  - `vesa_mark_dirty(x,y,w,h)`：扩展 AABB 以覆盖新绘制区域
+  - `vesa_fill_rect_fast()` 改进：绘制后自动调用 `vesa_mark_dirty`
+  - `vesa_flush_dirty()`：将脏区 AABB 通过 `gpu_blit()` 发送到 VirtIO GPU
+  - `vesa_flip()`：`gpu_flip()` 全屏刷新 + 清除脏区标志
+  - `vesa_blit_rect(dst_x,dst_y,src_x,src_y,w,h)`：帧缓冲内区域拷贝（方向感知）
+  - `vesa_blit_from(x,y,w,h,src_addr)`：外部 BGRA32 缓冲区 → 屏幕拷贝
+  - `vesa_dirty_info()`：脏区状态字符串（调试用）
+- **`shell.hl`**: 新增 3 条图形命令（99 total）
+  - `gpu flip`：强制全屏刷新
+  - `gpu dirty`：显示当前脏区状态
+  - `gpu`：增加脏区信息输出
+  - help 新增 Graphics 行
+- **发布验证**: 18/18 PASSED
+  - hicos-uefi.img 重新生成（34,603,008 bytes）
 
 ## Iteration 142 — 音频管道增强（audio.hl + mixer.hl）
 
