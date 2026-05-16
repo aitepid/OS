@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 580 commands + pipe operator (|):
+// 595 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -141,6 +141,9 @@ fn shell_handle(cmd) {
         serial_print("Brotli:   brotli compress <data>  brotli decompress <data>  brotli quality <n>  brotli ratio <orig>  brotli test");
         serial_print("SM3:      sm3 hash <data>  sm3 hex  sm3 test");
         serial_print("SM4:      sm4 key <key>  sm4 encrypt <data>  sm4 decrypt <data>  sm4 hex  sm4 test");
+        serial_print("X25519:   curve25519 scalar <key>  curve25519 pubkey  curve25519 shared <peer_pub>  curve25519 pubhex  curve25519 test");
+        serial_print("AES-GCM:  aesgcm key <key>  aesgcm nonce <nonce>  aesgcm aad <data>  aesgcm encrypt <data>  aesgcm tag  aesgcm test");
+        serial_print("CP1305:   cp1305 key <key>  cp1305 nonce <nonce>  cp1305 encrypt <data>  cp1305 tag  cp1305 test");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -3269,6 +3272,81 @@ fn shell_handle_ext(cmd) {
     }
     if cmd == "sm4 test" { return sm4_test(); }
 
+    // === Curve25519 X25519 ECDH ===
+    if str_starts_with(cmd, "curve25519 scalar ") {
+        let key_str = substr(cmd, 18, len(cmd) - 18);
+        let key_bytes = str_to_bytes(key_str);
+        let result = curve25519_set_scalar(key_bytes);
+        if result == 0 { return "curve25519: scalar set (" + to_string(len(key_bytes)) + " bytes)"; }
+        return "curve25519: scalar too short (need 32 bytes)";
+    }
+    if cmd == "curve25519 pubkey" {
+        curve25519_get_public();
+        return "curve25519: public key computed -> " + substr(curve25519_get_public_hex(), 0, 16) + "...";
+    }
+    if str_starts_with(cmd, "curve25519 shared ") {
+        let peer_str = substr(cmd, 18, len(cmd) - 18);
+        let peer_bytes = str_to_bytes(peer_str);
+        let result = curve25519_shared_secret(peer_bytes);
+        if result == 0 { return "curve25519: shared secret computed -> " + substr(curve25519_get_shared_hex(), 0, 16) + "..."; }
+        return "curve25519: peer public key too short";
+    }
+    if cmd == "curve25519 pubhex" { return "curve25519: " + curve25519_get_public_hex(); }
+    if cmd == "curve25519 test" { return curve25519_test(); }
+
+    // === AES-GCM AEAD ===
+    if str_starts_with(cmd, "aesgcm key ") {
+        let key_str = substr(cmd, 11, len(cmd) - 11);
+        let key_bytes = str_to_bytes(key_str);
+        let result = aes_gcm_set_key(key_bytes);
+        if result == 0 { return "aesgcm: key set (16 bytes)"; }
+        return "aesgcm: key too short (need 16 bytes)";
+    }
+    if str_starts_with(cmd, "aesgcm nonce ") {
+        let nonce_str = substr(cmd, 13, len(cmd) - 13);
+        let nonce_bytes = str_to_bytes(nonce_str);
+        let result = aes_gcm_set_nonce(nonce_bytes);
+        if result == 0 { return "aesgcm: nonce set (12 bytes)"; }
+        return "aesgcm: nonce too short (need 12 bytes)";
+    }
+    if str_starts_with(cmd, "aesgcm aad ") {
+        let aad_str = substr(cmd, 11, len(cmd) - 11);
+        aes_gcm_set_aad(str_to_bytes(aad_str));
+        return "aesgcm: AAD set (" + to_string(aes_gcm_aad_len) + " bytes)";
+    }
+    if str_starts_with(cmd, "aesgcm encrypt ") {
+        let plain_str = substr(cmd, 15, len(cmd) - 15);
+        let plain_bytes = str_to_bytes(plain_str);
+        aes_gcm_encrypt(plain_bytes);
+        return "aesgcm: encrypted -> ct=" + aes_gcm_get_ciphertext_hex() + " tag=" + substr(aes_gcm_get_tag(), 0, 8) + "...";
+    }
+    if cmd == "aesgcm tag" { return "aesgcm: tag=" + aes_gcm_get_tag(); }
+    if cmd == "aesgcm test" { return aes_gcm_test(); }
+
+    // === ChaCha20-Poly1305 AEAD ===
+    if str_starts_with(cmd, "cp1305 key ") {
+        let key_str = substr(cmd, 11, len(cmd) - 11);
+        let key_bytes = str_to_bytes(key_str);
+        let result = chacha20_poly1305_set_key(key_bytes);
+        if result == 0 { return "cp1305: key set (32 bytes)"; }
+        return "cp1305: key too short (need 32 bytes)";
+    }
+    if str_starts_with(cmd, "cp1305 nonce ") {
+        let nonce_str = substr(cmd, 13, len(cmd) - 13);
+        let nonce_bytes = str_to_bytes(nonce_str);
+        let result = chacha20_poly1305_set_nonce(nonce_bytes);
+        if result == 0 { return "cp1305: nonce set (12 bytes)"; }
+        return "cp1305: nonce too short (need 12 bytes)";
+    }
+    if str_starts_with(cmd, "cp1305 encrypt ") {
+        let plain_str = substr(cmd, 15, len(cmd) - 15);
+        let plain_bytes = str_to_bytes(plain_str);
+        chacha20_poly1305_encrypt(plain_bytes);
+        return "cp1305: encrypted -> ct=" + chacha20_poly1305_get_ct_hex() + " tag=" + substr(chacha20_poly1305_get_tag(), 0, 8) + "...";
+    }
+    if cmd == "cp1305 tag" { return "cp1305: tag=" + chacha20_poly1305_get_tag(); }
+    if cmd == "cp1305 test" { return chacha20_poly1305_test(); }
+
     return shell_handle(cmd);
 }
 
@@ -3280,7 +3358,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 580 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4");
+print("shell.hl loaded -- 595 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305");
 
 // Main shell loop (called from kernel_init)
 

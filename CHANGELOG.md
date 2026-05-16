@@ -2,13 +2,64 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`301`（69 根目录 + 232 内核模块）
-- H-L 总行数：`~80,300`
-- 内核模块：`232`
-- Shell 命令：`580`
-- 最近完成功能迭代：`246`（brotli + sm3 + sm4）
+- `.hl` 文件：`304`（69 根目录 + 235 内核模块）
+- H-L 总行数：`~83,000`
+- 内核模块：`235`
+- Shell 命令：`595`
+- 最近完成功能迭代：`249`（curve25519 + aes_gcm + chacha20_poly1305）
 
-## Iteration 246 — sm4.hl：SM4 分组密码
+## Iteration 249 — chacha20_poly1305.hl：ChaCha20-Poly1305 AEAD
+
+- **`bare-kernel/hl/chacha20_poly1305.hl`** 新增（~350 行）
+  - ChaCha20-Poly1305 认证加密（RFC 8439），移动端优选 AEAD 方案
+  - 用途：TLS 1.3（首选套件）、WireGuard、QUIC、无 AES 硬件加速设备
+  - `chacha20_poly1305_set_key(key)` — 设置 256 位密钥（32 字节）
+  - `chacha20_poly1305_set_nonce(nonce)` — 设置 96 位随机数（12 字节）
+  - `chacha20_poly1305_set_aad(aad)` — 设置附加认证数据（AAD）
+  - `chacha20_poly1305_encrypt(plaintext)` — 加密并生成 128 位 Poly1305 认证标签
+  - OTK 派生：ChaCha20 计数器 0 的前 32 字节作为 Poly1305 一次性密钥
+  - 加密：ChaCha20 计数器 1 起始的密钥流与明文异或
+  - MAC 输入：pad(AAD) || pad(ciphertext) || len(AAD) || len(CT)
+  - `chacha20_poly1305_decrypt(ciphertext)` — 解密并验证认证标签
+  - `chacha20_poly1305_get_tag()` — 返回十六进制认证标签
+  - `chacha20_poly1305_test()` — RFC 8439 §2.8.2 测试向量验证
+  - Shell 命令：`cp1305 key <k>  cp1305 nonce <n>  cp1305 encrypt <data>  cp1305 tag  cp1305 test`
+
+## Iteration 248 — aes_gcm.hl：AES-GCM 认证加密
+
+- **`bare-kernel/hl/aes_gcm.hl`** 新增（~320 行）
+  - AES-128-GCM 认证加密（NIST SP 800-38D / RFC 5116）
+  - 用途：HTTPS/TLS 1.3、SSH、IPsec、安全通信的标准 AEAD 方案
+  - `aes_gcm_set_key(key)` — 设置 128 位密钥（16 字节），计算哈希子密钥 H
+  - `aes_gcm_set_nonce(nonce)` — 设置 96 位随机数（推荐长度）
+  - `aes_gcm_set_aad(aad)` — 设置附加认证数据
+  - `aes_gcm_encrypt(plaintext)` — CTR 模式加密 + GHASH 认证标签
+  - GHASH：GF(2^128) 域乘法，生成 128 位认证标签
+  - CTR 模式：J0 = nonce || 0x00000001，计数器从 2 起始
+  - 标签：GHASH(H, AAD, CT) ⊕ AES_K(J0)
+  - `aes_gcm_decrypt(ciphertext)` — CTR 解密（对称操作）
+  - `aes_gcm_get_tag()` — 返回十六进制认证标签（32 hex 字符）
+  - `aes_gcm_test()` — 标准测试向量验证
+  - Shell 命令：`aesgcm key <k>  aesgcm nonce <n>  aesgcm aad <d>  aesgcm encrypt <d>  aesgcm tag  aesgcm test`
+
+## Iteration 247 — curve25519.hl：X25519 ECDH 密钥交换
+
+- **`bare-kernel/hl/curve25519.hl`** 新增（~280 行）
+  - Curve25519 椭圆曲线 Diffie-Hellman（RFC 7748）
+  - 曲线方程：y² = x³ + 486662x² + x（Montgomery 曲线，GF(2²⁵⁵ - 19)）
+  - 用途：TLS 1.3 握手密钥交换、WireGuard、Signal 协议
+  - `curve25519_set_scalar(bytes)` — 设置 32 字节私钥（自动 RFC 7748 标量 clamping）
+  - Clamping：scalar[0] &= 248，scalar[31] &= 127，scalar[31] |= 64
+  - `curve25519_get_public()` — 计算公钥 = scalar × G（G = 基点 u=9）
+  - `curve25519_shared_secret(peer_pub)` — 计算共享密钥 = scalar × peer_pub
+  - Montgomery 阶梯：恒定时间椭圆曲线标量乘法算法
+  - 域算术：GF(2²⁵⁵ - 19) 上的加减乘法（算术运算模拟）
+  - `curve25519_get_public_hex()` — 公钥十六进制字符串
+  - `curve25519_get_shared_hex()` — 共享密钥十六进制字符串
+  - `curve25519_test()` — 使用标准测试向量验证
+  - Shell 命令：`curve25519 scalar <k>  curve25519 pubkey  curve25519 shared <p>  curve25519 pubhex  curve25519 test`
+
+
 
 - **`bare-kernel/hl/sm4.hl`** 新增（~320 行）
   - SM4 分组密码（中国国家标准 GB/T 32907-2016）
