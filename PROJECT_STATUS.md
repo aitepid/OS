@@ -2,23 +2,23 @@
 
 ## 版本定位
 
-当前仓库处于 `v6.0` 发布线，最新功能里程碑为迭代 216（rle + rss + ldap）。
+当前仓库处于 `v6.0` 发布线，最新功能里程碑为迭代 219（aes + huffman + radius）。
 
-## 本轮已核实状态（迭代 216 基线）
+## 本轮已核实状态（迭代 219 基线）
 
 ### 仓库规模（精确计数）
 
 | 指标 | 当前值 | 说明 |
 |---|---:|---|
-| 全部 `.hl` 文件 | 271 | 69 根目录 + 202 内核模块 |
-| H-L 总行数 | ~72,700 | 持续增长 |
-| `bare-kernel/hl/` 内核模块 | 202 | 编译进 `kernel.bin` |
+| 全部 `.hl` 文件 | 274 | 69 根目录 + 205 内核模块 |
+| H-L 总行数 | ~73,400 | 持续增长 |
+| `bare-kernel/hl/` 内核模块 | 205 | 编译进 `kernel.bin` |
 | `kernel_entry.hl` 行数 | 9,428 | 内核入口 + 命令分发 |
 | 编译产出函数数 | 2,200+ | 编译管线实测 |
 | 链接符号数 | 2,500+ | linker 实测 |
 | `hl-bootstrap.hl` 行数 | 4,306 | 自举编译器（208 函数） |
 | `stdlib.hl` 行数 | 1,385 | 标准库（143 函数） |
-| Shell 命令数 | 432 | shell.hl（+rle/rss/ldap）|
+| Shell 命令数 | 446 | shell.hl（+aes/huffman/radius）|
 | `test_*.hl` / `test-*.hl` | 19 | |
 | `IP-Protection/` 文件数 | 60 | 知识产权文件 |
 | `.md` 文档 | 10 | |
@@ -28,7 +28,7 @@
 | 验证项 | 结果 |
 |---|---|
 | `hl-bootstrap build` | ✅ 132 模块编译 + 镜像重建 |
-| `validate-workspace` | ✅ 271 HL / 202 模块 / 0 stub |
+| `validate-workspace` | ✅ 274 HL / 205 模块 / 0 stub |
 | `runtime-path-readiness` | ✅ IDT/PIT/KBD + SYSCALL + 网络 + eBPF/TLS/QUIC |
 | `release-validate` | ✅ 18/18 |
 

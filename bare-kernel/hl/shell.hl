@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 432 commands + pipe operator (|):
+// 446 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -111,6 +111,9 @@ fn shell_handle(cmd) {
         serial_print("RLE:      rle encode <data>  rle decode <data>  rle ratio <orig> <comp>  rle hex <data>  rle test");
         serial_print("RSS:      rss parse <xml>  rss channel  rss items  rss item <n>  rss count  rss test");
         serial_print("LDAP:     ldap connect <host>  ldap bind <dn> <pwd>  ldap search <dn> <filter>  ldap unbind  ldap disconnect  ldap test");
+        serial_print("AES:      aes key <key>  aes encrypt <data>  aes decrypt <data>  aes hex  aes test");
+        serial_print("Huffman:  huffman encode <data>  huffman decode <data>  huffman ratio <orig> <comp>  huffman test");
+        serial_print("RADIUS:   radius secret <secret>  radius request <user> <pwd>  radius send <server>  radius parse <data>  radius test");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -2465,6 +2468,87 @@ fn shell_handle_ext(cmd) {
     if cmd == "ldap disconnect" { return ldap_disconnect(); }
     if cmd == "ldap test" { return ldap_test(); }
 
+    // === AES commands ===
+    if str_starts_with(cmd, "aes key ") {
+        let key = str_sub(cmd, 8, len(cmd));
+        aes_set_key(key);
+        return "aes: key set (" + to_string(len(key)) + " bytes)";
+    }
+    if str_starts_with(cmd, "aes encrypt ") {
+        let plaintext = str_sub(cmd, 12, len(cmd));
+        let enc_len = aes_encrypt(plaintext);
+        return "aes: encrypted " + to_string(len(plaintext)) + " → " + to_string(enc_len) + " bytes";
+    }
+    if str_starts_with(cmd, "aes decrypt ") {
+        let ciphertext = str_sub(cmd, 12, len(cmd));
+        let dec_len = aes_decrypt(ciphertext);
+        let result = aes_get_result();
+        return "aes: decrypted " + to_string(len(ciphertext)) + " → " + to_string(dec_len) + " bytes";
+    }
+    if cmd == "aes hex" {
+        let hex = aes_get_hex();
+        return "aes: " + hex;
+    }
+    if cmd == "aes test" { return aes_test(); }
+
+    // === Huffman commands ===
+    if str_starts_with(cmd, "huffman encode ") {
+        let data = str_sub(cmd, 15, len(cmd));
+        let enc_len = huffman_encode(data);
+        let ratio = huffman_ratio(len(data), enc_len);
+        return "huffman: encoded " + to_string(len(data)) + " → " + to_string(enc_len) + " bytes (" + ratio + "%)";
+    }
+    if str_starts_with(cmd, "huffman decode ") {
+        let data = str_sub(cmd, 15, len(cmd));
+        let dec_len = huffman_decode(data);
+        return "huffman: decoded " + to_string(len(data)) + " → " + to_string(dec_len) + " bytes";
+    }
+    if str_starts_with(cmd, "huffman ratio ") {
+        let parts = str_split(str_sub(cmd, 14, len(cmd)), " ");
+        if len(parts) >= 2 {
+            let orig = parse_int(parts[0]);
+            let comp = parse_int(parts[1]);
+            return "huffman: ratio = " + huffman_ratio(orig, comp) + "%";
+        }
+        return "huffman: usage: huffman ratio <original_size> <compressed_size>";
+    }
+    if cmd == "huffman test" { return huffman_test(); }
+
+    // === RADIUS commands ===
+    if str_starts_with(cmd, "radius secret ") {
+        let secret = str_sub(cmd, 14, len(cmd));
+        radius_set_secret(secret);
+        return "radius: shared secret set";
+    }
+    if str_starts_with(cmd, "radius request ") {
+        let parts = str_split(str_sub(cmd, 15, len(cmd)), " ");
+        if len(parts) >= 2 {
+            let username = parts[0];
+            let password = parts[1];
+            let req_len = radius_create_access_request(username, password);
+            return "radius: Access-Request created (" + to_string(req_len) + " bytes)";
+        }
+        return "radius: usage: radius request <username> <password>";
+    }
+    if str_starts_with(cmd, "radius send ") {
+        let parts = str_split(str_sub(cmd, 12, len(cmd)), " ");
+        if len(parts) >= 1 {
+            let server = parts[0];
+            let result = radius_send_request(server, RADIUS_PORT_AUTH);
+            if result == 0 { return "radius: request sent to " + server; }
+            return "radius: send failed";
+        }
+        return "radius: usage: radius send <server>";
+    }
+    if str_starts_with(cmd, "radius parse ") {
+        let data = str_sub(cmd, 13, len(cmd));
+        let result = radius_parse_response(data);
+        if result == 1 { return "radius: Access-Accept"; }
+        if result == 0 { return "radius: Access-Reject"; }
+        return "radius: parse error";
+    }
+    if cmd == "radius test" { return radius_test(); }
+
     return shell_handle(cmd);
 }
 
@@ -2476,7 +2560,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 432 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap");
+print("shell.hl loaded -- 446 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius");
 
 // Main shell loop (called from kernel_init)
 

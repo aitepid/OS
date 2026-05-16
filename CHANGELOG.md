@@ -2,11 +2,70 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`271`（69 根目录 + 202 内核模块）
-- H-L 总行数：`~72,700`
-- 内核模块：`202`
-- Shell 命令：`432`
-- 最近完成功能迭代：`216`（rle + rss + ldap）
+- `.hl` 文件：`274`（69 根目录 + 205 内核模块）
+- H-L 总行数：`~73,400`
+- 内核模块：`205`
+- Shell 命令：`446`
+- 最近完成功能迭代：`219`（aes + huffman + radius）
+
+## Iteration 219 — radius.hl：RADIUS 认证协议
+
+- **`bare-kernel/hl/radius.hl`** 新增（~310 行）
+  - RADIUS（Remote Authentication Dial-In User Service）远程认证拨号用户服务（RFC 2865）
+  - 用途：集中式 AAA（认证/授权/计费）协议，企业网络访问控制
+  - UDP 端口 1812（认证）/1813（计费）
+  - `radius_create_access_request(username, password)` — 创建访问请求报文：Code=1 + Identifier + Length(2B) + Authenticator(16B) + 属性
+  - `radius_send_request(server, port)` — 发送 UDP 请求：创建 socket + udp_send
+  - `radius_parse_response(data)` — 解析响应：Code=2（Accept）/3（Reject）
+  - `_radius_encrypt_password(pwd, auth)` — 密码加密：XOR with MD5(secret + authenticator)，16 字节分块
+  - `_radius_add_attribute(type, data)` — 添加属性：TLV 格式（Type + Length + Value）
+  - RADIUS 属性：USER_NAME=1，USER_PASSWORD=2，NAS_IP=4，SERVICE_TYPE=6
+  - `radius_set_secret(secret)` — 设置共享密钥（用于密码加密和消息完整性）
+  - 报文结构：Code(1B) + Identifier(1B) + Length(2B) + Authenticator(16B) + Attributes(变长)
+  - `radius_selftest()` — 测试报文构建：用户名 "testuser" + 密码 "testpass" → Access-Request
+  - RADIUS_BUF=0x1120000（17891328），64 KB 消息缓冲区
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`radius_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 5 条命令：
+  - `radius secret <secret>` / `radius request <user> <pwd>` / `radius send <server>` / `radius parse <data>` / `radius test`
+
+## Iteration 218 — huffman.hl：霍夫曼编码压缩
+
+- **`bare-kernel/hl/huffman.hl`** 新增（~280 行）
+  - Huffman Coding（霍夫曼编码）可变长度前缀编码压缩算法
+  - 用途：无损压缩，高频符号使用短码，低频符号使用长码
+  - `huffman_encode(data)` — 编码：构建频率表 → 排序 → 生成码表 → 位流编码
+  - `huffman_decode(data)` — 解码：读取码表 → 位流解码 → 符号输出
+  - `_huffman_build_freq_table(data)` — 频率统计：256 字节符号 → 出现次数数组
+  - `_huffman_build_simple_codes()` — 简化码表生成：按频率排序 → 分配码长（1-16 位）
+  - 码表格式：符号数量 + [符号, 码长, 码值] × N
+  - 位缓冲：累积 8 位后写入字节流，最后不足 8 位填充 0
+  - `huffman_ratio(orig_len, comp_len)` — 压缩率计算：(compressed / original) × 100%
+  - `huffman_get_result()` — 获取编码/解码结果二进制字符串
+  - `huffman_selftest()` — 测试 "AAAABBBCCD" → 压缩 → 解压 → 验证
+  - HUFFMAN_BUF=0x1110000（17825792），64 KB 输出缓冲区
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`huffman_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 4 条命令：
+  - `huffman encode <data>` / `huffman decode <data>` / `huffman ratio <orig> <comp>` / `huffman test`
+
+## Iteration 217 — aes.hl：AES 加密算法
+
+- **`bare-kernel/hl/aes.hl`** 新增（~290 行）
+  - AES（Advanced Encryption Standard）高级加密标准（FIPS 197）
+  - 注：简化教学实现，受 H-L 语言约束（无真实位运算，使用算术模拟）
+  - AES-128：128 位密钥 + 128 位数据块 + 10 轮加密
+  - `aes_set_key(key)` — 设置 16 字节密钥（不足补零）
+  - `aes_encrypt(plaintext)` — 加密：分 16 字节块 → 10 轮变换 → 密文输出
+  - `aes_decrypt(ciphertext)` — 解密：逆变换（简化版）
+  - `_aes_sub_bytes()` — S 盒替换：每字节通过 256 字节查找表映射
+  - `_aes_shift_rows()` — 行移位：4×4 状态矩阵行循环移位（0/1/2/3）
+  - `_aes_add_round_key()` — 轮密钥加：状态 XOR 轮密钥（算术模拟：(s + k) % 256）
+  - S-box：256 字节查找表（Rijndael 标准 S 盒）
+  - `aes_get_hex()` — 密文十六进制输出（调试友好）
+  - `aes_selftest()` — 测试 "Hello AES World!" + 密钥 "0123456789abcdef" → 加密 → 解密
+  - AES_BUF=0x1100000（17825792），64 KB 数据缓冲区
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`aes_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 5 条命令：
+  - `aes key <key>` / `aes encrypt <data>` / `aes decrypt <data>` / `aes hex` / `aes test`
 
 ## Iteration 216 — ldap.hl：LDAP 目录访问协议
 

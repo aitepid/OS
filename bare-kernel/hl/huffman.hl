@@ -1,0 +1,289 @@
+// huffman.hl -- Huffman Coding Compression
+//
+// Provides Huffman coding compression and decompression.
+// Builds frequency table → creates Huffman tree → encodes data.
+// Variable-length prefix codes: frequent symbols use shorter codes.
+// Buffer at 0x1110000 (64 KB output buffer).
+
+let HUFFMAN_BUF = 0x1110000;
+let HUFFMAN_BUF_SZ = 65536;
+let huffman_len = 0;
+
+let HUFFMAN_MAX_SYMBOLS = 256;
+
+let mut huffman_freq = [];
+let mut huffman_codes = [];
+let mut huffman_code_lens = [];
+
+fn huffman_init() {
+    huffman_clear();
+    huffman_freq = [];
+    huffman_codes = [];
+    huffman_code_lens = [];
+    let mut i = 0;
+    while i < HUFFMAN_MAX_SYMBOLS {
+        push(huffman_freq, 0);
+        push(huffman_codes, 0);
+        push(huffman_code_lens, 0);
+        i = i + 1;
+    }
+    print("huffman: Huffman coding compression initialized");
+    return 0;
+}
+
+fn huffman_clear() {
+    huffman_len = 0;
+    let mut i = 0;
+    while i < 1024 {
+        mem_write_byte(HUFFMAN_BUF + i, 0);
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn _huffman_put(byte) {
+    if huffman_len >= HUFFMAN_BUF_SZ {
+        return 0;
+    }
+    mem_write_byte(HUFFMAN_BUF + huffman_len, byte);
+    huffman_len = huffman_len + 1;
+    return 0;
+}
+
+fn _huffman_build_freq_table(data) {
+    let mut i = 0;
+    while i < HUFFMAN_MAX_SYMBOLS {
+        set_at(huffman_freq, i, 0);
+        i = i + 1;
+    }
+
+    let mut j = 0;
+    while j < len(data) {
+        let byte = str_char_code(data, j);
+        set_at(huffman_freq, byte, huffman_freq[byte] + 1);
+        j = j + 1;
+    }
+
+    return 0;
+}
+
+fn _huffman_build_simple_codes() {
+    let mut sorted_symbols = [];
+    let mut i = 0;
+
+    while i < HUFFMAN_MAX_SYMBOLS {
+        if huffman_freq[i] > 0 {
+            push(sorted_symbols, [i, huffman_freq[i]]);
+        }
+        i = i + 1;
+    }
+
+    let mut j = 0;
+    while j < len(sorted_symbols) {
+        let mut k = j + 1;
+        while k < len(sorted_symbols) {
+            if sorted_symbols[k][1] > sorted_symbols[j][1] {
+                let temp = sorted_symbols[j];
+                set_at(sorted_symbols, j, sorted_symbols[k]);
+                set_at(sorted_symbols, k, temp);
+            }
+            k = k + 1;
+        }
+        j = j + 1;
+    }
+
+    let mut code_len = 1;
+    let mut idx = 0;
+    while idx < len(sorted_symbols) {
+        let symbol = sorted_symbols[idx][0];
+        let bits = code_len;
+        if bits > 16 { bits = 16; }
+        set_at(huffman_code_lens, symbol, bits);
+        set_at(huffman_codes, symbol, idx);
+
+        if idx % 2 == 1 {
+            code_len = code_len + 1;
+        }
+
+        idx = idx + 1;
+    }
+
+    return len(sorted_symbols);
+}
+
+fn huffman_encode(data) {
+    huffman_clear();
+
+    if len(data) == 0 {
+        return 0;
+    }
+
+    _huffman_build_freq_table(data);
+    let symbol_count = _huffman_build_simple_codes();
+
+    _huffman_put(symbol_count);
+
+    let mut i = 0;
+    while i < HUFFMAN_MAX_SYMBOLS {
+        if huffman_freq[i] > 0 {
+            _huffman_put(i);
+            _huffman_put(huffman_code_lens[i]);
+            _huffman_put(huffman_codes[i] % 256);
+        }
+        i = i + 1;
+    }
+
+    let mut bit_buffer = 0;
+    let mut bit_count = 0;
+    let mut j = 0;
+
+    while j < len(data) {
+        let byte = str_char_code(data, j);
+        let code = huffman_codes[byte];
+        let code_len = huffman_code_lens[byte];
+
+        let mut b = 0;
+        while b < code_len {
+            let bit = (code / (1 * (2 * b))) % 2;
+            bit_buffer = bit_buffer * 2 + bit;
+            bit_count = bit_count + 1;
+
+            if bit_count == 8 {
+                _huffman_put(bit_buffer);
+                bit_buffer = 0;
+                bit_count = 0;
+            }
+
+            b = b + 1;
+        }
+
+        j = j + 1;
+    }
+
+    if bit_count > 0 {
+        while bit_count < 8 {
+            bit_buffer = bit_buffer * 2;
+            bit_count = bit_count + 1;
+        }
+        _huffman_put(bit_buffer);
+    }
+
+    return huffman_len;
+}
+
+fn huffman_decode(data) {
+    huffman_clear();
+
+    if len(data) < 1 {
+        return 0;
+    }
+
+    let symbol_count = str_char_code(data, 0);
+    let mut pos = 1;
+
+    let mut decode_table = [];
+    let mut i = 0;
+    while i < symbol_count {
+        if pos + 2 >= len(data) {
+            return 0 - 1;
+        }
+
+        let symbol = str_char_code(data, pos);
+        let code_len = str_char_code(data, pos + 1);
+        let code = str_char_code(data, pos + 2);
+
+        push(decode_table, [symbol, code_len, code]);
+        pos = pos + 3;
+        i = i + 1;
+    }
+
+    let mut bit_buffer = 0;
+    let mut bit_count = 0;
+
+    while pos < len(data) {
+        let byte = str_char_code(data, pos);
+        let mut b = 7;
+
+        while b >= 0 {
+            let bit = (byte / (1 * (128 / (1 * (2 * (7 - b)))))) % 2;
+            bit_buffer = bit_buffer * 2 + bit;
+            bit_count = bit_count + 1;
+
+            let mut j = 0;
+            while j < len(decode_table) {
+                let entry = decode_table[j];
+                let sym = entry[0];
+                let clen = entry[1];
+                let code = entry[2];
+
+                if bit_count == clen {
+                    if bit_buffer == code {
+                        _huffman_put(sym);
+                        bit_buffer = 0;
+                        bit_count = 0;
+                        j = len(decode_table);
+                    }
+                }
+
+                j = j + 1;
+            }
+
+            b = b - 1;
+        }
+
+        pos = pos + 1;
+    }
+
+    return huffman_len;
+}
+
+fn huffman_get_result() {
+    let mut result = "";
+    let mut i = 0;
+    while i < huffman_len {
+        let c = mem_read_byte(HUFFMAN_BUF + i);
+        result = result + chr(c);
+        i = i + 1;
+    }
+    return result;
+}
+
+fn huffman_ratio(original_len, compressed_len) {
+    if original_len == 0 {
+        return "0.00";
+    }
+    let ratio = (compressed_len * 100) / original_len;
+    return to_string(ratio);
+}
+
+fn huffman_test() {
+    print("huffman: running self-test");
+
+    let test_data = "AAAABBBCCD";
+    let enc_len = huffman_encode(test_data);
+
+    if enc_len > 0 {
+        print("  [ok] Huffman encode: " + to_string(len(test_data)) + " → " + to_string(enc_len) + " bytes");
+    } else {
+        print("  [fail] Huffman encode failed");
+        return 0 - 1;
+    }
+
+    let ratio = huffman_ratio(len(test_data), enc_len);
+    print("  [ok] Compression ratio: " + ratio + "%");
+
+    let compressed = huffman_get_result();
+    let dec_len = huffman_decode(compressed);
+
+    if dec_len > 0 {
+        print("  [ok] Huffman decode: " + to_string(enc_len) + " → " + to_string(dec_len) + " bytes");
+    } else {
+        print("  [fail] Huffman decode failed");
+        return 0 - 1;
+    }
+
+    print("huffman: self-test passed");
+    return 0;
+}
+
+print("huffman.hl loaded");

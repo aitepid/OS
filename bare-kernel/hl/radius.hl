@@ -1,0 +1,285 @@
+// radius.hl -- RADIUS Authentication Protocol
+//
+// Provides RADIUS (Remote Authentication Dial-In User Service) client.
+// Used for centralized authentication, authorization, and accounting (AAA).
+// UDP-based protocol on port 1812 (auth) / 1813 (accounting).
+// Buffer at 0x1120000 (64 KB message buffer).
+
+let RADIUS_BUF = 0x1120000;
+let RADIUS_BUF_SZ = 65536;
+let radius_len = 0;
+
+let RADIUS_PORT_AUTH = 1812;
+let RADIUS_PORT_ACCT = 1813;
+
+let RADIUS_CODE_ACCESS_REQUEST = 1;
+let RADIUS_CODE_ACCESS_ACCEPT = 2;
+let RADIUS_CODE_ACCESS_REJECT = 3;
+let RADIUS_CODE_ACCOUNTING_REQUEST = 4;
+let RADIUS_CODE_ACCOUNTING_RESPONSE = 5;
+
+let RADIUS_ATTR_USER_NAME = 1;
+let RADIUS_ATTR_USER_PASSWORD = 2;
+let RADIUS_ATTR_NAS_IP_ADDRESS = 4;
+let RADIUS_ATTR_NAS_PORT = 5;
+let RADIUS_ATTR_SERVICE_TYPE = 6;
+let RADIUS_ATTR_FRAMED_PROTOCOL = 7;
+let RADIUS_ATTR_REPLY_MESSAGE = 18;
+let RADIUS_ATTR_STATE = 24;
+let RADIUS_ATTR_CLASS = 25;
+let RADIUS_ATTR_SESSION_TIMEOUT = 27;
+let RADIUS_ATTR_IDLE_TIMEOUT = 28;
+let RADIUS_ATTR_NAS_IDENTIFIER = 32;
+
+let mut radius_secret = "";
+let mut radius_identifier = 1;
+
+fn radius_init() {
+    radius_clear();
+    radius_secret = "secret";
+    radius_identifier = 1;
+    print("radius: RADIUS client initialized (port " + to_string(RADIUS_PORT_AUTH) + ")");
+    return 0;
+}
+
+fn radius_clear() {
+    radius_len = 0;
+    let mut i = 0;
+    while i < 1024 {
+        mem_write_byte(RADIUS_BUF + i, 0);
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn _radius_put(byte) {
+    if radius_len >= RADIUS_BUF_SZ {
+        return 0;
+    }
+    mem_write_byte(RADIUS_BUF + radius_len, byte);
+    radius_len = radius_len + 1;
+    return 0;
+}
+
+fn radius_set_secret(secret) {
+    radius_secret = secret;
+    return 0;
+}
+
+fn _radius_put_u16(value) {
+    _radius_put(value / 256);
+    _radius_put(value % 256);
+    return 0;
+}
+
+fn _radius_put_authenticator() {
+    let mut i = 0;
+    while i < 16 {
+        let rand_byte = (random_get() % 256);
+        _radius_put(rand_byte);
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn _radius_add_attribute(type, data) {
+    _radius_put(type);
+    _radius_put(2 + len(data));
+
+    let mut i = 0;
+    while i < len(data) {
+        _radius_put(str_char_code(data, i));
+        i = i + 1;
+    }
+
+    return 0;
+}
+
+fn _radius_add_string_attr(type, value) {
+    _radius_add_attribute(type, value);
+    return 0;
+}
+
+fn _radius_add_int_attr(type, value) {
+    let data = "";
+    data = data + chr((value / 16777216) % 256);
+    data = data + chr((value / 65536) % 256);
+    data = data + chr((value / 256) % 256);
+    data = data + chr(value % 256);
+    _radius_add_attribute(type, data);
+    return 0;
+}
+
+fn _radius_encrypt_password(password, authenticator) {
+    let mut padded = password;
+    while len(padded) % 16 != 0 {
+        padded = padded + chr(0);
+    }
+
+    let mut result = "";
+    let mut block = 0;
+
+    while block < len(padded) / 16 {
+        let md5_input = radius_secret + authenticator;
+        if block > 0 {
+            md5_input = radius_secret + str_sub(result, (block - 1) * 16, block * 16);
+        }
+
+        let hash = md5(md5_input);
+        let mut hash_bytes = "";
+        let mut i = 0;
+        while i < 32 {
+            let hex_char = str_char_code(hash, i);
+            let digit = 0;
+            if hex_char >= 48 {
+                if hex_char <= 57 {
+                    digit = hex_char - 48;
+                } else {
+                    if hex_char >= 97 {
+                        digit = hex_char - 87;
+                    }
+                }
+            }
+
+            if i % 2 == 0 {
+                hash_bytes = hash_bytes + chr(digit * 16);
+            } else {
+                let last_pos = len(hash_bytes) - 1;
+                let last_byte = str_char_code(hash_bytes, last_pos);
+                hash_bytes = str_sub(hash_bytes, 0, last_pos) + chr(last_byte + digit);
+            }
+
+            i = i + 1;
+        }
+
+        let mut j = 0;
+        while j < 16 {
+            let pwd_byte = str_char_code(padded, block * 16 + j);
+            let hash_byte = str_char_code(hash_bytes, j);
+            result = result + chr((pwd_byte + hash_byte) % 256);
+            j = j + 1;
+        }
+
+        block = block + 1;
+    }
+
+    return result;
+}
+
+fn radius_create_access_request(username, password) {
+    radius_clear();
+
+    _radius_put(RADIUS_CODE_ACCESS_REQUEST);
+    _radius_put(radius_identifier);
+
+    let length_pos = radius_len;
+    _radius_put_u16(0);
+
+    let auth_pos = radius_len;
+    _radius_put_authenticator();
+
+    _radius_add_string_attr(RADIUS_ATTR_USER_NAME, username);
+
+    let authenticator = str_sub("", 0, 16);
+    let mut i = 0;
+    while i < 16 {
+        authenticator = authenticator + chr(mem_read_byte(RADIUS_BUF + auth_pos + i));
+        i = i + 1;
+    }
+
+    let encrypted_pwd = _radius_encrypt_password(password, authenticator);
+    _radius_add_attribute(RADIUS_ATTR_USER_PASSWORD, encrypted_pwd);
+
+    _radius_add_int_attr(RADIUS_ATTR_NAS_IP_ADDRESS, 0);
+    _radius_add_int_attr(RADIUS_ATTR_SERVICE_TYPE, 1);
+
+    let total_len = radius_len;
+    mem_write_byte(RADIUS_BUF + length_pos, total_len / 256);
+    mem_write_byte(RADIUS_BUF + length_pos + 1, total_len % 256);
+
+    radius_identifier = (radius_identifier + 1) % 256;
+
+    return radius_len;
+}
+
+fn radius_send_request(server, port) {
+    let sock = socket_create(2, 2, 0);
+    if sock < 0 {
+        print("radius: socket creation failed");
+        return 0 - 1;
+    }
+
+    let result = udp_send(sock, server, port, RADIUS_BUF, radius_len);
+    socket_close(sock);
+
+    if result > 0 {
+        return 0;
+    }
+
+    return 0 - 1;
+}
+
+fn radius_parse_response(data) {
+    if len(data) < 20 {
+        return 0 - 1;
+    }
+
+    let code = str_char_code(data, 0);
+    let identifier = str_char_code(data, 1);
+    let length = str_char_code(data, 2) * 256 + str_char_code(data, 3);
+
+    if code == RADIUS_CODE_ACCESS_ACCEPT {
+        return 1;
+    }
+
+    if code == RADIUS_CODE_ACCESS_REJECT {
+        return 0;
+    }
+
+    return 0 - 1;
+}
+
+fn radius_get_packet() {
+    let mut result = "";
+    let mut i = 0;
+    while i < radius_len {
+        let c = mem_read_byte(RADIUS_BUF + i);
+        result = result + chr(c);
+        i = i + 1;
+    }
+    return result;
+}
+
+fn radius_test() {
+    print("radius: running self-test");
+
+    radius_set_secret("testing123");
+
+    let req_len = radius_create_access_request("testuser", "testpass");
+    if req_len >= 20 {
+        print("  [ok] RADIUS Access-Request created: " + to_string(req_len) + " bytes");
+    } else {
+        print("  [fail] RADIUS request creation failed");
+        return 0 - 1;
+    }
+
+    if mem_read_byte(RADIUS_BUF) == RADIUS_CODE_ACCESS_REQUEST {
+        print("  [ok] RADIUS packet code: Access-Request (1)");
+    } else {
+        print("  [fail] RADIUS packet code incorrect");
+        return 0 - 1;
+    }
+
+    let packet_len = mem_read_byte(RADIUS_BUF + 2) * 256 + mem_read_byte(RADIUS_BUF + 3);
+    if packet_len == req_len {
+        print("  [ok] RADIUS packet length: " + to_string(packet_len));
+    } else {
+        print("  [fail] RADIUS packet length mismatch");
+        return 0 - 1;
+    }
+
+    print("radius: self-test passed");
+    return 0;
+}
+
+print("radius.hl loaded");
