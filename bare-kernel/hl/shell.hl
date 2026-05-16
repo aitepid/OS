@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 108 commands + pipe operator (|):
+// 116 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -11,9 +11,10 @@
 //   services svc(start/stop/status) kinfo run kill mkdir rm cp mv
 //   history hostname netstat grep disk_info format install advtest
 //   tcploop dnstest heval lsmod kmodtest
-//   UI: sysmon files audiotest settings fm fileman
+//   UI: sysmon files audiotest settings fm fileman edit editor
 //   Audio: audio vol mute unmute beep  AudioServer: audioserver aus aus-connect/play/stop/vol/beep
 //   GPU: gpu flip dirty
+//   Namespace: ns  ns new  ns info  ns hostname  ns enter  ns del
 //   Shell pipe: cmd1 | cmd2
 
 fn shell_handle(cmd) {
@@ -24,6 +25,7 @@ fn shell_handle(cmd) {
         serial_print("Tasks:    ps kill run (kill sends SIGTERM by default)");
         serial_print("Signals:  SIGTERM=15 SIGKILL=9 SIGSTOP=19 SIGCONT=18");
         serial_print("Files:    ls [path] cat echo  echo <text> > <file>  mkdir rm  cp <s> <d>  mv <s> <d>  fm (graphical)");
+        serial_print("Editor:   editor  edit <file>   (graphical text editor with VFS open/save)");
         serial_print("Proc:     mounts (dynamic) | cat /proc/meminfo etc.");
         serial_print("Disk:     disk_info format install");
         serial_print("Network:  ifconfig ping dns arp netstat");
@@ -34,6 +36,7 @@ fn shell_handle(cmd) {
         serial_print("Graphics: gpu  gpu flip  gpu dirty");
         serial_print("Services: services svc start|stop|status <name>");
         serial_print("FS Events:inotify  watch <path>  pty [alloc|info <id>]");
+        serial_print("Namespace:ns  ns new  ns info <id>  ns hostname <id> <name>  ns enter <tid> <nsid>  ns del <id>");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -518,6 +521,46 @@ fn shell_handle_ext(cmd) {
     if cmd == "cg" {
         return cgroup_status(0);
     }
+
+    if cmd == "ns" {
+        return ns_list();
+    }
+    if str_starts_with(cmd, "ns new") {
+        let ns_id = ns_create(0, NS_TYPE_ALL);
+        if ns_id < 0 { return "Error: namespace table full"; }
+        return "Created: " + ns_status(ns_id);
+    }
+    if str_starts_with(cmd, "ns info ") {
+        let id = parse_int(str_sub(cmd, 8, len(cmd)));
+        return ns_status(id);
+    }
+    if str_starts_with(cmd, "ns hostname ") {
+        let args = str_sub(cmd, 12, len(cmd));
+        let sp = str_find(args, " ");
+        if sp < 0 { return "Usage: ns hostname <ns_id> <name>"; }
+        let ns_id = parse_int(str_sub(args, 0, sp));
+        let name  = str_sub(args, sp + 1, len(args));
+        let r = ns_set_hostname(ns_id, name);
+        if r == 0 { return "Set hostname in ns[" + to_string(ns_id) + "] = " + name; }
+        return "Error: cannot set hostname";
+    }
+    if str_starts_with(cmd, "ns enter ") {
+        let args = str_sub(cmd, 9, len(cmd));
+        let sp = str_find(args, " ");
+        if sp < 0 { return "Usage: ns enter <task_idx> <ns_id>"; }
+        let tidx  = parse_int(str_sub(args, 0, sp));
+        let ns_id = parse_int(str_sub(args, sp + 1, len(args)));
+        let r = ns_enter(tidx, ns_id);
+        if r == 0 { return "Task " + to_string(tidx) + " entered ns[" + to_string(ns_id) + "]"; }
+        return "Error: ns_enter failed";
+    }
+    if str_starts_with(cmd, "ns del ") {
+        let ns_id = parse_int(str_sub(cmd, 7, len(cmd)));
+        let r = ns_destroy(ns_id);
+        if r == 0 { return "Destroyed ns[" + to_string(ns_id) + "]"; }
+        return "Error: cannot destroy ns[" + to_string(ns_id) + "]";
+    }
+
     if cmd == "pty" {
         return pty_status();
     }
@@ -596,6 +639,15 @@ fn shell_handle_ext(cmd) {
     if cmd == "settings" {
         uisettings_open();
         return "Settings opened";
+    }
+    if str_starts_with(cmd, "edit ") {
+        let path = str_sub(cmd, 5, len(cmd));
+        uitxed_open(path);
+        return "Editor opened: " + path;
+    }
+    if cmd == "editor" {
+        uitxed_open("");
+        return "Editor opened (new file)";
     }
     if cmd == "gpu" {
         if gpu_initialized == 1 {
@@ -723,7 +775,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 108 commands + pipe(|) + echo>redirect + inotify + watch + pty + audio + aus + gpu + cp/mv");
+print("shell.hl loaded -- 116 commands + pipe(|) + echo>redirect + inotify + watch + pty + audio + aus + gpu + cp/mv + ns + editor");
 
 // Main shell loop (called from kernel_init)
 

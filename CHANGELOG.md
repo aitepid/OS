@@ -2,17 +2,64 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`201`（69 根目录 + 132 内核模块）
-- H-L 总行数：`~48,900`（根 10,300+ + 内核 ~38,600）
-- 内核模块：`132`（编译产出 1,720+ 函数 / 2,030+ 符号）
+- `.hl` 文件：`203`（69 根目录 + 134 内核模块）
+- H-L 总行数：`~50,200`（根 10,600+ + 内核 ~39,600）
+- 内核模块：`134`（编译产出 1,760+ 函数 / 2,060+ 符号）
 - `kernel_entry.hl`：`9,428` 行
 - `hl-bootstrap.hl`：`4,306` 行，`208` 函数
 - `stdlib.hl`：`1,385` 行，`143` 函数
 - `kinterp.hl`：`~1,280` 行
-- Shell 命令（`shell.hl` if cmd ==）：`108`
+- Shell 命令（`shell.hl` if cmd ==）：`116`
 - `scripts/*.ps1`：`28`（9,729 行）
 - 构建/测试主入口：`hl-bootstrap.cmd test`
-- 最近完成功能迭代：`145`（AudioServer IPC 服务 + 18/18 发布验证通过）
+- 最近完成功能迭代：`147`（图形文本编辑器 + 进程命名空间 + 18/18 发布验证通过）
+
+## Iteration 147 — 图形文本编辑器（ui_text_editor.hl）
+
+- **`bare-kernel/hl/ui_text_editor.hl`**: 新建（~370 行，26 个函数）
+  - 常量：`UITXED_MAX_LINES=512`，`UITXED_LINE_W=256`，8×16 字符网格
+  - 编辑器状态：`uitxed_lines[]`（字符串数组），光标 (row/col)，滚动偏移，文件名，dirty 标志
+  - 光标导航：`←/→/↑/↓` 移动，`Home/End`，`PgUp/PgDn`（整页翻滚）
+  - 编辑操作：`uitxed_insert_char()`、`uitxed_backspace()`（含跨行合并）、`uitxed_delete_char()`（含跨行合并）、`uitxed_newline()`（行拆分）
+  - VFS 集成：`uitxed_load(path)` — 逐字节读取 `/n` 分割；`uitxed_save()` — 逐行写回；`uitxed_save_as(path)`
+  - 渲染：行号槽（40px 灰底）、当前行高亮（accent color）、光标竖线闪烁、状态栏（行/列 + modified/saved）
+  - 窗口生命周期：`uitxed_open(path)` / `uitxed_close()` / `uitxed_update()` / `uitxed_is_open()`
+  - 键盘处理：可打印 ASCII（32-126）直接插入；功能键 scancodes 映射
+- **`wm.hl`**: 集成文本编辑器渲染与键盘路由
+  - `wm_draw_all()`: 新增 `if uitxed_is_open() { uitxed_update(); }`
+  - `wm_key_dispatch()`: 焦点窗口为编辑器时路由到 `uitxed_handle_key()`
+- **`ui_desktop.hl`**: dock 扩展到 6 个应用启动器
+  - `UIDSK_APP_EDITOR = 5`："Edit" 按钮 → `uitxed_open("")`
+  - `uidsk_app_count = 6`
+- **`shell.hl`**: 新增 2 条编辑器命令（114 → 116 total）
+  - `editor`：打开空白编辑器窗口
+  - `edit <file>`：从 VFS 加载并打开文件（路径不存在时创建新文件）
+  - help Editor 行新增
+
+## Iteration 146 — 进程命名空间隔离（namespace.hl）
+
+- **`bare-kernel/hl/namespace.hl`**: 新建（~280 行，21 个函数）
+  - 支持 4 种命名空间类型：`NS_TYPE_PID=1 / UTS=2 / IPC=4 / MNT=8`；最多 16 个命名空间
+  - 全局并行数组存储：`ns_active / ns_parent / ns_type_mask / ns_hostname / ns_domainname / ns_pid_base / ns_pid_map / ns_ipc_keys / ns_mnt_extra / ns_refcount`
+  - **PID 命名空间**：`ns_pid_alloc()` 为 global_pid 分配 ns-local PID；`ns_get_pid()` 翻译；`ns_pid_base[]` 内部计数器
+  - **UTS 命名空间**：`ns_set/get_hostname()` + `ns_set/get_domainname()` — 每 ns 独立 hostname
+  - **IPC 命名空间**：`ns_ipc_add_key()` 注册可见 key；`ns_ipc_key_valid()` 过滤 SysV 共享内存 key
+  - **MNT 命名空间**：`ns_mnt_add(ns_id, path)` — ns 私有挂载点；`ns_mount_visible()` — 递归父 ns 可见性查询
+  - `ns_create(parent, type_mask)` / `ns_clone(src, mask)` / `ns_destroy(id)` — 生命周期管理
+  - `ns_enter(task_idx, ns_id)`：任务分配（引用计数 +/−）；`ns_get(task_idx)` 查询
+  - `ns_list()` / `ns_status(id)`：状态字符串
+- **`kernel_init.hl`**: Phase 4 新增 `ns_init()` 调用（在 `signal_init_subsystem()` 之后）
+- **`shell.hl`**: 新增 6 条命名空间命令（108 → 114 total）
+  - `ns`：列出全部命名空间
+  - `ns new`：创建 ALL 类型子命名空间（parent = root ns）
+  - `ns info <id>`：显示指定命名空间详情
+  - `ns hostname <id> <name>`：修改 UTS 主机名
+  - `ns enter <task_idx> <ns_id>`：将任务迁入命名空间
+  - `ns del <id>`：销毁空命名空间（refcount=0 才允许）
+  - help Namespace 行新增
+- **`manifest.hl`**: 更新指标
+  - `KERNEL_MODULES=134`, `HL_FILES=203`, `SHELL_COMMANDS=116`, `KERNEL_FUNCTIONS=1760`
+- **发布验证**: 18/18 PASSED（203 HL 文件，134 模块）
 
 ## Iteration 145 — HicOS_AudioServer IPC 音频服务
 

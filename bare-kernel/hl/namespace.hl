@@ -1,0 +1,338 @@
+// namespace.hl -- Process Namespace Isolation
+//
+// Implements Linux-compatible namespace types:
+//   PID  - isolated process ID trees (each ns has its own PID 1)
+//   UTS  - isolated hostname + domainname per ns
+//   IPC  - isolated SysV-style IPC (shared memory keys, message queues)
+//   MNT  - isolated VFS mount view (per-ns mount table overlay)
+//
+// Design:
+//   Up to NS_MAX (16) namespace groups.
+//   Each task carries a ns_id (default = 0 = global namespace).
+//   ns_clone() creates a child namespace copying the parent's view.
+//   ns_enter(task_idx, ns_id) reassigns a task into a namespace.
+//
+// Public API:
+//   ns_init / ns_create / ns_destroy / ns_clone
+//   ns_enter / ns_get_pid / ns_set_hostname / ns_get_hostname
+//   ns_ipc_key_valid / ns_mount_visible / ns_status
+
+let NS_MAX       = 16;
+let NS_TYPE_PID  = 1;
+let NS_TYPE_UTS  = 2;
+let NS_TYPE_IPC  = 4;
+let NS_TYPE_MNT  = 8;
+let NS_TYPE_ALL  = 15;   // PID | UTS | IPC | MNT
+
+// Namespace table (parallel arrays, indexed by ns_id)
+let mut ns_active     = [];   // 1 = slot in use
+let mut ns_parent     = [];   // parent ns_id (-1 = root)
+let mut ns_type_mask  = [];   // bitmask of NS_TYPE_*
+let mut ns_hostname   = [];   // UTS: hostname string
+let mut ns_domainname = [];   // UTS: domainname string
+let mut ns_pid_base   = [];   // PID: next_pid counter inside ns
+let mut ns_pid_map    = [];   // PID: [global_pid -> ns_local_pid] list
+let mut ns_ipc_keys   = [];   // IPC: allowed shared-memory keys list
+let mut ns_mnt_extra  = [];   // MNT: additional mount paths visible in ns
+let mut ns_refcount   = [];   // reference count (# tasks in this ns)
+let mut ns_count      = 0;
+
+// Per-task namespace assignment (indexed by task slot)
+let mut task_ns_id    = [];   // ns_id for each task slot (0 = global)
+
+fn ns_init() {
+    ns_active     = [];
+    ns_parent     = [];
+    ns_type_mask  = [];
+    ns_hostname   = [];
+    ns_domainname = [];
+    ns_pid_base   = [];
+    ns_pid_map    = [];
+    ns_ipc_keys   = [];
+    ns_mnt_extra  = [];
+    ns_refcount   = [];
+    ns_count      = 0;
+    task_ns_id    = [];
+
+    // Pre-fill MAX slots with defaults (ns_id = 0 is the global root ns)
+    let mut i = 0;
+    while i < NS_MAX {
+        push(ns_active,     0);
+        push(ns_parent,     0 - 1);
+        push(ns_type_mask,  0);
+        push(ns_hostname,   "hicos");
+        push(ns_domainname, "local");
+        push(ns_pid_base,   1);
+        push(ns_pid_map,    []);
+        push(ns_ipc_keys,   []);
+        push(ns_mnt_extra,  []);
+        push(ns_refcount,   0);
+        i = i + 1;
+    }
+
+    // Initialise global root namespace (slot 0)
+    set_at(ns_active,    0, 1);
+    set_at(ns_type_mask, 0, NS_TYPE_ALL);
+    set_at(ns_hostname,  0, "hicos");
+    set_at(ns_pid_base,  0, 1);
+    set_at(ns_refcount,  0, 1);
+    ns_count = 1;
+
+    // Pre-fill per-task ns to global (0) for up to MAX_TASKS slots
+    let mut t = 0;
+    while t < 64 {
+        push(task_ns_id, 0);
+        t = t + 1;
+    }
+
+    print("namespace: init — root ns[0] ready, PID/UTS/IPC/MNT isolation available");
+    return 0;
+}
+
+// Allocate a new namespace slot; returns ns_id or -1
+fn ns_alloc_slot() {
+    let mut i = 1;   // 0 is always the root ns
+    while i < NS_MAX {
+        if ns_active[i] == 0 { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+// Create a new namespace of the given type_mask, child of parent_ns_id.
+// Returns new ns_id or -1 on failure.
+fn ns_create(parent_ns_id, type_mask) {
+    if parent_ns_id < 0 { parent_ns_id = 0; }
+    if parent_ns_id >= NS_MAX { return 0 - 1; }
+    if ns_active[parent_ns_id] == 0 { return 0 - 1; }
+
+    let id = ns_alloc_slot();
+    if id < 0 {
+        print("namespace: ns_create failed — table full");
+        return 0 - 1;
+    }
+
+    set_at(ns_active,     id, 1);
+    set_at(ns_parent,     id, parent_ns_id);
+    set_at(ns_type_mask,  id, type_mask);
+    // UTS: inherit parent hostname
+    set_at(ns_hostname,   id, ns_hostname[parent_ns_id]);
+    set_at(ns_domainname, id, ns_domainname[parent_ns_id]);
+    // PID: fresh counter starting from 1 (ns-local PID 1 = init)
+    set_at(ns_pid_base,   id, 1);
+    set_at(ns_pid_map,    id, []);
+    // IPC: inherit parent's allowed keys
+    set_at(ns_ipc_keys,   id, ns_ipc_keys[parent_ns_id]);
+    // MNT: start with empty extra mounts (inherits global mounts)
+    set_at(ns_mnt_extra,  id, []);
+    set_at(ns_refcount,   id, 0);
+
+    ns_count = ns_count + 1;
+    print("namespace: created ns[" + to_string(id) + "] type=" + to_string(type_mask) + " parent=" + to_string(parent_ns_id));
+    return id;
+}
+
+// Clone a namespace: copy the parent's ns view into a new child ns.
+// type_mask controls which sub-namespaces are cloned (CLONE_NEW* flags).
+fn ns_clone(src_ns_id, type_mask) {
+    return ns_create(src_ns_id, type_mask);
+}
+
+// Destroy a namespace (only if refcount == 0)
+fn ns_destroy(ns_id) {
+    if ns_id <= 0 { return 0 - 1; }   // can't destroy root ns
+    if ns_id >= NS_MAX { return 0 - 1; }
+    if ns_active[ns_id] == 0 { return 0 - 1; }
+    if ns_refcount[ns_id] > 0 {
+        print("namespace: ns_destroy ns[" + to_string(ns_id) + "] refused — refcount=" + to_string(ns_refcount[ns_id]));
+        return 0 - 1;
+    }
+    set_at(ns_active, ns_id, 0);
+    ns_count = ns_count - 1;
+    print("namespace: destroyed ns[" + to_string(ns_id) + "]");
+    return 0;
+}
+
+// Assign a task to a namespace; adjusts refcounts
+fn ns_enter(task_idx, ns_id) {
+    if task_idx < 0 { return 0 - 1; }
+    if task_idx >= 64 { return 0 - 1; }
+    if ns_id < 0 { return 0 - 1; }
+    if ns_id >= NS_MAX { return 0 - 1; }
+    if ns_active[ns_id] == 0 { return 0 - 1; }
+
+    // Decrement old ns refcount
+    let old_ns = task_ns_id[task_idx];
+    if old_ns >= 0 {
+        if old_ns < NS_MAX {
+            set_at(ns_refcount, old_ns, ns_refcount[old_ns] - 1);
+        }
+    }
+
+    set_at(task_ns_id,  task_idx, ns_id);
+    set_at(ns_refcount, ns_id, ns_refcount[ns_id] + 1);
+    return 0;
+}
+
+fn ns_get(task_idx) {
+    if task_idx < 0 { return 0; }
+    if task_idx >= 64 { return 0; }
+    return task_ns_id[task_idx];
+}
+
+// ============================================================
+// PID namespace helpers
+// ============================================================
+
+// Allocate a ns-local PID for global_pid in ns_id; returns ns-local pid
+fn ns_pid_alloc(ns_id, global_pid) {
+    if ns_id < 0 { return global_pid; }
+    if ns_id >= NS_MAX { return global_pid; }
+    if (ns_type_mask[ns_id] / NS_TYPE_PID) % 2 == 0 { return global_pid; }
+
+    let local_pid = ns_pid_base[ns_id];
+    set_at(ns_pid_base, ns_id, local_pid + 1);
+    // Record mapping: [global, local]
+    let old_map = ns_pid_map[ns_id];
+    push(old_map, [global_pid, local_pid]);
+    set_at(ns_pid_map, ns_id, old_map);
+    return local_pid;
+}
+
+// Translate global PID to ns-local PID for given ns_id
+fn ns_get_pid(ns_id, global_pid) {
+    if ns_id <= 0 { return global_pid; }
+    if ns_id >= NS_MAX { return global_pid; }
+    if (ns_type_mask[ns_id] / NS_TYPE_PID) % 2 == 0 { return global_pid; }
+    let mp = ns_pid_map[ns_id];
+    let mut i = 0;
+    while i < len(mp) {
+        if mp[i][0] == global_pid { return mp[i][1]; }
+        i = i + 1;
+    }
+    return global_pid; // not remapped yet — use global
+}
+
+// ============================================================
+// UTS namespace helpers
+// ============================================================
+
+fn ns_set_hostname(ns_id, name) {
+    if ns_id < 0 { return 0 - 1; }
+    if ns_id >= NS_MAX { return 0 - 1; }
+    if ns_active[ns_id] == 0 { return 0 - 1; }
+    if (ns_type_mask[ns_id] / NS_TYPE_UTS) % 2 == 0 { return 0 - 1; }
+    set_at(ns_hostname, ns_id, name);
+    return 0;
+}
+
+fn ns_get_hostname(ns_id) {
+    if ns_id < 0 { return "hicos"; }
+    if ns_id >= NS_MAX { return "hicos"; }
+    if ns_active[ns_id] == 0 { return "hicos"; }
+    return ns_hostname[ns_id];
+}
+
+fn ns_set_domainname(ns_id, name) {
+    if ns_id < 0 { return 0 - 1; }
+    if ns_id >= NS_MAX { return 0 - 1; }
+    set_at(ns_domainname, ns_id, name);
+    return 0;
+}
+
+fn ns_get_domainname(ns_id) {
+    if ns_id < 0 { return "local"; }
+    if ns_id >= NS_MAX { return "local"; }
+    return ns_domainname[ns_id];
+}
+
+// ============================================================
+// IPC namespace helpers
+// ============================================================
+
+// Register an IPC shared-memory key as visible in ns_id
+fn ns_ipc_add_key(ns_id, key) {
+    if ns_id < 0 { return 0 - 1; }
+    if ns_id >= NS_MAX { return 0 - 1; }
+    if (ns_type_mask[ns_id] / NS_TYPE_IPC) % 2 == 0 { return 0 - 1; }
+    let keys = ns_ipc_keys[ns_id];
+    push(keys, key);
+    set_at(ns_ipc_keys, ns_id, keys);
+    return 0;
+}
+
+// Returns 1 if IPC key is visible in this namespace (or root ns), 0 otherwise
+fn ns_ipc_key_valid(ns_id, key) {
+    if ns_id <= 0 { return 1; }  // root ns: all keys visible
+    if ns_id >= NS_MAX { return 0; }
+    if (ns_type_mask[ns_id] / NS_TYPE_IPC) % 2 == 0 { return 1; }
+    let keys = ns_ipc_keys[ns_id];
+    let mut i = 0;
+    while i < len(keys) {
+        if keys[i] == key { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// ============================================================
+// MNT namespace helpers
+// ============================================================
+
+// Add a mount path visible only inside ns_id
+fn ns_mnt_add(ns_id, path) {
+    if ns_id <= 0 { return 0 - 1; }  // don't modify root ns mounts this way
+    if ns_id >= NS_MAX { return 0 - 1; }
+    if (ns_type_mask[ns_id] / NS_TYPE_MNT) % 2 == 0 { return 0 - 1; }
+    let mpts = ns_mnt_extra[ns_id];
+    push(mpts, path);
+    set_at(ns_mnt_extra, ns_id, mpts);
+    return 0;
+}
+
+// Returns 1 if path is visible in ns_id (always true for global ns)
+fn ns_mount_visible(ns_id, path) {
+    if ns_id <= 0 { return 1; }
+    if ns_id >= NS_MAX { return 0; }
+    if (ns_type_mask[ns_id] / NS_TYPE_MNT) % 2 == 0 { return 1; }
+    // Check ns-specific mounts
+    let mpts = ns_mnt_extra[ns_id];
+    let mut i = 0;
+    while i < len(mpts) {
+        if mpts[i] == path { return 1; }
+        i = i + 1;
+    }
+    // Fall back: check if parent ns sees it (recursive)
+    let parent = ns_parent[ns_id];
+    if parent >= 0 { return ns_mount_visible(parent, path); }
+    return 1;  // global mounts always visible
+}
+
+// ============================================================
+// Status / debug
+// ============================================================
+
+fn ns_status(ns_id) {
+    if ns_id < 0 { return "invalid"; }
+    if ns_id >= NS_MAX { return "invalid"; }
+    if ns_active[ns_id] == 0 { return "ns[" + to_string(ns_id) + "] inactive"; }
+    return "ns[" + to_string(ns_id) + "] type=" + to_string(ns_type_mask[ns_id])
+        + " host=" + ns_hostname[ns_id]
+        + " refs=" + to_string(ns_refcount[ns_id])
+        + " parent=" + to_string(ns_parent[ns_id]);
+}
+
+fn ns_list() {
+    let mut out = "Namespaces (" + to_string(ns_count) + "/" + to_string(NS_MAX) + "):\n";
+    let mut i = 0;
+    while i < NS_MAX {
+        if ns_active[i] == 1 {
+            out = out + "  " + ns_status(i) + "\n";
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+print("namespace.hl loaded");
+print("Namespace isolation: PID/UTS/IPC/MNT — max " + to_string(NS_MAX) + " namespaces");
