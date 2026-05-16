@@ -2,11 +2,51 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`232`（69 根目录 + 163 内核模块）
-- H-L 总行数：`~69,000`
-- 内核模块：`163`
-- Shell 命令：`245`
-- 最近完成功能迭代：`177`（csv + ping + ui_taskman）
+- `.hl` 文件：`235`（69 根目录 + 166 内核模块）
+- H-L 总行数：`~70,500`
+- 内核模块：`166`
+- Shell 命令：`253`
+- 最近完成功能迭代：`180`（traceroute + semaphore + ui_notepad）
+
+## Iteration 180 — ui_notepad.hl：图形化多行文本编辑器
+
+- **`bare-kernel/hl/ui_notepad.hl`** 新增（~270 行）
+  - 窗口 640×460；行数组最多 200 行（NOTEP_MAX_LINES）
+  - 行号 gutter（40px）+ 光标（蓝色 2px 竖线）+ 状态栏（行/列/modified）
+  - 键盘：可打印字符插入 / Enter 分行 / Backspace 合并行 / 方向键 / Home/End
+  - Ctrl+S 保存至 VFS；Esc 关闭；鼠标点击定位光标
+  - `_notep_insert_line/delete_line`：O(n) 行数组移位操作
+  - NOTEP_BUF=0xE5C000（64 KB）读写缓冲
+- **`bare-kernel/hl/wm.hl`** 接入：draw / key（仅焦点窗口）/ click
+- **`bare-kernel/hl/ui_desktop.hl`** dock 第 14 号图标 `UIDSK_APP_NOTEPAD`，标签 "Note"
+- **`bare-kernel/hl/shell.hl`** 新增 2 条命令：`notepad` / `notepad <path>`
+
+## Iteration 179 — semaphore.hl：POSIX 命名计数信号量
+
+- **`bare-kernel/hl/semaphore.hl`** 新增（~170 行）
+  - SEM_MAX=16；并行平坦数组 sem_active/names/vals/max_vals/waiters
+  - `sem_open(name, val)` — 存在则返回已有 id，否则分配新槽
+  - `sem_wait(id)` — 非阻塞：val>0 则减一返回 0，否则返回 -1（EAGAIN）
+  - `sem_timedwait(id, ticks)` — 自旋等待直到超时，计数 waiters
+  - `sem_post(id)` — 增一并返回新值
+  - `sem_destroy(id)` — 有等待者时打印警告后销毁
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`sem_init_subsystem()`
+- **`bare-kernel/hl/shell.hl`** 新增 6 条命令：
+  - `sem list` / `sem create <name> <val>` / `sem wait <id>`
+  - `sem post <id>` / `sem value <id>` / `sem destroy <id>`
+
+## Iteration 178 — traceroute.hl：逐跳路由追踪
+
+- **`bare-kernel/hl/traceroute.hl`** 新增（~170 行）
+  - UDP 探测包（40 字节），目标端口 33434+seq，本地端口 17071
+  - 每跳递增 TTL；等待 ICMP type=11（TTL 超时）或 type=3（目标不可达）
+  - 超时 200 ticks（2 s）→ 输出 `* * *`
+  - `_trace_build_probe(seq)` → 40 字节数组（含 TTL 字段）
+  - `traceroute_on_recv(data)` UDP 回调：解析 ICMP 类型 + 发送方 IP
+  - `traceroute_host(host, max_hops)` → 多行跳表字符串
+  - TRACE_MAX_HOPS=30
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`traceroute_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 1 条命令：`traceroute <host> [max_hops]`
 
 ## Iteration 177 — ui_taskman.hl：图形化任务管理器
 

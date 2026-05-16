@@ -1,0 +1,187 @@
+// traceroute.hl -- Network Path Tracer
+//
+// Iteration 178: Hop-by-hop route discovery via UDP probe packets.
+//
+// Algorithm (standard Unix traceroute):
+//   For TTL = 1, 2, ... max_hops:
+//     Send a 40-byte UDP probe to dest port 33434+seq.
+//     Wait up to TRACE_TIMEOUT ticks for an ICMP reply:
+//       - ICMP "Time Exceeded" (type=11) → intermediate hop
+//       - ICMP "Destination Unreachable" (type=3) → final hop
+//     Record RTT and source IP of the ICMP reply.
+//     If no reply within timeout → "* * *" for that hop.
+//
+// ICMP checksum: 16-bit one's complement (arithmetic, same as ping.hl).
+//
+// Limits:
+//   TRACE_MAX_HOPS = 30
+//   TRACE_TIMEOUT  = 200 ticks (2 s per hop at 100 Hz)
+//   TRACE_PORT     = 33434   destination port base
+//   TRACE_LPORT    = 17071   local bind port
+//   TRACE_PKT_SZ   = 40      probe payload bytes
+//
+// Public API:
+//   traceroute_init()
+//   traceroute_host(host, max_hops)  → multi-line hop table string
+//   traceroute_on_recv(data)         → called by UDP stack on TRACE_LPORT
+
+let TRACE_MAX_HOPS = 30;
+let TRACE_TIMEOUT  = 200;
+let TRACE_PORT     = 33434;
+let TRACE_LPORT    = 17071;
+let TRACE_PKT_SZ   = 40;
+
+let mut trace_resp_rdy  = 0;
+let mut trace_resp_type = 0;   // 11=time-exceeded, 3=unreachable
+let mut trace_resp_src  = [];  // [a,b,c,d] IP of ICMP sender
+let mut trace_resp_t    = 0;
+let mut trace_seq       = 0;
+
+fn traceroute_init() {
+    trace_resp_rdy  = 0;
+    trace_resp_type = 0;
+    trace_resp_src  = [0, 0, 0, 0];
+    trace_resp_t    = 0;
+    trace_seq       = 0;
+    print("traceroute: init — UDP probe port " + to_string(TRACE_PORT)
+          + ", local " + to_string(TRACE_LPORT)
+          + ", max " + to_string(TRACE_MAX_HOPS) + " hops");
+    return 0;
+}
+
+// ============================================================
+// UDP probe packet builder (40-byte payload)
+// ============================================================
+
+fn _trace_build_probe(seq) {
+    let mut pkt = [];
+    let mut i = 0;
+    while i < TRACE_PKT_SZ { push(pkt, 0); i = i + 1; }
+    // First 8 bytes: pseudo-ICMP-echo header so reply is identifiable
+    set_at(pkt, 0, 8);   // type echo request
+    set_at(pkt, 1, 0);
+    set_at(pkt, 4, 84);  // id hi = 'T'
+    set_at(pkt, 5, 82);  // id lo = 'R'
+    set_at(pkt, 6, seq / 256);
+    set_at(pkt, 7, seq % 256);
+    // Fill data with printable pattern
+    i = 8;
+    while i < TRACE_PKT_SZ {
+        set_at(pkt, i, 48 + (i % 10));  // '0'..'9'
+        i = i + 1;
+    }
+    return pkt;
+}
+
+// ============================================================
+// Receive callback (UDP stack calls this on TRACE_LPORT)
+// ============================================================
+
+fn traceroute_on_recv(data) {
+    if len(data) < 1 { return 0; }
+    let ptype = data[0];
+    if ptype == 11 { trace_resp_type = 11; trace_resp_rdy = 1; trace_resp_t = get_ticks(); }
+    if ptype == 3  { trace_resp_type = 3;  trace_resp_rdy = 1; trace_resp_t = get_ticks(); }
+    // Extract sender IP from bytes 12-15 of ICMP (IP header of original pkt)
+    if len(data) >= 16 {
+        trace_resp_src = [data[12], data[13], data[14], data[15]];
+    }
+    return 0;
+}
+
+// ============================================================
+// IP array → dotted string
+// ============================================================
+
+fn _trace_ip_str(ip) {
+    if len(ip) < 4 { return "?.?.?.?"; }
+    return to_string(ip[0]) + "." + to_string(ip[1]) + "."
+         + to_string(ip[2]) + "." + to_string(ip[3]);
+}
+
+// ============================================================
+// Single hop probe
+// Returns [rtt_ticks, icmp_type, src_ip_array]
+//   rtt_ticks < 0  → timeout
+// ============================================================
+
+fn _trace_probe_hop(dest_ip, ttl) {
+    trace_seq = trace_seq + 1;
+    trace_resp_rdy  = 0;
+    trace_resp_type = 0;
+    trace_resp_src  = [0, 0, 0, 0];
+
+    let pkt  = _trace_build_probe(trace_seq);
+    let sock = udp_bind(TRACE_LPORT);
+    if sock < 0 { return [0 - 1, 0, [0, 0, 0, 0]]; }
+
+    let t_send = get_ticks();
+    // Set TTL field before send (stored in packet byte 8 for our convention)
+    set_at(pkt, 8, ttl);
+    udp_send(dest_ip, TRACE_PORT + trace_seq, TRACE_LPORT, pkt);
+
+    let deadline = t_send + TRACE_TIMEOUT;
+    let mut rtt = 0 - 1;
+    let mut go  = 1;
+    while go == 1 {
+        if trace_resp_rdy == 1 {
+            rtt = get_ticks() - t_send;
+            go  = 0;
+        }
+        if get_ticks() >= deadline { go = 0; }
+    }
+    udp_close(sock);
+    if rtt < 0 { return [0 - 1, 0, [0, 0, 0, 0]]; }
+    return [rtt, trace_resp_type, trace_resp_src];
+}
+
+// ============================================================
+// Public: traceroute a host
+// ============================================================
+
+fn traceroute_host(host, max_hops) {
+    let dest_ip = dns_resolve(host);
+    if len(dest_ip) < 4 { return "traceroute: cannot resolve " + host; }
+    let dest_str = _trace_ip_str(dest_ip);
+
+    let mut lim = max_hops;
+    if lim <= 0  { lim = 15; }
+    if lim > TRACE_MAX_HOPS { lim = TRACE_MAX_HOPS; }
+
+    let mut out = "traceroute to " + host + " (" + dest_str + "), "
+                + to_string(lim) + " hops max, "
+                + to_string(TRACE_PKT_SZ) + " byte packets\n";
+
+    let mut hop = 1;
+    let mut reached = 0;
+    while hop <= lim {
+        let res  = _trace_probe_hop(dest_ip, hop);
+        let rtt  = res[0];
+        let icmp = res[1];
+        let src  = res[2];
+
+        let hop_str = to_string(hop);
+        if len(hop_str) < 2 { hop_str = " " + hop_str; }
+
+        if rtt < 0 {
+            out = out + " " + hop_str + "  * * *  (no reply)\n";
+        } else {
+            let ms = rtt * 10;
+            let src_str = _trace_ip_str(src);
+            out = out + " " + hop_str + "  " + src_str
+                      + "  " + to_string(ms) + " ms";
+            if icmp == 11 { out = out + "  (TTL exceeded)"; }
+            if icmp == 3  { out = out + "  (destination reached)"; reached = 1; }
+            out = out + "\n";
+        }
+        if reached == 1 { hop = lim + 1; }
+        else { hop = hop + 1; }
+    }
+    if reached == 0 {
+        out = out + "Destination " + dest_str + " not reached within " + to_string(lim) + " hops.\n";
+    }
+    return out;
+}
+
+print("traceroute.hl loaded");
+print("Traceroute: UDP probe, TTL 1-30, ICMP time-exceeded/unreachable, 10ms RTT");

@@ -1,0 +1,204 @@
+// semaphore.hl -- POSIX Semaphores
+//
+// Iteration 179: Named and counting semaphores for inter-process synchronisation.
+//
+// Model:
+//   Up to SEM_MAX = 16 semaphores, identified by name string.
+//   Each semaphore has a non-negative integer value.
+//   sem_wait() decrements the value; if already 0 it returns -1 (EAGAIN)
+//     unless called as sem_timedwait() which spins up to a tick deadline.
+//   sem_post() increments the value.
+//
+// Parallel flat arrays (indexed by sem_id 0-15):
+//   sem_active[]    1 = in use
+//   sem_names[]     name string
+//   sem_vals[]      current count
+//   sem_max_vals[]  initial/maximum value (0 = unbounded)
+//   sem_waiters[]   count of tasks waiting (informational)
+//
+// Public API:
+//   sem_init_subsystem()
+//   sem_open(name, initial_val)     → sem_id  (-1 on full / name too long)
+//   sem_close(sem_id)               → 0
+//   sem_destroy(sem_id)             → 0
+//   sem_wait(sem_id)                → 0 ok, -1 would-block
+//   sem_timedwait(sem_id, timeout)  → 0 ok, -1 timed-out
+//   sem_trywait(sem_id)             → 0 ok, -1 would-block (alias for sem_wait)
+//   sem_post(sem_id)                → new value
+//   sem_getvalue(sem_id)            → current count (-1 if invalid)
+//   sem_list()                      → formatted dump string
+
+let SEM_MAX      = 16;
+let SEM_NAME_MAX = 32;
+
+let mut sem_active    = [];
+let mut sem_names     = [];
+let mut sem_vals      = [];
+let mut sem_max_vals  = [];
+let mut sem_waiters   = [];
+
+fn sem_init_subsystem() {
+    sem_active   = [];
+    sem_names    = [];
+    sem_vals     = [];
+    sem_max_vals = [];
+    sem_waiters  = [];
+    let mut i = 0;
+    while i < SEM_MAX {
+        push(sem_active,   0);
+        push(sem_names,    "");
+        push(sem_vals,     0);
+        push(sem_max_vals, 0);
+        push(sem_waiters,  0);
+        i = i + 1;
+    }
+    print("semaphore: init — " + to_string(SEM_MAX) + " slots");
+    return 0;
+}
+
+// ============================================================
+// Internal helpers
+// ============================================================
+
+fn _sem_find_name(name) {
+    let mut i = 0;
+    while i < SEM_MAX {
+        if sem_active[i] == 1 {
+            if sem_names[i] == name { return i; }
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn _sem_alloc() {
+    let mut i = 0;
+    while i < SEM_MAX {
+        if sem_active[i] == 0 { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn _sem_valid(id) {
+    if id < 0 { return 0; }
+    if id >= SEM_MAX { return 0; }
+    if sem_active[id] == 0 { return 0; }
+    return 1;
+}
+
+// ============================================================
+// Open / Close / Destroy
+// ============================================================
+
+fn sem_open(name, initial_val) {
+    if len(name) > SEM_NAME_MAX {
+        print("semaphore: name too long: " + name);
+        return 0 - 1;
+    }
+    // Return existing if name already open
+    let existing = _sem_find_name(name);
+    if existing >= 0 { return existing; }
+
+    let id = _sem_alloc();
+    if id < 0 { print("semaphore: table full"); return 0 - 1; }
+
+    set_at(sem_active,   id, 1);
+    set_at(sem_names,    id, name);
+    set_at(sem_vals,     id, initial_val);
+    set_at(sem_max_vals, id, initial_val);
+    set_at(sem_waiters,  id, 0);
+    print("semaphore: opened '" + name + "' id=" + to_string(id) + " val=" + to_string(initial_val));
+    return id;
+}
+
+fn sem_close(id) {
+    // Close doesn't destroy; just returns (POSIX close semantics)
+    if _sem_valid(id) == 0 { return 0; }
+    return 0;
+}
+
+fn sem_destroy(id) {
+    if _sem_valid(id) == 0 { return 0; }
+    if sem_waiters[id] > 0 {
+        print("semaphore: warning — destroying '" + sem_names[id] + "' with " + to_string(sem_waiters[id]) + " waiters");
+    }
+    print("semaphore: destroyed '" + sem_names[id] + "'");
+    set_at(sem_active,  id, 0);
+    set_at(sem_names,   id, "");
+    set_at(sem_vals,    id, 0);
+    set_at(sem_waiters, id, 0);
+    return 0;
+}
+
+// ============================================================
+// Wait / Post
+// ============================================================
+
+fn sem_wait(id) {
+    if _sem_valid(id) == 0 { return 0 - 1; }
+    if sem_vals[id] > 0 {
+        set_at(sem_vals, id, sem_vals[id] - 1);
+        return 0;
+    }
+    return 0 - 1;   // EAGAIN — would block
+}
+
+fn sem_trywait(id) {
+    return sem_wait(id);
+}
+
+fn sem_timedwait(id, timeout_ticks) {
+    if _sem_valid(id) == 0 { return 0 - 1; }
+    set_at(sem_waiters, id, sem_waiters[id] + 1);
+    let deadline = get_ticks() + timeout_ticks;
+    let mut result = 0 - 1;
+    let mut go = 1;
+    while go == 1 {
+        if sem_vals[id] > 0 {
+            set_at(sem_vals, id, sem_vals[id] - 1);
+            result = 0;
+            go = 0;
+        } else {
+            if get_ticks() >= deadline { go = 0; }
+        }
+    }
+    set_at(sem_waiters, id, sem_waiters[id] - 1);
+    return result;
+}
+
+fn sem_post(id) {
+    if _sem_valid(id) == 0 { return 0 - 1; }
+    let new_val = sem_vals[id] + 1;
+    set_at(sem_vals, id, new_val);
+    return new_val;
+}
+
+fn sem_getvalue(id) {
+    if _sem_valid(id) == 0 { return 0 - 1; }
+    return sem_vals[id];
+}
+
+// ============================================================
+// List
+// ============================================================
+
+fn sem_list() {
+    let mut out = "Semaphores (" + to_string(SEM_MAX) + " slots):\n";
+    let mut found = 0;
+    let mut i = 0;
+    while i < SEM_MAX {
+        if sem_active[i] == 1 {
+            out = out + "  [" + to_string(i) + "] '" + sem_names[i]
+                + "'  val=" + to_string(sem_vals[i])
+                + "  waiters=" + to_string(sem_waiters[i]) + "\n";
+            found = found + 1;
+        }
+        i = i + 1;
+    }
+    if found == 0 { out = out + "  (none)\n"; }
+    return out;
+}
+
+print("semaphore.hl loaded");
+print("Semaphore: 16 named counting semaphores, sem_open/wait/timedwait/post/destroy");

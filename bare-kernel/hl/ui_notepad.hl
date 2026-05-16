@@ -1,0 +1,409 @@
+// ui_notepad.hl -- Multi-Line Text Notepad
+//
+// Iteration 180: Lightweight graphical text editor with VFS open/save.
+//
+// Window: 640 × 460 px.
+// Text model:
+//   notep_lines[]   — array of line strings, up to NOTEP_MAX_LINES
+//   notep_nlines    — current line count (always >= 1)
+//   notep_cur_row   — cursor row index (0-based)
+//   notep_cur_col   — cursor column index (0-based, within line)
+//   notep_scroll    — first visible line index
+//
+// Display:
+//   NOTEP_VISIBLE_LINES = 24   (rows of text visible)
+//   NOTEP_CHAR_W = 8           (pixel width per character, fixed-width font)
+//   NOTEP_CHAR_H = 17          (pixel row height)
+//   NOTEP_TEXT_X = 8           (left margin for text)
+//   NOTEP_TEXT_Y = 8           (top margin under title bar)
+//   Max columns visible ≈ (640 - 16) / 8 = 78
+//
+// Keyboard:
+//   Printable (32-126)  → insert at cursor, advance column
+//   Enter (13)          → split line at cursor → new line below
+//   Backspace (8)       → delete char left of cursor (or merge lines)
+//   Delete (83)         → delete char at cursor
+//   Left/Right (75/77)  → move cursor column
+//   Up/Down (72/80)     → move cursor row
+//   Home (71)           → col → 0
+//   End (79)            → col → end of line
+//   Ctrl+S (19)         → save to notep_path
+//   Ctrl+O (15)         → (no-op; open via shell `notepad <path>`)
+//   Esc (27)            → close
+//
+// WM interface:
+//   notepad_is_open()
+//   notepad_open(path)     — load path if non-empty, else start blank
+//   notepad_close()
+//   notepad_draw()
+//   notepad_key(k)
+//   notepad_click(mx, my)
+
+let NOTEP_MAX_LINES   = 200;
+let NOTEP_CHAR_W      = 8;
+let NOTEP_CHAR_H      = 17;
+let NOTEP_VISIBLE     = 24;
+let NOTEP_TEXT_X      = 8;
+let NOTEP_TEXT_Y      = 8;
+let NOTEP_WIN_W       = 640;
+let NOTEP_WIN_H       = 460;
+let NOTEP_BUF         = 14991360 + 65536;  // 0xE5C000 — above CSV buf
+let NOTEP_BUF_SZ      = 65536;
+
+// Colors
+let NOTEP_BG          = 0xFFFDF5;   // warm white
+let NOTEP_FG          = 0x1A1A2E;   // dark text
+let NOTEP_CURSOR_CLR  = 0x3366FF;
+let NOTEP_STATUS_BG   = 0xE8E8F0;
+let NOTEP_STATUS_FG   = 0x555577;
+let NOTEP_LINE_NUM_FG = 0xAAAAAA;
+let NOTEP_MODIFIED_FG = 0xFF5555;
+
+let mut notep_win_id  = 0 - 1;
+let mut notep_lines   = [];
+let mut notep_nlines  = 0;
+let mut notep_cur_row = 0;
+let mut notep_cur_col = 0;
+let mut notep_scroll  = 0;
+let mut notep_path    = "";
+let mut notep_modified = 0;
+
+fn notepad_is_open() {
+    if notep_win_id >= 0 { return 1; }
+    return 0;
+}
+
+// ============================================================
+// Internal helpers
+// ============================================================
+
+fn _notep_clamp_col() {
+    let llen = len(notep_lines[notep_cur_row]);
+    if notep_cur_col > llen { notep_cur_col = llen; }
+    if notep_cur_col < 0    { notep_cur_col = 0; }
+    return 0;
+}
+
+fn _notep_ensure_scroll() {
+    if notep_cur_row < notep_scroll { notep_scroll = notep_cur_row; }
+    if notep_cur_row >= notep_scroll + NOTEP_VISIBLE {
+        notep_scroll = notep_cur_row - NOTEP_VISIBLE + 1;
+    }
+    if notep_scroll < 0 { notep_scroll = 0; }
+    return 0;
+}
+
+// Insert a string at position (row) — shifts all later lines down
+fn _notep_insert_line(row, text) {
+    if notep_nlines >= NOTEP_MAX_LINES { return 0; }
+    // Extend array
+    push(notep_lines, "");
+    // Shift lines down
+    let mut i = notep_nlines;
+    while i > row {
+        set_at(notep_lines, i, notep_lines[i - 1]);
+        i = i - 1;
+    }
+    set_at(notep_lines, row, text);
+    notep_nlines = notep_nlines + 1;
+    return 0;
+}
+
+// Delete line at row — shifts later lines up
+fn _notep_delete_line(row) {
+    if notep_nlines <= 1 { set_at(notep_lines, 0, ""); return 0; }
+    let mut i = row;
+    while i < notep_nlines - 1 {
+        set_at(notep_lines, i, notep_lines[i + 1]);
+        i = i + 1;
+    }
+    notep_nlines = notep_nlines - 1;
+    return 0;
+}
+
+// ============================================================
+// Open / Close
+// ============================================================
+
+fn _notep_init_blank() {
+    notep_lines   = [];
+    notep_nlines  = 1;
+    let mut i = 0;
+    while i < NOTEP_MAX_LINES { push(notep_lines, ""); i = i + 1; }
+    set_at(notep_lines, 0, "");
+    notep_cur_row = 0;
+    notep_cur_col = 0;
+    notep_scroll  = 0;
+    notep_modified = 0;
+    return 0;
+}
+
+fn _notep_load(path) {
+    let fd = vfs_open(path, 0);
+    if fd < 0 { return 0; }
+    let n = vfs_read(fd, NOTEP_BUF, NOTEP_BUF_SZ);
+    vfs_close(fd);
+    if n <= 0 { return 0; }
+    // Parse bytes into line strings
+    notep_nlines = 0;
+    let mut cur_line = "";
+    let mut i = 0;
+    while i < n {
+        let b = mem_read_u8(NOTEP_BUF + i);
+        if b == 13 { i = i + 1; }   // skip \r
+        else {
+            if b == 10 {
+                // newline
+                if notep_nlines < NOTEP_MAX_LINES {
+                    set_at(notep_lines, notep_nlines, cur_line);
+                    notep_nlines = notep_nlines + 1;
+                }
+                cur_line = "";
+            } else {
+                cur_line = cur_line + str_from_byte(b);
+            }
+            i = i + 1;
+        }
+    }
+    if len(cur_line) > 0 {
+        if notep_nlines < NOTEP_MAX_LINES {
+            set_at(notep_lines, notep_nlines, cur_line);
+            notep_nlines = notep_nlines + 1;
+        }
+    }
+    if notep_nlines == 0 { notep_nlines = 1; set_at(notep_lines, 0, ""); }
+    return notep_nlines;
+}
+
+fn notepad_open(path) {
+    if notep_win_id >= 0 { return 0; }
+    _notep_init_blank();
+    notep_path = path;
+    if len(path) > 0 {
+        let n = _notep_load(path);
+        if n > 0 { print("notepad: loaded " + to_string(n) + " lines from " + path); }
+    }
+    let top_h = ui_theme_topbar_height();
+    let title = "Notepad";
+    if len(path) > 0 { title = "Notepad — " + path; }
+    notep_win_id = wm_create_window(60, top_h + 30, NOTEP_WIN_W, NOTEP_WIN_H, title, 0);
+    wm_focus_window(notep_win_id);
+    notepad_draw();
+    return 0;
+}
+
+fn notepad_close() {
+    if notep_win_id < 0 { return 0; }
+    wm_close_window(notep_win_id);
+    notep_win_id = 0 - 1;
+    return 0;
+}
+
+// ============================================================
+// Save
+// ============================================================
+
+fn _notep_save() {
+    if len(notep_path) == 0 { print("notepad: no path set"); return 0 - 1; }
+    let mut out = "";
+    let mut i = 0;
+    while i < notep_nlines {
+        out = out + notep_lines[i] + "\n";
+        i = i + 1;
+    }
+    let fd = vfs_open(notep_path, 1);
+    if fd < 0 { print("notepad: cannot open " + notep_path); return 0 - 1; }
+    let n = len(out);
+    let mut j = 0;
+    while j < n { mem_write_u8(NOTEP_BUF + j, str_char_code(out, j)); j = j + 1; }
+    vfs_write(fd, NOTEP_BUF, n);
+    vfs_close(fd);
+    notep_modified = 0;
+    print("notepad: saved " + to_string(n) + " bytes to " + notep_path);
+    return n;
+}
+
+// ============================================================
+// Draw
+// ============================================================
+
+fn _notep_wx() { return mem_read_u64(WM_TABLE_ADDR + notep_win_id * 128 + 8); }
+fn _notep_wy() { return mem_read_u64(WM_TABLE_ADDR + notep_win_id * 128 + 16) + ui_theme_title_height(); }
+
+fn notepad_draw() {
+    if notep_win_id < 0 { return 0; }
+    let wx = _notep_wx();
+    let wy = _notep_wy();
+
+    // Background
+    ui_fill_rect(wx, wy, NOTEP_WIN_W, NOTEP_WIN_H, NOTEP_BG);
+
+    // Line number gutter (40px wide)
+    let gutter_w = 40;
+    ui_fill_rect(wx, wy, gutter_w, NOTEP_WIN_H - 20, NOTEP_STATUS_BG);
+
+    // Render visible lines
+    let mut i = 0;
+    while i < NOTEP_VISIBLE {
+        let li = i + notep_scroll;
+        if li < notep_nlines {
+            let lx = wx + gutter_w + NOTEP_TEXT_X;
+            let ly = wy + NOTEP_TEXT_Y + i * NOTEP_CHAR_H;
+            // Line number
+            ui_draw_text(wx + 2, ly, to_string(li + 1), NOTEP_LINE_NUM_FG);
+            // Line text
+            let line_txt = notep_lines[li];
+            ui_draw_text(lx, ly, line_txt, NOTEP_FG);
+            // Cursor
+            if li == notep_cur_row {
+                let cur_x = lx + notep_cur_col * NOTEP_CHAR_W;
+                ui_fill_rect(cur_x, ly, 2, NOTEP_CHAR_H - 2, NOTEP_CURSOR_CLR);
+            }
+        }
+        i = i + 1;
+    }
+
+    // Status bar
+    let stat_y = wy + NOTEP_WIN_H - 20;
+    ui_fill_rect(wx, stat_y, NOTEP_WIN_W, 20, NOTEP_STATUS_BG);
+    let mod_str = "";
+    if notep_modified == 1 { mod_str = " [modified]"; }
+    let pos_str = "Ln " + to_string(notep_cur_row + 1)
+                + "  Col " + to_string(notep_cur_col + 1)
+                + "  Lines " + to_string(notep_nlines) + mod_str;
+    let clr = NOTEP_STATUS_FG;
+    if notep_modified == 1 { clr = NOTEP_MODIFIED_FG; }
+    ui_draw_text(wx + 6, stat_y + 3, pos_str, clr);
+    ui_draw_text(wx + NOTEP_WIN_W - 180, stat_y + 3, "Ctrl+S save  Esc close", NOTEP_STATUS_FG);
+    return 0;
+}
+
+// ============================================================
+// Key handler
+// ============================================================
+
+fn notepad_key(k) {
+    if notep_win_id < 0 { return 0; }
+
+    // Control keys
+    if k == 27  { notepad_close(); return 0; }      // Esc
+    if k == 19  { _notep_save(); notepad_draw(); return 0; }  // Ctrl+S
+
+    // Navigation
+    if k == 72 {   // Up
+        if notep_cur_row > 0 { notep_cur_row = notep_cur_row - 1; }
+        _notep_clamp_col();
+        _notep_ensure_scroll();
+        notepad_draw(); return 0;
+    }
+    if k == 80 {   // Down
+        if notep_cur_row < notep_nlines - 1 { notep_cur_row = notep_cur_row + 1; }
+        _notep_clamp_col();
+        _notep_ensure_scroll();
+        notepad_draw(); return 0;
+    }
+    if k == 75 {   // Left
+        if notep_cur_col > 0 { notep_cur_col = notep_cur_col - 1; }
+        else {
+            if notep_cur_row > 0 {
+                notep_cur_row = notep_cur_row - 1;
+                notep_cur_col = len(notep_lines[notep_cur_row]);
+            }
+        }
+        _notep_ensure_scroll();
+        notepad_draw(); return 0;
+    }
+    if k == 77 {   // Right
+        let llen = len(notep_lines[notep_cur_row]);
+        if notep_cur_col < llen { notep_cur_col = notep_cur_col + 1; }
+        else {
+            if notep_cur_row < notep_nlines - 1 {
+                notep_cur_row = notep_cur_row + 1;
+                notep_cur_col = 0;
+            }
+        }
+        _notep_ensure_scroll();
+        notepad_draw(); return 0;
+    }
+    if k == 71 { notep_cur_col = 0; notepad_draw(); return 0; }   // Home
+    if k == 79 { notep_cur_col = len(notep_lines[notep_cur_row]); notepad_draw(); return 0; } // End
+
+    // Enter — split line
+    if k == 13 {
+        let cur_line = notep_lines[notep_cur_row];
+        let left  = str_sub(cur_line, 0, notep_cur_col);
+        let right = str_sub(cur_line, notep_cur_col, len(cur_line));
+        set_at(notep_lines, notep_cur_row, left);
+        _notep_insert_line(notep_cur_row + 1, right);
+        notep_cur_row = notep_cur_row + 1;
+        notep_cur_col = 0;
+        notep_modified = 1;
+        _notep_ensure_scroll();
+        notepad_draw(); return 0;
+    }
+
+    // Backspace — delete char before cursor
+    if k == 8 {
+        if notep_cur_col > 0 {
+            let line = notep_lines[notep_cur_row];
+            let new_line = str_sub(line, 0, notep_cur_col - 1)
+                         + str_sub(line, notep_cur_col, len(line));
+            set_at(notep_lines, notep_cur_row, new_line);
+            notep_cur_col = notep_cur_col - 1;
+        } else {
+            if notep_cur_row > 0 {
+                let prev = notep_lines[notep_cur_row - 1];
+                let cur  = notep_lines[notep_cur_row];
+                notep_cur_col = len(prev);
+                set_at(notep_lines, notep_cur_row - 1, prev + cur);
+                _notep_delete_line(notep_cur_row);
+                notep_cur_row = notep_cur_row - 1;
+                _notep_ensure_scroll();
+            }
+        }
+        notep_modified = 1;
+        notepad_draw(); return 0;
+    }
+
+    // Printable characters (ASCII 32-126)
+    if k >= 32 {
+        if k <= 126 {
+            let line = notep_lines[notep_cur_row];
+            let ch   = str_from_byte(k);
+            let new_line = str_sub(line, 0, notep_cur_col) + ch
+                         + str_sub(line, notep_cur_col, len(line));
+            set_at(notep_lines, notep_cur_row, new_line);
+            notep_cur_col = notep_cur_col + 1;
+            notep_modified = 1;
+            notepad_draw();
+        }
+    }
+    return 0;
+}
+
+// ============================================================
+// Click — position cursor
+// ============================================================
+
+fn notepad_click(mx, my) {
+    if notep_win_id < 0 { return 0; }
+    let wx = _notep_wx();
+    let wy = _notep_wy();
+    let gutter_w = 40;
+    let rel_y = my - wy - NOTEP_TEXT_Y;
+    let rel_x = mx - wx - gutter_w - NOTEP_TEXT_X;
+    if rel_y < 0 { return 0; }
+    if rel_x < 0 { return 0; }
+    let clicked_row = rel_y / NOTEP_CHAR_H + notep_scroll;
+    if clicked_row >= notep_nlines { clicked_row = notep_nlines - 1; }
+    notep_cur_row = clicked_row;
+    let clicked_col = rel_x / NOTEP_CHAR_W;
+    let max_col = len(notep_lines[notep_cur_row]);
+    notep_cur_col = clicked_col;
+    if notep_cur_col > max_col { notep_cur_col = max_col; }
+    notepad_draw();
+    return 0;
+}
+
+print("ui_notepad.hl loaded");
+print("Notepad: multi-line editor, 200 lines, cursor, Backspace/Enter/arrows, Ctrl+S save");

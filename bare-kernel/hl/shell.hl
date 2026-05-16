@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 245 commands + pipe operator (|):
+// 253 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -80,6 +80,9 @@ fn shell_handle(cmd) {
         serial_print("Profiler: prof report  prof top <n>  prof inc <name>  prof reset  prof spans  prof sample  prof ring");
         serial_print("CSV:      csv load <path>  csv list [n]  csv get <row> <col>  csv set <row> <col> <val>  csv save <path>  csv cols");
         serial_print("Ping:     ping <host> [count]");
+        serial_print("Trace:    traceroute <host> [max_hops]");
+        serial_print("Semaphore:sem list  sem create <name> <val>  sem wait <id>  sem post <id>  sem value <id>  sem destroy <id>");
+        serial_print("Notepad:  notepad [path]");
         serial_print("TaskMan:  taskman");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
@@ -1735,6 +1738,66 @@ fn shell_handle_ext(cmd) {
         return "Task Manager opened";
     }
 
+    // === Traceroute commands ===
+    if str_starts_with(cmd, "traceroute ") {
+        let args = str_sub(cmd, 11, len(cmd));
+        let sp = str_find(args, " ");
+        let host = args;
+        let hops = 15;
+        if sp >= 0 {
+            host = str_sub(args, 0, sp);
+            hops = parse_int(str_sub(args, sp + 1, len(args)));
+        }
+        return traceroute_host(host, hops);
+    }
+
+    // === Semaphore commands ===
+    if cmd == "sem list" { return sem_list(); }
+    if str_starts_with(cmd, "sem create ") {
+        let args = str_sub(cmd, 11, len(cmd));
+        let sp = str_find(args, " ");
+        if sp < 0 { return "Usage: sem create <name> <initial_val>"; }
+        let nm  = str_sub(args, 0, sp);
+        let val = parse_int(str_sub(args, sp + 1, len(args)));
+        let id = sem_open(nm, val);
+        if id < 0 { return "Error: semaphore table full or name too long"; }
+        return "Semaphore '" + nm + "' created, id=" + to_string(id);
+    }
+    if str_starts_with(cmd, "sem wait ") {
+        let id = parse_int(str_sub(cmd, 9, len(cmd)));
+        let r = sem_wait(id);
+        if r < 0 { return "sem[" + to_string(id) + "]: would block (val=0)"; }
+        return "sem[" + to_string(id) + "]: acquired, val=" + to_string(sem_getvalue(id));
+    }
+    if str_starts_with(cmd, "sem post ") {
+        let id = parse_int(str_sub(cmd, 9, len(cmd)));
+        let v = sem_post(id);
+        if v < 0 { return "Error: invalid semaphore id"; }
+        return "sem[" + to_string(id) + "]: posted, val=" + to_string(v);
+    }
+    if str_starts_with(cmd, "sem value ") {
+        let id = parse_int(str_sub(cmd, 10, len(cmd)));
+        let v = sem_getvalue(id);
+        if v < 0 { return "Error: invalid semaphore id"; }
+        return "sem[" + to_string(id) + "] = " + to_string(v);
+    }
+    if str_starts_with(cmd, "sem destroy ") {
+        let id = parse_int(str_sub(cmd, 12, len(cmd)));
+        sem_destroy(id);
+        return "Semaphore " + to_string(id) + " destroyed";
+    }
+
+    // === Notepad commands ===
+    if cmd == "notepad" {
+        notepad_open("");
+        return "Notepad opened";
+    }
+    if str_starts_with(cmd, "notepad ") {
+        let path = str_sub(cmd, 8, len(cmd));
+        notepad_open(path);
+        return "Notepad opened: " + path;
+    }
+
     return shell_handle(cmd);
 }
 
@@ -1746,7 +1809,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 245 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman");
+print("shell.hl loaded -- 253 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad");
 
 // Main shell loop (called from kernel_init)
 
