@@ -2,11 +2,64 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`217`（69 根目录 + 148 内核模块）
-- H-L 总行数：`~59,500`
-- 内核模块：`148`
-- Shell 命令：`183`
-- 最近完成功能迭代：`162`（smtp + cron + ui_image）
+- `.hl` 文件：`220`（69 根目录 + 151 内核模块）
+- H-L 总行数：`~62,500`
+- 内核模块：`151`
+- Shell 命令：`195`
+- 最近完成功能迭代：`165`（ntp + tar + ui_hexedit + pop3）
+
+## Iteration 165 — pop3.hl：POP3 邮件接收客户端（RFC 1939）
+
+- **`bare-kernel/hl/pop3.hl`** 新增（~220 行）
+  - POP3_MAX=4 并发会话，POP3_BUF=0xDE0000（8 KB/会话响应缓冲）
+  - 6 个会话状态：FREE → CONN → AUTH → READY → BUSY → ERR
+  - `pop3_connect(host, port)`：DNS 解析 + TCP 连接
+  - `pop3_auth(id, user, pass)`：USER + PASS 命令序列
+  - `pop3_stat(id)` → `[count, total_bytes]`：解析 "+OK N M" 响应
+  - `pop3_list(id)`：LIST 命令 → 邮件编号+大小列表
+  - `pop3_retr(id, n)`：RETR n → 剥离 "+OK" 前缀 + ".\r\n" 尾
+  - `pop3_dele(id, n)`：DELE 标记删除
+  - `pop3_tick()`：轮询待处理响应，错误写入 klog(WARN)
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`pop3_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 5 条命令：
+  - `pop3` / `pop3 connect <host> <port>` / `pop3 auth <id> <user> <pass>`
+  - `pop3 list <id>` / `pop3 get <id> <n>` / `pop3 quit <id>`
+
+## Iteration 164 — ui_hexedit.hl：十六进制编辑器
+
+- **`bare-kernel/hl/ui_hexedit.hl`** 新增（~320 行）
+  - 620×440 窗口，22 行 × 16 字节/行 = 352 字节可见
+  - 布局：8 位偏移 | 16 对十六进制 | 16 字符 ASCII 列
+  - VFS 文件加载：4 KB 页面至 HEXED_BUF=0xDD0400
+  - 导航：方向键（±1 字节）/ PgUp/PgDn（±352 字节）/ Home/End（行首/尾）
+  - 编辑模式：Tab 切换 view/edit；半字节输入（高/低 nibble）；Ctrl+S 保存到 VFS
+  - 工具栏：Open / Save / Close / Edit（active 高亮）；未保存指示
+  - 点击内容区：按行列坐标移动光标
+- **`bare-kernel/hl/wm.hl`** 接入：draw / key / click
+- **`bare-kernel/hl/ui_desktop.hl`** dock 第 10 号图标 `UIDSK_APP_HEXEDIT`，标签 "Hex"
+- **`bare-kernel/hl/shell.hl`** 新增 2 条命令：`hexedit` / `hexedit <path>`
+
+## Iteration 163 — ntp.hl 完整实现 + tar.hl：TAR 归档读取
+
+- **`bare-kernel/hl/ntp.hl`** 升级（stub → 完整 SNTP 实现）
+  - 删除注释存根，改用 HL 字节数组构建 48 字节 NTP 请求
+  - `_ntp_build_request()`：LI=0, VN=4, Mode=3 → 0x23 + 44 字节零
+  - `ntp_on_recv(data)`：UDP 回调，设置 `ntp_resp_ready + ntp_resp_data`
+  - `ntp_sync(host)`：dns_resolve → udp_bind → udp_send → 轮询回调 → 解析 offset 40 大端 u32
+  - `ntp_format_time(unix)`：Unix 时间戳 → "YYYY-MM-DD HH:MM:SS"（含闰年处理）
+  - `ntp_get_time()`：`last_unix + (get_ticks() - last_tick) / 100`
+- **`bare-kernel/hl/tar.hl`** 新增（~260 行）
+  - POSIX ustar 格式；512 字节块；一次读取一块（VFS + TAR_BUF=0xDD0000）
+  - `_tar_oct(addr, len)`：八进制 ASCII 字段解析
+  - `_tar_is_ustar(addr)`：验证 offset 257 "ustar" 魔数
+  - `_tar_fullname(addr)`：合并 prefix[155] + "/" + name[100]
+  - `tar_list(path)` / `tar_cat(tar_path, filename)` / `tar_extract(tar_path, dest)` / `tar_info(path)`
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`ntp_init()`（已含 pop3_init）
+- **`bare-kernel/hl/shell.hl`** 新增 3+4=7 条命令：
+  - `ntp sync <host>` / `ntp time` / `ntp status`
+  - `tar list <path>` / `tar cat <path> <file>` / `tar extract <path> <dest>` / `tar info <path>`
+
+
 
 ## Iteration 162 — ui_image.hl：BMP 图像查看器
 

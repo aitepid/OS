@@ -1,0 +1,319 @@
+// tar.hl -- POSIX ustar TAR Archive Reader
+//
+// Iteration 163: Read POSIX ustar TAR archives from VFS.
+//
+// Archive layout: sequence of 512-byte blocks.
+//   Each file entry:
+//     Block 0:  ustar header (see below)
+//     Blocks 1+: file data (ceil(size / 512) blocks, last padded with NUL)
+//   Archive ends with two consecutive all-zero 512-byte blocks.
+//
+// ustar header (512 bytes):
+//   Offset  0: name[100]     — filename (NUL-terminated)
+//   Offset100: mode[8]       — octal permissions
+//   Offset108: uid[8]        — octal user ID
+//   Offset116: gid[8]        — octal group ID
+//   Offset124: size[12]      — octal file size
+//   Offset136: mtime[12]     — octal modification time (Unix)
+//   Offset148: checksum[8]   — sum of all header bytes (ASCII space for checksum field)
+//   Offset156: typeflag[1]   — '0'=regular, '5'=directory, '2'=symlink
+//   Offset157: linkname[100] — link target (if symlink)
+//   Offset257: magic[6]      — "ustar"
+//   Offset263: version[2]    — "00"
+//   Offset265: uname[32]     — owner name
+//   Offset297: gname[32]     — group name
+//   Offset329: devmajor[8]
+//   Offset337: devminor[8]
+//   Offset345: prefix[155]   — path prefix (prepend to name for long paths)
+//
+// Uses VFS for file I/O; reads one 512-byte block at a time via mem buffer.
+//
+// Scratch buffer: 0xDD0000 (14483456), two 512-byte slots (read + extract).
+//
+// Public API:
+//   tar_list(path)                    → newline-separated filename list
+//   tar_cat(tar_path, filename)       → file content string (first 4 KB)
+//   tar_extract(tar_path, dest_dir)   → 0 ok / -1 fail
+//   tar_info(tar_path)                → summary string (file count, total bytes)
+
+let TAR_BUF      = 14483456;   // 0xDD0000  — header read buffer (512 bytes)
+let TAR_DATA_BUF = 14483968;   // 0xDD0200  — data read buffer  (4 KB)
+let TAR_BLOCK    = 512;
+let TAR_DATA_MAX = 4096;
+
+// ============================================================
+// Low-level helpers
+// ============================================================
+
+// Read NUL-terminated ASCII string from memory buffer at addr
+fn _tar_read_str(addr, max_len) {
+    let mut s = "";
+    let mut i = 0;
+    let mut go = 1;
+    while go == 1 {
+        if i >= max_len { go = 0; }
+        else {
+            let b = mem_read_u8(addr + i);
+            if b == 0 { go = 0; }
+            else { s = s + str_from_code(b); i = i + 1; }
+        }
+    }
+    return s;
+}
+
+// Convert octal ASCII string at addr (max_len bytes) to integer
+fn _tar_oct(addr, max_len) {
+    let mut v = 0;
+    let mut i = 0;
+    while i < max_len {
+        let b = mem_read_u8(addr + i);
+        if b == 0 { i = max_len; }
+        else {
+            if b >= 48 {
+                if b <= 55 {   // '0'..'7'
+                    v = v * 8 + (b - 48);
+                }
+            }
+            i = i + 1;
+        }
+    }
+    return v;
+}
+
+// Check whether a 512-byte block is all zeros (end-of-archive sentinel)
+fn _tar_block_zero(addr) {
+    let mut i = 0;
+    while i < TAR_BLOCK {
+        if mem_read_u8(addr + i) != 0 { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+
+// Verify ustar magic "ustar" at offset 257
+fn _tar_is_ustar(addr) {
+    let b0 = mem_read_u8(addr + 257);
+    let b1 = mem_read_u8(addr + 258);
+    let b2 = mem_read_u8(addr + 259);
+    let b3 = mem_read_u8(addr + 260);
+    let b4 = mem_read_u8(addr + 261);
+    if b0 != 117 { return 0; }  // 'u'
+    if b1 != 115 { return 0; }  // 's'
+    if b2 != 116 { return 0; }  // 't'
+    if b3 != 97  { return 0; }  // 'a'
+    if b4 != 114 { return 0; }  // 'r'
+    return 1;
+}
+
+// Read a full 512-byte block from file fd into TAR_BUF.  Returns bytes read.
+fn _tar_read_block(fd) {
+    return vfs_read(fd, TAR_BUF, TAR_BLOCK);
+}
+
+// Number of 512-byte data blocks for a file of given size
+fn _tar_data_blocks(size) {
+    if size == 0 { return 0; }
+    let full = size / TAR_BLOCK;
+    if size % TAR_BLOCK != 0 { return full + 1; }
+    return full;
+}
+
+// Build full filename: prefix (if any) + "/" + name
+fn _tar_fullname(addr) {
+    let prefix = _tar_read_str(addr + 345, 155);
+    let name   = _tar_read_str(addr, 100);
+    if len(prefix) == 0 { return name; }
+    return prefix + "/" + name;
+}
+
+// ============================================================
+// tar_list — enumerate filenames
+// ============================================================
+
+fn tar_list(path) {
+    let fd = vfs_open(path, O_RDONLY);
+    if fd < 0 { return "Error: cannot open " + path; }
+
+    let mut out = "";
+    let mut count = 0;
+    let mut done = 0;
+    while done == 0 {
+        let n = _tar_read_block(fd);
+        if n < TAR_BLOCK { done = 1; }
+        else {
+            if _tar_block_zero(TAR_BUF) == 1 { done = 1; }
+            else {
+                let typeflag = mem_read_u8(TAR_BUF + 156);
+                let size     = _tar_oct(TAR_BUF + 124, 12);
+                let fname    = _tar_fullname(TAR_BUF);
+                let is_valid = _tar_is_ustar(TAR_BUF);
+
+                if is_valid == 1 {
+                    if len(fname) > 0 {
+                        out = out + fname;
+                        if typeflag == 53 { out = out + "/"; }  // '5' = dir
+                        out = out + "\n";
+                        count = count + 1;
+                    }
+                }
+
+                // Skip data blocks
+                let dblocks = _tar_data_blocks(size);
+                let mut j = 0;
+                while j < dblocks {
+                    vfs_read(fd, TAR_BUF, TAR_BLOCK);
+                    j = j + 1;
+                }
+            }
+        }
+    }
+    vfs_close(fd);
+    return to_string(count) + " file(s) in " + path + ":\n" + out;
+}
+
+// ============================================================
+// tar_cat — read a specific file from archive
+// ============================================================
+
+fn tar_cat(tar_path, filename) {
+    let fd = vfs_open(tar_path, O_RDONLY);
+    if fd < 0 { return "Error: cannot open " + tar_path; }
+
+    let mut found = 0;
+    let mut result = "";
+    let mut done = 0;
+    while done == 0 {
+        let n = _tar_read_block(fd);
+        if n < TAR_BLOCK { done = 1; }
+        else {
+            if _tar_block_zero(TAR_BUF) == 1 { done = 1; }
+            else {
+                let size  = _tar_oct(TAR_BUF + 124, 12);
+                let fname = _tar_fullname(TAR_BUF);
+
+                if fname == filename {
+                    found = 1;
+                    // Read up to TAR_DATA_MAX bytes of file content
+                    let read_sz = size;
+                    if read_sz > TAR_DATA_MAX { read_sz = TAR_DATA_MAX; }
+                    let got = vfs_read(fd, TAR_DATA_BUF, read_sz);
+                    result = _tar_read_str(TAR_DATA_BUF, got);
+                    if size > TAR_DATA_MAX {
+                        result = result + "\n[truncated at " + to_string(TAR_DATA_MAX) + " bytes]";
+                    }
+                    done = 1;
+                } else {
+                    // Skip data blocks
+                    let dblocks = _tar_data_blocks(size);
+                    let mut j = 0;
+                    while j < dblocks {
+                        vfs_read(fd, TAR_BUF, TAR_BLOCK);
+                        j = j + 1;
+                    }
+                }
+            }
+        }
+    }
+    vfs_close(fd);
+    if found == 0 { return "Error: " + filename + " not found in " + tar_path; }
+    return result;
+}
+
+// ============================================================
+// tar_extract — extract all files to dest_dir
+// ============================================================
+
+fn tar_extract(tar_path, dest_dir) {
+    let fd = vfs_open(tar_path, O_RDONLY);
+    if fd < 0 { print("tar: cannot open " + tar_path); return 0 - 1; }
+
+    let mut extracted = 0;
+    let mut done = 0;
+    while done == 0 {
+        let n = _tar_read_block(fd);
+        if n < TAR_BLOCK { done = 1; }
+        else {
+            if _tar_block_zero(TAR_BUF) == 1 { done = 1; }
+            else {
+                let size     = _tar_oct(TAR_BUF + 124, 12);
+                let typeflag = mem_read_u8(TAR_BUF + 156);
+                let fname    = _tar_fullname(TAR_BUF);
+
+                if len(fname) > 0 {
+                    let dest = dest_dir + "/" + fname;
+                    if typeflag == 53 {   // directory
+                        vfs_mkdir(dest);
+                        print("tar: mkdir " + dest);
+                    } else {
+                        // Regular file: read blocks, write to VFS
+                        let out_fd = vfs_open(dest, O_WRONLY);
+                        let mut remaining = size;
+                        let mut ok = 1;
+                        if out_fd < 0 { ok = 0; }
+                        let dblocks = _tar_data_blocks(size);
+                        let mut j = 0;
+                        while j < dblocks {
+                            let rd = vfs_read(fd, TAR_DATA_BUF, TAR_BLOCK);
+                            if ok == 1 {
+                                let wr = remaining;
+                                if wr > TAR_BLOCK { wr = TAR_BLOCK; }
+                                vfs_write(out_fd, TAR_DATA_BUF, wr);
+                                remaining = remaining - wr;
+                            }
+                            j = j + 1;
+                        }
+                        if ok == 1 {
+                            vfs_close(out_fd);
+                            print("tar: extracted " + dest + " (" + to_string(size) + " bytes)");
+                            extracted = extracted + 1;
+                        } else {
+                            print("tar: failed to write " + dest);
+                        }
+                    }
+                } else {
+                    // Skip data blocks for unnamed entry
+                    let dblocks = _tar_data_blocks(size);
+                    let mut j = 0;
+                    while j < dblocks { vfs_read(fd, TAR_BUF, TAR_BLOCK); j = j + 1; }
+                }
+            }
+        }
+    }
+    vfs_close(fd);
+    print("tar: extracted " + to_string(extracted) + " file(s) to " + dest_dir);
+    return extracted;
+}
+
+// ============================================================
+// tar_info — summary statistics
+// ============================================================
+
+fn tar_info(path) {
+    let fd = vfs_open(path, O_RDONLY);
+    if fd < 0 { return "Error: cannot open " + path; }
+
+    let mut count = 0;
+    let mut total = 0;
+    let mut done  = 0;
+    while done == 0 {
+        let n = _tar_read_block(fd);
+        if n < TAR_BLOCK { done = 1; }
+        else {
+            if _tar_block_zero(TAR_BUF) == 1 { done = 1; }
+            else {
+                let size  = _tar_oct(TAR_BUF + 124, 12);
+                let fname = _tar_fullname(TAR_BUF);
+                if len(fname) > 0 { count = count + 1; total = total + size; }
+                let dblocks = _tar_data_blocks(size);
+                let mut j = 0;
+                while j < dblocks { vfs_read(fd, TAR_BUF, TAR_BLOCK); j = j + 1; }
+            }
+        }
+    }
+    vfs_close(fd);
+    return path + ": " + to_string(count) + " file(s), "
+        + to_string(total) + " bytes total";
+}
+
+print("tar.hl loaded");
+print("TAR: POSIX ustar reader — list/cat/extract/info, 512-byte blocks, octal fields");

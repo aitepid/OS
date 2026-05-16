@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 183 commands + pipe operator (|):
+// 195 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -65,6 +65,10 @@ fn shell_handle(cmd) {
         serial_print("SMTP:     smtp  smtp connect <host> <port>  smtp auth <id> <user> <pass>  smtp send <id> <from> <to> <subj> <body>  smtp quit <id>");
         serial_print("Cron:     cron  cron add <secs> <cmd>  cron once <secs> <cmd>  cron rm <id>  cron en <id>  cron dis <id>");
         serial_print("ImgView:  imgview <path.bmp>  imgview zoom <1|2>  (opens BMP image viewer)");
+        serial_print("NTP:      ntp sync <host>  ntp time  ntp status");
+        serial_print("TAR:      tar list <path>  tar cat <path> <file>  tar extract <path> <dest>  tar info <path>");
+        serial_print("HexEdit:  hexedit [path]  (open hex editor; Tab=toggle edit, Ctrl+S=save)");
+        serial_print("POP3:     pop3 connect <host> <port>  pop3 auth <id> <user> <pass>  pop3 list <id>  pop3 get <id> <n>  pop3 quit <id>");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -912,6 +916,104 @@ fn shell_handle_ext(cmd) {
         return "Loaded: " + arg;
     }
 
+    // --- NTP ---
+    if cmd == "ntp time" {
+        let t = ntp_get_time();
+        if t == 0 { return "ntp: not synced — use: ntp sync <host>"; }
+        return ntp_format_time(t);
+    }
+    if cmd == "ntp status" { return ntp_status(); }
+    if str_starts_with(cmd, "ntp sync ") {
+        let host = str_sub(cmd, 9, len(cmd));
+        let t = ntp_sync(host);
+        if t == 0 { return "Error: ntp sync failed"; }
+        return "ntp: synced — " + ntp_format_time(t);
+    }
+
+    // --- TAR ---
+    if str_starts_with(cmd, "tar list ") {
+        let path = str_sub(cmd, 9, len(cmd));
+        return tar_list(path);
+    }
+    if str_starts_with(cmd, "tar info ") {
+        let path = str_sub(cmd, 9, len(cmd));
+        return tar_info(path);
+    }
+    if str_starts_with(cmd, "tar cat ") {
+        let args = str_sub(cmd, 8, len(cmd));
+        let sp = str_find(args, " ");
+        if sp < 0 { return "Usage: tar cat <path> <file>"; }
+        let tar_path = str_sub(args, 0, sp);
+        let fname    = str_sub(args, sp + 1, len(args));
+        return tar_cat(tar_path, fname);
+    }
+    if str_starts_with(cmd, "tar extract ") {
+        let args = str_sub(cmd, 12, len(cmd));
+        let sp = str_find(args, " ");
+        if sp < 0 { return "Usage: tar extract <path> <dest>"; }
+        let tar_path = str_sub(args, 0, sp);
+        let dest     = str_sub(args, sp + 1, len(args));
+        let n = tar_extract(tar_path, dest);
+        if n < 0 { return "Error: extract failed"; }
+        return "Extracted " + to_string(n) + " file(s) to " + dest;
+    }
+
+    // --- Hex Editor ---
+    if cmd == "hexedit" {
+        hexed_open();
+        return "Hex editor opened — use: hexedit <path>";
+    }
+    if str_starts_with(cmd, "hexedit ") {
+        let path = str_sub(cmd, 8, len(cmd));
+        if hexed_is_open() == 0 { hexed_open(); }
+        let r = hexed_load(path);
+        if r == 0 { return "Error: cannot open " + path; }
+        return "hexedit: loaded " + path;
+    }
+
+    // --- POP3 ---
+    if cmd == "pop3" { return pop3_list_sessions(); }
+    if str_starts_with(cmd, "pop3 connect ") {
+        let args = str_sub(cmd, 13, len(cmd));
+        let sp = str_find(args, " ");
+        if sp < 0 { return "Usage: pop3 connect <host> <port>"; }
+        let host = str_sub(args, 0, sp);
+        let port = parse_int(str_sub(args, sp + 1, len(args)));
+        let id = pop3_connect(host, port);
+        if id < 0 { return "Error: pop3 connect failed"; }
+        return "pop3[" + to_string(id) + "] connected to " + host;
+    }
+    if str_starts_with(cmd, "pop3 auth ") {
+        let args = str_sub(cmd, 10, len(cmd));
+        let sp1 = str_find(args, " ");
+        if sp1 < 0 { return "Usage: pop3 auth <id> <user> <pass>"; }
+        let id = parse_int(str_sub(args, 0, sp1));
+        let rest = str_sub(args, sp1 + 1, len(args));
+        let sp2 = str_find(rest, " ");
+        if sp2 < 0 { return "Usage: pop3 auth <id> <user> <pass>"; }
+        let user = str_sub(rest, 0, sp2);
+        let pass = str_sub(rest, sp2 + 1, len(rest));
+        pop3_auth(id, user, pass);
+        return "pop3[" + to_string(id) + "] auth sent";
+    }
+    if str_starts_with(cmd, "pop3 list ") {
+        let id = parse_int(str_sub(cmd, 10, len(cmd)));
+        return pop3_list(id);
+    }
+    if str_starts_with(cmd, "pop3 get ") {
+        let args = str_sub(cmd, 9, len(cmd));
+        let sp = str_find(args, " ");
+        if sp < 0 { return "Usage: pop3 get <id> <msg_num>"; }
+        let id  = parse_int(str_sub(args, 0, sp));
+        let num = parse_int(str_sub(args, sp + 1, len(args)));
+        return pop3_retr(id, num);
+    }
+    if str_starts_with(cmd, "pop3 quit ") {
+        let id = parse_int(str_sub(cmd, 10, len(cmd)));
+        pop3_quit(id);
+        return "pop3[" + to_string(id) + "] disconnected";
+    }
+
     if cmd == "ctr" {
         return ctr_list();
     }
@@ -1207,7 +1309,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 183 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview");
+print("shell.hl loaded -- 195 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3");
 
 // Main shell loop (called from kernel_init)
 
