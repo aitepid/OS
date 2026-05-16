@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 101 commands + pipe operator (|):
+// 108 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -12,7 +12,8 @@
 //   history hostname netstat grep disk_info format install advtest
 //   tcploop dnstest heval lsmod kmodtest
 //   UI: sysmon files audiotest settings fm fileman
-//   Audio: audio vol mute unmute beep  GPU: gpu flip dirty
+//   Audio: audio vol mute unmute beep  AudioServer: audioserver aus aus-connect/play/stop/vol/beep
+//   GPU: gpu flip dirty
 //   Shell pipe: cmd1 | cmd2
 
 fn shell_handle(cmd) {
@@ -29,6 +30,7 @@ fn shell_handle(cmd) {
         serial_print("Firewall: fw  firewall  fw allow|block <port>  fw flush  fw policy input|output drop|accept");
         serial_print("Hardware: lspci lsusb cpus dev beep ahci usb acpi");
         serial_print("Audio:    audio  audio vol <0-100>  audio mute/unmute  audio beep <hz> <ms>  mixer");
+        serial_print("AudioSvr: audioserver  aus  aus connect  aus play/stop <id>  aus vol <pct>  aus beep <hz> <ms>");
         serial_print("Graphics: gpu  gpu flip  gpu dirty");
         serial_print("Services: services svc start|stop|status <name>");
         serial_print("FS Events:inotify  watch <path>  pty [alloc|info <id>]");
@@ -375,6 +377,41 @@ fn shell_handle_ext(cmd) {
     if cmd == "mixer" {
         return mixer_status();
     }
+    if cmd == "audioserver" {
+        return aus_status();
+    }
+    if str_starts_with(cmd, "aus connect") {
+        let id = aus_connect(1);
+        if id >= 0 { return "Connected: client slot " + to_string(id); }
+        return "Error: cannot connect";
+    }
+    if str_starts_with(cmd, "aus play ") {
+        let cid = parse_int(str_sub(cmd, 9, len(cmd)));
+        aus_play(cid);
+        return "Play: client " + to_string(cid);
+    }
+    if str_starts_with(cmd, "aus stop ") {
+        let cid = parse_int(str_sub(cmd, 9, len(cmd)));
+        aus_stop(cid);
+        return "Stop: client " + to_string(cid);
+    }
+    if str_starts_with(cmd, "aus vol ") {
+        let v = parse_int(str_sub(cmd, 8, len(cmd)));
+        aus_set_master(v);
+        return "AudioServer master vol: " + to_string(v) + "%";
+    }
+    if str_starts_with(cmd, "aus beep ") {
+        let args = str_sub(cmd, 9, len(cmd));
+        let sp = str_find(args, " ");
+        if sp < 0 { return "Usage: aus beep <hz> <ms>"; }
+        let freq = parse_int(str_sub(args, 0, sp));
+        let dur  = parse_int(str_sub(args, sp + 1, len(args)));
+        aus_beep(freq, dur);
+        return "Beep via AudioServer: " + to_string(freq) + " Hz " + to_string(dur) + " ms";
+    }
+    if cmd == "aus" {
+        return aus_status();
+    }
     if cmd == "env" {
         return "HOME=/root PATH=/bin:/usr/bin SHELL=/bin/sh USER=root TERM=vt100";
     }
@@ -686,7 +723,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 101 commands + pipe(|) + echo>redirect + inotify + watch + pty + audio + gpu + cp/mv");
+print("shell.hl loaded -- 108 commands + pipe(|) + echo>redirect + inotify + watch + pty + audio + aus + gpu + cp/mv");
 
 // Main shell loop (called from kernel_init)
 

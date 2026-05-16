@@ -189,5 +189,42 @@ fn mixer_status() {
     return to_string(active) + "/" + to_string(MIXER_MAX_STREAMS) + " streams active, master=" + to_string(mixer_master_vol);
 }
 
+// --- AudioServer-friendly wrappers ---
+
+// Reserve a silent stream slot for a client; returns stream_id or -1
+fn mixer_alloc_stream() {
+    let mut i = 0;
+    while i < MIXER_MAX_STREAMS {
+        if mixer_active[i] == 0 {
+            mixer_active[i] = 1;
+            mixer_buf_addr[i] = 0;
+            mixer_buf_len[i] = 0;
+            mixer_position[i] = 0;
+            mixer_volume[i] = 255;
+            mixer_loop[i] = 0;
+            mixer_stream_count = mixer_stream_count + 1;
+            return i;
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn mixer_stream_play(stream_id) {
+    if stream_id < 0 { return 0; }
+    if stream_id >= MIXER_MAX_STREAMS { return 0; }
+    mixer_active[stream_id] = 1;
+    return 0;
+}
+
+fn mixer_stream_stop(stream_id) {
+    return mixer_stop(stream_id);
+}
+
+fn mixer_stream_set_vol(stream_id, vol) {
+    return mixer_set_volume(stream_id, vol);
+}
+
 print("mixer.hl loaded");
 print("Audio mixer: " + to_string(MIXER_MAX_STREAMS) + " streams, master vol, pan, loop, beep, saturation clamp");
+

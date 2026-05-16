@@ -1,0 +1,268 @@
+// HicOS_AudioServer.hl -- Audio IPC Service
+//
+// Multiplexes audio access from multiple processes via IPC.
+// Clients connect and get a stream slot; playback is routed through
+// the kernel mixer (mixer.hl) and AC97 driver (audio.hl).
+//
+// IPC Protocol:
+//   Client -> Server: AUS_MSG_CONNECT / PLAY / STOP / SET_VOL / BEEP / STATUS
+//   Server -> Client: AUS_MSG_ACK / AUS_MSG_STATUS_REPLY
+//
+// Requires: ipc.hl, mixer.hl, audio.hl
+
+// --- IPC Message Constants ---
+let AUS_MSG_CONNECT      = 300;
+let AUS_MSG_DISCONNECT   = 301;
+let AUS_MSG_PLAY         = 302;   // data = stream_id
+let AUS_MSG_STOP         = 303;   // data = stream_id
+let AUS_MSG_SET_VOL      = 304;   // data = volume (0-255)
+let AUS_MSG_SET_MASTER   = 305;   // data = volume percent (0-100)
+let AUS_MSG_BEEP         = 306;   // data = encoded freq<<16|dur_ms
+let AUS_MSG_STATUS       = 307;
+let AUS_MSG_ACK          = 350;
+let AUS_MSG_STATUS_REPLY = 351;
+let AUS_MSG_MUTE         = 308;   // data = 1=mute 0=unmute
+
+// --- Server State ---
+let AUS_MAX_CLIENTS = 16;
+let mut aus_client_pids = [];
+let mut aus_client_streams = [];   // per-client assigned stream slot
+let mut aus_client_count = 0;
+let mut aus_running = 0;
+let mut aus_frame_count = 0;
+let mut aus_total_played = 0;
+
+// --- Lifecycle ---
+
+fn aus_init() {
+    aus_client_pids = [];
+    aus_client_streams = [];
+    aus_client_count = 0;
+    aus_running = 1;
+    aus_frame_count = 0;
+    aus_total_played = 0;
+    // Ensure AC97 is ready
+    ac97_init();
+    mixer_set_master_vol(80);
+    print("audio-server: started (max " + to_string(AUS_MAX_CLIENTS) + " clients, master=80%)");
+    return 0;
+}
+
+fn aus_shutdown() {
+    // Stop all streams
+    let mut i = 0;
+    while i < aus_client_count {
+        let sid = aus_client_streams[i];
+        if sid >= 0 { mixer_stream_stop(sid); }
+        i = i + 1;
+    }
+    aus_running = 0;
+    print("audio-server: shut down (played " + to_string(aus_total_played) + " frames)");
+    return 0;
+}
+
+// --- Client Management ---
+
+fn aus_connect(client_pid) {
+    if aus_client_count >= AUS_MAX_CLIENTS {
+        print("audio-server: max clients reached");
+        return 0 - 1;
+    }
+    let stream_id = mixer_alloc_stream();
+    if stream_id < 0 {
+        print("audio-server: no free mixer streams");
+        return 0 - 2;
+    }
+    push(aus_client_pids, client_pid);
+    push(aus_client_streams, stream_id);
+    let id = aus_client_count;
+    aus_client_count = aus_client_count + 1;
+    print("audio-server: PID " + to_string(client_pid) + " connected (slot=" + to_string(id) + " stream=" + to_string(stream_id) + ")");
+    return id;
+}
+
+fn aus_disconnect(client_id) {
+    if client_id < 0 { return 0 - 1; }
+    if client_id >= aus_client_count { return 0 - 1; }
+    let sid = aus_client_streams[client_id];
+    if sid >= 0 { mixer_stream_stop(sid); }
+    print("audio-server: client " + to_string(client_id) + " (stream " + to_string(sid) + ") disconnected");
+    return 0;
+}
+
+fn aus_find_client(pid) {
+    let mut i = 0;
+    while i < aus_client_count {
+        if aus_client_pids[i] == pid { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+// --- Playback Control ---
+
+fn aus_play(client_id) {
+    if client_id < 0 { return 0 - 1; }
+    if client_id >= aus_client_count { return 0 - 1; }
+    let sid = aus_client_streams[client_id];
+    if sid < 0 { return 0 - 1; }
+    mixer_stream_play(sid);
+    aus_total_played = aus_total_played + 1;
+    return 0;
+}
+
+fn aus_stop(client_id) {
+    if client_id < 0 { return 0 - 1; }
+    if client_id >= aus_client_count { return 0 - 1; }
+    let sid = aus_client_streams[client_id];
+    if sid < 0 { return 0 - 1; }
+    mixer_stream_stop(sid);
+    return 0;
+}
+
+fn aus_set_stream_vol(client_id, vol) {
+    if client_id < 0 { return 0 - 1; }
+    if client_id >= aus_client_count { return 0 - 1; }
+    let sid = aus_client_streams[client_id];
+    if sid < 0 { return 0 - 1; }
+    mixer_stream_set_vol(sid, vol);
+    return 0;
+}
+
+fn aus_set_master(pct) {
+    if pct < 0 { pct = 0; }
+    if pct > 100 { pct = 100; }
+    mixer_set_master_vol(pct);
+    return pct;
+}
+
+fn aus_beep(freq_hz, dur_ms) {
+    mixer_beep(freq_hz, dur_ms);
+    return 0;
+}
+
+fn aus_mute(enable) {
+    ac97_mute(enable);
+    return 0;
+}
+
+// --- Status ---
+
+fn aus_status() {
+    let running_s = "0";
+    if aus_running == 1 { running_s = "1"; }
+    return "audio-server: running=" + running_s
+        + " clients=" + to_string(aus_client_count)
+        + " played=" + to_string(aus_total_played)
+        + " master=" + to_string(mixer_master_vol) + "%"
+        + " ac97=" + ac97_status();
+}
+
+fn aus_client_info(client_id) {
+    if client_id < 0 { return "invalid"; }
+    if client_id >= aus_client_count { return "invalid"; }
+    let pid = aus_client_pids[client_id];
+    let sid = aus_client_streams[client_id];
+    return "client[" + to_string(client_id) + "] pid=" + to_string(pid) + " stream=" + to_string(sid);
+}
+
+// --- IPC Message Dispatcher ---
+
+fn aus_handle_message(src_pid, msg_type, msg_data) {
+    if msg_type == AUS_MSG_CONNECT {
+        let id = aus_connect(src_pid);
+        ipc_send(src_pid, AUS_MSG_ACK, id);
+        return id;
+    }
+
+    if msg_type == AUS_MSG_DISCONNECT {
+        let cid = aus_find_client(src_pid);
+        aus_disconnect(cid);
+        ipc_send(src_pid, AUS_MSG_ACK, 0);
+        return 0;
+    }
+
+    let cid = aus_find_client(src_pid);
+    if cid < 0 {
+        ipc_send(src_pid, AUS_MSG_ACK, 0 - 1);
+        return 0 - 1;
+    }
+
+    if msg_type == AUS_MSG_PLAY {
+        let r = aus_play(cid);
+        ipc_send(src_pid, AUS_MSG_ACK, r);
+        return r;
+    }
+
+    if msg_type == AUS_MSG_STOP {
+        let r = aus_stop(cid);
+        ipc_send(src_pid, AUS_MSG_ACK, r);
+        return r;
+    }
+
+    if msg_type == AUS_MSG_SET_VOL {
+        let r = aus_set_stream_vol(cid, msg_data);
+        ipc_send(src_pid, AUS_MSG_ACK, r);
+        return r;
+    }
+
+    if msg_type == AUS_MSG_SET_MASTER {
+        let r = aus_set_master(msg_data);
+        ipc_send(src_pid, AUS_MSG_ACK, r);
+        return r;
+    }
+
+    if msg_type == AUS_MSG_BEEP {
+        // freq packed in high 16 bits, dur_ms in low 16 bits
+        let freq = msg_data / 65536;
+        let dur  = msg_data % 65536;
+        aus_beep(freq, dur);
+        ipc_send(src_pid, AUS_MSG_ACK, 0);
+        return 0;
+    }
+
+    if msg_type == AUS_MSG_MUTE {
+        aus_mute(msg_data);
+        ipc_send(src_pid, AUS_MSG_ACK, 0);
+        return 0;
+    }
+
+    if msg_type == AUS_MSG_STATUS {
+        let s = aus_status();
+        ipc_send(src_pid, AUS_MSG_STATUS_REPLY, 0);
+        return 0;
+    }
+
+    ipc_send(src_pid, AUS_MSG_ACK, 0 - 1);
+    return 0 - 1;
+}
+
+// --- Server Tick (called from kernel main loop) ---
+
+fn aus_tick() {
+    if aus_running == 0 { return 0; }
+    aus_frame_count = aus_frame_count + 1;
+
+    // Drive the mixer on each tick to process pending audio
+    if aus_client_count > 0 {
+        mixer_mix();
+    }
+
+    // Poll for incoming IPC messages addressed to the audio server
+    let msg = ipc_poll(0);  // pid=0 means "addressed to kernel audio server"
+    if msg >= 0 {
+        let mtype = ipc_msg_type(msg);
+        let mdata = ipc_msg_data(msg);
+        let msrc  = ipc_msg_src(msg);
+        if mtype >= AUS_MSG_CONNECT {
+            if mtype <= AUS_MSG_MUTE {
+                aus_handle_message(msrc, mtype, mdata);
+            }
+        }
+    }
+
+    return 0;
+}
+
+print("HicOS_AudioServer.hl loaded");
+print("audio-server: AUS IPC protocol (msgs 300-351) | " + to_string(AUS_MAX_CLIENTS) + " max clients");

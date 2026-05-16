@@ -2,17 +2,58 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`200`（68 根目录 + 132 内核模块）
-- H-L 总行数：`~48,600`（根 10,044 + 内核 ~38,556）
-- 内核模块：`132`（编译产出 1,700+ 函数 / 2,003+ 符号）
+- `.hl` 文件：`201`（69 根目录 + 132 内核模块）
+- H-L 总行数：`~48,900`（根 10,300+ + 内核 ~38,600）
+- 内核模块：`132`（编译产出 1,720+ 函数 / 2,030+ 符号）
 - `kernel_entry.hl`：`9,428` 行
 - `hl-bootstrap.hl`：`4,306` 行，`208` 函数
 - `stdlib.hl`：`1,385` 行，`143` 函数
 - `kinterp.hl`：`~1,280` 行
-- Shell 命令（`shell.hl` if cmd ==）：`101`
+- Shell 命令（`shell.hl` if cmd ==）：`108`
 - `scripts/*.ps1`：`28`（9,729 行）
 - 构建/测试主入口：`hl-bootstrap.cmd test`
-- 最近完成功能迭代：`144`（文件操作完整 + 上下文菜单 + cp/mv + 发布验证通过）
+- 最近完成功能迭代：`145`（AudioServer IPC 服务 + 18/18 发布验证通过）
+
+## Iteration 145 — HicOS_AudioServer IPC 音频服务
+
+- **`HicOS_AudioServer.hl`**: 新建（~240 行，21 个函数）
+  - IPC 消息协议（消息编号 300–351）：
+    - `AUS_MSG_CONNECT/DISCONNECT`：客户端注册与注销
+    - `AUS_MSG_PLAY/STOP`：流级别播放控制
+    - `AUS_MSG_SET_VOL/SET_MASTER`：流音量与主音量
+    - `AUS_MSG_BEEP`：高16位=频率，低16位=时长打包编码
+    - `AUS_MSG_MUTE/STATUS`：静音与状态查询
+    - `AUS_MSG_ACK/STATUS_REPLY`：服务端应答
+  - `aus_init()`：调用 `ac97_init()` + `mixer_set_master_vol(80%)` + 初始化客户端表
+  - `aus_connect(pid)`：从 `mixer_alloc_stream()` 分配流槽位，绑定 PID
+  - `aus_disconnect(cid)`：停止流 + 释放槽位
+  - `aus_play/stop(cid)`：委托 `mixer_stream_play/stop()`
+  - `aus_set_stream_vol(cid, vol)` / `aus_set_master(pct)`：音量控制
+  - `aus_beep(freq, dur_ms)`：委托 `mixer_beep()`
+  - `aus_mute(enable)`：委托 `ac97_mute()`
+  - `aus_handle_message(src_pid, type, data)`：完整 IPC 分发 + `ipc_send()` ACK
+  - `aus_tick()`：驱动 `mixer_mix()` + 轮询 `ipc_poll()` 处理客户端请求
+  - `aus_status()` / `aus_client_info(cid)`：状态字符串
+
+- **`mixer.hl`**: 新增 AudioServer 兼容包装（4 个函数）
+  - `mixer_alloc_stream()`：分配静默流槽（无需先提供缓冲区）
+  - `mixer_stream_play(sid)` / `mixer_stream_stop(sid)` / `mixer_stream_set_vol(sid, vol)`：AudioServer API 别名
+
+- **`kernel_init.hl`**: Phase 7 新增 `aus_init()` 调用（在 `ac97_init()` 之后）
+  - Phase 7 摘要行更新：新增 AudioServer
+
+- **`shell.hl`**: 新增 7 条 AudioServer 命令（101 → 108 total）
+  - `audioserver` / `aus`：显示 AudioServer 状态
+  - `aus connect`：注册内核 PID=1 为测试客户端
+  - `aus play <cid>` / `aus stop <cid>`：播放/停止指定客户端流
+  - `aus vol <pct>`：设置主音量（同步至 AC97）
+  - `aus beep <hz> <ms>`：通过 AudioServer 触发蜂鸣
+  - help AudioSvr 行新增
+
+- **`manifest.hl`**: 更新指标
+  - `HL_FILES = 201`, `SHELL_COMMANDS = 108`, `KERNEL_FUNCTIONS = 1720`
+
+- **发布验证**: 18/18 PASSED（201 HL 文件，132 模块）
 
 ## Iteration 144 — 文件操作完整 + 上下文菜单（ui_files.hl + vfs.hl + shell.hl）
 
