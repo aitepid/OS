@@ -1,0 +1,226 @@
+// ping.hl -- ICMP Echo Request / Reply
+//
+// Iteration 176: Network ping diagnostic with RTT measurement.
+//
+// Implementation:
+//   ICMP Echo is emulated over a dedicated UDP exchange: the kernel sends
+//   a structured 64-byte "echo request" packet and the network stack reflects
+//   it back.  RTT is measured in kernel ticks (100 Hz → 1 tick = 10 ms).
+//
+//   ICMP header (first 8 bytes of payload, all big-endian):
+//     [0]    type    (8 = echo request, 0 = echo reply)
+//     [1]    code    (0)
+//     [2-3]  checksum (16-bit one's complement; computed via arithmetic)
+//     [4-5]  id      (our PID-style ID, lo/hi bytes)
+//     [6-7]  seq     (sequence number, lo/hi bytes)
+//   [8-63]   data    (56 bytes, filled with 0x61..0x61+'seq')
+//
+//   Checksum (16-bit one's complement, arithmetic only):
+//     sum = sum all 16-bit big-endian words; fold carry; negate mod 65536
+//
+// Limits:
+//   PING_MAX_HIST = 8    (RTT history for statistics)
+//   PING_TIMEOUT  = 300  (ticks = 3 s)
+//   PING_PORT     = 7    (ECHO service port)
+//   PING_LPORT    = 17070
+//
+// Public API:
+//   ping_init()
+//   ping_host(host, count)           → statistics string
+//   ping_once(ip_arr)                → RTT ticks (-1 = timeout)
+//   ping_stat_str(host, sent, recv, rtt_min, rtt_max, rtt_total) → stats
+
+let PING_TIMEOUT  = 300;
+let PING_PORT     = 7;
+let PING_LPORT    = 17070;
+let PING_MAX_HIST = 8;
+let PING_PKT_SZ   = 64;
+
+let mut ping_seq      = 0;
+let mut ping_id       = 0x5049;   // 'PI' in ASCII
+let mut ping_resp_rdy = 0;
+let mut ping_resp_seq = 0;
+let mut ping_resp_t   = 0;
+
+fn ping_init() {
+    ping_seq      = 0;
+    ping_resp_rdy = 0;
+    ping_resp_seq = 0;
+    ping_resp_t   = 0;
+    print("ping: init — ICMP echo via port " + to_string(PING_PORT) + ", timeout=" + to_string(PING_TIMEOUT) + " ticks");
+    return 0;
+}
+
+// ============================================================
+// Arithmetic checksum (16-bit one's complement)
+// ============================================================
+
+fn _ping_checksum(pkt) {
+    let n = len(pkt);
+    let mut sum = 0;
+    let mut i = 0;
+    while i + 1 < n {
+        let hi = pkt[i];
+        let lo = pkt[i + 1];
+        sum = sum + hi * 256 + lo;
+        i = i + 2;
+    }
+    if i < n { sum = sum + pkt[i] * 256; }
+    // Fold carries
+    while sum > 65535 { sum = sum % 65536 + sum / 65536; }
+    // One's complement
+    return 65535 - sum;
+}
+
+// ============================================================
+// Build ICMP echo request packet (64 bytes as HL array)
+// ============================================================
+
+fn _ping_build_pkt(seq) {
+    let mut pkt = [];
+    let mut i = 0;
+    while i < PING_PKT_SZ { push(pkt, 0); i = i + 1; }
+
+    // Type=8 (echo request), Code=0
+    set_at(pkt, 0, 8);
+    set_at(pkt, 1, 0);
+    // Checksum field initialised to 0 before computation
+    set_at(pkt, 2, 0);
+    set_at(pkt, 3, 0);
+    // ID
+    set_at(pkt, 4, ping_id / 256);
+    set_at(pkt, 5, ping_id % 256);
+    // Seq
+    set_at(pkt, 6, seq / 256);
+    set_at(pkt, 7, seq % 256);
+    // Data: 56 bytes of 'a' + seq offset
+    i = 8;
+    while i < PING_PKT_SZ {
+        set_at(pkt, i, 97 + (i % 26));  // 'a'..'z' cycling
+        i = i + 1;
+    }
+    // Compute and insert checksum
+    let cksum = _ping_checksum(pkt);
+    set_at(pkt, 2, cksum / 256);
+    set_at(pkt, 3, cksum % 256);
+    return pkt;
+}
+
+// ============================================================
+// Callback: invoked by UDP stack on echo reply
+// ============================================================
+
+fn ping_on_recv(data) {
+    if len(data) < 8 { return 0; }
+    let ptype = data[0];
+    let seq_hi = data[6];
+    let seq_lo = data[7];
+    if ptype == 0 {   // echo reply
+        ping_resp_rdy = 1;
+        ping_resp_seq = seq_hi * 256 + seq_lo;
+        ping_resp_t   = get_ticks();
+    }
+    return 0;
+}
+
+// ============================================================
+// Send one echo request and wait for reply
+// ============================================================
+
+fn ping_once(ip_arr) {
+    ping_seq = ping_seq + 1;
+    ping_resp_rdy = 0;
+
+    let pkt = _ping_build_pkt(ping_seq);
+    let sock = udp_bind(PING_LPORT);
+    if sock < 0 { return 0 - 1; }
+
+    let t_send = get_ticks();
+    udp_send(ip_arr, PING_PORT, PING_LPORT, pkt);
+
+    let deadline = t_send + PING_TIMEOUT;
+    let mut rtt = 0 - 1;
+    let mut go = 1;
+    while go == 1 {
+        if ping_resp_rdy == 1 {
+            if ping_resp_seq == ping_seq {
+                rtt = ping_resp_t - t_send;
+                go = 0;
+            }
+            ping_resp_rdy = 0;
+        }
+        if get_ticks() >= deadline { go = 0; }
+    }
+    udp_close(sock);
+    return rtt;
+}
+
+// ============================================================
+// Statistics formatter
+// ============================================================
+
+fn ping_stat_str(host, sent, recv, rtt_min, rtt_max, rtt_total) {
+    let lost = sent - recv;
+    let pct_loss = 0;
+    if sent > 0 { pct_loss = lost * 100 / sent; }
+    let avg_rtt = 0;
+    if recv > 0 { avg_rtt = rtt_total / recv; }
+    // Convert ticks → ms (100 Hz → 1 tick = 10 ms)
+    let ms_min = rtt_min * 10;
+    let ms_max = rtt_max * 10;
+    let ms_avg = avg_rtt * 10;
+    return "--- " + host + " ping statistics ---\n"
+        + to_string(sent) + " transmitted, " + to_string(recv) + " received, "
+        + to_string(pct_loss) + "% packet loss\n"
+        + "rtt min/avg/max = " + to_string(ms_min) + "/"
+        + to_string(ms_avg) + "/" + to_string(ms_max) + " ms";
+}
+
+fn _ping_ip_str(ip) {
+    return to_string(ip[0]) + "." + to_string(ip[1]) + "."
+         + to_string(ip[2]) + "." + to_string(ip[3]);
+}
+
+// ============================================================
+// Public: ping a host N times
+// ============================================================
+
+fn ping_host(host, count) {
+    let ip = dns_resolve(host);
+    if len(ip) < 4 { return "ping: cannot resolve " + host; }
+    let ip_str = _ping_ip_str(ip);
+    let mut out = "PING " + host + " (" + ip_str + ") " + to_string(PING_PKT_SZ) + " bytes of data.\n";
+
+    let mut sent = 0;
+    let mut recv = 0;
+    let mut rtt_min = 999999;
+    let mut rtt_max = 0;
+    let mut rtt_total = 0;
+    let mut lim = count;
+    if lim <= 0 { lim = 4; }
+    if lim > PING_MAX_HIST { lim = PING_MAX_HIST; }
+
+    let mut i = 0;
+    while i < lim {
+        sent = sent + 1;
+        let rtt = ping_once(ip);
+        if rtt >= 0 {
+            recv = recv + 1;
+            let ms = rtt * 10;
+            out = out + to_string(PING_PKT_SZ) + " bytes from " + ip_str
+                + ": icmp_seq=" + to_string(ping_seq)
+                + " ttl=64 time=" + to_string(ms) + " ms\n";
+            if rtt < rtt_min { rtt_min = rtt; }
+            if rtt > rtt_max { rtt_max = rtt; }
+            rtt_total = rtt_total + rtt;
+        } else {
+            out = out + "Request timeout for icmp_seq " + to_string(ping_seq) + "\n";
+            if rtt_min > rtt_max { rtt_min = 0; }
+        }
+        i = i + 1;
+    }
+    return out + ping_stat_str(host, sent, recv, rtt_min, rtt_max, rtt_total);
+}
+
+print("ping.hl loaded");
+print("Ping: ICMP echo (64-byte packet, one's-complement checksum, RTT in 10ms ticks)");

@@ -2,11 +2,50 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`229`（69 根目录 + 160 内核模块）
-- H-L 总行数：`~68,000`
-- 内核模块：`160`
-- Shell 命令：`236`
-- 最近完成功能迭代：`174`（base64 + ini + profiler）
+- `.hl` 文件：`232`（69 根目录 + 163 内核模块）
+- H-L 总行数：`~69,000`
+- 内核模块：`163`
+- Shell 命令：`245`
+- 最近完成功能迭代：`177`（csv + ping + ui_taskman）
+
+## Iteration 177 — ui_taskman.hl：图形化任务管理器
+
+- **`bare-kernel/hl/ui_taskman.hl`** 新增（~240 行）
+  - 窗口 580×400；扫描 task.hl 任务表（UITM_TASK_TBL=0x880000，64 槽）
+  - 列：PID / Name / State / Pri / Ticks / Mem KB
+  - 状态颜色：运行=绿 / 阻塞=黄 / 僵尸=红
+  - 每 50 tick（~0.5 s）`uitaskman_tick()` 自动刷新
+  - 'K' 键向选中进程发送 SIGKILL；'R' 手动刷新；↑↓ 滚动选行
+  - 点击行选中进程；底部状态栏显示进程总数
+- **`bare-kernel/hl/wm.hl`** 接入：draw+tick / key / click
+- **`bare-kernel/hl/ui_desktop.hl`** dock 第 13 号图标 `UIDSK_APP_TASKMAN`，标签 "Tasks"
+- **`bare-kernel/hl/shell.hl`** 新增 1 条命令：`taskman`
+
+## Iteration 176 — ping.hl：ICMP Echo 网络诊断
+
+- **`bare-kernel/hl/ping.hl`** 新增（~150 行）
+  - 64 字节 ICMP Echo 包结构（Type/Code/Checksum/ID/Seq + 56 字节数据）
+  - 纯算术 16-bit 一补数校验和：`65535 - (sum % 65536 + sum / 65536)` 折叠进位
+  - `ping_once(ip_arr)` → RTT ticks（100 Hz → 10 ms/tick）；超时 300 ticks
+  - `ping_host(host, count)` → 完整统计字符串（sent/recv/loss% + min/avg/max ms）
+  - `ping_on_recv(data)` 由 UDP 栈回调（port 17070）
+  - PING_PORT=7（ECHO 服务），PING_LPORT=17070
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`ping_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 1 条命令：`ping <host> [count]`
+
+## Iteration 175 — csv.hl：CSV 解析器 / 写入器（RFC 4180）
+
+- **`bare-kernel/hl/csv.hl`** 新增（~210 行）
+  - 支持带引号字段（`""` 转义）、自定义分隔符、`\r\n` → `\n` 规范化
+  - 存储：`csv_rows[]`（原始行字符串数组），按需解析（`_csv_parse_row`）
+  - `_csv_parse_row(row)` → HL 字段数组（处理引号、逐字段）
+  - `_csv_build_row(fields)` → 重建 CSV 行字符串（按需加引号）
+  - 缓冲区：CSV_BUF=0xE4C000（64 KB）；最多 256 行 × 32 列
+  - `csv_load/save`：VFS 文件 I/O；`csv_get/set`：字段读写；`csv_head/col_names`：显示辅助
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`csv_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 7 条命令：
+  - `csv load <path>` / `csv list [n]` / `csv get <row> <col>`
+  - `csv set <row> <col> <val>` / `csv save <path>` / `csv cols`
 
 ## Iteration 174 — profiler.hl：内核性能分析器
 

@@ -1,0 +1,291 @@
+// csv.hl -- CSV Parser / Writer
+//
+// Iteration 175: RFC 4180-compatible CSV for VFS files.
+//
+// Format:
+//   Fields separated by comma (configurable delimiter).
+//   Fields may be quoted with double-quotes; "" inside quotes = literal ".
+//   Lines terminated by \n (or \r\n, \r stripped on load).
+//
+// Storage model:
+//   csv_rows[]    — array of raw row strings (unparsed)
+//   csv_nrows     — total rows loaded (incl. header)
+//   csv_has_hdr   — 1 if first row is treated as header
+//   csv_delim     — delimiter char (default ",")
+//
+//   On-demand parsing: csv_get(row, col) parses the row string each call.
+//   For write: csv_set(row, col, val) rebuilds the row string.
+//
+// Limits:
+//   CSV_MAX_ROWS = 256
+//   CSV_MAX_COLS = 32
+//   CSV_BUF      = 0xE4C000  (14991360)  64 KB
+//
+// Public API:
+//   csv_init()
+//   csv_load(path)                    → row count (-1 on error)
+//   csv_save(path)                    → bytes written (-1 on error)
+//   csv_get(row, col)                 → field string
+//   csv_set(row, col, val)            → 0 (updates row string in-place)
+//   csv_nrows                         → row count
+//   csv_ncols(row)                    → column count for row
+//   csv_head(n)                       → first n rows formatted
+//   csv_col_names()                   → header row string (if csv_has_hdr)
+//   csv_clear()
+
+let CSV_MAX_ROWS = 256;
+let CSV_MAX_COLS = 32;
+let CSV_BUF      = 14991360;   // 0xE4C000
+let CSV_BUF_SZ   = 65536;
+
+let mut csv_rows    = [];
+let mut csv_nrows   = 0;
+let mut csv_has_hdr = 0;
+let mut csv_delim   = ",";
+
+fn csv_init() {
+    csv_rows    = [];
+    csv_nrows   = 0;
+    csv_has_hdr = 0;
+    csv_delim   = ",";
+    let mut i = 0;
+    while i < CSV_MAX_ROWS { push(csv_rows, ""); i = i + 1; }
+    print("csv: init — " + to_string(CSV_MAX_ROWS) + " row slots");
+    return 0;
+}
+
+fn csv_clear() {
+    let mut i = 0;
+    while i < CSV_MAX_ROWS { set_at(csv_rows, i, ""); i = i + 1; }
+    csv_nrows = 0;
+    return 0;
+}
+
+// ============================================================
+// Row parser: split a CSV row string into fields array
+// ============================================================
+
+fn _csv_parse_row(row) {
+    let mut fields = [];
+    let n = len(row);
+    let mut i = 0;
+    while i < n {
+        // Check for quoted field
+        let c = str_sub(row, i, i + 1);
+        if c == "\"" {
+            // Quoted field
+            let mut field = "";
+            i = i + 1;
+            let mut done = 0;
+            while done == 0 {
+                if i >= n { done = 1; }
+                else {
+                    let ch = str_sub(row, i, i + 1);
+                    if ch == "\"" {
+                        if i + 1 < n {
+                            if str_sub(row, i + 1, i + 2) == "\"" {
+                                // Escaped quote
+                                field = field + "\"";
+                                i = i + 2;
+                            } else {
+                                // End of quoted field
+                                i = i + 1;
+                                done = 1;
+                            }
+                        } else {
+                            i = i + 1;
+                            done = 1;
+                        }
+                    } else {
+                        field = field + ch;
+                        i = i + 1;
+                    }
+                }
+            }
+            push(fields, field);
+            // Skip delimiter
+            if i < n {
+                if str_sub(row, i, i + 1) == csv_delim { i = i + 1; }
+            }
+        } else {
+            // Unquoted field: read until delimiter
+            let mut field = "";
+            let mut done = 0;
+            while done == 0 {
+                if i >= n { done = 1; }
+                else {
+                    let ch = str_sub(row, i, i + 1);
+                    if ch == csv_delim { i = i + 1; done = 1; }
+                    else { field = field + ch; i = i + 1; }
+                }
+            }
+            push(fields, field);
+        }
+        if len(fields) >= CSV_MAX_COLS { i = n; }
+    }
+    return fields;
+}
+
+// ============================================================
+// Rebuild row from fields array
+// ============================================================
+
+fn _csv_build_row(fields) {
+    let mut out = "";
+    let mut i = 0;
+    while i < len(fields) {
+        if i > 0 { out = out + csv_delim; }
+        let f = fields[i];
+        // Quote if field contains delimiter, quote, or newline
+        let needs_quote = 0;
+        if str_find(f, csv_delim) >= 0 { needs_quote = 1; }
+        if str_find(f, "\"") >= 0 { needs_quote = 1; }
+        if str_find(f, "\n") >= 0 { needs_quote = 1; }
+        if needs_quote == 1 {
+            // Escape internal quotes
+            let mut esc = "";
+            let fn2 = len(f);
+            let mut j = 0;
+            while j < fn2 {
+                let ch = str_sub(f, j, j + 1);
+                if ch == "\"" { esc = esc + "\"\""; }
+                else { esc = esc + ch; }
+                j = j + 1;
+            }
+            out = out + "\"" + esc + "\"";
+        } else {
+            out = out + f;
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+// ============================================================
+// Load
+// ============================================================
+
+fn csv_load(path) {
+    let fd = vfs_open(path, 0);
+    if fd < 0 { return 0 - 1; }
+    let n = vfs_read(fd, CSV_BUF, CSV_BUF_SZ);
+    vfs_close(fd);
+    if n <= 0 { return 0; }
+
+    let mut text = "";
+    let mut i = 0;
+    while i < n {
+        let b = mem_read_u8(CSV_BUF + i);
+        if b != 13 { text = text + str_from_byte(b); }  // strip \r
+        i = i + 1;
+    }
+
+    csv_clear();
+    // Split on newlines
+    let tlen = len(text);
+    let mut start = 0;
+    i = 0;
+    while i < tlen {
+        if str_sub(text, i, i + 1) == "\n" {
+            let row = str_sub(text, start, i);
+            if len(row) > 0 {
+                if csv_nrows < CSV_MAX_ROWS {
+                    set_at(csv_rows, csv_nrows, row);
+                    csv_nrows = csv_nrows + 1;
+                }
+            }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    if start < tlen {
+        let row = str_sub(text, start, tlen);
+        if len(row) > 0 {
+            if csv_nrows < CSV_MAX_ROWS {
+                set_at(csv_rows, csv_nrows, row);
+                csv_nrows = csv_nrows + 1;
+            }
+        }
+    }
+    print("csv: loaded " + to_string(csv_nrows) + " rows from " + path);
+    return csv_nrows;
+}
+
+// ============================================================
+// Get / Set
+// ============================================================
+
+fn csv_get(row, col) {
+    if row < 0 { return ""; }
+    if row >= csv_nrows { return ""; }
+    let fields = _csv_parse_row(csv_rows[row]);
+    if col < 0 { return ""; }
+    if col >= len(fields) { return ""; }
+    return fields[col];
+}
+
+fn csv_ncols(row) {
+    if row < 0 { return 0; }
+    if row >= csv_nrows { return 0; }
+    return len(_csv_parse_row(csv_rows[row]));
+}
+
+fn csv_set(row, col, val) {
+    if row < 0 { return 0 - 1; }
+    if row >= CSV_MAX_ROWS { return 0 - 1; }
+    // Extend rows if needed
+    while csv_nrows <= row { set_at(csv_rows, csv_nrows, ""); csv_nrows = csv_nrows + 1; }
+    let mut fields = _csv_parse_row(csv_rows[row]);
+    // Extend fields if needed
+    while len(fields) <= col { push(fields, ""); }
+    set_at(fields, col, val);
+    set_at(csv_rows, row, _csv_build_row(fields));
+    return 0;
+}
+
+// ============================================================
+// Save
+// ============================================================
+
+fn csv_save(path) {
+    let mut out = "";
+    let mut i = 0;
+    while i < csv_nrows {
+        out = out + csv_rows[i] + "\n";
+        i = i + 1;
+    }
+    let fd = vfs_open(path, 1);
+    if fd < 0 { return 0 - 1; }
+    let n = len(out);
+    let mut j = 0;
+    while j < n { mem_write_u8(CSV_BUF + j, str_char_code(out, j)); j = j + 1; }
+    vfs_write(fd, CSV_BUF, n);
+    vfs_close(fd);
+    print("csv: saved " + to_string(csv_nrows) + " rows to " + path + " (" + to_string(n) + " bytes)");
+    return n;
+}
+
+// ============================================================
+// Display helpers
+// ============================================================
+
+fn csv_col_names() {
+    if csv_nrows == 0 { return "(empty)"; }
+    return csv_rows[0];
+}
+
+fn csv_head(n) {
+    let mut lim = n;
+    if lim > csv_nrows { lim = csv_nrows; }
+    if lim == 0 { return "(empty)"; }
+    let mut out = "";
+    let mut i = 0;
+    while i < lim {
+        out = out + "[" + to_string(i) + "] " + csv_rows[i] + "\n";
+        i = i + 1;
+    }
+    return out + "(" + to_string(csv_nrows) + " total rows)";
+}
+
+print("csv.hl loaded");
+print("CSV: RFC 4180 parser/writer, 256 rows, 32 cols, quoted fields, load/get/set/save");

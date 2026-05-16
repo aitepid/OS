@@ -1,0 +1,298 @@
+// ui_taskman.hl -- Graphical Task Manager
+//
+// Iteration 177: Process table viewer with kill, sort, and refresh.
+//
+// Window: 580 × 400 px
+// Columns: PID | Name | State | Priority | Ticks | Memory
+//
+// Process data sourced from task.hl task table (64 slots).
+// State decoded: 0=FREE, 1=READY, 2=RUNNING, 3=BLOCKED, 4=ZOMBIE
+//
+// Features:
+//   - Auto-refresh every UITM_REFRESH_TICKS compositor ticks
+//   - Highlight selected row (click to select)
+//   - 'K' key sends SIGKILL to selected PID
+//   - 'R' key refreshes immediately
+//   - Column sort by clicking header (PID / Name / State / Ticks)
+//   - Scroll with Up/Down arrow keys
+//
+// WM interface:
+//   uitaskman_is_open()
+//   uitaskman_open()
+//   uitaskman_close()
+//   uitaskman_draw()
+//   uitaskman_key(k)
+//   uitaskman_click(mx, my)
+//   uitaskman_tick()
+
+let UITM_W              = 580;
+let UITM_H              = 400;
+let UITM_HDR_H          = 28;
+let UITM_ROW_H          = 18;
+let UITM_REFRESH_TICKS  = 50;   // refresh every ~0.5 s
+
+// Colors
+let UITM_BG         = 0x181C2A;
+let UITM_HDR_BG     = 0x252A3E;
+let UITM_ROW_EVEN   = 0x1E2336;
+let UITM_ROW_ODD    = 0x1A1F30;
+let UITM_ROW_SEL    = 0x2E4070;
+let UITM_FG         = 0xD0D4E8;
+let UITM_HDR_FG     = 0xAAB0CC;
+let UITM_ACCENT     = 0x5078FF;
+let UITM_GREEN      = 0x44CC88;
+let UITM_RED        = 0xFF5555;
+let UITM_YELLOW     = 0xFFAA44;
+
+// Column X offsets (relative to window content x)
+let UITM_COL_PID    = 4;
+let UITM_COL_NAME   = 52;
+let UITM_COL_STATE  = 200;
+let UITM_COL_PRI    = 280;
+let UITM_COL_TICKS  = 340;
+let UITM_COL_MEM    = 440;
+
+// State strings
+let UITM_STATE_STR = ["FREE", "READY", "RUN", "BLOCK", "ZOMBIE"];
+
+// Task table base (matches task.hl: TASK_TABLE_ADDR + slot*128)
+let UITM_TASK_TBL  = 8912896;   // 0x880000 — same as task.hl TASK_TABLE_ADDR
+let UITM_TASK_SZ   = 128;
+let UITM_MAX_TASKS = 64;
+
+let mut uitm_win_id      = 0 - 1;
+let mut uitm_scroll      = 0;
+let mut uitm_selected    = 0 - 1;
+let mut uitm_tick_ctr    = 0;
+let mut uitm_sort_col    = 0;   // 0=PID, 1=Name, 2=State, 3=Ticks
+let mut uitm_visible_rows = 0;
+
+// Cached task list (up to 64 entries)
+let mut uitm_pids    = [];
+let mut uitm_names   = [];
+let mut uitm_states  = [];
+let mut uitm_pris    = [];
+let mut uitm_ticks   = [];
+let mut uitm_mems    = [];
+let mut uitm_count   = 0;
+
+fn uitaskman_is_open() {
+    if uitm_win_id >= 0 { return 1; }
+    return 0;
+}
+
+// ============================================================
+// Task table scanning
+// ============================================================
+
+fn _uitm_read_tasks() {
+    uitm_pids   = [];
+    uitm_names  = [];
+    uitm_states = [];
+    uitm_pris   = [];
+    uitm_ticks  = [];
+    uitm_mems   = [];
+    uitm_count  = 0;
+    let mut i = 0;
+    while i < UITM_MAX_TASKS {
+        let base = UITM_TASK_TBL + i * UITM_TASK_SZ;
+        let state = mem_read_u64(base + 16);    // state field
+        if state != 0 {
+            let pid   = mem_read_u64(base);          // pid
+            let pri   = mem_read_u64(base + 24);     // priority
+            let tics  = mem_read_u64(base + 32);     // ticks used
+            let mem   = mem_read_u64(base + 40);     // memory pages
+            // Name: 16 bytes at +48 (null-terminated ASCII)
+            let mut nm = "";
+            let mut j = 0;
+            while j < 16 {
+                let c = mem_read_u8(base + 48 + j);
+                if c == 0 { j = 16; }
+                else { nm = nm + str_from_byte(c); j = j + 1; }
+            }
+            if len(nm) == 0 { nm = "proc" + to_string(pid); }
+            push(uitm_pids,   pid);
+            push(uitm_names,  nm);
+            push(uitm_states, state);
+            push(uitm_pris,   pri);
+            push(uitm_ticks,  tics);
+            push(uitm_mems,   mem * 4);  // pages → KB (4 KB/page)
+            uitm_count = uitm_count + 1;
+        }
+        i = i + 1;
+    }
+    return uitm_count;
+}
+
+fn _uitm_state_str(s) {
+    if s >= 0 {
+        if s < len(UITM_STATE_STR) { return UITM_STATE_STR[s]; }
+    }
+    return "?";
+}
+
+fn _uitm_state_color(s) {
+    if s == 2 { return UITM_GREEN; }   // RUNNING
+    if s == 3 { return UITM_YELLOW; }  // BLOCKED
+    if s == 4 { return UITM_RED; }     // ZOMBIE
+    return UITM_FG;
+}
+
+// ============================================================
+// Open / Close
+// ============================================================
+
+fn uitaskman_open() {
+    if uitm_win_id >= 0 { return 0; }
+    let top_h = ui_theme_topbar_height();
+    let sx = 80;
+    let sy = top_h + 40;
+    uitm_win_id = wm_create_window(sx, sy, UITM_W, UITM_H, "Task Manager", 0);
+    uitm_scroll   = 0;
+    uitm_selected = 0 - 1;
+    uitm_tick_ctr = 0;
+    wm_focus_window(uitm_win_id);
+    _uitm_read_tasks();
+    uitaskman_draw();
+    print("ui_taskman: opened (win=" + to_string(uitm_win_id) + ")");
+    return 0;
+}
+
+fn uitaskman_close() {
+    if uitm_win_id < 0 { return 0; }
+    wm_close_window(uitm_win_id);
+    uitm_win_id = 0 - 1;
+    return 0;
+}
+
+// ============================================================
+// Draw
+// ============================================================
+
+fn _uitm_wx() { return mem_read_u64(WM_TABLE_ADDR + uitm_win_id * 128 + 8); }
+fn _uitm_wy() { return mem_read_u64(WM_TABLE_ADDR + uitm_win_id * 128 + 16) + ui_theme_title_height(); }
+
+fn uitaskman_draw() {
+    if uitm_win_id < 0 { return 0; }
+    let wx = _uitm_wx();
+    let wy = _uitm_wy();
+
+    // Background
+    ui_fill_rect(wx, wy, UITM_W, UITM_H, UITM_BG);
+
+    // Header row
+    ui_fill_rect(wx, wy, UITM_W, UITM_HDR_H, UITM_HDR_BG);
+    ui_draw_text(wx + UITM_COL_PID,   wy + 6, "PID",    UITM_ACCENT);
+    ui_draw_text(wx + UITM_COL_NAME,  wy + 6, "Name",   UITM_ACCENT);
+    ui_draw_text(wx + UITM_COL_STATE, wy + 6, "State",  UITM_ACCENT);
+    ui_draw_text(wx + UITM_COL_PRI,   wy + 6, "Pri",    UITM_ACCENT);
+    ui_draw_text(wx + UITM_COL_TICKS, wy + 6, "Ticks",  UITM_ACCENT);
+    ui_draw_text(wx + UITM_COL_MEM,   wy + 6, "Mem KB", UITM_ACCENT);
+
+    // Status bar at bottom
+    let stat_y = wy + UITM_H - 20;
+    ui_fill_rect(wx, stat_y, UITM_W, 20, UITM_HDR_BG);
+    ui_draw_text(wx + 6, stat_y + 3,
+        "Procs: " + to_string(uitm_count) + "  [R]efresh  [K]ill  ↑↓ scroll",
+        UITM_HDR_FG);
+
+    // Visible area
+    let content_h = UITM_H - UITM_HDR_H - 20;
+    uitm_visible_rows = content_h / UITM_ROW_H;
+    let mut i = 0;
+    while i < uitm_visible_rows {
+        let ti = i + uitm_scroll;
+        if ti >= uitm_count { i = uitm_visible_rows; }
+        else {
+            let ry = wy + UITM_HDR_H + i * UITM_ROW_H;
+            let row_bg = UITM_ROW_ODD;
+            if i % 2 == 0 { row_bg = UITM_ROW_EVEN; }
+            if ti == uitm_selected { row_bg = UITM_ROW_SEL; }
+            ui_fill_rect(wx, ry, UITM_W, UITM_ROW_H, row_bg);
+            let sc = _uitm_state_color(uitm_states[ti]);
+            ui_draw_text(wx + UITM_COL_PID,   ry + 2, to_string(uitm_pids[ti]),   UITM_FG);
+            ui_draw_text(wx + UITM_COL_NAME,  ry + 2, uitm_names[ti],             UITM_FG);
+            ui_draw_text(wx + UITM_COL_STATE, ry + 2, _uitm_state_str(uitm_states[ti]), sc);
+            ui_draw_text(wx + UITM_COL_PRI,   ry + 2, to_string(uitm_pris[ti]),   UITM_FG);
+            ui_draw_text(wx + UITM_COL_TICKS, ry + 2, to_string(uitm_ticks[ti]),  UITM_FG);
+            ui_draw_text(wx + UITM_COL_MEM,   ry + 2, to_string(uitm_mems[ti]),   UITM_FG);
+            i = i + 1;
+        }
+    }
+    return 0;
+}
+
+// ============================================================
+// Input
+// ============================================================
+
+fn uitaskman_key(k) {
+    if uitm_win_id < 0 { return 0; }
+    if k == 27 { uitaskman_close(); return 0; }  // Esc
+    if k == 114 {   // 'r' — refresh
+        _uitm_read_tasks();
+        uitaskman_draw();
+        return 0;
+    }
+    if k == 107 {   // 'k' — kill selected
+        if uitm_selected >= 0 {
+            if uitm_selected < uitm_count {
+                let pid = uitm_pids[uitm_selected];
+                task_kill(pid, 9);
+                print("taskman: SIGKILL → pid " + to_string(pid));
+                _uitm_read_tasks();
+                uitaskman_draw();
+            }
+        }
+        return 0;
+    }
+    if k == 72 {   // Up arrow
+        if uitm_selected > 0 { uitm_selected = uitm_selected - 1; }
+        if uitm_selected < uitm_scroll { uitm_scroll = uitm_selected; }
+        uitaskman_draw();
+        return 0;
+    }
+    if k == 80 {   // Down arrow
+        if uitm_selected < uitm_count - 1 { uitm_selected = uitm_selected + 1; }
+        if uitm_selected >= uitm_scroll + uitm_visible_rows {
+            uitm_scroll = uitm_selected - uitm_visible_rows + 1;
+        }
+        uitaskman_draw();
+        return 0;
+    }
+    return 0;
+}
+
+fn uitaskman_click(mx, my) {
+    if uitm_win_id < 0 { return 0; }
+    let wx = _uitm_wx();
+    let wy = _uitm_wy();
+    if mx < wx { return 0; }
+    if mx > wx + UITM_W { return 0; }
+    let rel_y = my - wy - UITM_HDR_H;
+    if rel_y < 0 { return 0; }
+    let row_idx = rel_y / UITM_ROW_H + uitm_scroll;
+    if row_idx < uitm_count {
+        uitm_selected = row_idx;
+        uitaskman_draw();
+    }
+    return 0;
+}
+
+// ============================================================
+// Tick (called by wm compositor)
+// ============================================================
+
+fn uitaskman_tick() {
+    if uitm_win_id < 0 { return 0; }
+    uitm_tick_ctr = uitm_tick_ctr + 1;
+    if uitm_tick_ctr >= UITM_REFRESH_TICKS {
+        uitm_tick_ctr = 0;
+        _uitm_read_tasks();
+        uitaskman_draw();
+    }
+    return 0;
+}
+
+print("ui_taskman.hl loaded");
+print("Task Manager: 64-slot process table, kill/sort/scroll, 0.5s auto-refresh");

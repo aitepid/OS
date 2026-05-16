@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 236 commands + pipe operator (|):
+// 245 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -78,6 +78,9 @@ fn shell_handle(cmd) {
         serial_print("Base64:   b64encode <src> <dst>  b64decode <src> <dst>  b64str <text>");
         serial_print("INI:      ini load <path>  ini list  ini get <sec> <key>  ini set <sec> <key> <val>  ini save <path>  ini del <sec> <key>");
         serial_print("Profiler: prof report  prof top <n>  prof inc <name>  prof reset  prof spans  prof sample  prof ring");
+        serial_print("CSV:      csv load <path>  csv list [n]  csv get <row> <col>  csv set <row> <col> <val>  csv save <path>  csv cols");
+        serial_print("Ping:     ping <host> [count]");
+        serial_print("TaskMan:  taskman");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -1672,6 +1675,66 @@ fn shell_handle_ext(cmd) {
         return name + " = " + to_string(prof_get(name));
     }
 
+    // === CSV commands ===
+    if str_starts_with(cmd, "csv load ") {
+        let path = str_sub(cmd, 9, len(cmd));
+        let n = csv_load(path);
+        if n < 0 { return "Error: cannot open " + path; }
+        return "Loaded " + to_string(n) + " rows from " + path;
+    }
+    if cmd == "csv list" { return csv_head(10); }
+    if str_starts_with(cmd, "csv list ") {
+        let n = parse_int(str_sub(cmd, 9, len(cmd)));
+        return csv_head(n);
+    }
+    if str_starts_with(cmd, "csv get ") {
+        let args = str_sub(cmd, 8, len(cmd));
+        let sp = str_find(args, " ");
+        if sp < 0 { return "Usage: csv get <row> <col>"; }
+        let row = parse_int(str_sub(args, 0, sp));
+        let col = parse_int(str_sub(args, sp + 1, len(args)));
+        return csv_get(row, col);
+    }
+    if str_starts_with(cmd, "csv set ") {
+        let args = str_sub(cmd, 8, len(cmd));
+        let sp1 = str_find(args, " ");
+        if sp1 < 0 { return "Usage: csv set <row> <col> <val>"; }
+        let row  = parse_int(str_sub(args, 0, sp1));
+        let rest = str_sub(args, sp1 + 1, len(args));
+        let sp2  = str_find(rest, " ");
+        if sp2 < 0 { return "Usage: csv set <row> <col> <val>"; }
+        let col = parse_int(str_sub(rest, 0, sp2));
+        let val = str_sub(rest, sp2 + 1, len(rest));
+        csv_set(row, col, val);
+        return "Set [" + to_string(row) + "," + to_string(col) + "] = " + val;
+    }
+    if str_starts_with(cmd, "csv save ") {
+        let path = str_sub(cmd, 9, len(cmd));
+        let n = csv_save(path);
+        if n < 0 { return "Error: cannot write " + path; }
+        return "Saved " + to_string(n) + " bytes to " + path;
+    }
+    if cmd == "csv cols" { return csv_col_names(); }
+
+    // === Ping commands ===
+    if str_starts_with(cmd, "ping ") {
+        let args = str_sub(cmd, 5, len(cmd));
+        let sp = str_find(args, " ");
+        let host = args;
+        let count = 4;
+        if sp >= 0 {
+            host = str_sub(args, 0, sp);
+            count = parse_int(str_sub(args, sp + 1, len(args)));
+        }
+        return ping_host(host, count);
+    }
+
+    // === Task manager commands ===
+    if cmd == "taskman" {
+        uitaskman_open();
+        return "Task Manager opened";
+    }
+
     return shell_handle(cmd);
 }
 
@@ -1683,7 +1746,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 236 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler");
+print("shell.hl loaded -- 245 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman");
 
 // Main shell loop (called from kernel_init)
 
