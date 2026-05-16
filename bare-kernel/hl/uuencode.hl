@@ -1,0 +1,242 @@
+// uuencode.hl -- UUencode/UUdecode Binary-to-Text Encoding
+//
+// UUencode is a binary-to-text encoding used for transmitting binary files
+// over text-only channels (email, Usenet). Encodes 3 bytes -> 4 ASCII chars.
+//
+// Format:
+//   - begin <mode> <filename>
+//   - <encoded lines> (max 60 chars per line, starts with length char)
+//   - ` (backtick for empty line)
+//   - end
+//
+// Each line: length_char + encoded_data
+// Length char: ASCII 32 + (bytes_in_line)
+// Encoding: each 6 bits -> ASCII 32 + value
+//
+// Memory:
+//   - UU_BUF: 0xFD0000 (16580608), 64 KB encode/decode buffer
+
+let UU_BUF = 16580608;           // 0xFD0000
+let UU_BUF_SZ = 65536;           // 64 KB
+let uu_len = 0;
+
+fn uu_init() {
+    uu_len = 0;
+    return 0;
+}
+
+fn uu_clear() {
+    uu_len = 0;
+    return 0;
+}
+
+fn _uu_enc_char(n) {
+    let c = n % 64;
+    return 32 + c;
+}
+
+fn _uu_dec_char(c) {
+    if c < 32 { return 0; }
+    return (c - 32) % 64;
+}
+
+fn _uu_put(c) {
+    if uu_len >= UU_BUF_SZ { return 0; }
+    mem_write_byte(UU_BUF + uu_len, c);
+    uu_len = uu_len + 1;
+    return 1;
+}
+
+fn _uu_puts(s) {
+    let mut i = 0;
+    while i < len(s) {
+        _uu_put(str_char_code(s, i));
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn uu_encode(data, filename) {
+    uu_clear();
+
+    _uu_puts("begin 644 ");
+    _uu_puts(filename);
+    _uu_put(10);
+
+    let mut i = 0;
+    let data_len = len(data);
+
+    while i < data_len {
+        let chunk_len = 45;
+        if i + chunk_len > data_len {
+            chunk_len = data_len - i;
+        }
+
+        _uu_put(_uu_enc_char(chunk_len));
+
+        let mut j = 0;
+        while j < chunk_len {
+            let b1 = str_char_code(data, i + j);
+            let b2 = 0;
+            let b3 = 0;
+
+            if j + 1 < chunk_len {
+                b2 = str_char_code(data, i + j + 1);
+            }
+            if j + 2 < chunk_len {
+                b3 = str_char_code(data, i + j + 2);
+            }
+
+            let c1 = b1 / 4;
+            let c2 = (b1 % 4) * 16 + (b2 / 16);
+            let c3 = (b2 % 16) * 4 + (b3 / 64);
+            let c4 = b3 % 64;
+
+            _uu_put(_uu_enc_char(c1));
+            _uu_put(_uu_enc_char(c2));
+            _uu_put(_uu_enc_char(c3));
+            _uu_put(_uu_enc_char(c4));
+
+            j = j + 3;
+        }
+
+        _uu_put(10);
+        i = i + chunk_len;
+    }
+
+    _uu_put(96);
+    _uu_put(10);
+    _uu_puts("end");
+    _uu_put(10);
+
+    return uu_len;
+}
+
+fn uu_decode(data) {
+    uu_clear();
+
+    let mut i = 0;
+    let data_len = len(data);
+
+    while i < data_len {
+        let line_start = i;
+        let mut line_end = i;
+        while line_end < data_len {
+            let c = str_char_code(data, line_end);
+            if c == 10 { line_end = line_end + 1; i = line_end; line_end = data_len + 1; }
+            if c == 13 { line_end = line_end + 1; i = line_end; line_end = data_len + 1; }
+            line_end = line_end + 1;
+        }
+
+        if line_end >= data_len + 1 { line_end = i - 1; }
+
+        if line_end <= line_start { i = i + 1; }
+
+        let line_len = line_end - line_start;
+        if line_len < 1 { i = i + 1; }
+
+        let first = str_char_code(data, line_start);
+
+        if first == 98 {
+            i = line_end + 1;
+        } else {
+            if first == 101 {
+                return uu_len;
+            } else {
+                if first == 96 {
+                    i = line_end + 1;
+                } else {
+                    let byte_count = _uu_dec_char(first);
+                    let mut pos = line_start + 1;
+                    let mut decoded = 0;
+
+                    while decoded < byte_count {
+                        if pos + 4 > line_end { decoded = byte_count; }
+
+                        let c1 = _uu_dec_char(str_char_code(data, pos));
+                        let c2 = _uu_dec_char(str_char_code(data, pos + 1));
+                        let c3 = _uu_dec_char(str_char_code(data, pos + 2));
+                        let c4 = _uu_dec_char(str_char_code(data, pos + 3));
+
+                        let b1 = c1 * 4 + (c2 / 16);
+                        let b2 = (c2 % 16) * 16 + (c3 / 4);
+                        let b3 = (c3 % 4) * 64 + c4;
+
+                        if decoded < byte_count {
+                            _uu_put(b1);
+                            decoded = decoded + 1;
+                        }
+                        if decoded < byte_count {
+                            _uu_put(b2);
+                            decoded = decoded + 1;
+                        }
+                        if decoded < byte_count {
+                            _uu_put(b3);
+                            decoded = decoded + 1;
+                        }
+
+                        pos = pos + 4;
+                    }
+
+                    i = line_end + 1;
+                }
+            }
+        }
+
+        if i <= line_start { i = line_start + 1; }
+    }
+
+    return uu_len;
+}
+
+fn uu_get_result() {
+    let mut out = "";
+    let mut i = 0;
+    while i < uu_len {
+        let c = mem_read_byte(UU_BUF + i);
+        out = out + str_from_code(c);
+        i = i + 1;
+    }
+    return out;
+}
+
+fn uu_load_encode(path, filename) {
+    let fd = vfs_open(path, 0);
+    if fd < 0 { return 0 - 1; }
+
+    let tmp_buf = 16646144;
+    let n = vfs_read(fd, tmp_buf, 32768);
+    vfs_close(fd);
+
+    if n < 0 { return 0 - 2; }
+
+    let mut data = "";
+    let mut i = 0;
+    while i < n {
+        let c = mem_read_byte(tmp_buf + i);
+        data = data + str_from_code(c);
+        i = i + 1;
+    }
+
+    return uu_encode(data, filename);
+}
+
+fn uu_selftest() {
+    let test_data = "Cat";
+    let n = uu_encode(test_data, "test.txt");
+    if n < 0 { return "uu selftest: encode failed"; }
+
+    let encoded = uu_get_result();
+
+    let m = uu_decode(encoded);
+    if m < 0 { return "uu selftest: decode failed"; }
+
+    let decoded = uu_get_result();
+    if decoded != test_data {
+        return "uu selftest: roundtrip failed (expected=Cat, got=" + decoded + ")";
+    }
+
+    return "uu selftest: pass";
+}
+
+print("uuencode.hl loaded");

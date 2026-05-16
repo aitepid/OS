@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 344 commands + pipe operator (|):
+// 357 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -90,15 +90,9 @@ fn shell_handle(cmd) {
         serial_print("FTP:      ftp  ftp connect <host>  ftp auth <id> <user> <pass>  ftp ls <id> [path]  ftp get <id> <rem> <loc>  ftp put <id> <loc> <rem>  ftp pwd <id>  ftp cd <id> <path>  ftp quit <id>");
         serial_print("CBOR:     cbor uint <n>  cbor neg <n>  cbor str <s>  cbor bool <0|1>  cbor null  cbor hex <hexstr>  cbor test");
         serial_print("Syslogd:  syslogd  syslogd start  syslogd stop  syslogd clear  syslogd status  syslogd last <n>");
-        serial_print("SNMP:     snmp  snmp start  snmp stop  snmp mib  snmp get <host> <comm> <oid>  snmp walk <host> [comm]");
-        serial_print("TOML:     toml load <path>  toml list  toml get <sec> <key>  toml set <sec> <key> <val>  toml save <path>  toml del <sec> <key>  toml clear");
-        serial_print("XML:      xml load <path>  xml find <tag>  xml text <tag>  xml attr <tag> <attr>  xml dump  xml clear");
-        serial_print("YAML:     yaml load <path>  yaml list  yaml get <key>  yaml clear  yaml count");
-        serial_print("MsgPack:  msgpack reset  msgpack uint/int/str/bool <val>  msgpack nil  msgpack hex  msgpack test");
-        serial_print("TFTP:     tftp get <host> <remote> <local>  tftp put <host> <remote> <local>  tftp start/stop/status");
-        serial_print("BSON:     bson reset  bson int/str/bool/null <name> [val]  bson hex  bson test");
-        serial_print("Bencode:  bencode reset  bencode int/str <val>  bencode lstart/lend  bencode dstart/dend  bencode show  bencode test");
-        serial_print("MIME:     mime load <path>  mime list  mime part <idx>  mime header <idx> <key>  mime clear  mime count");
+        serial_print("CPIO:     cpio load <path>  cpio list  cpio extract <idx> <dest>  cpio clear  cpio test");
+        serial_print("QP:       qp encode <text>  qp decode <text>  qp show  qp test");
+        serial_print("UU:       uu encode <text> <fname>  uu decode <text>  uu show  uu test");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -2077,263 +2071,62 @@ fn shell_handle_ext(cmd) {
         return syslog_srv_list(n);
     }
 
-    // SNMP
-    if cmd == "snmp" { return snmp_status(); }
-    if cmd == "snmp start" { snmp_agent_start(); return "snmp: agent started on UDP 161"; }
-    if cmd == "snmp stop" { snmp_agent_stop(); return "snmp: agent stopped"; }
-    if cmd == "snmp mib" { return snmp_mib_dump(); }
-    if str_starts_with(cmd, "snmp get ") {
-        let rest = str_sub(cmd, 9, len(cmd));
-        let sp1 = str_find(rest, " ");
-        if sp1 < 0 { return "usage: snmp get <host> <community> <oid>"; }
-        let host = str_sub(rest, 0, sp1);
-        let rest2 = str_sub(rest, sp1 + 1, len(rest));
-        let sp2 = str_find(rest2, " ");
-        if sp2 < 0 { return "usage: snmp get <host> <community> <oid>"; }
-        let community = str_sub(rest2, 0, sp2);
-        let oid = str_sub(rest2, sp2 + 1, len(rest2));
-        return snmp_get(host, community, oid);
-    }
-    if str_starts_with(cmd, "snmp walk ") {
-        let rest = str_sub(cmd, 10, len(cmd));
-        let sp1 = str_find(rest, " ");
-        if sp1 < 0 { return snmp_walk(rest, "public"); }
-        let host = str_sub(rest, 0, sp1);
-        let community = str_sub(rest, sp1 + 1, len(rest));
-        return snmp_walk(host, community);
-    }
-
-    // TOML
-    if cmd == "toml list" { return toml_list(); }
-    if cmd == "toml clear" { toml_clear(); return "toml: cleared"; }
-    if str_starts_with(cmd, "toml load ") {
+    // === CPIO archive commands ===
+    if cmd == "cpio list" { return cpio_list(); }
+    if str_starts_with(cmd, "cpio load ") {
         let path = str_sub(cmd, 10, len(cmd));
-        let n = toml_load(path);
-        if n < 0 { return "toml: load failed"; }
-        return "toml: loaded " + to_string(n) + " entries from " + path;
+        let n = cpio_load(path);
+        if n < 0 { return "cpio: load failed"; }
+        return "cpio: loaded " + to_string(n) + " entries from " + path;
     }
-    if str_starts_with(cmd, "toml save ") {
-        let path = str_sub(cmd, 10, len(cmd));
-        toml_save(path);
-        return "toml: saved to " + path;
+    if str_starts_with(cmd, "cpio extract ") {
+        let args = str_sub(cmd, 13, len(cmd));
+        let space = str_index_of(args, " ");
+        if space < 0 { return "cpio: usage: cpio extract <index> <dest>"; }
+        let idx = parse_int(str_sub(args, 0, space));
+        let dest = str_sub(args, space + 1, len(args));
+        let res = cpio_extract(idx, dest);
+        if res < 0 { return "cpio: extract failed"; }
+        return "cpio: extracted " + cpio_get_name(idx) + " to " + dest;
     }
-    if str_starts_with(cmd, "toml get ") {
-        let rest = str_sub(cmd, 9, len(cmd));
-        let sp = str_find(rest, " ");
-        if sp < 0 { return "usage: toml get <section> <key>"; }
-        let section = str_sub(rest, 0, sp);
-        let key = str_sub(rest, sp + 1, len(rest));
-        let val = toml_get(section, key);
-        if len(val) == 0 { return "(not found)"; }
-        return val;
-    }
-    if str_starts_with(cmd, "toml set ") {
-        let rest = str_sub(cmd, 9, len(cmd));
-        let sp1 = str_find(rest, " ");
-        if sp1 < 0 { return "usage: toml set <section> <key> <val>"; }
-        let section = str_sub(rest, 0, sp1);
-        let rest2 = str_sub(rest, sp1 + 1, len(rest));
-        let sp2 = str_find(rest2, " ");
-        if sp2 < 0 { return "usage: toml set <section> <key> <val>"; }
-        let key = str_sub(rest2, 0, sp2);
-        let val = str_sub(rest2, sp2 + 1, len(rest2));
-        toml_set(section, key, val);
-        return "toml: set [" + section + "] " + key + " = " + val;
-    }
-    if str_starts_with(cmd, "toml del ") {
-        let rest = str_sub(cmd, 9, len(cmd));
-        let sp = str_find(rest, " ");
-        if sp < 0 { return "usage: toml del <section> <key>"; }
-        let section = str_sub(rest, 0, sp);
-        let key = str_sub(rest, sp + 1, len(rest));
-        toml_delete(section, key);
-        return "toml: deleted [" + section + "] " + key;
-    }
+    if cmd == "cpio test" { return cpio_selftest(); }
+    if cmd == "cpio clear" { cpio_clear(); return "cpio: cleared"; }
 
-    // XML
-    if cmd == "xml dump" { return xml_dump(); }
-    if cmd == "xml clear" { xml_init(); return "xml: cleared"; }
-    if str_starts_with(cmd, "xml load ") {
-        let path = str_sub(cmd, 9, len(cmd));
-        let n = xml_load(path);
-        if n < 0 { return "xml: load failed"; }
-        return "xml: loaded " + to_string(n) + " elements from " + path;
+    // === Quoted-Printable commands ===
+    if str_starts_with(cmd, "qp encode ") {
+        let text = str_sub(cmd, 10, len(cmd));
+        let n = qp_encode(text);
+        if n < 0 { return "qp: encode failed"; }
+        return qp_get_result();
     }
-    if str_starts_with(cmd, "xml find ") {
-        let tag = str_sub(cmd, 9, len(cmd));
-        let idx = xml_find(tag);
-        if idx < 0 { return "xml: tag <" + tag + "> not found"; }
-        return "xml: found <" + tag + "> at index " + to_string(idx);
+    if str_starts_with(cmd, "qp decode ") {
+        let text = str_sub(cmd, 10, len(cmd));
+        let n = qp_decode(text);
+        if n < 0 { return "qp: decode failed"; }
+        return qp_get_result();
     }
-    if str_starts_with(cmd, "xml text ") {
-        let tag = str_sub(cmd, 9, len(cmd));
-        let idx = xml_find(tag);
-        if idx < 0 { return "xml: tag <" + tag + "> not found"; }
-        return xml_text(idx);
-    }
-    if str_starts_with(cmd, "xml attr ") {
-        let rest = str_sub(cmd, 9, len(cmd));
-        let sp = str_find(rest, " ");
-        if sp < 0 { return "usage: xml attr <tag> <attrname>"; }
-        let tag = str_sub(rest, 0, sp);
-        let attrname = str_sub(rest, sp + 1, len(rest));
-        let idx = xml_find(tag);
-        if idx < 0 { return "xml: tag <" + tag + "> not found"; }
-        return xml_attr(idx, attrname);
-    }
+    if cmd == "qp show" { return qp_get_result(); }
+    if cmd == "qp test" { return qp_selftest(); }
 
-    // YAML
-    if cmd == "yaml list" { return yaml_list(); }
-    if cmd == "yaml clear" { yaml_clear(); return "yaml: cleared"; }
-    if cmd == "yaml count" { return "yaml: " + to_string(yaml_count()) + " entries"; }
-    if str_starts_with(cmd, "yaml load ") {
-        let path = str_sub(cmd, 10, len(cmd));
-        let n = yaml_load(path);
-        if n < 0 { return "yaml: load failed"; }
-        return "yaml: loaded " + to_string(n) + " entries from " + path;
+    // === UUencode commands ===
+    if str_starts_with(cmd, "uu encode ") {
+        let args = str_sub(cmd, 10, len(cmd));
+        let space = str_index_of(args, " ");
+        if space < 0 { return "uu: usage: uu encode <text> <filename>"; }
+        let text = str_sub(args, 0, space);
+        let fname = str_sub(args, space + 1, len(args));
+        let n = uu_encode(text, fname);
+        if n < 0 { return "uu: encode failed"; }
+        return uu_get_result();
     }
-    if str_starts_with(cmd, "yaml get ") {
-        let key = str_sub(cmd, 9, len(cmd));
-        let val = yaml_get(key);
-        if len(val) == 0 { return "(not found)"; }
-        return val;
+    if str_starts_with(cmd, "uu decode ") {
+        let text = str_sub(cmd, 10, len(cmd));
+        let n = uu_decode(text);
+        if n < 0 { return "uu: decode failed"; }
+        return uu_get_result();
     }
-
-    // MsgPack
-    if cmd == "msgpack reset" { msgpack_reset(); return "msgpack: buffer reset"; }
-    if cmd == "msgpack nil" { msgpack_nil(); return "msgpack: nil encoded"; }
-    if cmd == "msgpack hex" { return msgpack_get_result(); }
-    if cmd == "msgpack test" { msgpack_selftest(); return ""; }
-    if str_starts_with(cmd, "msgpack uint ") {
-        let n = parse_int(str_sub(cmd, 13, len(cmd)));
-        msgpack_uint(n);
-        return "msgpack: uint(" + to_string(n) + ") encoded";
-    }
-    if str_starts_with(cmd, "msgpack int ") {
-        let n = parse_int(str_sub(cmd, 12, len(cmd)));
-        msgpack_int(n);
-        return "msgpack: int(" + to_string(n) + ") encoded";
-    }
-    if str_starts_with(cmd, "msgpack str ") {
-        let s = str_sub(cmd, 12, len(cmd));
-        msgpack_str(s);
-        return "msgpack: str(\"" + s + "\") encoded";
-    }
-    if str_starts_with(cmd, "msgpack bool ") {
-        let v = parse_int(str_sub(cmd, 13, len(cmd)));
-        msgpack_bool(v);
-        return "msgpack: bool(" + to_string(v) + ") encoded";
-    }
-
-    // TFTP
-    if cmd == "tftp status" { return tftp_status(); }
-    if cmd == "tftp start" { tftp_server_start(); return "tftp: server started"; }
-    if cmd == "tftp stop" { tftp_server_stop(); return "tftp: server stopped"; }
-    if str_starts_with(cmd, "tftp get ") {
-        let rest = str_sub(cmd, 9, len(cmd));
-        let sp1 = str_find(rest, " ");
-        if sp1 < 0 { return "usage: tftp get <host> <remote> <local>"; }
-        let host = str_sub(rest, 0, sp1);
-        let rest2 = str_sub(rest, sp1 + 1, len(rest));
-        let sp2 = str_find(rest2, " ");
-        if sp2 < 0 { return "usage: tftp get <host> <remote> <local>"; }
-        let remote = str_sub(rest2, 0, sp2);
-        let local = str_sub(rest2, sp2 + 1, len(rest2));
-        tftp_get(host, remote, local);
-        return "";
-    }
-    if str_starts_with(cmd, "tftp put ") {
-        let rest = str_sub(cmd, 9, len(cmd));
-        let sp1 = str_find(rest, " ");
-        if sp1 < 0 { return "usage: tftp put <host> <remote> <local>"; }
-        let host = str_sub(rest, 0, sp1);
-        let rest2 = str_sub(rest, sp1 + 1, len(rest));
-        let sp2 = str_find(rest2, " ");
-        if sp2 < 0 { return "usage: tftp put <host> <remote> <local>"; }
-        let remote = str_sub(rest2, 0, sp2);
-        let local = str_sub(rest2, sp2 + 1, len(rest2));
-        tftp_put(host, remote, local);
-        return "";
-    }
-
-    // BSON
-    if cmd == "bson reset" { bson_reset(); return "bson: buffer reset"; }
-    if cmd == "bson hex" { return bson_get_result(); }
-    if cmd == "bson test" { bson_selftest(); return ""; }
-    if str_starts_with(cmd, "bson int ") {
-        let rest = str_sub(cmd, 9, len(cmd));
-        let sp = str_find(rest, " ");
-        if sp < 0 { return "usage: bson int <name> <val>"; }
-        let name = str_sub(rest, 0, sp);
-        let val = parse_int(str_sub(rest, sp + 1, len(rest)));
-        bson_int32(name, val);
-        return "bson: int32(" + name + ", " + to_string(val) + ") encoded";
-    }
-    if str_starts_with(cmd, "bson str ") {
-        let rest = str_sub(cmd, 9, len(cmd));
-        let sp = str_find(rest, " ");
-        if sp < 0 { return "usage: bson str <name> <val>"; }
-        let name = str_sub(rest, 0, sp);
-        let val = str_sub(rest, sp + 1, len(rest));
-        bson_str(name, val);
-        return "bson: str(" + name + ", \"" + val + "\") encoded";
-    }
-    if str_starts_with(cmd, "bson bool ") {
-        let rest = str_sub(cmd, 10, len(cmd));
-        let sp = str_find(rest, " ");
-        if sp < 0 { return "usage: bson bool <name> <0|1>"; }
-        let name = str_sub(rest, 0, sp);
-        let val = parse_int(str_sub(rest, sp + 1, len(rest)));
-        bson_bool(name, val);
-        return "bson: bool(" + name + ", " + to_string(val) + ") encoded";
-    }
-    if str_starts_with(cmd, "bson null ") {
-        let name = str_sub(cmd, 10, len(cmd));
-        bson_null(name);
-        return "bson: null(" + name + ") encoded";
-    }
-
-    // Bencode
-    if cmd == "bencode reset" { bencode_reset(); return "bencode: buffer reset"; }
-    if cmd == "bencode lstart" { bencode_list_start(); return "bencode: list started"; }
-    if cmd == "bencode lend" { bencode_list_end(); return "bencode: list ended"; }
-    if cmd == "bencode dstart" { bencode_dict_start(); return "bencode: dict started"; }
-    if cmd == "bencode dend" { bencode_dict_end(); return "bencode: dict ended"; }
-    if cmd == "bencode show" { return bencode_get_result(); }
-    if cmd == "bencode test" { bencode_selftest(); return ""; }
-    if str_starts_with(cmd, "bencode int ") {
-        let n = parse_int(str_sub(cmd, 12, len(cmd)));
-        bencode_int(n);
-        return "bencode: int(" + to_string(n) + ") encoded";
-    }
-    if str_starts_with(cmd, "bencode str ") {
-        let s = str_sub(cmd, 12, len(cmd));
-        bencode_str(s);
-        return "bencode: str(\"" + s + "\") encoded";
-    }
-
-    // MIME
-    if cmd == "mime list" { return mime_list(); }
-    if cmd == "mime clear" { mime_clear(); return "mime: cleared"; }
-    if cmd == "mime count" { return "mime: " + to_string(mime_part_count()) + " parts"; }
-    if str_starts_with(cmd, "mime load ") {
-        let path = str_sub(cmd, 10, len(cmd));
-        let n = mime_load(path);
-        if n < 0 { return "mime: load failed"; }
-        return "mime: loaded " + to_string(n) + " parts from " + path;
-    }
-    if str_starts_with(cmd, "mime part ") {
-        let idx = parse_int(str_sub(cmd, 10, len(cmd)));
-        return mime_part_body(idx);
-    }
-    if str_starts_with(cmd, "mime header ") {
-        let rest = str_sub(cmd, 12, len(cmd));
-        let sp = str_find(rest, " ");
-        if sp < 0 { return "usage: mime header <idx> <key>"; }
-        let idx = parse_int(str_sub(rest, 0, sp));
-        let key = str_sub(rest, sp + 1, len(rest));
-        return mime_part_header(idx, key);
-    }
+    if cmd == "uu show" { return uu_get_result(); }
+    if cmd == "uu test" { return uu_selftest(); }
 
     return shell_handle(cmd);
 }
@@ -2346,7 +2139,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 344 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + snmp + toml + xml + yaml + msgpack + tftp + bson + bencode + mime");
+print("shell.hl loaded -- 357 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu");
 
 // Main shell loop (called from kernel_init)
 

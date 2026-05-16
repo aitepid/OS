@@ -2,156 +2,58 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`250`（69 根目录 + 181 内核模块）
-- H-L 总行数：`~68,400`
-- 内核模块：`181`
-- Shell 命令：`344`
-- 最近完成功能迭代：`195`（bson + bencode + mime）
+- `.hl` 文件：`253`（69 根目录 + 184 内核模块）
+- H-L 总行数：`~69,100`
+- 内核模块：`184`
+- Shell 命令：`357`
+- 最近完成功能迭代：`198`（cpio + quoted_printable + uuencode）
 
-## Iteration 195 — mime.hl：MIME 多部分消息解析器
+## Iteration 198 — uuencode.hl：UUencode/UUdecode 二进制-文本编码
 
-- **`bare-kernel/hl/mime.hl`** 新增（~300 行）
-  - MIME multipart/mixed 格式解析器（邮件/HTTP）
-  - 结构：headers（key: value）→ 空行 → body（多部分用 boundary 分隔）
-  - `_mime_extract_boundary(ctype)` — 从 Content-Type 提取 boundary 字符串
-  - `mime_parse_str(s)` — 按 boundary 分割，每部分提取 headers + body
-  - `mime_part_header(idx, key)` — 获取指定部分的 header 值
-  - `mime_part_body(idx)` / `mime_part_count()` / `mime_list()`
-  - MIME_MAX=8 部分；MIME_BUF=0xFA0000（64 KB）
-  - 并行数组：`mime_part_headers/bodies/ctypes[]`
-- **kernel_init.hl** Phase 7：`mime_init()`
-- **shell.hl** 新增 6 条命令：
-  - `mime load <path>` / `mime list` / `mime part <idx>`
-  - `mime header <idx> <key>` / `mime clear` / `mime count`
+- **`bare-kernel/hl/uuencode.hl`** 新增（~250 行）
+  - UUencode 历史编码格式：3 字节 → 4 ASCII 字符（每字符 6 位，base 32+）
+  - 格式：`begin <mode> <filename>` / 长度字符 + 编码行（每行最多 60 字符）/ ` (backtick 空行) / `end`
+  - `uu_encode(data, filename)` — 分块编码，长度字符=32+字节数，6 位拆分 → ASCII 32+
+  - `uu_decode(data)` — 逐行解析，长度字符→字节计数，4 字符→3 字节重组
+  - `_uu_enc_char(n)` / `_uu_dec_char(c)` — 6 位值 ↔ ASCII 32+（纯整数模运算，无位运算）
+  - `uu_get_result()` — 提取缓冲区内容为字符串；`uu_load_encode(path, fname)` — VFS 文件编码
+  - `uu_selftest()` — "Cat" → 编码 → 解码 → 验证往返
+  - UU_BUF=0xFD0000（16580608），64 KB 编码/解码缓冲区
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`uu_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 4 条命令：
+  - `uu encode <text> <filename>` / `uu decode <text>` / `uu show` / `uu test`
 
-## Iteration 194 — bencode.hl：Bencode（BitTorrent）编码器
+## Iteration 197 — quoted_printable.hl：Quoted-Printable MIME 编码
 
-- **`bare-kernel/hl/bencode.hl`** 新增（~120 行）
-  - BitTorrent metainfo 格式编码器
-  - 整数：`i<number>e` (e.g., `i42e`)
-  - 字符串：`<length>:<data>` (e.g., `4:spam`)
-  - 列表：`l<items>e` (e.g., `li42e4:spame`)
-  - 字典：`d<key-value>e` (e.g., `d3:keyi42ee`)
-  - `bencode_int(n)` / `bencode_str(s)` / `bencode_list_start/end()` / `bencode_dict_start/end()`
-  - `bencode_get_result()` → bencode 字符串
-  - `bencode_selftest()` — 字典 {"answer":42, "msg":"hello"}
-  - BENCODE_BUF=0xF90000（4 KB）
-- **kernel_init.hl** Phase 7：`bencode_init()`
-- **shell.hl** 新增 9 条命令：
-  - `bencode reset` / `bencode int/str <val>`
-  - `bencode lstart/lend` / `bencode dstart/dend`
-  - `bencode show` / `bencode test`
+- **`bare-kernel/hl/quoted_printable.hl`** 新增（~200 行）
+  - RFC 2045 Quoted-Printable：7 位 ASCII 安全传输 8 位数据（MIME content-transfer-encoding）
+  - 编码规则：非打印字符（包括 `=`）→ `=XX`（十六进制）；行长度限制 76 字符（软换行 `=\r\n`）
+  - `qp_encode(data)` — 逐字节扫描，`_qp_is_printable(c)` 判断 → 直通 / 转义 `=XX`
+  - `qp_decode(data)` — 逐字符解析，`=XX` → 字节值，`=\r\n` → 软换行（跳过）
+  - `_qp_hex_digit(n)` / `_qp_from_hex(c)` — 十六进制字符转换（0-9/A-F/a-f）
+  - `qp_get_result()` — 从缓冲区提取结果字符串；`qp_load_encode(path)` — VFS 文件编码
+  - `qp_selftest()` — "Hello=World" → "Hello=3DWorld" → 解码 → 验证往返
+  - QP_BUF=0xFC0000（16515072），64 KB 编码/解码缓冲区
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`qp_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 4 条命令：
+  - `qp encode <text>` / `qp decode <text>` / `qp show` / `qp test`
 
-## Iteration 193 — bson.hl：BSON（Binary JSON）编码器
+## Iteration 196 — cpio.hl：CPIO 归档格式解析器/提取器
 
-- **`bare-kernel/hl/bson.hl`** 新增（~200 行）
-  - MongoDB BSON 二进制 JSON 格式
-  - 文档结构：4B 总长度（LE）+ 元素列表 + 0x00 终止符
-  - 元素：1B 类型 + cstring 名称 + 值（类型相关）
-  - 支持类型：0x10=int32 / 0x02=string / 0x08=boolean / 0x0A=null
-  - `bson_int32(name, val)` / `bson_str(name, val)` / `bson_bool(name, val)` / `bson_null(name)`
-  - `bson_finalize()` — 写入文档长度头部
-  - `bson_get_result()` → 十六进制字符串
-  - `bson_selftest()` — 编码 {"answer":42, "msg":"hi", "ok":true, "empty":null}
-  - BSON_BUF=0xF80000（4 KB）
-- **kernel_init.hl** Phase 7：`bson_init()`
-- **shell.hl** 新增 7 条命令：
-  - `bson reset` / `bson int/str/bool/null <name> [val]`
-  - `bson hex` / `bson test`
-
-## Iteration 192 — tftp.hl：TFTP 文件传输客户端 + 服务器
-
-- **`bare-kernel/hl/tftp.hl`** 新增（~230 行）
-  - RFC 1350 简单文件传输协议；UDP 端口 69，512B 数据块
-  - 客户端模式：`tftp_get(host, remote, local)` / `tftp_put(host, remote, local)`
-  - 服务器模式：`tftp_server_start/stop()`，UDP 绑定回调 `tftp_on_recv`
-  - 包构建辅助：`_tftp_build_rrq/wrq/ack` — 纯字符串拼接（无位运算）
-  - RRQ (opcode 1) / WRQ (opcode 2) / DATA (opcode 3) / ACK (opcode 4) / ERROR (opcode 5)
-  - `tftp_get` 逐块接收 DATA，发送 ACK，最后块 <512B 结束
-  - `tftp_put` 发送 WRQ，等待 ACK 0，逐块发送 DATA，等待 ACK
-  - TFTP_BUF=0xF60000, TFTP_DATA_BUF=0xF70000（暂存 64 KB 文件数据）
-- **kernel_init.hl** Phase 7：`tftp_init()`
-- **shell.hl** 新增 5 条命令：
-  - `tftp get <host> <remote> <local>` / `tftp put <host> <remote> <local>`
-  - `tftp start/stop/status`
-
-## Iteration 191 — msgpack.hl：MessagePack 二进制序列化
-
-- **`bare-kernel/hl/msgpack.hl`** 新增（~200 行）
-  - MessagePack 紧凑二进制格式编码器
-  - 正整数 fixint (0-127) / uint8 (0xCC) / uint16 (0xCD) / uint32 (0xCE)
-  - 负整数 fixint (-32 to -1, 224+32+val) / int8 (0xD0) / int16 (0xD1) / int32 (0xD2)
-  - fixstr (0xA0+len, len 0-31) / str8 (0xD9) / str16 (0xDA)
-  - fixarray (0x90+len) / array16 (0xDC) / fixmap (0x80+len) / map16 (0xDE)
-  - nil (0xC0=192) / false (0xC2=194) / true (0xC3=195)
-  - `msgpack_uint/int/str/bool/nil/array_hdr/map_hdr` — 编码函数
-  - `msgpack_get_result()` → 十六进制字符串输出
-  - `msgpack_selftest()` — array[4] + uint(42) + str("hi") + true + nil
-  - MSGPACK_BUF=0xF50000（4 KB）
-- **kernel_init.hl** Phase 7：`msgpack_init()`
-- **shell.hl** 新增 8 条命令：
-  - `msgpack reset` / `msgpack uint/int/str/bool <val>` / `msgpack nil`
-  - `msgpack hex` / `msgpack test`
-
-## Iteration 190 — yaml.hl：YAML 1.2 配置解析器
-
-- **`bare-kernel/hl/yaml.hl`** 新增（~290 行）
-  - YAML 1.2 最小子集：标量映射、序列、缩进深度追踪
-  - 支持：`# 注释` / `key: value` / `key: "quoted"` / `- item` 序列 / `key:` 空块头
-  - 类型检测：true/false → bool, null/~ → null, 数字 → int/float, 其他 → string
-  - 并行数组存储：`yaml_keys/vals/types/indents[]`（YAML_MAX=64）
-  - `_yaml_indent(line_raw)` — 统计前导空格/Tab 数量
-  - `yaml_parse_str(s)` — 逐行分割，识别注释/序列项（`- `）/键值对（`key: val`）
-  - 序列项存储为 "-0", "-1", "-2" 等动态键名
-  - `yaml_load(path)` / `yaml_get(key)` / `yaml_get_int/bool` / `yaml_list()`
-  - YAML_BUF=0xF40000（64 KB）
-- **kernel_init.hl** Phase 7：`yaml_init()`
-- **shell.hl** 新增 5 条命令：
-  - `yaml load <path>` / `yaml list` / `yaml get <key>`
-  - `yaml clear` / `yaml count`
-
-## Iteration 189 — xml.hl：SAX 风格 XML 解析器
-
-- **`bare-kernel/hl/xml.hl`** 新增（~290 行）
-  - SAX 启发式 DOM-lite 解析；XML_MAX=64，XML_BUF=0xF30000（64 KB）
-  - 并行数组：`xml_tags/texts/attrs/depths/parents[]`
-  - `_xml_decode_entities(s)` — 处理 `&amp; &lt; &gt; &quot; &apos;`
-  - `xml_parse_str(s)` — 跳过 PI（`<?`）、注释（`<!`）、解析开合/自闭标签
-  - `xml_attr(idx, name)` — 扫描原始 attr 字符串，支持单/双引号值
-  - `xml_find(tag)` / `xml_find_all(tag)` / `xml_dump()` / `xml_load(path)`
-  - Parent 栈用 HL 动态数组模拟 push/pop
-- **kernel_init.hl** Phase 7：`xml_init()`
-- **shell.hl** 新增 6 条命令：
-  - `xml load` / `xml find` / `xml text` / `xml attr` / `xml dump` / `xml clear`
-
-## Iteration 188 — toml.hl：TOML v1 配置解析/写入
-
-- **`bare-kernel/hl/toml.hl`** 新增（~280 行）
-  - TOML_MAX=64，TOML_BUF=0xF20000（64 KB）；并行数组存储 section/key/val/type
-  - 类型标签：`"s"` 字符串 / `"i"` 整数 / `"f"` 浮点 / `"b"` 布尔 / `"a"` 数组
-  - `_toml_detect_type(val)` — 识别 true/false/`[`/数字/字符串
-  - `_toml_parse_val(raw)` — 剥离 `"..."` / `'...'` 外层引号
-  - `toml_load(path)` — VFS 读取，跳过 `\r`，按行分割，解析 `[section]` 和 `key=value`
-  - `toml_save(path)` — 按 section 分组输出，字符串加引号
-  - `toml_get/set/delete/get_int/get_bool/list/clear/count`
-- **kernel_init.hl** Phase 7：`toml_init()`
-- **shell.hl** 新增 7 条命令：
-  - `toml load/list/get/set/save/del/clear`
-
-## Iteration 187 — snmp.hl：SNMP v2c 代理 + 客户端
-
-- **`bare-kernel/hl/snmp.hl`** 新增（~240 行）
-  - RFC 3416 SNMP v2c；SNMP_PORT=161，SNMP_LPORT=16161，SNMP_BUF=0xF10000
-  - BER 编码辅助：`_snmp_write_len/int/octstr/timeticks`
-  - OID 编码：`_snmp_encode_oid(off, oid_str)` — 点分字符串→弧数组→DER 7bit 续位编码
-  - 本地 MIB-II sysGroup：7 个 OID（sysDescr/sysObjectID/sysUpTime/sysContact/sysName/sysLocation/ifNumber）
-  - 代理模式：`snmp_agent_start/stop()`，UDP 161 回调 `snmp_on_recv`
-  - 客户端：`snmp_get(host, community, oid)` — 本地直查 / 远端 UDP 轮询
-  - `snmp_walk(host, community)` — 批量查询 5 个标准 OID
-- **kernel_init.hl** Phase 7：`snmp_init()`
-- **shell.hl** 新增 5 条命令（`snmp walk` 变参）：
-  - `snmp` / `snmp start/stop` / `snmp mib` / `snmp get` / `snmp walk`
-
+- **`bare-kernel/hl/cpio.hl`** 新增（~230 行）
+  - CPIO（Unix 归档格式，initramfs 使用）；支持 "newc"（SVR4）格式
+  - 格式：110 字节 ASCII 十六进制头（magic 070701）+ 文件名 + 对齐 + 数据 + 4 字节对齐
+  - `_cpio_parse_hex(buf, offset, len)` — ASCII 十六进制 → 整数（逐字符 *16）
+  - `_cpio_align4(n)` — 4 字节对齐（n + (4 - n%4)）
+  - `cpio_parse_buf()` — 逐条目解析：magic 验证 → 提取 inode/mode/size/namesize → 文件名提取 → 偏移计算
+  - TRAILER!!! 条目标记归档结束；parallel arrays 存储 name/size/mode/offset（CPIO_MAX=64）
+  - `cpio_load(path)` — VFS 读取归档到缓冲区 → 调用 `cpio_parse_buf()`
+  - `cpio_extract(idx, dest)` / `cpio_extract_all(dir)` — 从缓冲区偏移提取数据 → VFS 写入
+  - `cpio_selftest()` — 构造简单 CPIO 头部 + "test.txt" → 解析验证
+  - CPIO_BUF=0xFB0000（16449536），64 KB 归档缓冲区
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`cpio_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 5 条命令：
+  - `cpio load <path>` / `cpio list` / `cpio extract <idx> <dest>` / `cpio clear` / `cpio test`
 
 ## Iteration 186 — syslog_srv.hl：UDP syslog 远端日志服务
 
