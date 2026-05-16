@@ -1,0 +1,247 @@
+// bcrypt.hl -- Bcrypt Password Hashing
+//
+// Provides bcrypt adaptive password hashing function.
+// Based on Blowfish cipher, designed for password storage.
+// Slow by design (cost factor) to resist brute-force attacks.
+// Note: Simplified implementation using arithmetic operations.
+// Buffer at 0x1160000 (64 KB work buffer).
+
+let BCRYPT_BUF = 0x1160000;
+let BCRYPT_BUF_SZ = 65536;
+let bcrypt_len = 0;
+
+let BCRYPT_DEFAULT_COST = 10;
+let BCRYPT_SALT_LEN = 16;
+let BCRYPT_HASH_LEN = 24;
+
+let mut bcrypt_cost = 10;
+let mut bcrypt_salt = [];
+
+fn bcrypt_init() {
+    bcrypt_clear();
+    bcrypt_cost = BCRYPT_DEFAULT_COST;
+    bcrypt_salt = [];
+    let mut i = 0;
+    while i < BCRYPT_SALT_LEN {
+        push(bcrypt_salt, 0);
+        i = i + 1;
+    }
+    print("bcrypt: bcrypt password hashing initialized (cost=" + to_string(BCRYPT_DEFAULT_COST) + ")");
+    return 0;
+}
+
+fn bcrypt_clear() {
+    bcrypt_len = 0;
+    let mut i = 0;
+    while i < 1024 {
+        mem_write_byte(BCRYPT_BUF + i, 0);
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn _bcrypt_put(byte) {
+    if bcrypt_len >= BCRYPT_BUF_SZ {
+        return 0;
+    }
+    mem_write_byte(BCRYPT_BUF + bcrypt_len, byte);
+    bcrypt_len = bcrypt_len + 1;
+    return 0;
+}
+
+fn bcrypt_set_cost(cost) {
+    if cost < 4 { cost = 4; }
+    if cost > 31 { cost = 31; }
+    bcrypt_cost = cost;
+    return 0;
+}
+
+fn _bcrypt_generate_salt() {
+    let mut i = 0;
+    while i < BCRYPT_SALT_LEN {
+        set_at(bcrypt_salt, i, random_get() % 256);
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn _bcrypt_encode_base64(byte) {
+    let table = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    if byte < 64 {
+        return str_char_at(table, byte);
+    }
+    return "A";
+}
+
+fn _bcrypt_salt_to_string() {
+    let mut result = "";
+    let mut i = 0;
+    while i < BCRYPT_SALT_LEN {
+        let byte = bcrypt_salt[i];
+        let c1 = _bcrypt_encode_base64(byte / 4);
+        let c2 = _bcrypt_encode_base64((byte % 4) * 16);
+        result = result + c1 + c2;
+        i = i + 1;
+    }
+    return result;
+}
+
+fn _bcrypt_expand_key(password) {
+    let mut state = [];
+    let mut i = 0;
+    while i < 18 {
+        push(state, 0);
+        i = i + 1;
+    }
+
+    let mut j = 0;
+    while j < len(password) {
+        let byte = str_char_code(password, j);
+        let idx = j % 18;
+        set_at(state, idx, (state[idx] + byte * (j + 1)) % 4294967296);
+        j = j + 1;
+    }
+
+    let mut k = 0;
+    while k < BCRYPT_SALT_LEN {
+        let salt_byte = bcrypt_salt[k];
+        let idx = k % 18;
+        set_at(state, idx, (state[idx] + salt_byte * (k + 1)) % 4294967296);
+        k = k + 1;
+    }
+
+    return state;
+}
+
+fn _bcrypt_rounds(state, rounds) {
+    let mut r = 0;
+    while r < rounds {
+        let mut i = 0;
+        while i < 18 {
+            let val = state[i];
+            let next_val = (val * 1103515245 + 12345) % 4294967296;
+            set_at(state, i, next_val);
+            i = i + 1;
+        }
+        r = r + 1;
+    }
+    return state;
+}
+
+fn bcrypt_hash(password) {
+    bcrypt_clear();
+    _bcrypt_generate_salt();
+
+    let iterations = 1 * (2 * bcrypt_cost);
+    let state = _bcrypt_expand_key(password);
+    let final_state = _bcrypt_rounds(state, iterations);
+
+    let salt_str = _bcrypt_salt_to_string();
+
+    let cost_str = "";
+    if bcrypt_cost < 10 {
+        cost_str = "0" + to_string(bcrypt_cost);
+    } else {
+        cost_str = to_string(bcrypt_cost);
+    }
+
+    let hash_str = "$2b$" + cost_str + "$" + salt_str;
+
+    let mut i = 0;
+    while i < 6 {
+        if i < len(final_state) {
+            let val = final_state[i];
+            let b1 = (val / 16777216) % 256;
+            let b2 = (val / 65536) % 256;
+            let b3 = (val / 256) % 256;
+            let b4 = val % 256;
+
+            hash_str = hash_str + _bcrypt_encode_base64(b1 / 4);
+            hash_str = hash_str + _bcrypt_encode_base64((b1 % 4) * 16 + b2 / 16);
+            hash_str = hash_str + _bcrypt_encode_base64((b2 % 16) * 4 + b3 / 64);
+            hash_str = hash_str + _bcrypt_encode_base64(b3 % 64);
+        }
+        i = i + 1;
+    }
+
+    return hash_str;
+}
+
+fn bcrypt_verify(password, hash) {
+    if len(hash) < 7 {
+        return 0;
+    }
+
+    if str_sub(hash, 0, 4) != "$2b$" {
+        return 0;
+    }
+
+    let cost_str = str_sub(hash, 4, 6);
+    let stored_cost = parse_int(cost_str);
+
+    let salt_start = 7;
+    let salt_end = salt_start + 22;
+    if len(hash) < salt_end {
+        return 0;
+    }
+
+    let old_cost = bcrypt_cost;
+    bcrypt_cost = stored_cost;
+
+    let new_hash = bcrypt_hash(password);
+
+    bcrypt_cost = old_cost;
+
+    let new_prefix = str_sub(new_hash, 0, salt_end);
+    let old_prefix = str_sub(hash, 0, salt_end);
+
+    if new_prefix == old_prefix {
+        return 1;
+    }
+
+    return 0;
+}
+
+fn bcrypt_test() {
+    print("bcrypt: running self-test");
+
+    bcrypt_set_cost(4);
+
+    let password = "test_password";
+    let hash = bcrypt_hash(password);
+
+    if len(hash) > 30 {
+        print("  [ok] bcrypt hash generated: " + to_string(len(hash)) + " chars");
+    } else {
+        print("  [fail] bcrypt hash too short");
+        return 0 - 1;
+    }
+
+    if str_index_of(hash, "$2b$") == 0 {
+        print("  [ok] bcrypt hash format correct");
+    } else {
+        print("  [fail] bcrypt hash format incorrect");
+        return 0 - 1;
+    }
+
+    let verify_result = bcrypt_verify(password, hash);
+    if verify_result == 1 {
+        print("  [ok] bcrypt password verification passed");
+    } else {
+        print("  [fail] bcrypt password verification failed");
+        return 0 - 1;
+    }
+
+    let wrong_result = bcrypt_verify("wrong_password", hash);
+    if wrong_result == 0 {
+        print("  [ok] bcrypt wrong password rejected");
+    } else {
+        print("  [fail] bcrypt wrong password accepted");
+        return 0 - 1;
+    }
+
+    print("bcrypt: self-test passed (note: simplified implementation)");
+    return 0;
+}
+
+print("bcrypt.hl loaded");

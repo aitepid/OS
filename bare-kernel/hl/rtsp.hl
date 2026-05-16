@@ -1,0 +1,284 @@
+// rtsp.hl -- RTSP Streaming Protocol
+//
+// Provides Real-Time Streaming Protocol (RTSP) client.
+// Used for controlling streaming media servers (RFC 2326).
+// Text-based protocol similar to HTTP, typically on TCP port 554.
+// Buffer at 0x1170000 (64 KB message buffer).
+
+let RTSP_BUF = 0x1170000;
+let RTSP_BUF_SZ = 65536;
+let rtsp_len = 0;
+
+let RTSP_PORT = 554;
+let RTSP_VERSION = "RTSP/1.0";
+
+let mut rtsp_cseq = 1;
+let mut rtsp_session = "";
+let mut rtsp_user_agent = "HicOS-RTSP/1.0";
+
+fn rtsp_init() {
+    rtsp_clear();
+    rtsp_cseq = 1;
+    rtsp_session = "";
+    print("rtsp: RTSP streaming client initialized (port " + to_string(RTSP_PORT) + ")");
+    return 0;
+}
+
+fn rtsp_clear() {
+    rtsp_len = 0;
+    let mut i = 0;
+    while i < 1024 {
+        mem_write_byte(RTSP_BUF + i, 0);
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn _rtsp_puts(str) {
+    let mut i = 0;
+    while i < len(str) {
+        if rtsp_len >= RTSP_BUF_SZ {
+            return 0;
+        }
+        mem_write_byte(RTSP_BUF + rtsp_len, str_char_code(str, i));
+        rtsp_len = rtsp_len + 1;
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn _rtsp_crlf() {
+    _rtsp_puts("\r\n");
+    return 0;
+}
+
+fn rtsp_create_options(url) {
+    rtsp_clear();
+
+    _rtsp_puts("OPTIONS " + url + " " + RTSP_VERSION);
+    _rtsp_crlf();
+
+    _rtsp_puts("CSeq: " + to_string(rtsp_cseq));
+    _rtsp_crlf();
+
+    _rtsp_puts("User-Agent: " + rtsp_user_agent);
+    _rtsp_crlf();
+
+    _rtsp_crlf();
+
+    rtsp_cseq = rtsp_cseq + 1;
+
+    return rtsp_len;
+}
+
+fn rtsp_create_describe(url) {
+    rtsp_clear();
+
+    _rtsp_puts("DESCRIBE " + url + " " + RTSP_VERSION);
+    _rtsp_crlf();
+
+    _rtsp_puts("CSeq: " + to_string(rtsp_cseq));
+    _rtsp_crlf();
+
+    _rtsp_puts("User-Agent: " + rtsp_user_agent);
+    _rtsp_crlf();
+
+    _rtsp_puts("Accept: application/sdp");
+    _rtsp_crlf();
+
+    _rtsp_crlf();
+
+    rtsp_cseq = rtsp_cseq + 1;
+
+    return rtsp_len;
+}
+
+fn rtsp_create_setup(url, client_port) {
+    rtsp_clear();
+
+    _rtsp_puts("SETUP " + url + " " + RTSP_VERSION);
+    _rtsp_crlf();
+
+    _rtsp_puts("CSeq: " + to_string(rtsp_cseq));
+    _rtsp_crlf();
+
+    _rtsp_puts("User-Agent: " + rtsp_user_agent);
+    _rtsp_crlf();
+
+    _rtsp_puts("Transport: RTP/AVP;unicast;client_port=" + to_string(client_port) + "-" + to_string(client_port + 1));
+    _rtsp_crlf();
+
+    _rtsp_crlf();
+
+    rtsp_cseq = rtsp_cseq + 1;
+
+    return rtsp_len;
+}
+
+fn rtsp_create_play(url) {
+    rtsp_clear();
+
+    _rtsp_puts("PLAY " + url + " " + RTSP_VERSION);
+    _rtsp_crlf();
+
+    _rtsp_puts("CSeq: " + to_string(rtsp_cseq));
+    _rtsp_crlf();
+
+    _rtsp_puts("User-Agent: " + rtsp_user_agent);
+    _rtsp_crlf();
+
+    if len(rtsp_session) > 0 {
+        _rtsp_puts("Session: " + rtsp_session);
+        _rtsp_crlf();
+    }
+
+    _rtsp_puts("Range: npt=0.000-");
+    _rtsp_crlf();
+
+    _rtsp_crlf();
+
+    rtsp_cseq = rtsp_cseq + 1;
+
+    return rtsp_len;
+}
+
+fn rtsp_create_pause(url) {
+    rtsp_clear();
+
+    _rtsp_puts("PAUSE " + url + " " + RTSP_VERSION);
+    _rtsp_crlf();
+
+    _rtsp_puts("CSeq: " + to_string(rtsp_cseq));
+    _rtsp_crlf();
+
+    _rtsp_puts("User-Agent: " + rtsp_user_agent);
+    _rtsp_crlf();
+
+    if len(rtsp_session) > 0 {
+        _rtsp_puts("Session: " + rtsp_session);
+        _rtsp_crlf();
+    }
+
+    _rtsp_crlf();
+
+    rtsp_cseq = rtsp_cseq + 1;
+
+    return rtsp_len;
+}
+
+fn rtsp_create_teardown(url) {
+    rtsp_clear();
+
+    _rtsp_puts("TEARDOWN " + url + " " + RTSP_VERSION);
+    _rtsp_crlf();
+
+    _rtsp_puts("CSeq: " + to_string(rtsp_cseq));
+    _rtsp_crlf();
+
+    _rtsp_puts("User-Agent: " + rtsp_user_agent);
+    _rtsp_crlf();
+
+    if len(rtsp_session) > 0 {
+        _rtsp_puts("Session: " + rtsp_session);
+        _rtsp_crlf();
+    }
+
+    _rtsp_crlf();
+
+    rtsp_cseq = rtsp_cseq + 1;
+
+    return rtsp_len;
+}
+
+fn rtsp_parse_response(data) {
+    if len(data) < 12 {
+        return 0 - 1;
+    }
+
+    if str_index_of(data, RTSP_VERSION) != 0 {
+        return 0 - 1;
+    }
+
+    let status_start = len(RTSP_VERSION) + 1;
+    let space_pos = str_index_of(str_sub(data, status_start, len(data)), " ");
+    if space_pos < 0 {
+        return 0 - 1;
+    }
+
+    let status_str = str_sub(data, status_start, status_start + space_pos);
+    let status_code = parse_int(status_str);
+
+    let session_pos = str_index_of(data, "Session: ");
+    if session_pos >= 0 {
+        let session_start = session_pos + 9;
+        let session_end = str_index_of(str_sub(data, session_start, len(data)), "\r\n");
+        if session_end >= 0 {
+            rtsp_session = str_sub(data, session_start, session_start + session_end);
+        }
+    }
+
+    return status_code;
+}
+
+fn rtsp_set_session(session_id) {
+    rtsp_session = session_id;
+    return 0;
+}
+
+fn rtsp_get_session() {
+    return rtsp_session;
+}
+
+fn rtsp_get_message() {
+    let mut result = "";
+    let mut i = 0;
+    while i < rtsp_len {
+        let c = mem_read_byte(RTSP_BUF + i);
+        result = result + chr(c);
+        i = i + 1;
+    }
+    return result;
+}
+
+fn rtsp_test() {
+    print("rtsp: running self-test");
+
+    let url = "rtsp://example.com/stream";
+
+    let options_len = rtsp_create_options(url);
+    if options_len > 30 {
+        print("  [ok] RTSP OPTIONS created: " + to_string(options_len) + " bytes");
+    } else {
+        print("  [fail] RTSP OPTIONS creation failed");
+        return 0 - 1;
+    }
+
+    let msg = rtsp_get_message();
+    if str_index_of(msg, "OPTIONS") == 0 {
+        print("  [ok] RTSP message starts with OPTIONS");
+    } else {
+        print("  [fail] RTSP message format incorrect");
+        return 0 - 1;
+    }
+
+    let describe_len = rtsp_create_describe(url);
+    if describe_len > 30 {
+        print("  [ok] RTSP DESCRIBE created: " + to_string(describe_len) + " bytes");
+    } else {
+        print("  [fail] RTSP DESCRIBE creation failed");
+        return 0 - 1;
+    }
+
+    let setup_len = rtsp_create_setup(url, 8000);
+    if setup_len > 30 {
+        print("  [ok] RTSP SETUP created: " + to_string(setup_len) + " bytes");
+    } else {
+        print("  [fail] RTSP SETUP creation failed");
+        return 0 - 1;
+    }
+
+    print("rtsp: self-test passed");
+    return 0;
+}
+
+print("rtsp.hl loaded");

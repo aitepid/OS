@@ -2,11 +2,72 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`277`（69 根目录 + 208 内核模块）
-- H-L 总行数：`~74,100`
-- 内核模块：`208`
-- Shell 命令：`460`
-- 最近完成功能迭代：`222`（sha256 + dhcp_server + sip）
+- `.hl` 文件：`280`（69 根目录 + 211 内核模块）
+- H-L 总行数：`~74,800`
+- 内核模块：`211`
+- Shell 命令：`475`
+- 最近完成功能迭代：`225`（bcrypt + rtsp + stun）
+
+## Iteration 225 — stun.hl：STUN NAT 穿透协议
+
+- **`bare-kernel/hl/stun.hl`** 新增（~260 行）
+  - STUN（Session Traversal Utilities for NAT）NAT 会话穿透工具（RFC 5389）
+  - 用途：发现公网 IP 地址和 NAT 类型，用于 VoIP/WebRTC 连接建立
+  - UDP 端口 3478，二进制协议
+  - `stun_create_binding_request()` — 创建绑定请求：20 字节固定头部（消息类型 + 长度 + Magic Cookie + 事务 ID）
+  - `stun_parse_response(data)` — 解析绑定响应：提取 MAPPED-ADDRESS 或 XOR-MAPPED-ADDRESS
+  - STUN 消息类型：BINDING_REQUEST=0x0001，BINDING_RESPONSE=0x0101
+  - STUN 属性：MAPPED_ADDRESS=0x0001，XOR_MAPPED_ADDRESS=0x0020
+  - Magic Cookie：0x2112A442（固定值，用于区分 STUN 和其他协议）
+  - `_stun_generate_transaction_id()` — 生成 12 字节随机事务 ID
+  - `stun_get_mapped_address()` — 获取映射地址：IP:Port 格式字符串
+  - XOR 映射：端口 XOR Magic_Cookie_High16，IP XOR Magic_Cookie
+  - `stun_selftest()` — 测试请求构建：验证消息类型 + Magic Cookie
+  - STUN_BUF=0x1180000（18284544），64 KB 消息缓冲区
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`stun_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 4 条命令：
+  - `stun request` / `stun parse <data>` / `stun addr` / `stun test`
+
+## Iteration 224 — rtsp.hl：RTSP 流媒体协议
+
+- **`bare-kernel/hl/rtsp.hl`** 新增（~280 行）
+  - RTSP（Real-Time Streaming Protocol）实时流协议（RFC 2326）
+  - 用途：控制流媒体服务器（播放/暂停/停止），类 HTTP 文本协议
+  - TCP 端口 554，协议版本 RTSP/1.0
+  - `rtsp_create_options(url)` — 创建 OPTIONS 请求：查询服务器支持的方法
+  - `rtsp_create_describe(url)` — 创建 DESCRIBE 请求：获取 SDP 媒体描述
+  - `rtsp_create_setup(url, client_port)` — 创建 SETUP 请求：建立传输通道（RTP/AVP unicast）
+  - `rtsp_create_play(url)` — 创建 PLAY 请求：开始流媒体播放（Range: npt=0.000-）
+  - `rtsp_create_pause(url)` — 创建 PAUSE 请求：暂停播放
+  - `rtsp_create_teardown(url)` — 创建 TEARDOWN 请求：关闭会话
+  - `rtsp_parse_response(data)` — 解析响应：提取状态码 + Session ID
+  - RTSP 头部：CSeq（命令序列号），Session（会话标识符），Transport（传输参数）
+  - CSeq 自增：每个请求递增，保证顺序
+  - `rtsp_selftest()` — 测试 OPTIONS + DESCRIBE + SETUP 请求构建
+  - RTSP_BUF=0x1170000（18219008），64 KB 消息缓冲区
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`rtsp_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 7 条命令：
+  - `rtsp options <url>` / `rtsp describe <url>` / `rtsp setup <url> <port>` / `rtsp play <url>` / `rtsp pause <url>` / `rtsp teardown <url>` / `rtsp test`
+
+## Iteration 223 — bcrypt.hl：Bcrypt 密码哈希
+
+- **`bare-kernel/hl/bcrypt.hl`** 新增（~270 行）
+  - Bcrypt 自适应密码哈希函数（基于 Blowfish 密码）
+  - 注：简化教学实现，受 H-L 语言约束（无真实位运算，使用算术模拟）
+  - 用途：密码存储，慢速设计（cost 因子）抵御暴力破解
+  - `bcrypt_hash(password)` — 生成哈希：随机盐 + cost 轮次 → $2b$cost$salt_hash 格式
+  - `bcrypt_verify(password, hash)` — 验证密码：重新哈希 + 前缀匹配
+  - `bcrypt_set_cost(cost)` — 设置成本因子（4-31），cost=10 → 2^10=1024 轮迭代
+  - `_bcrypt_generate_salt()` — 生成 16 字节随机盐
+  - `_bcrypt_expand_key(password)` — 密钥扩展：密码 + 盐 → 18 个状态字
+  - `_bcrypt_rounds(state, rounds)` — 多轮变换：模拟 Blowfish Feistel 网络
+  - Bcrypt 格式：$2b$cost$salt（22 字符 Base64）+ hash（31 字符 Base64）
+  - Base64 编码：自定义字符表（A-Z/a-z/0-9/+/）
+  - `bcrypt_selftest()` — 测试密码 "test_password" → 哈希 → 验证正确/错误密码
+  - BCRYPT_BUF=0x1160000（18153472），64 KB 工作缓冲区
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`bcrypt_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 4 条命令：
+  - `bcrypt cost <n>` / `bcrypt hash <pwd>` / `bcrypt verify <pwd> <hash>` / `bcrypt test`
 
 ## Iteration 222 — sip.hl：SIP VoIP 信令协议
 

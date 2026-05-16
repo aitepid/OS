@@ -1,0 +1,236 @@
+// stun.hl -- STUN NAT Traversal Protocol
+//
+// Provides Session Traversal Utilities for NAT (STUN) client.
+// Used to discover public IP address and NAT type (RFC 5389).
+// Binary protocol over UDP port 3478.
+// Buffer at 0x1180000 (64 KB message buffer).
+
+let STUN_BUF = 0x1180000;
+let STUN_BUF_SZ = 65536;
+let stun_len = 0;
+
+let STUN_PORT = 3478;
+let STUN_MAGIC_COOKIE = 554869826;
+
+let STUN_BINDING_REQUEST = 1;
+let STUN_BINDING_RESPONSE = 257;
+
+let STUN_ATTR_MAPPED_ADDRESS = 1;
+let STUN_ATTR_XOR_MAPPED_ADDRESS = 32;
+let STUN_ATTR_SOFTWARE = 32802;
+let STUN_ATTR_FINGERPRINT = 32808;
+
+let mut stun_transaction_id = [];
+let mut stun_mapped_ip = 0;
+let mut stun_mapped_port = 0;
+
+fn stun_init() {
+    stun_clear();
+    stun_transaction_id = [];
+    let mut i = 0;
+    while i < 12 {
+        push(stun_transaction_id, 0);
+        i = i + 1;
+    }
+    stun_mapped_ip = 0;
+    stun_mapped_port = 0;
+    print("stun: STUN NAT traversal client initialized (port " + to_string(STUN_PORT) + ")");
+    return 0;
+}
+
+fn stun_clear() {
+    stun_len = 0;
+    let mut i = 0;
+    while i < 1024 {
+        mem_write_byte(STUN_BUF + i, 0);
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn _stun_put(byte) {
+    if stun_len >= STUN_BUF_SZ {
+        return 0;
+    }
+    mem_write_byte(STUN_BUF + stun_len, byte);
+    stun_len = stun_len + 1;
+    return 0;
+}
+
+fn _stun_put_u16(value) {
+    _stun_put(value / 256);
+    _stun_put(value % 256);
+    return 0;
+}
+
+fn _stun_put_u32(value) {
+    _stun_put((value / 16777216) % 256);
+    _stun_put((value / 65536) % 256);
+    _stun_put((value / 256) % 256);
+    _stun_put(value % 256);
+    return 0;
+}
+
+fn _stun_generate_transaction_id() {
+    let mut i = 0;
+    while i < 12 {
+        set_at(stun_transaction_id, i, random_get() % 256);
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn stun_create_binding_request() {
+    stun_clear();
+    _stun_generate_transaction_id();
+
+    _stun_put_u16(STUN_BINDING_REQUEST);
+
+    _stun_put_u16(0);
+
+    _stun_put_u32(STUN_MAGIC_COOKIE);
+
+    let mut i = 0;
+    while i < 12 {
+        _stun_put(stun_transaction_id[i]);
+        i = i + 1;
+    }
+
+    return stun_len;
+}
+
+fn stun_parse_response(data) {
+    if len(data) < 20 {
+        return 0 - 1;
+    }
+
+    let msg_type = str_char_code(data, 0) * 256 + str_char_code(data, 1);
+    if msg_type != STUN_BINDING_RESPONSE {
+        return 0 - 1;
+    }
+
+    let msg_len = str_char_code(data, 2) * 256 + str_char_code(data, 3);
+
+    let cookie = str_char_code(data, 4) * 16777216 +
+                 str_char_code(data, 5) * 65536 +
+                 str_char_code(data, 6) * 256 +
+                 str_char_code(data, 7);
+
+    if cookie != STUN_MAGIC_COOKIE {
+        return 0 - 1;
+    }
+
+    let mut pos = 20;
+    while pos < len(data) {
+        if pos + 4 > len(data) {
+            break;
+        }
+
+        let attr_type = str_char_code(data, pos) * 256 + str_char_code(data, pos + 1);
+        let attr_len = str_char_code(data, pos + 2) * 256 + str_char_code(data, pos + 3);
+
+        if attr_type == STUN_ATTR_MAPPED_ADDRESS {
+            if pos + 8 <= len(data) {
+                let family = str_char_code(data, pos + 5);
+                let port = str_char_code(data, pos + 6) * 256 + str_char_code(data, pos + 7);
+                let ip = str_char_code(data, pos + 8) * 16777216 +
+                         str_char_code(data, pos + 9) * 65536 +
+                         str_char_code(data, pos + 10) * 256 +
+                         str_char_code(data, pos + 11);
+
+                stun_mapped_port = port;
+                stun_mapped_ip = ip;
+            }
+        }
+
+        if attr_type == STUN_ATTR_XOR_MAPPED_ADDRESS {
+            if pos + 8 <= len(data) {
+                let family = str_char_code(data, pos + 5);
+                let xor_port = str_char_code(data, pos + 6) * 256 + str_char_code(data, pos + 7);
+                let xor_ip = str_char_code(data, pos + 8) * 16777216 +
+                             str_char_code(data, pos + 9) * 65536 +
+                             str_char_code(data, pos + 10) * 256 +
+                             str_char_code(data, pos + 11);
+
+                let cookie_high = STUN_MAGIC_COOKIE / 65536;
+                let cookie_low = STUN_MAGIC_COOKIE % 65536;
+
+                let port = (xor_port + cookie_high) % 65536;
+                let ip = (xor_ip + STUN_MAGIC_COOKIE) % 4294967296;
+
+                stun_mapped_port = port;
+                stun_mapped_ip = ip;
+            }
+        }
+
+        let padding = (4 - (attr_len % 4)) % 4;
+        pos = pos + 4 + attr_len + padding;
+    }
+
+    return 0;
+}
+
+fn stun_get_mapped_ip() {
+    return stun_mapped_ip;
+}
+
+fn stun_get_mapped_port() {
+    return stun_mapped_port;
+}
+
+fn stun_get_mapped_address() {
+    let ip = stun_mapped_ip;
+    let ip_str = to_string((ip / 16777216) % 256) + "." +
+                 to_string((ip / 65536) % 256) + "." +
+                 to_string((ip / 256) % 256) + "." +
+                 to_string(ip % 256);
+    return ip_str + ":" + to_string(stun_mapped_port);
+}
+
+fn stun_get_message() {
+    let mut result = "";
+    let mut i = 0;
+    while i < stun_len {
+        let c = mem_read_byte(STUN_BUF + i);
+        result = result + chr(c);
+        i = i + 1;
+    }
+    return result;
+}
+
+fn stun_test() {
+    print("stun: running self-test");
+
+    let req_len = stun_create_binding_request();
+    if req_len == 20 {
+        print("  [ok] STUN Binding Request created: " + to_string(req_len) + " bytes");
+    } else {
+        print("  [fail] STUN request length incorrect: " + to_string(req_len));
+        return 0 - 1;
+    }
+
+    let msg = stun_get_message();
+    let msg_type = str_char_code(msg, 0) * 256 + str_char_code(msg, 1);
+    if msg_type == STUN_BINDING_REQUEST {
+        print("  [ok] STUN message type correct");
+    } else {
+        print("  [fail] STUN message type incorrect");
+        return 0 - 1;
+    }
+
+    let cookie = str_char_code(msg, 4) * 16777216 +
+                 str_char_code(msg, 5) * 65536 +
+                 str_char_code(msg, 6) * 256 +
+                 str_char_code(msg, 7);
+    if cookie == STUN_MAGIC_COOKIE {
+        print("  [ok] STUN magic cookie correct");
+    } else {
+        print("  [fail] STUN magic cookie incorrect");
+        return 0 - 1;
+    }
+
+    print("stun: self-test passed");
+    return 0;
+}
+
+print("stun.hl loaded");

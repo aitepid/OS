@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 460 commands + pipe operator (|):
+// 475 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -117,6 +117,9 @@ fn shell_handle(cmd) {
         serial_print("SHA256:   sha256 <text>  sha256 test");
         serial_print("DHCPSrv:  dhcpsrv start  dhcpsrv pool <start> <end>  dhcpsrv options <subnet> <router> <dns>  dhcpsrv leases  dhcpsrv test");
         serial_print("SIP:      sip local <ip> <port>  sip invite <from> <to> <host>  sip ack <to> <host>  sip bye <to> <host>  sip register <user> <reg>  sip test");
+        serial_print("Bcrypt:   bcrypt cost <n>  bcrypt hash <pwd>  bcrypt verify <pwd> <hash>  bcrypt test");
+        serial_print("RTSP:     rtsp options <url>  rtsp describe <url>  rtsp setup <url> <port>  rtsp play <url>  rtsp pause <url>  rtsp teardown <url>  rtsp test");
+        serial_print("STUN:     stun request  stun parse <data>  stun addr  stun test");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -2647,6 +2650,86 @@ fn shell_handle_ext(cmd) {
     }
     if cmd == "sip test" { return sip_test(); }
 
+    // === Bcrypt commands ===
+    if str_starts_with(cmd, "bcrypt cost ") {
+        let cost = parse_int(str_sub(cmd, 12, len(cmd)));
+        bcrypt_set_cost(cost);
+        return "bcrypt: cost set to " + to_string(cost);
+    }
+    if str_starts_with(cmd, "bcrypt hash ") {
+        let password = str_sub(cmd, 12, len(cmd));
+        let hash = bcrypt_hash(password);
+        return "bcrypt: " + hash;
+    }
+    if str_starts_with(cmd, "bcrypt verify ") {
+        let parts = str_split(str_sub(cmd, 14, len(cmd)), " ");
+        if len(parts) >= 2 {
+            let password = parts[0];
+            let hash = parts[1];
+            let result = bcrypt_verify(password, hash);
+            if result == 1 { return "bcrypt: password matches"; }
+            return "bcrypt: password does not match";
+        }
+        return "bcrypt: usage: bcrypt verify <password> <hash>";
+    }
+    if cmd == "bcrypt test" { return bcrypt_test(); }
+
+    // === RTSP commands ===
+    if str_starts_with(cmd, "rtsp options ") {
+        let url = str_sub(cmd, 13, len(cmd));
+        let len = rtsp_create_options(url);
+        return "rtsp: OPTIONS created (" + to_string(len) + " bytes)";
+    }
+    if str_starts_with(cmd, "rtsp describe ") {
+        let url = str_sub(cmd, 14, len(cmd));
+        let len = rtsp_create_describe(url);
+        return "rtsp: DESCRIBE created (" + to_string(len) + " bytes)";
+    }
+    if str_starts_with(cmd, "rtsp setup ") {
+        let parts = str_split(str_sub(cmd, 11, len(cmd)), " ");
+        if len(parts) >= 2 {
+            let url = parts[0];
+            let port = parse_int(parts[1]);
+            let len = rtsp_create_setup(url, port);
+            return "rtsp: SETUP created (" + to_string(len) + " bytes)";
+        }
+        return "rtsp: usage: rtsp setup <url> <client_port>";
+    }
+    if str_starts_with(cmd, "rtsp play ") {
+        let url = str_sub(cmd, 10, len(cmd));
+        let len = rtsp_create_play(url);
+        return "rtsp: PLAY created (" + to_string(len) + " bytes)";
+    }
+    if str_starts_with(cmd, "rtsp pause ") {
+        let url = str_sub(cmd, 11, len(cmd));
+        let len = rtsp_create_pause(url);
+        return "rtsp: PAUSE created (" + to_string(len) + " bytes)";
+    }
+    if str_starts_with(cmd, "rtsp teardown ") {
+        let url = str_sub(cmd, 14, len(cmd));
+        let len = rtsp_create_teardown(url);
+        return "rtsp: TEARDOWN created (" + to_string(len) + " bytes)";
+    }
+    if cmd == "rtsp test" { return rtsp_test(); }
+
+    // === STUN commands ===
+    if cmd == "stun request" {
+        let len = stun_create_binding_request();
+        return "stun: Binding Request created (" + to_string(len) + " bytes)";
+    }
+    if str_starts_with(cmd, "stun parse ") {
+        let data = str_sub(cmd, 11, len(cmd));
+        let result = stun_parse_response(data);
+        if result == 0 { return "stun: response parsed successfully"; }
+        return "stun: parse error";
+    }
+    if cmd == "stun addr" {
+        let addr = stun_get_mapped_address();
+        if len(addr) > 0 { return "stun: mapped address = " + addr; }
+        return "stun: no mapped address available";
+    }
+    if cmd == "stun test" { return stun_test(); }
+
     return shell_handle(cmd);
 }
 
@@ -2658,7 +2741,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 460 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip");
+print("shell.hl loaded -- 475 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun");
 
 // Main shell loop (called from kernel_init)
 
