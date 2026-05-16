@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 253 commands + pipe operator (|):
+// 269 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -84,6 +84,9 @@ fn shell_handle(cmd) {
         serial_print("Semaphore:sem list  sem create <name> <val>  sem wait <id>  sem post <id>  sem value <id>  sem destroy <id>");
         serial_print("Notepad:  notepad [path]");
         serial_print("TaskMan:  taskman");
+        serial_print("IMAP:     imap  imap connect <host> <port>  imap login <id> <user> <pass>  imap select <id> <mbox>  imap list <id>  imap fetch <id> <from> <to>  imap logout <id>");
+        serial_print("MQTT:     mqtt  mqtt connect <host> <port> <cid>  mqtt pub <id> <topic> <payload>  mqtt sub <id> <topic>  mqtt unsub <id> <topic>  mqtt ping <id>  mqtt quit <id>");
+        serial_print("LZ4:      lz4c <in> <out>  lz4d <in> <out>  lz4test");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -1798,6 +1801,145 @@ fn shell_handle_ext(cmd) {
         return "Notepad opened: " + path;
     }
 
+    // === IMAP commands ===
+    if cmd == "imap" { return imap_list_sessions(); }
+    if str_starts_with(cmd, "imap connect ") {
+        let rest = str_sub(cmd, 13, len(cmd));
+        let sp = str_find(rest, " ");
+        if sp < 0 { return "Usage: imap connect <host> <port>"; }
+        let host = str_sub(rest, 0, sp);
+        let port = parse_int(str_sub(rest, sp + 1, len(rest)));
+        let id = imap_connect(host, port);
+        if id < 0 { return "Error: imap connect failed"; }
+        return "imap[" + to_string(id) + "] connected to " + host;
+    }
+    if str_starts_with(cmd, "imap login ") {
+        let rest = str_sub(cmd, 11, len(cmd));
+        let sp1 = str_find(rest, " ");
+        if sp1 < 0 { return "Usage: imap login <id> <user> <pass>"; }
+        let id = parse_int(str_sub(rest, 0, sp1));
+        let rest2 = str_sub(rest, sp1 + 1, len(rest));
+        let sp2 = str_find(rest2, " ");
+        if sp2 < 0 { return "Usage: imap login <id> <user> <pass>"; }
+        let user = str_sub(rest2, 0, sp2);
+        let pass = str_sub(rest2, sp2 + 1, len(rest2));
+        let r = imap_login(id, user, pass);
+        if r < 0 { return "Error: imap login failed"; }
+        return "imap[" + to_string(id) + "] logged in as " + user;
+    }
+    if str_starts_with(cmd, "imap select ") {
+        let rest = str_sub(cmd, 12, len(cmd));
+        let sp = str_find(rest, " ");
+        if sp < 0 { return "Usage: imap select <id> <mailbox>"; }
+        let id = parse_int(str_sub(rest, 0, sp));
+        let mbox = str_sub(rest, sp + 1, len(rest));
+        let cnt = imap_select(id, mbox);
+        if cnt < 0 { return "Error: imap select failed"; }
+        return "imap[" + to_string(id) + "] selected " + mbox + " (" + to_string(cnt) + " msgs)";
+    }
+    if str_starts_with(cmd, "imap list ") {
+        let id = parse_int(str_sub(cmd, 10, len(cmd)));
+        return imap_list(id);
+    }
+    if str_starts_with(cmd, "imap fetch ") {
+        let rest = str_sub(cmd, 11, len(cmd));
+        let sp1 = str_find(rest, " ");
+        if sp1 < 0 { return "Usage: imap fetch <id> <from> <to>"; }
+        let id = parse_int(str_sub(rest, 0, sp1));
+        let rest2 = str_sub(rest, sp1 + 1, len(rest));
+        let sp2 = str_find(rest2, " ");
+        if sp2 < 0 { return "Usage: imap fetch <id> <from> <to>"; }
+        let from = parse_int(str_sub(rest2, 0, sp2));
+        let to_n = parse_int(str_sub(rest2, sp2 + 1, len(rest2)));
+        return imap_fetch(id, from, to_n);
+    }
+    if str_starts_with(cmd, "imap logout ") {
+        let id = parse_int(str_sub(cmd, 12, len(cmd)));
+        imap_logout(id);
+        return "imap[" + to_string(id) + "] logged out";
+    }
+
+    // === MQTT commands ===
+    if cmd == "mqtt" { return mqtt_list(); }
+    if str_starts_with(cmd, "mqtt connect ") {
+        let rest = str_sub(cmd, 13, len(cmd));
+        let sp1 = str_find(rest, " ");
+        if sp1 < 0 { return "Usage: mqtt connect <host> <port> <client_id>"; }
+        let host = str_sub(rest, 0, sp1);
+        let rest2 = str_sub(rest, sp1 + 1, len(rest));
+        let sp2 = str_find(rest2, " ");
+        if sp2 < 0 { return "Usage: mqtt connect <host> <port> <client_id>"; }
+        let port = parse_int(str_sub(rest2, 0, sp2));
+        let cid = str_sub(rest2, sp2 + 1, len(rest2));
+        let id = mqtt_connect(host, port, cid);
+        if id < 0 { return "Error: mqtt connect failed"; }
+        return "mqtt[" + to_string(id) + "] connected to " + host;
+    }
+    if str_starts_with(cmd, "mqtt pub ") {
+        let rest = str_sub(cmd, 9, len(cmd));
+        let sp1 = str_find(rest, " ");
+        if sp1 < 0 { return "Usage: mqtt pub <id> <topic> <payload>"; }
+        let id = parse_int(str_sub(rest, 0, sp1));
+        let rest2 = str_sub(rest, sp1 + 1, len(rest));
+        let sp2 = str_find(rest2, " ");
+        if sp2 < 0 { return "Usage: mqtt pub <id> <topic> <payload>"; }
+        let topic = str_sub(rest2, 0, sp2);
+        let payload = str_sub(rest2, sp2 + 1, len(rest2));
+        mqtt_publish(id, topic, payload);
+        return "mqtt[" + to_string(id) + "] published to " + topic;
+    }
+    if str_starts_with(cmd, "mqtt sub ") {
+        let rest = str_sub(cmd, 9, len(cmd));
+        let sp = str_find(rest, " ");
+        if sp < 0 { return "Usage: mqtt sub <id> <topic>"; }
+        let id = parse_int(str_sub(rest, 0, sp));
+        let topic = str_sub(rest, sp + 1, len(rest));
+        mqtt_subscribe(id, topic);
+        return "mqtt[" + to_string(id) + "] subscribed to " + topic;
+    }
+    if str_starts_with(cmd, "mqtt unsub ") {
+        let rest = str_sub(cmd, 11, len(cmd));
+        let sp = str_find(rest, " ");
+        if sp < 0 { return "Usage: mqtt unsub <id> <topic>"; }
+        let id = parse_int(str_sub(rest, 0, sp));
+        let topic = str_sub(rest, sp + 1, len(rest));
+        mqtt_unsubscribe(id, topic);
+        return "mqtt[" + to_string(id) + "] unsubscribed from " + topic;
+    }
+    if str_starts_with(cmd, "mqtt ping ") {
+        let id = parse_int(str_sub(cmd, 10, len(cmd)));
+        mqtt_ping(id);
+        return "mqtt[" + to_string(id) + "] PINGREQ sent";
+    }
+    if str_starts_with(cmd, "mqtt quit ") {
+        let id = parse_int(str_sub(cmd, 10, len(cmd)));
+        mqtt_disconnect(id);
+        return "mqtt[" + to_string(id) + "] disconnected";
+    }
+
+    // === LZ4 commands ===
+    if cmd == "lz4test" { return lz4_selftest(); }
+    if str_starts_with(cmd, "lz4c ") {
+        let rest = str_sub(cmd, 5, len(cmd));
+        let sp = str_find(rest, " ");
+        if sp < 0 { return "Usage: lz4c <inpath> <outpath>"; }
+        let inpath  = str_sub(rest, 0, sp);
+        let outpath = str_sub(rest, sp + 1, len(rest));
+        let n = lz4_compress_file(inpath, outpath);
+        if n < 0 { return "Error: lz4c failed"; }
+        return "lz4c: compressed " + to_string(n) + " bytes → " + outpath;
+    }
+    if str_starts_with(cmd, "lz4d ") {
+        let rest = str_sub(cmd, 5, len(cmd));
+        let sp = str_find(rest, " ");
+        if sp < 0 { return "Usage: lz4d <inpath> <outpath>"; }
+        let inpath  = str_sub(rest, 0, sp);
+        let outpath = str_sub(rest, sp + 1, len(rest));
+        let n = lz4_decompress_file(inpath, outpath);
+        if n < 0 { return "Error: lz4d failed"; }
+        return "lz4d: decompressed " + to_string(n) + " bytes → " + outpath;
+    }
+
     return shell_handle(cmd);
 }
 
@@ -1809,7 +1951,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 253 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad");
+print("shell.hl loaded -- 269 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4");
 
 // Main shell loop (called from kernel_init)
 

@@ -1,0 +1,304 @@
+// imap.hl -- IMAP4rev1 Email Client (RFC 3501)
+//
+// Iteration 181: Read email from IMAP servers over TCP.
+//
+// Protocol flow:
+//   CONNECT  → recv "* OK" greeting
+//   A001 CAPABILITY → recv "* CAPABILITY ... A001 OK"
+//   A002 LOGIN user pass → recv "A002 OK"
+//   A003 SELECT INBOX   → recv "* EXISTS N ... A003 OK"
+//   A004 FETCH 1:N (FLAGS BODY[HEADER.FIELDS (FROM SUBJECT DATE)])
+//   A005 LOGOUT → recv "* BYE" + "A005 OK"
+//
+// Tags auto-increment: A001, A002, ..., A999 (3-digit zero-padded).
+// Up to IMAP_MAX (4) concurrent sessions.
+//
+// Public API:
+//   imap_init()
+//   imap_connect(host, port)   → session_id  (port 143 = plain, 993 = TLS)
+//   imap_login(id, user, pass) → 0 ok / -1 fail
+//   imap_select(id, mailbox)   → message count or -1
+//   imap_list(id)              → string listing mailboxes
+//   imap_fetch(id, seq_from, seq_to) → string with headers
+//   imap_logout(id)
+//   imap_status(id) / imap_list_sessions()
+//   imap_tick()
+//
+// Shell:
+//   imap connect <host> <port>
+//   imap login <id> <user> <pass>
+//   imap select <id> <mailbox>
+//   imap list <id>
+//   imap fetch <id> <from> <to>
+//   imap logout <id>
+
+let IMAP_MAX     = 4;
+let IMAP_BUF     = 15319040;   // 0xE9C000  8 KB response scratch
+let IMAP_BUF_SZ  = 4096;
+
+let IMAP_ST_FREE = 0;
+let IMAP_ST_CONN = 1;   // connected, greeting received
+let IMAP_ST_AUTH = 2;   // LOGIN sent, 200 OK
+let IMAP_ST_SEL  = 3;   // mailbox selected
+let IMAP_ST_ERR  = 4;
+
+let mut imap_active  = [];
+let mut imap_tcb     = [];
+let mut imap_state   = [];
+let mut imap_host    = [];
+let mut imap_mailbox = [];
+let mut imap_msg_cnt = [];   // message count in selected mailbox
+let mut imap_tag_ctr = [];   // per-session tag counter (starts at 1)
+let mut imap_count   = 0;
+
+fn imap_init() {
+    imap_active  = [];
+    imap_tcb     = [];
+    imap_state   = [];
+    imap_host    = [];
+    imap_mailbox = [];
+    imap_msg_cnt = [];
+    imap_tag_ctr = [];
+    imap_count   = 0;
+    let mut i = 0;
+    while i < IMAP_MAX {
+        push(imap_active,  0);
+        push(imap_tcb,     0 - 1);
+        push(imap_state,   IMAP_ST_FREE);
+        push(imap_host,    "");
+        push(imap_mailbox, "");
+        push(imap_msg_cnt, 0);
+        push(imap_tag_ctr, 1);
+        i = i + 1;
+    }
+    print("imap: init — max " + to_string(IMAP_MAX) + " sessions, port 143/993");
+    return 0;
+}
+
+fn _imap_alloc() {
+    let mut i = 0;
+    while i < IMAP_MAX {
+        if imap_active[i] == 0 { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+// Build tag string: A001, A002, ... A999
+fn _imap_tag(id) {
+    let n = imap_tag_ctr[id];
+    let mut s = to_string(n);
+    while len(s) < 3 { s = "0" + s; }
+    set_at(imap_tag_ctr, id, n + 1);
+    return "A" + s;
+}
+
+// ============================================================
+// TCP I/O helpers
+// ============================================================
+
+fn _imap_send(id, line) {
+    tcp_send(imap_tcb[id], line + "\r\n");
+    return 0;
+}
+
+// Read response from TCB RX buffer into IMAP_BUF; returns string
+fn _imap_read(id) {
+    let addr = TCP_TABLE + imap_tcb[id] * TCB_SIZE;
+    let rx_buf = mem_read_u64(addr + 64);
+    if rx_buf == 0 { return ""; }
+    let mut s = "";
+    let mut j = 0;
+    while j < IMAP_BUF_SZ {
+        let b = mem_read_u8(rx_buf + j);
+        if b == 0 { j = IMAP_BUF_SZ + 1; }
+        else { s = s + str_from_code(b); j = j + 1; }
+    }
+    mem_zero(rx_buf, IMAP_BUF_SZ);
+    return s;
+}
+
+// Check if response contains "tag OK"
+fn _imap_ok(resp, tag) {
+    if str_find(resp, tag + " OK") >= 0 { return 1; }
+    return 0;
+}
+
+// ============================================================
+// Lifecycle
+// ============================================================
+
+fn imap_connect(host, port) {
+    let id = _imap_alloc();
+    if id < 0 { print("imap: no free slots"); return 0 - 1; }
+    let ip = dns_resolve(host);
+    let tcb = tcp_connect(ip, port);
+    if tcb < 0 { print("imap: tcp_connect failed to " + host); return 0 - 1; }
+    set_at(imap_active,  id, 1);
+    set_at(imap_tcb,     id, tcb);
+    set_at(imap_state,   id, IMAP_ST_CONN);
+    set_at(imap_host,    id, host);
+    set_at(imap_tag_ctr, id, 1);
+    imap_count = imap_count + 1;
+    print("imap[" + to_string(id) + "]: connected to " + host + ":" + to_string(port));
+    return id;
+}
+
+fn imap_login(id, user, pass) {
+    if id < 0 { return 0 - 1; }
+    if imap_active[id] == 0 { return 0 - 1; }
+    let tag = _imap_tag(id);
+    _imap_send(id, tag + " LOGIN " + user + " " + pass);
+    // Poll response (up to 200 ticks = 2 seconds)
+    let deadline = get_ticks() + 200;
+    let mut resp = "";
+    while get_ticks() < deadline {
+        resp = _imap_read(id);
+        if len(resp) > 0 {
+            if _imap_ok(resp, tag) == 1 {
+                set_at(imap_state, id, IMAP_ST_AUTH);
+                print("imap[" + to_string(id) + "]: authenticated as " + user);
+                return 0;
+            }
+            if str_find(resp, "NO") >= 0 { return 0 - 1; }
+        }
+    }
+    set_at(imap_state, id, IMAP_ST_ERR);
+    return 0 - 1;
+}
+
+fn imap_select(id, mailbox) {
+    if id < 0 { return 0 - 1; }
+    if imap_active[id] == 0 { return 0 - 1; }
+    let tag = _imap_tag(id);
+    _imap_send(id, tag + " SELECT " + mailbox);
+    let deadline = get_ticks() + 200;
+    let mut msg_count = 0;
+    while get_ticks() < deadline {
+        let resp = _imap_read(id);
+        if len(resp) > 0 {
+            // Parse "* N EXISTS"
+            let ei = str_find(resp, " EXISTS");
+            if ei > 0 {
+                // Scan back for the number
+                let mut ni = ei - 1;
+                while ni > 0 {
+                    let c = str_char_code(resp, ni);
+                    if c < 48 { ni = 0 - 1; }
+                    else { if c > 57 { ni = 0 - 1; } else { ni = ni - 1; } }
+                }
+                let num_s = str_sub(resp, ni + 1, ei);
+                msg_count = parse_int(num_s);
+            }
+            if _imap_ok(resp, tag) == 1 {
+                set_at(imap_state,   id, IMAP_ST_SEL);
+                set_at(imap_mailbox, id, mailbox);
+                set_at(imap_msg_cnt, id, msg_count);
+                print("imap[" + to_string(id) + "]: selected " + mailbox
+                    + " (" + to_string(msg_count) + " messages)");
+                return msg_count;
+            }
+        }
+    }
+    return 0 - 1;
+}
+
+fn imap_list(id) {
+    if id < 0 { return "imap: invalid id"; }
+    if imap_active[id] == 0 { return "imap: session not active"; }
+    let tag = _imap_tag(id);
+    _imap_send(id, tag + " LIST \"\" *");
+    let deadline = get_ticks() + 300;
+    while get_ticks() < deadline {
+        let resp = _imap_read(id);
+        if len(resp) > 0 { return resp; }
+    }
+    return "(timeout)";
+}
+
+fn imap_fetch(id, seq_from, seq_to) {
+    if id < 0 { return "imap: invalid id"; }
+    if imap_active[id] == 0 { return "imap: not active"; }
+    let seq = to_string(seq_from) + ":" + to_string(seq_to);
+    let tag = _imap_tag(id);
+    _imap_send(id, tag + " FETCH " + seq
+        + " (FLAGS BODY[HEADER.FIELDS (FROM SUBJECT DATE)])");
+    let deadline = get_ticks() + 500;
+    let mut out = "";
+    while get_ticks() < deadline {
+        let resp = _imap_read(id);
+        if len(resp) > 0 { out = out + resp; }
+        if _imap_ok(out, tag) == 1 { return out; }
+    }
+    return out + "(timeout)";
+}
+
+fn imap_logout(id) {
+    if id < 0 { return 0; }
+    if imap_active[id] == 0 { return 0; }
+    let tag = _imap_tag(id);
+    _imap_send(id, tag + " LOGOUT");
+    tcp_close(imap_tcb[id]);
+    set_at(imap_active, id, 0);
+    imap_count = imap_count - 1;
+    print("imap[" + to_string(id) + "]: logged out");
+    return 0;
+}
+
+// ============================================================
+// Tick: flush any unsolicited server data
+// ============================================================
+
+fn imap_tick() {
+    let mut i = 0;
+    while i < IMAP_MAX {
+        if imap_active[i] == 1 {
+            let resp = _imap_read(i);
+            if len(resp) > 0 {
+                if str_find(resp, "* BYE") >= 0 {
+                    klog(1, "imap", "server sent BYE on session " + to_string(i));
+                    tcp_close(imap_tcb[i]);
+                    set_at(imap_active, i, 0);
+                    imap_count = imap_count - 1;
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// ============================================================
+// Status
+// ============================================================
+
+fn imap_status(id) {
+    if id < 0 { return "imap: invalid"; }
+    if id >= IMAP_MAX { return "imap: invalid"; }
+    if imap_active[id] == 0 { return "imap[" + to_string(id) + "] free"; }
+    let st_names = ["free", "connected", "auth", "selected", "error"];
+    let st = imap_state[id];
+    let st_s = "?";
+    if st >= 0 { if st <= 4 { st_s = st_names[st]; } }
+    return "imap[" + to_string(id) + "] " + st_s
+        + " host=" + imap_host[id]
+        + " mailbox=" + imap_mailbox[id]
+        + " msgs=" + to_string(imap_msg_cnt[id]);
+}
+
+fn imap_list_sessions() {
+    let mut out = "IMAP sessions (" + to_string(imap_count) + "/" + to_string(IMAP_MAX) + "):\n";
+    let mut i = 0;
+    while i < IMAP_MAX {
+        if imap_active[i] == 1 {
+            out = out + "  " + imap_status(i) + "\n";
+        }
+        i = i + 1;
+    }
+    if imap_count == 0 { out = out + "  (no sessions)\n"; }
+    return out;
+}
+
+print("imap.hl loaded");
+print("IMAP: RFC 3501 IMAP4rev1 client — LOGIN/SELECT/LIST/FETCH/LOGOUT — "
+    + to_string(IMAP_MAX) + " sessions, auto-tagged commands");

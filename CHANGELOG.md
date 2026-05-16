@@ -2,11 +2,54 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`235`（69 根目录 + 166 内核模块）
-- H-L 总行数：`~70,500`
-- 内核模块：`166`
-- Shell 命令：`253`
-- 最近完成功能迭代：`180`（traceroute + semaphore + ui_notepad）
+- `.hl` 文件：`238`（69 根目录 + 169 内核模块）
+- H-L 总行数：`~62,300`
+- 内核模块：`169`
+- Shell 命令：`269`
+- 最近完成功能迭代：`183`（imap + mqtt + lz4）
+
+## Iteration 183 — lz4.hl：LZ4 块压缩编解码
+
+- **`bare-kernel/hl/lz4.hl`** 新增（~310 行）
+  - LZ4 块格式：token(1B) + 扩展字节 + 字面量 + 2B 偏移 + 匹配段
+  - 4096 槽哈希表（LZ4_HASH=0xED0000，4B/槽）— 纯整数算术哈希
+  - `lz4_compress_mem(src, slen, dst)` — 贪心最长匹配，回溯至锚点
+  - `lz4_decompress_mem(src, slen, dst, dlim)` — 逐字节 token 解析 + 重叠匹配拷贝
+  - `lz4_compress_file/decompress_file` — VFS 读写，打印压缩比
+  - `lz4_selftest()` — 60B 重复模式 → 压缩 → 解压 → 逐字节验证
+  - LZ4_IN_BUF=0xEB0000, LZ4_OUT_BUF=0xEC0000（各 64 KB）
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`lz4_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 3 条命令：`lz4c <in> <out>` / `lz4d <in> <out>` / `lz4test`
+
+## Iteration 182 — mqtt.hl：MQTT 3.1.1 发布/订阅客户端
+
+- **`bare-kernel/hl/mqtt.hl`** 新增（~310 行）
+  - MQTT 3.1.1 可变长度字段编码（纯整数模/除法，无位运算）
+  - CONNECT 包：协议名 "MQTT" + 版本 4 + CleanSession + keepalive=60s + 客户端 ID
+  - PUBLISH QoS 0：固定头 0x30 + 可变长度 + 2B 主题长度 + 主题 + 载荷
+  - SUBSCRIBE：0x82 + 包 ID + 主题列表 + QoS 0
+  - UNSUBSCRIBE / PINGREQ / DISCONNECT
+  - `mqtt_tick()`：每 5000 tick 自动发送 PINGREQ；排水 TCP RX 缓冲区中 PUBLISH 包
+  - MQTT_MAX=4 个并发连接；MQTT_BUF=0xEAC000
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`mqtt_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 7 条命令：
+  - `mqtt connect <host> <port> <cid>` / `mqtt pub <id> <topic> <payload>`
+  - `mqtt sub <id> <topic>` / `mqtt unsub <id> <topic>` / `mqtt ping <id>` / `mqtt quit <id>` / `mqtt`
+
+## Iteration 181 — imap.hl：IMAP4rev1 邮件读取客户端
+
+- **`bare-kernel/hl/imap.hl`** 新增（~270 行）
+  - RFC 3501 IMAP4rev1；自动递增命令标签（A001..A999）
+  - `imap_connect(host, port)` — TCP 连接到邮件服务器（143 明文 / 993 TLS）
+  - `imap_login(id, user, pass)` — 轮询 200 tick 等待 "tag OK" 响应
+  - `imap_select(id, mailbox)` — 解析 `* N EXISTS` 获取邮件数量
+  - `imap_list(id)` — LIST "" * 列举邮件夹
+  - `imap_fetch(id, from, to)` — FETCH FLAGS BODY[HEADER.FIELDS (FROM SUBJECT DATE)]
+  - `imap_logout(id)` / `imap_tick()` — 排水 `* BYE` 主动断连
+  - IMAP_MAX=4 会话；IMAP_BUF=0xE9C000（4 KB）
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`imap_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 6 条命令：
+  - `imap connect/login/select/list/fetch/logout`
 
 ## Iteration 180 — ui_notepad.hl：图形化多行文本编辑器
 

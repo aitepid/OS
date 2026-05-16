@@ -1,0 +1,391 @@
+// mqtt.hl -- MQTT 3.1.1 Client (OASIS Standard)
+//
+// Iteration 182: Lightweight publish/subscribe messaging for IoT.
+//
+// Packet types (fixed-header byte0 = type<<4 | flags):
+//   CONNECT(1)=0x10  CONNACK(2)=0x20  PUBLISH(3)=0x3N
+//   PUBACK(4)=0x40   SUBSCRIBE(8)=0x82  SUBACK(9)=0x90
+//   UNSUBSCRIBE(10)=0xA2  UNSUBACK(11)=0xB0
+//   PINGREQ(12)=0xC0  PINGRESP(13)=0xD0  DISCONNECT(14)=0xE0
+//
+// Variable-length encoding: 7-bit groups, MSB continuation bit.
+//
+// Up to MQTT_MAX (4) broker connections.
+// QoS 0 only (fire-and-forget) for simplicity.
+// Keepalive: 60s default, PINGREQ sent every MQTT_PING_TICKS ticks.
+//
+// Public API:
+//   mqtt_init()
+//   mqtt_connect(host, port, client_id)   → connection_id
+//   mqtt_publish(id, topic, payload)      → 0 ok / -1 fail
+//   mqtt_subscribe(id, topic)             → 0 ok / -1 fail
+//   mqtt_unsubscribe(id, topic)           → 0 ok / -1 fail
+//   mqtt_disconnect(id)
+//   mqtt_tick()
+//   mqtt_status(id) / mqtt_list()
+//
+// Shell:
+//   mqtt connect <host> <port> <client_id>
+//   mqtt pub <id> <topic> <payload>
+//   mqtt sub <id> <topic>
+//   mqtt unsub <id> <topic>
+//   mqtt ping <id>
+//   mqtt quit <id>
+//   mqtt                    → list all connections
+
+let MQTT_MAX        = 4;
+let MQTT_PING_TICKS = 5000;   // ~50s at 100Hz (keepalive=60s)
+let MQTT_BUF        = 15384576;   // 0xEAC000  4 KB packet scratch
+let MQTT_PKT_MAX    = 256;
+
+let MQTT_ST_FREE    = 0;
+let MQTT_ST_CONN    = 1;   // TCP connected, CONNECT sent
+let MQTT_ST_READY   = 2;   // CONNACK received, session live
+let MQTT_ST_ERR     = 3;
+
+let mut mqtt_active    = [];
+let mut mqtt_tcb       = [];
+let mut mqtt_state     = [];
+let mut mqtt_host      = [];
+let mut mqtt_client_id = [];
+let mut mqtt_ping_ctr  = [];   // ticks since last PINGREQ
+let mut mqtt_pkt_id    = [];   // incrementing packet id for subscribe
+let mut mqtt_count     = 0;
+
+fn mqtt_init() {
+    mqtt_active    = [];
+    mqtt_tcb       = [];
+    mqtt_state     = [];
+    mqtt_host      = [];
+    mqtt_client_id = [];
+    mqtt_ping_ctr  = [];
+    mqtt_pkt_id    = [];
+    mqtt_count     = 0;
+    let mut i = 0;
+    while i < MQTT_MAX {
+        push(mqtt_active,    0);
+        push(mqtt_tcb,       0 - 1);
+        push(mqtt_state,     MQTT_ST_FREE);
+        push(mqtt_host,      "");
+        push(mqtt_client_id, "");
+        push(mqtt_ping_ctr,  0);
+        push(mqtt_pkt_id,    1);
+        i = i + 1;
+    }
+    print("mqtt: init — max " + to_string(MQTT_MAX) + " connections, QoS 0");
+    return 0;
+}
+
+fn _mqtt_alloc() {
+    let mut i = 0;
+    while i < MQTT_MAX {
+        if mqtt_active[i] == 0 { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+// ============================================================
+// Packet builder helpers (write to MQTT_BUF, return length)
+// ============================================================
+
+// Write 2-byte big-endian string: length(2) + chars
+fn _mqtt_write_str(off, s) {
+    let n = len(s);
+    mem_write_u8(MQTT_BUF + off,     n / 256);
+    mem_write_u8(MQTT_BUF + off + 1, n % 256);
+    let mut i = 0;
+    while i < n {
+        mem_write_u8(MQTT_BUF + off + 2 + i, str_char_code(s, i));
+        i = i + 1;
+    }
+    return 2 + n;
+}
+
+// Encode variable-length field starting at offset; return bytes written
+fn _mqtt_encode_len(off, val) {
+    let mut v = val;
+    let mut cnt = 0;
+    while 1 == 1 {
+        let enc = v % 128;
+        v = v / 128;
+        if v > 0 {
+            mem_write_u8(MQTT_BUF + off + cnt, enc + 128);
+        } else {
+            mem_write_u8(MQTT_BUF + off + cnt, enc);
+        }
+        cnt = cnt + 1;
+        if v == 0 { return cnt; }
+    }
+    return cnt;
+}
+
+// Send raw MQTT_BUF[0..n] over TCP
+fn _mqtt_flush(id, n) {
+    let mut pkt = "";
+    let mut i = 0;
+    while i < n {
+        pkt = pkt + str_from_code(mem_read_u8(MQTT_BUF + i));
+        i = i + 1;
+    }
+    tcp_send(mqtt_tcb[id], pkt);
+    return 0;
+}
+
+// ============================================================
+// CONNECT packet
+// ============================================================
+
+fn _mqtt_send_connect(id) {
+    let cid = mqtt_client_id[id];
+    // Variable header: protocol name "MQTT"(6B) + level(1) + flags(1) + keepalive(2)
+    let vh_off = 4;   // reserve bytes 0-3 for fixed header + length
+    let mut pos = vh_off;
+    pos = pos + _mqtt_write_str(pos, "MQTT");   // protocol name
+    mem_write_u8(MQTT_BUF + pos, 4);  pos = pos + 1;   // level=4 (MQTT 3.1.1)
+    mem_write_u8(MQTT_BUF + pos, 2);  pos = pos + 1;   // flags=CleanSession
+    mem_write_u8(MQTT_BUF + pos, 0);  pos = pos + 1;   // keepalive hi=0
+    mem_write_u8(MQTT_BUF + pos, 60); pos = pos + 1;   // keepalive lo=60s
+    // Payload: client_id
+    pos = pos + _mqtt_write_str(pos, cid);
+
+    let remain = pos - vh_off;
+    // Write fixed header at bytes 0-1
+    mem_write_u8(MQTT_BUF + 0, 16);   // CONNECT = 1<<4 = 0x10
+    let lbytes = _mqtt_encode_len(1, remain);
+    // Shift variable header to after length bytes
+    let hdr_sz = 1 + lbytes;
+    let body_start = vh_off;
+    let body_end   = pos;
+    let body_len   = body_end - body_start;
+    // Move body to follow the real header
+    if hdr_sz < vh_off {
+        let mut k = 0;
+        while k < body_len {
+            mem_write_u8(MQTT_BUF + hdr_sz + k, mem_read_u8(MQTT_BUF + body_start + k));
+            k = k + 1;
+        }
+    }
+    _mqtt_flush(id, hdr_sz + body_len);
+    return 0;
+}
+
+// ============================================================
+// PUBLISH (QoS 0)
+// ============================================================
+
+fn mqtt_publish(id, topic, payload) {
+    if id < 0 { return 0 - 1; }
+    if mqtt_active[id] == 0 { return 0 - 1; }
+    if mqtt_state[id] != MQTT_ST_READY {
+        print("mqtt[" + to_string(id) + "]: not ready"); return 0 - 1;
+    }
+    // Build directly into pkt string (QoS 0 = no packet id)
+    let tlen  = len(topic);
+    let plen  = len(payload);
+    let remain = 2 + tlen + plen;
+    let mut pkt = str_from_code(48);   // 0x30 = PUBLISH QoS0
+    // Encode remaining length
+    let mut v = remain;
+    while 1 == 1 {
+        let enc = v % 128;
+        v = v / 128;
+        if v > 0 { pkt = pkt + str_from_code(enc + 128); }
+        else { pkt = pkt + str_from_code(enc); }
+        if v == 0 { v = 0 - 1; }
+    }
+    pkt = pkt + str_from_code(tlen / 256) + str_from_code(tlen % 256);
+    pkt = pkt + topic + payload;
+    tcp_send(mqtt_tcb[id], pkt);
+    klog(1, "mqtt", "pub id=" + to_string(id) + " topic=" + topic);
+    return 0;
+}
+
+// ============================================================
+// SUBSCRIBE
+// ============================================================
+
+fn mqtt_subscribe(id, topic) {
+    if id < 0 { return 0 - 1; }
+    if mqtt_active[id] == 0 { return 0 - 1; }
+    let pid = mqtt_pkt_id[id];
+    set_at(mqtt_pkt_id, id, pid + 1);
+    let tlen   = len(topic);
+    let remain = 2 + 2 + tlen + 1;   // pkt_id + strlen(2) + topic + QoS
+    let mut pkt = str_from_code(130);   // 0x82 = SUBSCRIBE
+    let mut v = remain;
+    while 1 == 1 {
+        let enc = v % 128;
+        v = v / 128;
+        if v > 0 { pkt = pkt + str_from_code(enc + 128); }
+        else { pkt = pkt + str_from_code(enc); }
+        if v == 0 { v = 0 - 1; }
+    }
+    pkt = pkt + str_from_code(pid / 256) + str_from_code(pid % 256);
+    pkt = pkt + str_from_code(tlen / 256) + str_from_code(tlen % 256);
+    pkt = pkt + topic;
+    pkt = pkt + str_from_code(0);   // QoS 0
+    tcp_send(mqtt_tcb[id], pkt);
+    print("mqtt[" + to_string(id) + "]: subscribed to " + topic);
+    return 0;
+}
+
+fn mqtt_unsubscribe(id, topic) {
+    if id < 0 { return 0 - 1; }
+    if mqtt_active[id] == 0 { return 0 - 1; }
+    let pid = mqtt_pkt_id[id];
+    set_at(mqtt_pkt_id, id, pid + 1);
+    let tlen   = len(topic);
+    let remain = 2 + 2 + tlen;
+    let mut pkt = str_from_code(162);   // 0xA2 = UNSUBSCRIBE
+    let mut v = remain;
+    while 1 == 1 {
+        let enc = v % 128;
+        v = v / 128;
+        if v > 0 { pkt = pkt + str_from_code(enc + 128); }
+        else { pkt = pkt + str_from_code(enc); }
+        if v == 0 { v = 0 - 1; }
+    }
+    pkt = pkt + str_from_code(pid / 256) + str_from_code(pid % 256);
+    pkt = pkt + str_from_code(tlen / 256) + str_from_code(tlen % 256);
+    pkt = pkt + topic;
+    tcp_send(mqtt_tcb[id], pkt);
+    print("mqtt[" + to_string(id) + "]: unsubscribed from " + topic);
+    return 0;
+}
+
+// ============================================================
+// PINGREQ / DISCONNECT
+// ============================================================
+
+fn mqtt_ping(id) {
+    if id < 0 { return 0; }
+    if mqtt_active[id] == 0 { return 0; }
+    // PINGREQ = 0xC0 0x00
+    tcp_send(mqtt_tcb[id], str_from_code(192) + str_from_code(0));
+    return 0;
+}
+
+fn mqtt_disconnect(id) {
+    if id < 0 { return 0; }
+    if mqtt_active[id] == 0 { return 0; }
+    // DISCONNECT = 0xE0 0x00
+    tcp_send(mqtt_tcb[id], str_from_code(224) + str_from_code(0));
+    tcp_close(mqtt_tcb[id]);
+    set_at(mqtt_active, id, 0);
+    mqtt_count = mqtt_count - 1;
+    print("mqtt[" + to_string(id) + "]: disconnected");
+    return 0;
+}
+
+// ============================================================
+// Connect
+// ============================================================
+
+fn mqtt_connect(host, port, client_id) {
+    let id = _mqtt_alloc();
+    if id < 0 { print("mqtt: no free slots"); return 0 - 1; }
+    let ip = dns_resolve(host);
+    let tcb = tcp_connect(ip, port);
+    if tcb < 0 { print("mqtt: tcp_connect failed to " + host); return 0 - 1; }
+    set_at(mqtt_active,    id, 1);
+    set_at(mqtt_tcb,       id, tcb);
+    set_at(mqtt_state,     id, MQTT_ST_CONN);
+    set_at(mqtt_host,      id, host);
+    set_at(mqtt_client_id, id, client_id);
+    set_at(mqtt_ping_ctr,  id, 0);
+    set_at(mqtt_pkt_id,    id, 1);
+    mqtt_count = mqtt_count + 1;
+    _mqtt_send_connect(id);
+
+    // Wait for CONNACK (up to 200 ticks)
+    let deadline = get_ticks() + 200;
+    while get_ticks() < deadline {
+        let addr = TCP_TABLE + tcb * TCB_SIZE;
+        let rx_buf = mem_read_u64(addr + 64);
+        if rx_buf != 0 {
+            let b0 = mem_read_u8(rx_buf);
+            if b0 == 32 {   // CONNACK = 0x20
+                let rc = mem_read_u8(rx_buf + 3);
+                mem_zero(rx_buf, 4);
+                if rc == 0 {
+                    set_at(mqtt_state, id, MQTT_ST_READY);
+                    print("mqtt[" + to_string(id) + "]: connected to " + host
+                        + " as " + client_id);
+                    return id;
+                }
+                print("mqtt: CONNACK error code=" + to_string(rc));
+                mqtt_disconnect(id);
+                return 0 - 1;
+            }
+        }
+    }
+    print("mqtt: CONNACK timeout from " + host);
+    set_at(mqtt_state, id, MQTT_ST_ERR);
+    return id;   // return id so caller can retry/inspect
+}
+
+// ============================================================
+// Tick: keepalive PING + incoming message drain
+// ============================================================
+
+fn mqtt_tick() {
+    let mut i = 0;
+    while i < MQTT_MAX {
+        if mqtt_active[i] == 1 {
+            if mqtt_state[i] == MQTT_ST_READY {
+                set_at(mqtt_ping_ctr, i, mqtt_ping_ctr[i] + 1);
+                if mqtt_ping_ctr[i] >= MQTT_PING_TICKS {
+                    set_at(mqtt_ping_ctr, i, 0);
+                    mqtt_ping(i);
+                }
+                // Drain incoming (PUBLISH from subscriptions → klog)
+                let addr = TCP_TABLE + mqtt_tcb[i] * TCB_SIZE;
+                let rx_buf = mem_read_u64(addr + 64);
+                if rx_buf != 0 {
+                    let b0 = mem_read_u8(rx_buf);
+                    if b0 >= 48 {
+                        if b0 < 64 {   // PUBLISH: 0x30..0x3F
+                            klog(1, "mqtt", "incoming PUBLISH on connection " + to_string(i));
+                        }
+                    }
+                    mem_zero(rx_buf, 64);
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// ============================================================
+// Status
+// ============================================================
+
+fn mqtt_status(id) {
+    if id < 0 { return "mqtt: invalid"; }
+    if id >= MQTT_MAX { return "mqtt: invalid"; }
+    if mqtt_active[id] == 0 { return "mqtt[" + to_string(id) + "] free"; }
+    let st_names = ["free", "connecting", "ready", "error"];
+    let st = mqtt_state[id];
+    let st_s = "?";
+    if st >= 0 { if st <= 3 { st_s = st_names[st]; } }
+    return "mqtt[" + to_string(id) + "] " + st_s
+        + " host=" + mqtt_host[id]
+        + " client=" + mqtt_client_id[id];
+}
+
+fn mqtt_list() {
+    let mut out = "MQTT connections (" + to_string(mqtt_count) + "/" + to_string(MQTT_MAX) + "):\n";
+    let mut i = 0;
+    while i < MQTT_MAX {
+        if mqtt_active[i] == 1 { out = out + "  " + mqtt_status(i) + "\n"; }
+        i = i + 1;
+    }
+    if mqtt_count == 0 { out = out + "  (no connections)\n"; }
+    return out;
+}
+
+print("mqtt.hl loaded");
+print("MQTT: OASIS 3.1.1 client — CONNECT/PUBLISH/SUBSCRIBE/PING/DISCONNECT — QoS 0 — "
+    + to_string(MQTT_MAX) + " connections");
