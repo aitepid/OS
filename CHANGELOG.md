@@ -3,16 +3,38 @@
 ## Current Snapshot
 
 - `.hl` 文件：`200`（68 根目录 + 132 内核模块）
-- H-L 总行数：`~48,200`（根 10,044 + 内核 ~38,156）
+- H-L 总行数：`~48,600`（根 10,044 + 内核 ~38,556）
 - 内核模块：`132`（编译产出 1,700+ 函数 / 2,003+ 符号）
 - `kernel_entry.hl`：`9,428` 行
 - `hl-bootstrap.hl`：`4,306` 行，`208` 函数
 - `stdlib.hl`：`1,385` 行，`143` 函数
 - `kinterp.hl`：`~1,280` 行
-- Shell 命令（`shell.hl` if cmd ==）：`79`
+- Shell 命令（`shell.hl` if cmd ==）：`101`
 - `scripts/*.ps1`：`28`（9,729 行）
 - 构建/测试主入口：`hl-bootstrap.cmd test`
-- 最近完成功能迭代：`143`（GPU 2D blit + 脏区追踪 + 18/18 发布验证通过）
+- 最近完成功能迭代：`144`（文件操作完整 + 上下文菜单 + cp/mv + 发布验证通过）
+
+## Iteration 144 — 文件操作完整 + 上下文菜单（ui_files.hl + vfs.hl + shell.hl）
+
+- **`vfs.hl`**: 新增文件操作函数
+  - `vfs_copy(src_path, dst_path)`：512 字节分块读写，0x900000 暂存缓冲区，成功后 `inotify_emit(IN_CREATE)`
+  - `vfs_rename(src_path, dst_path)`：`vfs_copy` + `vfs_unlink` 实现跨路径移动
+  - 修复 `vfs_unlink` 后遗留孤立代码（stray `return 0 - 1; }`）
+- **`ui_files.hl`**: 完整重写（360 行，22 个函数）
+  - 上下文菜单系统：`UIFILES_CTX_{DELETE,NEWFOLD,COPY,CANCEL}`（4 项）
+  - `uifiles_ctx_render()`：覆盖式弹出菜单，带分隔线
+  - `uifiles_ctx_show/hide/handle_click()`：坐标命中测试 + 边界外点击关闭
+  - `uifiles_selected_path()`：返回当前选中项完整路径，正确处理 ".." 跳转
+  - `uifiles_op_delete()`：`vfs_unlink` + 自动刷新
+  - `uifiles_op_new_folder(name)`：`vfs_mkdir` + 自动刷新
+  - `uifiles_op_copy(dst_dir)`：`vfs_copy` 复制选中文件到目标目录
+  - `uifiles_handle_right_click()`：显示上下文菜单
+  - 渲染增强：文件列表 Type 列（DIR/file），滚动条缩略块
+- **`shell.hl`**: 新增 2 条文件命令（101 total）
+  - `cp <src> <dst>`：`vfs_copy` 包装，显示字节数
+  - `mv <src> <dst>`：`vfs_rename` 包装
+  - help Files 行更新（标注 cp/mv 用法）
+- **发布验证**: 18/18 PASSED（200 HL 文件，132 模块）
 
 ## Iteration 143 — GPU 2D blit + 脏区追踪（vesa.hl）
 

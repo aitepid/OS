@@ -471,7 +471,37 @@ fn vfs_unlink(path) {
     if result == 0 { inotify_emit(path, 512, path); }
     return result;
 }
-    return 0 - 1;
+
+// Copy file: read src then write dst (works across same FS or ramfs)
+fn vfs_copy(src_path, dst_path) {
+    let src_fd = vfs_open(src_path, O_RDONLY);
+    if src_fd < 0 { return 0 - 1; }
+
+    let dst_fd = vfs_open(dst_path, O_CREAT + O_WRONLY + O_TRUNC);
+    if dst_fd < 0 { vfs_close(src_fd); return 0 - 2; }
+
+    // Read in 512-byte chunks and write
+    let CHUNK = 512;
+    let buf_addr = 9437184;  // 0x900000 scratch buffer
+    let mut total = 0;
+    let mut n = vfs_read(src_fd, buf_addr, CHUNK);
+    while n > 0 {
+        vfs_write(dst_fd, buf_addr, n);
+        total = total + n;
+        n = vfs_read(src_fd, buf_addr, CHUNK);
+    }
+
+    vfs_close(src_fd);
+    vfs_close(dst_fd);
+    inotify_emit(dst_path, 256, dst_path);  // IN_CREATE
+    return total;
+}
+
+// Rename / move: copy then delete src (VFS layer; works cross-directory)
+fn vfs_rename(src_path, dst_path) {
+    let bytes = vfs_copy(src_path, dst_path);
+    if bytes < 0 { return 0 - 1; }
+    return vfs_unlink(src_path);
 }
 
 print("vfs.hl loaded (Trie mount resolve)");

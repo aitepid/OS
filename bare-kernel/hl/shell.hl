@@ -3,15 +3,16 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 73 commands + pipe operator (|):
+// 101 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
 //   cache ntp wdog tmpfs fw rand cg pty sock shm trace hrt sysfs
-//   services svc(start/stop/status) kinfo run kill mkdir rm
+//   services svc(start/stop/status) kinfo run kill mkdir rm cp mv
 //   history hostname netstat grep disk_info format install advtest
 //   tcploop dnstest heval lsmod kmodtest
-//   UI: sysmon files audiotest settings
+//   UI: sysmon files audiotest settings fm fileman
+//   Audio: audio vol mute unmute beep  GPU: gpu flip dirty
 //   Shell pipe: cmd1 | cmd2
 
 fn shell_handle(cmd) {
@@ -21,7 +22,7 @@ fn shell_handle(cmd) {
         serial_print("Memory:   free heap meminfo");
         serial_print("Tasks:    ps kill run (kill sends SIGTERM by default)");
         serial_print("Signals:  SIGTERM=15 SIGKILL=9 SIGSTOP=19 SIGCONT=18");
-        serial_print("Files:    ls [path] cat echo  echo <text> > <file>  mkdir rm  fm (graphical)");
+        serial_print("Files:    ls [path] cat echo  echo <text> > <file>  mkdir rm  cp <s> <d>  mv <s> <d>  fm (graphical)");
         serial_print("Proc:     mounts (dynamic) | cat /proc/meminfo etc.");
         serial_print("Disk:     disk_info format install");
         serial_print("Network:  ifconfig ping dns arp netstat");
@@ -255,6 +256,28 @@ fn shell_handle(cmd) {
         let r = vfs_unlink(path);
         if r == 0 { return "Removed: " + path; }
         return "Error: cannot remove " + path;
+    }
+
+    if str_starts_with(cmd, "cp ") {
+        let args = str_sub(cmd, 3, len(cmd));
+        let sp = str_find(args, " ");
+        if sp < 0 { return "Usage: cp <src> <dst>"; }
+        let src = str_sub(args, 0, sp);
+        let dst = str_sub(args, sp + 1, len(args));
+        let r = vfs_copy(src, dst);
+        if r >= 0 { return "Copied: " + src + " -> " + dst + " (" + to_string(r) + " bytes)"; }
+        return "Error: cannot copy " + src;
+    }
+
+    if str_starts_with(cmd, "mv ") {
+        let args = str_sub(cmd, 3, len(cmd));
+        let sp = str_find(args, " ");
+        if sp < 0 { return "Usage: mv <src> <dst>"; }
+        let src = str_sub(args, 0, sp);
+        let dst = str_sub(args, sp + 1, len(args));
+        let r = vfs_rename(src, dst);
+        if r >= 0 { return "Moved: " + src + " -> " + dst; }
+        return "Error: cannot move " + src;
     }
 
     if str_starts_with(cmd, "run ") {
@@ -663,7 +686,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 99 commands + pipe(|) + echo>redirect + inotify + watch + pty + audio + gpu");
+print("shell.hl loaded -- 101 commands + pipe(|) + echo>redirect + inotify + watch + pty + audio + gpu + cp/mv");
 
 // Main shell loop (called from kernel_init)
 
