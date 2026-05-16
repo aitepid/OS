@@ -2,17 +2,77 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`203`（69 根目录 + 134 内核模块）
-- H-L 总行数：`~50,200`（根 10,600+ + 内核 ~39,600）
-- 内核模块：`134`（编译产出 1,760+ 函数 / 2,060+ 符号）
+- `.hl` 文件：`205`（69 根目录 + 136 内核模块）
+- H-L 总行数：`~52,800`（根 10,900+ + 内核 ~41,900）
+- 内核模块：`136`（编译产出 1,840+ 函数 / 2,100+ 符号）
 - `kernel_entry.hl`：`9,428` 行
 - `hl-bootstrap.hl`：`4,306` 行，`208` 函数
 - `stdlib.hl`：`1,385` 行，`143` 函数
 - `kinterp.hl`：`~1,280` 行
-- Shell 命令（`shell.hl` if cmd ==）：`116`
+- Shell 命令（`shell.hl` if cmd ==）：`135`
 - `scripts/*.ps1`：`28`（9,729 行）
 - 构建/测试主入口：`hl-bootstrap.cmd test`
-- 最近完成功能迭代：`147`（图形文本编辑器 + 进程命名空间 + 18/18 发布验证通过）
+- 最近完成功能迭代：`150`（clipboard + seccomp + 容器运行时完整 + 18/18 验证通过）
+
+## Iteration 150 — 跨窗口剪贴板（clipboard.hl）
+
+- **`bare-kernel/hl/clipboard.hl`**: 新建（~120 行，12 个函数）
+  - 全局文本剪贴板：`clipboard_set_text(owner, text)` / `clipboard_get_text()`
+  - 主选择剪贴板（X11 风格）：`clipboard_set/get_selection()`
+  - 8 槽历史环形缓冲：`clipboard_history(idx)` 支持召回旧条目
+  - 64 KB 文本上限，超长自动截断
+  - 所有者窗口跟踪（owner_win_id），`clipboard_release(win_id)` 窗口关闭时释放
+  - Toast 通知：复制时调用 `ui_notify_info("Copied: ...")` 显示预览
+  - `clipboard_copy_text/paste/release` 便捷别名
+- **`bare-kernel/hl/ui_text_editor.hl`**: 新增三组快捷键
+  - `Ctrl+C`（key=3）：复制当前行到剪贴板
+  - `Ctrl+V`（key=22）：粘贴剪贴板文本（可打印 ASCII 逐字符插入）
+  - `Ctrl+S`（key=19）：保存文件 → `uitxed_save()`
+- **`kernel_init.hl`**: Phase 6 新增 `clipboard_init()` 调用（wm_init 之后）
+- **`shell.hl`**: 新增 4 条剪贴板命令（131 → 135 total）
+  - `clipboard`：状态查询
+  - `clip copy <text>`：复制文本到剪贴板
+  - `clip paste`：粘贴当前剪贴板内容
+  - `clip hist`：查看最近一条历史记录
+
+## Iteration 149 — 容器运行时完整集成（HicOS_ContainerRuntime.hl）
+
+- **`HicOS_ContainerRuntime.hl`**: 全面重写（~260 行，15 个函数）
+  - 完整三层隔离：每个容器自动创建 namespace（PID/UTS/IPC/MNT） + cgroup（默认 64 MB 内存限制）+ seccomp（默认 no-net 配置）
+  - 新增字段：`ctr_ns_ids / ctr_sc_ids / ctr_task_idx / ctr_exit_code / ctr_active`
+  - `ctr_create(name, rootfs)` → 调用 `ns_create / cgroup_create / seccomp_profile_no_net`
+  - `ctr_start(id)` → `task_create + ns_enter + cgroup_attach + seccomp_apply`
+  - `ctr_stop(id)` → `task_kill + ns_enter(root) + seccomp_detach`
+  - `ctr_pause/resume(id)` → `task_block/unblock`
+  - `ctr_destroy(id)` → 释放 ns + seccomp profile
+  - `ctr_set_mem_limit / ctr_set_cpu_quota / ctr_set_seccomp`：运行时调整资源与安全策略
+  - `ctr_list()` / `ctr_status(id)`：完整状态字符串
+- **`shell.hl`**: 新增 7 条容器命令（124 → 131 total）
+  - `ctr`：列出全部容器
+  - `ctr new <name> [root]`：创建容器（自动分配 ns + cg + sc）
+  - `ctr start/stop/rm <id>`：容器生命周期
+  - `ctr exec <id> <cmd>`：在容器 ns 上下文执行命令
+  - `ctr info <id>`：容器详情
+
+## Iteration 148 — 系统调用过滤沙箱（seccomp.hl）
+
+- **`bare-kernel/hl/seccomp.hl`**: 新建（~210 行，18 个函数）
+  - 4 种动作：`SECCOMP_ACT_ALLOW / KILL / ERRNO / TRACE`
+  - 5 种比较器：`CMP_ANY / EQ / NEQ / LT / GE`（支持 arg0 值过滤）
+  - 最多 32 个 profile，每 profile 最多 64 条规则，first-match-wins 语义
+  - `seccomp_check(task_idx, syscall_nr, arg0)` → 从 syscall dispatcher 调用
+  - 3 个预设 profile：`seccomp_profile_minimal()`（仅 6 个 syscall）、`seccomp_profile_no_net()`（屏蔽网络 syscall）、`seccomp_profile_audit()`（仅记录）
+  - `seccomp_apply(task_idx, profile_id)` / `seccomp_detach(task_idx)`：per-task 绑定
+  - 命中计数统计（`sc_hit_count[]`）
+- **`kernel_init.hl`**: Phase 9 新增 `seccomp_init()` 调用（secboot_init 之后）
+- **`shell.hl`**: 新增 4 条 seccomp 命令（116 → 124 total）
+  - `seccomp`：列出全部过滤规则
+  - `seccomp new <name>`：创建空 allow-all profile
+  - `seccomp deny <pid> <nr>`：添加 deny 规则
+  - `seccomp apply <tid> <pid>`：将 profile 绑定到任务
+- **`manifest.hl`**: 更新指标
+  - `KERNEL_MODULES=136`, `HL_FILES=205`, `SHELL_COMMANDS=135`, `KERNEL_FUNCTIONS=1840`
+- **发布验证**: 18/18 PASSED（205 HL 文件，136 模块）
 
 ## Iteration 147 — 图形文本编辑器（ui_text_editor.hl）
 

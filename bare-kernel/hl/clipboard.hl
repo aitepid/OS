@@ -1,0 +1,159 @@
+// clipboard.hl -- Cross-Window Clipboard (Copy/Paste)
+//
+// Single global clipboard with:
+//   - Text clipboard (string buffer up to 64 KB)
+//   - Selection clipboard (primary selection, as in X11)
+//   - History ring (last 8 clipboard entries)
+//   - Owner tracking (which window last set the clipboard)
+//   - Event notification (clipboard change → ui_notify toast)
+//
+// Public API:
+//   clipboard_init
+//   clipboard_set_text(owner_win_id, text)  -- copy text to clipboard
+//   clipboard_get_text()                    -- paste: returns current text
+//   clipboard_set_selection(text)           -- primary (mouse-selection)
+//   clipboard_get_selection()
+//   clipboard_clear()
+//   clipboard_history(idx)                  -- recall older entry
+//   clipboard_status()
+
+let CLIPBOARD_MAX_TEXT = 65536;   // 64 KB
+let CLIPBOARD_HISTORY  = 8;
+
+// Current clipboard state
+let mut clipboard_text    = "";
+let mut clipboard_owner   = 0 - 1;   // window_id that owns clipboard (-1 = none)
+let mut clipboard_seq     = 0;        // monotonically increasing sequence number
+
+// Primary / selection clipboard (separate from main clipboard)
+let mut clipboard_selection = "";
+
+// History ring (last CLIPBOARD_HISTORY entries)
+let mut clipboard_hist     = [];
+let mut clipboard_hist_seq = [];      // sequence numbers for each entry
+let mut clipboard_hist_head = 0;
+let mut clipboard_hist_count = 0;
+
+fn clipboard_init() {
+    clipboard_text      = "";
+    clipboard_owner     = 0 - 1;
+    clipboard_seq       = 0;
+    clipboard_selection = "";
+    clipboard_hist      = [];
+    clipboard_hist_seq  = [];
+    clipboard_hist_head = 0;
+    clipboard_hist_count = 0;
+
+    let mut i = 0;
+    while i < CLIPBOARD_HISTORY {
+        push(clipboard_hist,     "");
+        push(clipboard_hist_seq, 0);
+        i = i + 1;
+    }
+
+    print("clipboard: init — " + to_string(CLIPBOARD_HISTORY) + "-entry history ring, 64 KB max");
+    return 0;
+}
+
+// --- Internal: push current clipboard to history ring ---
+fn _clipboard_push_history(text) {
+    let idx = clipboard_hist_head % CLIPBOARD_HISTORY;
+    set_at(clipboard_hist,     idx, text);
+    set_at(clipboard_hist_seq, idx, clipboard_seq);
+    clipboard_hist_head = clipboard_hist_head + 1;
+    if clipboard_hist_count < CLIPBOARD_HISTORY {
+        clipboard_hist_count = clipboard_hist_count + 1;
+    }
+    return 0;
+}
+
+// --- Copy: set clipboard text ---
+fn clipboard_set_text(owner_win_id, text) {
+    // Save old content to history before replacing
+    if len(clipboard_text) > 0 {
+        _clipboard_push_history(clipboard_text);
+    }
+
+    // Truncate if too large
+    let mut t = text;
+    if len(t) > CLIPBOARD_MAX_TEXT { t = str_sub(t, 0, CLIPBOARD_MAX_TEXT); }
+
+    clipboard_text  = t;
+    clipboard_owner = owner_win_id;
+    clipboard_seq   = clipboard_seq + 1;
+
+    // Toast notification
+    let preview = t;
+    if len(preview) > 40 { preview = str_sub(preview, 0, 40) + "..."; }
+    ui_notify_info("Copied: " + preview);
+
+    return clipboard_seq;
+}
+
+// --- Paste: get clipboard text ---
+fn clipboard_get_text() {
+    return clipboard_text;
+}
+
+// --- Primary / selection clipboard (no history, no notification) ---
+fn clipboard_set_selection(text) {
+    clipboard_selection = text;
+    return 0;
+}
+
+fn clipboard_get_selection() {
+    return clipboard_selection;
+}
+
+// --- Clear clipboard ---
+fn clipboard_clear() {
+    if len(clipboard_text) > 0 {
+        _clipboard_push_history(clipboard_text);
+    }
+    clipboard_text  = "";
+    clipboard_owner = 0 - 1;
+    clipboard_seq   = clipboard_seq + 1;
+    return 0;
+}
+
+// --- History recall: idx=0 is most recent, idx=N is older ---
+fn clipboard_history(idx) {
+    if idx < 0 { return ""; }
+    if idx >= clipboard_hist_count { return ""; }
+    let ring_idx = (clipboard_hist_head - 1 - idx + CLIPBOARD_HISTORY * 2) % CLIPBOARD_HISTORY;
+    return clipboard_hist[ring_idx];
+}
+
+// --- Status string ---
+fn clipboard_status() {
+    let text_len = len(clipboard_text);
+    let sel_len  = len(clipboard_selection);
+    return "clipboard: seq=" + to_string(clipboard_seq)
+        + " len=" + to_string(text_len)
+        + " owner_win=" + to_string(clipboard_owner)
+        + " history=" + to_string(clipboard_hist_count)
+        + " selection=" + to_string(sel_len) + "ch";
+}
+
+// --- Shortcut helpers for UI modules ---
+
+// Called from text editor: Ctrl+C selects current line and copies
+fn clipboard_copy_text(text) {
+    return clipboard_set_text(0 - 1, text);
+}
+
+// Called from text editor: Ctrl+V returns paste string
+fn clipboard_paste() {
+    return clipboard_get_text();
+}
+
+// Called when a window is closed: relinquish clipboard ownership
+fn clipboard_release(win_id) {
+    if clipboard_owner == win_id {
+        clipboard_owner = 0 - 1;
+    }
+    return 0;
+}
+
+print("clipboard.hl loaded");
+print("Clipboard: " + to_string(CLIPBOARD_HISTORY) + "-slot history, text + selection, window ownership");

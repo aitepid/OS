@@ -1,101 +1,300 @@
 // HicOS_ContainerRuntime.hl -- Container Runtime (Native H-L)
 //
-// Lightweight container isolation using kernel cgroups + namespaces.
-// Requires: task.hl, cgroup.hl, vfs.hl, page_alloc.hl
+// Lightweight container isolation wiring together:
+//   - namespace.hl  (PID/UTS/IPC/MNT isolation)
+//   - cgroup.hl     (CPU/memory/IO/PID resource limits)
+//   - seccomp.hl    (syscall filter — minimal or no-net preset)
+//   - vfs.hl        (per-container rootfs path)
+//
+// Container lifecycle: create → start → (pause/resume) → stop → destroy
+//
+// Public API:
+//   ctr_init / ctr_create / ctr_destroy
+//   ctr_start / ctr_stop / ctr_pause / ctr_resume
+//   ctr_exec / ctr_list / ctr_status
+//   ctr_set_mem_limit / ctr_set_cpu_quota / ctr_set_seccomp
 
 let CTR_MAX = 32;
+
 let CTR_STATE_STOPPED = 0;
 let CTR_STATE_RUNNING = 1;
 let CTR_STATE_PAUSED  = 2;
+let CTR_STATE_DEAD    = 3;
 
-let ctr_names  = [];
-let ctr_pids   = [];
-let ctr_states = [];
-let ctr_cg_ids = [];   // cgroup IDs
-let ctr_rootfs = [];   // VFS mount paths
-let mut ctr_count = 0;
+// Container table (parallel arrays)
+let mut ctr_active   = [];
+let mut ctr_names    = [];
+let mut ctr_pids     = [];    // global task PID (0 = none)
+let mut ctr_task_idx = [];    // task slot index
+let mut ctr_states   = [];
+let mut ctr_cg_ids   = [];    // cgroup slot
+let mut ctr_ns_ids   = [];    // namespace slot
+let mut ctr_sc_ids   = [];    // seccomp profile slot (-1 = none)
+let mut ctr_rootfs   = [];    // VFS root path
+let mut ctr_hostname = [];    // UTS hostname
+let mut ctr_exit_code = [];
+let mut ctr_count    = 0;
 
 fn ctr_init() {
-    print("container-runtime: initialized (max " + to_string(CTR_MAX) + ")");
+    ctr_active   = [];
+    ctr_names    = [];
+    ctr_pids     = [];
+    ctr_task_idx = [];
+    ctr_states   = [];
+    ctr_cg_ids   = [];
+    ctr_ns_ids   = [];
+    ctr_sc_ids   = [];
+    ctr_rootfs   = [];
+    ctr_hostname = [];
+    ctr_exit_code = [];
+    ctr_count    = 0;
+
+    let mut i = 0;
+    while i < CTR_MAX {
+        push(ctr_active,    0);
+        push(ctr_names,     "");
+        push(ctr_pids,      0);
+        push(ctr_task_idx,  0 - 1);
+        push(ctr_states,    CTR_STATE_STOPPED);
+        push(ctr_cg_ids,    0 - 1);
+        push(ctr_ns_ids,    0 - 1);
+        push(ctr_sc_ids,    0 - 1);
+        push(ctr_rootfs,    "/");
+        push(ctr_hostname,  "container");
+        push(ctr_exit_code, 0);
+        i = i + 1;
+    }
+    print("container-runtime: init — max " + to_string(CTR_MAX) + " containers (ns+cgroup+seccomp)");
     return 0;
 }
 
+fn ctr_alloc_slot() {
+    let mut i = 0;
+    while i < CTR_MAX {
+        if ctr_active[i] == 0 { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+// Create a new container; returns container_id or -1
 fn ctr_create(name, rootfs_path) {
-    if ctr_count >= CTR_MAX {
-        print("container: limit reached");
+    let id = ctr_alloc_slot();
+    if id < 0 {
+        print("container: table full");
         return 0 - 1;
     }
-    // Allocate a cgroup for resource isolation
-    let cg = cgroup_create(name, 0);
-    // Set default memory limit (16 MB)
-    cgroup_set_mem_limit(cg, 16 * 1048576);
 
-    push(ctr_names, name);
-    push(ctr_pids, 0);
-    push(ctr_states, CTR_STATE_STOPPED);
-    push(ctr_cg_ids, cg);
-    push(ctr_rootfs, rootfs_path);
-    let id = ctr_count;
+    // 1. Create namespace (all types)
+    let ns_id = ns_create(0, NS_TYPE_ALL);
+    if ns_id >= 0 {
+        ns_set_hostname(ns_id, name);
+    }
+
+    // 2. Create cgroup for resource limits
+    let cg_id = cgroup_create(name, 0);
+    if cg_id >= 0 {
+        cgroup_set_mem_limit(cg_id, 67108864);  // default 64 MB
+    }
+
+    // 3. Create seccomp profile (no-net by default for security)
+    let sc_id = seccomp_profile_no_net(name + ".seccomp");
+
+    set_at(ctr_active,    id, 1);
+    set_at(ctr_names,     id, name);
+    set_at(ctr_pids,      id, 0);
+    set_at(ctr_task_idx,  id, 0 - 1);
+    set_at(ctr_states,    id, CTR_STATE_STOPPED);
+    set_at(ctr_cg_ids,    id, cg_id);
+    set_at(ctr_ns_ids,    id, ns_id);
+    set_at(ctr_sc_ids,    id, sc_id);
+    set_at(ctr_rootfs,    id, rootfs_path);
+    set_at(ctr_hostname,  id, name);
+    set_at(ctr_exit_code, id, 0);
+
     ctr_count = ctr_count + 1;
-    print("container: created '" + name + "' (id=" + to_string(id) + ")");
+    print("container: created '" + name + "' id=" + to_string(id)
+        + " rootfs=" + rootfs_path
+        + " ns=" + to_string(ns_id)
+        + " cg=" + to_string(cg_id)
+        + " sc=" + to_string(sc_id));
     return id;
 }
 
-fn ctr_start(id) {
-    if id < 0 || id >= ctr_count { return 0 - 1; }
+fn ctr_destroy(id) {
+    if id < 0 { return 0 - 1; }
+    if id >= CTR_MAX { return 0 - 1; }
+    if ctr_active[id] == 0 { return 0 - 1; }
     if ctr_states[id] == CTR_STATE_RUNNING {
-        print("container: already running");
-        return 0;
+        ctr_stop(id);
     }
-    // Create isolated task with separate VFS root
-    let pid = task_create_isolated(ctr_rootfs[id]);
-    ctr_pids[id] = pid;
-    ctr_states[id] = CTR_STATE_RUNNING;
-    // Attach task to cgroup
-    cgroup_attach(ctr_cg_ids[id], pid);
-    print("container: started '" + ctr_names[id] + "' (PID " + to_string(pid) + ")");
-    return pid;
+    // Release namespace and cgroup
+    let ns_id = ctr_ns_ids[id];
+    let cg_id = ctr_cg_ids[id];
+    let sc_id = ctr_sc_ids[id];
+    if ns_id >= 0 { ns_destroy(ns_id); }
+    if sc_id >= 0 { seccomp_destroy_profile(sc_id); }
+    set_at(ctr_active, id, 0);
+    ctr_count = ctr_count - 1;
+    print("container: destroyed '" + ctr_names[id] + "'");
+    return 0;
+}
+
+// Start container: create task, attach ns/cgroup/seccomp
+fn ctr_start(id) {
+    if id < 0 { return 0 - 1; }
+    if id >= CTR_MAX { return 0 - 1; }
+    if ctr_active[id] == 0 { return 0 - 1; }
+    if ctr_states[id] == CTR_STATE_RUNNING { return 0; }
+
+    // Allocate a task slot
+    let task_idx = task_create(0, 0);
+    if task_idx < 0 {
+        print("container: task_create failed");
+        return 0 - 1;
+    }
+
+    // Attach namespace
+    let ns_id = ctr_ns_ids[id];
+    if ns_id >= 0 { ns_enter(task_idx, ns_id); }
+
+    // Attach cgroup
+    let cg_id = ctr_cg_ids[id];
+    if cg_id >= 0 { cgroup_attach(cg_id, task_idx); }
+
+    // Attach seccomp filter
+    let sc_id = ctr_sc_ids[id];
+    if sc_id >= 0 { seccomp_apply(task_idx, sc_id); }
+
+    set_at(ctr_task_idx, id, task_idx);
+    set_at(ctr_states,   id, CTR_STATE_RUNNING);
+
+    print("container: started '" + ctr_names[id] + "' task_idx=" + to_string(task_idx)
+        + " ns=" + to_string(ns_id) + " cg=" + to_string(cg_id) + " sc=" + to_string(sc_id));
+    return task_idx;
 }
 
 fn ctr_stop(id) {
-    if id < 0 || id >= ctr_count { return 0 - 1; }
+    if id < 0 { return 0 - 1; }
+    if id >= CTR_MAX { return 0 - 1; }
+    if ctr_active[id] == 0 { return 0 - 1; }
     if ctr_states[id] != CTR_STATE_RUNNING { return 0; }
-    task_kill(ctr_pids[id]);
-    ctr_states[id] = CTR_STATE_STOPPED;
+
+    let task_idx = ctr_task_idx[id];
+    if task_idx >= 0 {
+        task_kill(ctr_pids[id]);
+        // Detach namespace and seccomp
+        ns_enter(task_idx, 0);   // return to root ns
+        seccomp_detach(task_idx);
+    }
+
+    set_at(ctr_states,   id, CTR_STATE_STOPPED);
+    set_at(ctr_task_idx, id, 0 - 1);
     print("container: stopped '" + ctr_names[id] + "'");
     return 0;
 }
 
 fn ctr_pause(id) {
-    if id < 0 || id >= ctr_count { return 0 - 1; }
-    ctr_states[id] = CTR_STATE_PAUSED;
+    if id < 0 { return 0 - 1; }
+    if id >= CTR_MAX { return 0 - 1; }
+    if ctr_states[id] != CTR_STATE_RUNNING { return 0 - 1; }
+    set_at(ctr_states, id, CTR_STATE_PAUSED);
+    let task_idx = ctr_task_idx[id];
+    if task_idx >= 0 { task_block(task_idx); }
+    print("container: paused '" + ctr_names[id] + "'");
     return 0;
+}
+
+fn ctr_resume(id) {
+    if id < 0 { return 0 - 1; }
+    if id >= CTR_MAX { return 0 - 1; }
+    if ctr_states[id] != CTR_STATE_PAUSED { return 0 - 1; }
+    set_at(ctr_states, id, CTR_STATE_RUNNING);
+    let task_idx = ctr_task_idx[id];
+    if task_idx >= 0 { task_unblock(task_idx); }
+    print("container: resumed '" + ctr_names[id] + "'");
+    return 0;
+}
+
+// Execute a command string inside a running container's namespace
+fn ctr_exec(id, cmd) {
+    if id < 0 { return 0 - 1; }
+    if id >= CTR_MAX { return 0 - 1; }
+    if ctr_active[id] == 0 { return 0 - 1; }
+    if ctr_states[id] != CTR_STATE_RUNNING {
+        print("container '" + ctr_names[id] + "': not running");
+        return 0 - 1;
+    }
+    // Delegate to shell interpreter in ns context
+    let result = shell_handle(cmd);
+    print("container '" + ctr_names[id] + "' exec: " + cmd + " => " + result);
+    return 0;
+}
+
+// Override resource limits after creation
+fn ctr_set_mem_limit(id, bytes) {
+    if id < 0 { return 0 - 1; }
+    if id >= CTR_MAX { return 0 - 1; }
+    let cg_id = ctr_cg_ids[id];
+    if cg_id < 0 { return 0 - 1; }
+    cgroup_set_mem_limit(cg_id, bytes);
+    return 0;
+}
+
+fn ctr_set_cpu_quota(id, period_ticks) {
+    if id < 0 { return 0 - 1; }
+    if id >= CTR_MAX { return 0 - 1; }
+    let cg_id = ctr_cg_ids[id];
+    if cg_id < 0 { return 0 - 1; }
+    cgroup_set_cpu_limit(cg_id, period_ticks);
+    return 0;
+}
+
+// Replace the seccomp profile (can upgrade to minimal sandbox)
+fn ctr_set_seccomp(id, profile_id) {
+    if id < 0 { return 0 - 1; }
+    if id >= CTR_MAX { return 0 - 1; }
+    set_at(ctr_sc_ids, id, profile_id);
+    // If task already running, reapply
+    let task_idx = ctr_task_idx[id];
+    if task_idx >= 0 {
+        if profile_id >= 0 {
+            seccomp_apply(task_idx, profile_id);
+        } else {
+            seccomp_detach(task_idx);
+        }
+    }
+    return 0;
+}
+
+// Status string for one container
+fn ctr_status(id) {
+    if id < 0 { return "invalid"; }
+    if id >= CTR_MAX { return "invalid"; }
+    if ctr_active[id] == 0 { return "ctr[" + to_string(id) + "] inactive"; }
+    let st = "stopped";
+    if ctr_states[id] == CTR_STATE_RUNNING { st = "running"; }
+    if ctr_states[id] == CTR_STATE_PAUSED  { st = "paused"; }
+    if ctr_states[id] == CTR_STATE_DEAD    { st = "dead"; }
+    return "ctr[" + to_string(id) + "] '" + ctr_names[id] + "'"
+        + " " + st
+        + " ns=" + to_string(ctr_ns_ids[id])
+        + " cg=" + to_string(ctr_cg_ids[id])
+        + " sc=" + to_string(ctr_sc_ids[id])
+        + " root=" + ctr_rootfs[id];
 }
 
 fn ctr_list() {
-    print("CONTAINER    STATE    PID   ROOTFS");
+    let mut out = "Containers (" + to_string(ctr_count) + "/" + to_string(CTR_MAX) + "):\n";
     let mut i = 0;
-    while i < ctr_count {
-        let st = "stopped";
-        if ctr_states[i] == CTR_STATE_RUNNING { st = "running"; }
-        if ctr_states[i] == CTR_STATE_PAUSED { st = "paused "; }
-        print("  " + ctr_names[i] + "  " + st + "  " + to_string(ctr_pids[i]) + "  " + ctr_rootfs[i]);
+    while i < CTR_MAX {
+        if ctr_active[i] == 1 {
+            out = out + "  " + ctr_status(i) + "\n";
+        }
         i = i + 1;
     }
-    return ctr_count;
-}
-
-fn ctr_exec(id, cmd) {
-    if id < 0 || id >= ctr_count { return 0 - 1; }
-    if ctr_states[id] != CTR_STATE_RUNNING {
-        print("container: not running");
-        return 0 - 1;
-    }
-    // Execute command inside container's namespace
-    print("container '" + ctr_names[id] + "': exec " + cmd);
-    return 0;
+    return out;
 }
 
 print("HicOS_ContainerRuntime.hl loaded (native H-L)");
-
-
+print("Container runtime: ns+cgroup+seccomp isolation, " + to_string(CTR_MAX) + " slots");

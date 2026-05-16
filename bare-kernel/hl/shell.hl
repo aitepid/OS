@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 116 commands + pipe operator (|):
+// 135 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -15,6 +15,9 @@
 //   Audio: audio vol mute unmute beep  AudioServer: audioserver aus aus-connect/play/stop/vol/beep
 //   GPU: gpu flip dirty
 //   Namespace: ns  ns new  ns info  ns hostname  ns enter  ns del
+//   Seccomp:   seccomp  seccomp new  seccomp deny  seccomp apply
+//   Container: ctr  ctr new  ctr start  ctr stop  ctr rm  ctr exec  ctr info
+//   Clipboard: clipboard  clip copy  clip paste  clip hist
 //   Shell pipe: cmd1 | cmd2
 
 fn shell_handle(cmd) {
@@ -37,6 +40,9 @@ fn shell_handle(cmd) {
         serial_print("Services: services svc start|stop|status <name>");
         serial_print("FS Events:inotify  watch <path>  pty [alloc|info <id>]");
         serial_print("Namespace:ns  ns new  ns info <id>  ns hostname <id> <name>  ns enter <tid> <nsid>  ns del <id>");
+        serial_print("Seccomp:  seccomp  seccomp new <name>  seccomp deny <pid> <nr>  seccomp apply <tid> <pid>");
+        serial_print("Container:ctr  ctr new <name> [root]  ctr start/stop/rm <id>  ctr exec <id> <cmd>  ctr info <id>");
+        serial_print("Clipboard:clipboard  clip copy <text>  clip paste  clip hist");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -521,6 +527,93 @@ fn shell_handle_ext(cmd) {
     if cmd == "cg" {
         return cgroup_status(0);
     }
+    if cmd == "seccomp" {
+        return seccomp_list();
+    }
+    if str_starts_with(cmd, "seccomp new ") {
+        let name = str_sub(cmd, 12, len(cmd));
+        let pid_s = seccomp_create_profile(name, SECCOMP_ACT_ALLOW);
+        if pid_s < 0 { return "Error: seccomp table full"; }
+        return "Created seccomp profile[" + to_string(pid_s) + "] '" + name + "'";
+    }
+    if str_starts_with(cmd, "seccomp deny ") {
+        let args = str_sub(cmd, 13, len(cmd));
+        let sp = str_find(args, " ");
+        if sp < 0 { return "Usage: seccomp deny <profile_id> <syscall_nr>"; }
+        let pid_s = parse_int(str_sub(args, 0, sp));
+        let nr  = parse_int(str_sub(args, sp + 1, len(args)));
+        seccomp_deny(pid_s, nr);
+        return "Added deny rule: profile[" + to_string(pid_s) + "] syscall=" + to_string(nr);
+    }
+    if str_starts_with(cmd, "seccomp apply ") {
+        let args = str_sub(cmd, 14, len(cmd));
+        let sp = str_find(args, " ");
+        if sp < 0 { return "Usage: seccomp apply <task_idx> <profile_id>"; }
+        let tidx = parse_int(str_sub(args, 0, sp));
+        let pid_s = parse_int(str_sub(args, sp + 1, len(args)));
+        seccomp_apply(tidx, pid_s);
+        return "Applied seccomp[" + to_string(pid_s) + "] to task " + to_string(tidx);
+    }
+    if cmd == "clipboard" {
+        return clipboard_status();
+    }
+    if str_starts_with(cmd, "clip copy ") {
+        let text = str_sub(cmd, 10, len(cmd));
+        clipboard_set_text(0 - 1, text);
+        return "Copied to clipboard (" + to_string(len(text)) + " chars)";
+    }
+    if cmd == "clip paste" {
+        let t = clipboard_get_text();
+        if len(t) == 0 { return "(clipboard empty)"; }
+        return t;
+    }
+    if str_starts_with(cmd, "clip hist") {
+        let idx = 0;
+        let t = clipboard_history(idx);
+        if len(t) == 0 { return "(no history)"; }
+        return "hist[0]: " + t;
+    }
+    if cmd == "ctr" {
+        return ctr_list();
+    }
+    if str_starts_with(cmd, "ctr new ") {
+        let args = str_sub(cmd, 8, len(cmd));
+        let sp = str_find(args, " ");
+        let name = args;
+        let root = "/";
+        if sp >= 0 { name = str_sub(args, 0, sp); root = str_sub(args, sp + 1, len(args)); }
+        let id = ctr_create(name, root);
+        if id < 0 { return "Error: container create failed"; }
+        return ctr_status(id);
+    }
+    if str_starts_with(cmd, "ctr start ") {
+        let id = parse_int(str_sub(cmd, 10, len(cmd)));
+        ctr_start(id);
+        return ctr_status(id);
+    }
+    if str_starts_with(cmd, "ctr stop ") {
+        let id = parse_int(str_sub(cmd, 9, len(cmd)));
+        ctr_stop(id);
+        return ctr_status(id);
+    }
+    if str_starts_with(cmd, "ctr rm ") {
+        let id = parse_int(str_sub(cmd, 7, len(cmd)));
+        ctr_destroy(id);
+        return "Container " + to_string(id) + " destroyed";
+    }
+    if str_starts_with(cmd, "ctr exec ") {
+        let args = str_sub(cmd, 9, len(cmd));
+        let sp = str_find(args, " ");
+        if sp < 0 { return "Usage: ctr exec <id> <cmd>"; }
+        let id  = parse_int(str_sub(args, 0, sp));
+        let c   = str_sub(args, sp + 1, len(args));
+        ctr_exec(id, c);
+        return "exec dispatched";
+    }
+    if str_starts_with(cmd, "ctr info ") {
+        let id = parse_int(str_sub(cmd, 9, len(cmd)));
+        return ctr_status(id);
+    }
 
     if cmd == "ns" {
         return ns_list();
@@ -775,7 +868,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 116 commands + pipe(|) + echo>redirect + inotify + watch + pty + audio + aus + gpu + cp/mv + ns + editor");
+print("shell.hl loaded -- 135 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard");
 
 // Main shell loop (called from kernel_init)
 

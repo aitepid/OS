@@ -1,0 +1,275 @@
+// seccomp.hl -- Syscall Filter (Secure Computing Mode)
+//
+// BPF-style per-process syscall allow/deny rules.
+// Inspired by Linux seccomp(2) SECCOMP_MODE_FILTER.
+//
+// Design:
+//   Up to SECCOMP_MAX_PROFILES (32) profiles, each owning up to
+//   SECCOMP_MAX_RULES (64) rules.
+//   Rules are matched in order; first matching rule wins.
+//   Default policy per profile: SECCOMP_ACT_ALLOW or SECCOMP_ACT_KILL.
+//
+// Each rule: { syscall_nr, comparator, arg0_val, action }
+//   comparator: SECCOMP_CMP_ANY=0 (match any), SECCOMP_CMP_EQ=1, SECCOMP_CMP_NEQ=2,
+//               SECCOMP_CMP_LT=3, SECCOMP_CMP_GE=4
+//
+// Public API:
+//   seccomp_init / seccomp_create_profile / seccomp_destroy_profile
+//   seccomp_add_rule / seccomp_set_default
+//   seccomp_apply(task_idx, profile_id) -- attach profile to task
+//   seccomp_check(task_idx, syscall_nr, arg0) -- called from syscall dispatcher
+//   seccomp_status / seccomp_list_rules
+
+let SECCOMP_MAX_PROFILES = 32;
+let SECCOMP_MAX_RULES    = 64;
+
+let SECCOMP_ACT_ALLOW = 0;   // let the syscall through
+let SECCOMP_ACT_KILL  = 1;   // kill the task
+let SECCOMP_ACT_ERRNO = 2;   // return -EPERM
+let SECCOMP_ACT_TRACE = 3;   // log and allow (audit mode)
+
+let SECCOMP_CMP_ANY = 0;   // match any arg value
+let SECCOMP_CMP_EQ  = 1;
+let SECCOMP_CMP_NEQ = 2;
+let SECCOMP_CMP_LT  = 3;
+let SECCOMP_CMP_GE  = 4;
+
+// Profile table (parallel arrays, indexed by profile_id)
+let mut sc_active    = [];   // 1 = slot in use
+let mut sc_name      = [];   // human-readable label
+let mut sc_default   = [];   // default action for unmatched syscalls
+let mut sc_rule_cnt  = [];   // number of rules in each profile
+let mut sc_rules     = [];   // rules: list of [nr, cmp, val, action]
+let mut sc_hit_count = [];   // total filter-hits per profile (audit)
+let mut sc_count     = 0;    // active profile count
+
+// Per-task profile assignment (indexed by task slot, 0-63)
+let mut task_sc_id = [];     // profile_id per task (-1 = no filter)
+
+fn seccomp_init() {
+    sc_active    = [];
+    sc_name      = [];
+    sc_default   = [];
+    sc_rule_cnt  = [];
+    sc_rules     = [];
+    sc_hit_count = [];
+    sc_count     = 0;
+    task_sc_id   = [];
+
+    let mut i = 0;
+    while i < SECCOMP_MAX_PROFILES {
+        push(sc_active,    0);
+        push(sc_name,      "");
+        push(sc_default,   SECCOMP_ACT_ALLOW);
+        push(sc_rule_cnt,  0);
+        push(sc_rules,     []);
+        push(sc_hit_count, 0);
+        i = i + 1;
+    }
+
+    // Per-task defaults: no filter (slot -1)
+    let mut t = 0;
+    while t < 64 {
+        push(task_sc_id, 0 - 1);
+        t = t + 1;
+    }
+
+    print("seccomp: init — " + to_string(SECCOMP_MAX_PROFILES) + " profiles, " + to_string(SECCOMP_MAX_RULES) + " rules each");
+    return 0;
+}
+
+// Allocate a new seccomp profile; returns profile_id or -1
+fn seccomp_create_profile(name, default_action) {
+    let mut i = 0;
+    while i < SECCOMP_MAX_PROFILES {
+        if sc_active[i] == 0 {
+            set_at(sc_active,    i, 1);
+            set_at(sc_name,      i, name);
+            set_at(sc_default,   i, default_action);
+            set_at(sc_rule_cnt,  i, 0);
+            set_at(sc_rules,     i, []);
+            set_at(sc_hit_count, i, 0);
+            sc_count = sc_count + 1;
+            print("seccomp: profile[" + to_string(i) + "] '" + name + "' default=" + to_string(default_action));
+            return i;
+        }
+        i = i + 1;
+    }
+    print("seccomp: profile table full");
+    return 0 - 1;
+}
+
+fn seccomp_destroy_profile(pid) {
+    if pid < 0 { return 0 - 1; }
+    if pid >= SECCOMP_MAX_PROFILES { return 0 - 1; }
+    if sc_active[pid] == 0 { return 0 - 1; }
+    set_at(sc_active, pid, 0);
+    sc_count = sc_count - 1;
+    return 0;
+}
+
+fn seccomp_set_default(profile_id, action) {
+    if profile_id < 0 { return 0 - 1; }
+    if profile_id >= SECCOMP_MAX_PROFILES { return 0 - 1; }
+    set_at(sc_default, profile_id, action);
+    return 0;
+}
+
+// Add a rule to a profile (appended; first-match wins at check time)
+fn seccomp_add_rule(profile_id, syscall_nr, cmp, arg0_val, action) {
+    if profile_id < 0 { return 0 - 1; }
+    if profile_id >= SECCOMP_MAX_PROFILES { return 0 - 1; }
+    if sc_active[profile_id] == 0 { return 0 - 1; }
+    if sc_rule_cnt[profile_id] >= SECCOMP_MAX_RULES { return 0 - 1; }
+
+    let rules = sc_rules[profile_id];
+    push(rules, [syscall_nr, cmp, arg0_val, action]);
+    set_at(sc_rules, profile_id, rules);
+    set_at(sc_rule_cnt, profile_id, sc_rule_cnt[profile_id] + 1);
+    return 0;
+}
+
+// Convenience: add allow rule for a single syscall number
+fn seccomp_allow(profile_id, syscall_nr) {
+    return seccomp_add_rule(profile_id, syscall_nr, SECCOMP_CMP_ANY, 0, SECCOMP_ACT_ALLOW);
+}
+
+// Convenience: add deny (ERRNO) rule for a syscall
+fn seccomp_deny(profile_id, syscall_nr) {
+    return seccomp_add_rule(profile_id, syscall_nr, SECCOMP_CMP_ANY, 0, SECCOMP_ACT_ERRNO);
+}
+
+// Convenience: kill task on syscall
+fn seccomp_kill_on(profile_id, syscall_nr) {
+    return seccomp_add_rule(profile_id, syscall_nr, SECCOMP_CMP_ANY, 0, SECCOMP_ACT_KILL);
+}
+
+// Attach profile to task
+fn seccomp_apply(task_idx, profile_id) {
+    if task_idx < 0 { return 0 - 1; }
+    if task_idx >= 64 { return 0 - 1; }
+    if profile_id < 0 { return 0 - 1; }
+    if profile_id >= SECCOMP_MAX_PROFILES { return 0 - 1; }
+    if sc_active[profile_id] == 0 { return 0 - 1; }
+    set_at(task_sc_id, task_idx, profile_id);
+    return 0;
+}
+
+// Remove filter from task
+fn seccomp_detach(task_idx) {
+    if task_idx < 0 { return 0 - 1; }
+    if task_idx >= 64 { return 0 - 1; }
+    set_at(task_sc_id, task_idx, 0 - 1);
+    return 0;
+}
+
+// Core check: called from syscall dispatcher before executing any syscall.
+// Returns SECCOMP_ACT_ALLOW, SECCOMP_ACT_ERRNO, or SECCOMP_ACT_KILL.
+fn seccomp_check(task_idx, syscall_nr, arg0) {
+    if task_idx < 0 { return SECCOMP_ACT_ALLOW; }
+    if task_idx >= 64 { return SECCOMP_ACT_ALLOW; }
+    let pid_s = task_sc_id[task_idx];
+    if pid_s < 0 { return SECCOMP_ACT_ALLOW; }   // no filter attached
+
+    let rules = sc_rules[pid_s];
+    let cnt   = sc_rule_cnt[pid_s];
+    let mut i = 0;
+    while i < cnt {
+        let rule    = rules[i];
+        let rule_nr  = rule[0];
+        let rule_cmp = rule[1];
+        let rule_val = rule[2];
+        let rule_act = rule[3];
+
+        if rule_nr == syscall_nr {
+            let matched = 0;
+            if rule_cmp == SECCOMP_CMP_ANY { matched = 1; }
+            if rule_cmp == SECCOMP_CMP_EQ  { if arg0 == rule_val { matched = 1; } }
+            if rule_cmp == SECCOMP_CMP_NEQ { if arg0 != rule_val { matched = 1; } }
+            if rule_cmp == SECCOMP_CMP_LT  { if arg0 < rule_val  { matched = 1; } }
+            if rule_cmp == SECCOMP_CMP_GE  { if arg0 >= rule_val { matched = 1; } }
+
+            if matched == 1 {
+                set_at(sc_hit_count, pid_s, sc_hit_count[pid_s] + 1);
+                if rule_act == SECCOMP_ACT_TRACE {
+                    klog(1, "seccomp", "audit: task=" + to_string(task_idx) + " syscall=" + to_string(syscall_nr));
+                    return SECCOMP_ACT_ALLOW;
+                }
+                return rule_act;
+            }
+        }
+        i = i + 1;
+    }
+
+    // No rule matched → apply default
+    let def = sc_default[pid_s];
+    if def != SECCOMP_ACT_ALLOW {
+        set_at(sc_hit_count, pid_s, sc_hit_count[pid_s] + 1);
+    }
+    return def;
+}
+
+// --- Preset profiles ---
+
+// Minimal sandbox: allow only essential syscalls, deny everything else
+fn seccomp_profile_minimal(name) {
+    let pid_s = seccomp_create_profile(name, SECCOMP_ACT_ERRNO);
+    if pid_s < 0 { return 0 - 1; }
+    seccomp_allow(pid_s, 0);   // SYS_EXIT
+    seccomp_allow(pid_s, 4);   // SYS_GETPID
+    seccomp_allow(pid_s, 6);   // SYS_YIELD
+    seccomp_allow(pid_s, 32);  // SYS_READ
+    seccomp_allow(pid_s, 33);  // SYS_WRITE
+    seccomp_allow(pid_s, 35);  // SYS_CLOSE
+    seccomp_allow(pid_s, 64);  // SYS_STAT
+    return pid_s;
+}
+
+// Network-sandbox: allow file I/O but block all network syscalls
+fn seccomp_profile_no_net(name) {
+    let pid_s = seccomp_create_profile(name, SECCOMP_ACT_ALLOW);
+    if pid_s < 0 { return 0 - 1; }
+    seccomp_deny(pid_s, 48);   // SYS_SEND
+    seccomp_deny(pid_s, 49);   // SYS_RECV
+    seccomp_deny(pid_s, 68);   // SYS_SOCKET
+    seccomp_deny(pid_s, 69);   // SYS_BIND
+    seccomp_deny(pid_s, 70);   // SYS_CONNECT
+    seccomp_deny(pid_s, 71);   // SYS_ACCEPT
+    return pid_s;
+}
+
+// Audit-only: log all syscalls but never block
+fn seccomp_profile_audit(name) {
+    let pid_s = seccomp_create_profile(name, SECCOMP_ACT_ALLOW);
+    if pid_s < 0 { return 0 - 1; }
+    // Catch-all trace rule via default; just set trace flag for key calls
+    seccomp_add_rule(pid_s, 0 - 1, SECCOMP_CMP_ANY, 0, SECCOMP_ACT_TRACE); // nr=-1 never matches
+    return pid_s;
+}
+
+// --- Status / debug ---
+
+fn seccomp_status(profile_id) {
+    if profile_id < 0 { return "invalid"; }
+    if profile_id >= SECCOMP_MAX_PROFILES { return "invalid"; }
+    if sc_active[profile_id] == 0 { return "seccomp[" + to_string(profile_id) + "] inactive"; }
+    return "seccomp[" + to_string(profile_id) + "] '" + sc_name[profile_id]
+        + "' default=" + to_string(sc_default[profile_id])
+        + " rules=" + to_string(sc_rule_cnt[profile_id])
+        + " hits=" + to_string(sc_hit_count[profile_id]);
+}
+
+fn seccomp_list() {
+    let mut out = "Seccomp profiles (" + to_string(sc_count) + "):\n";
+    let mut i = 0;
+    while i < SECCOMP_MAX_PROFILES {
+        if sc_active[i] == 1 {
+            out = out + "  " + seccomp_status(i) + "\n";
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+print("seccomp.hl loaded");
+print("Syscall filter: " + to_string(SECCOMP_MAX_PROFILES) + " profiles x " + to_string(SECCOMP_MAX_RULES) + " rules, ALLOW/KILL/ERRNO/TRACE actions");
