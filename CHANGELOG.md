@@ -2,11 +2,75 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`280`（69 根目录 + 211 内核模块）
-- H-L 总行数：`~74,800`
-- 内核模块：`211`
-- Shell 命令：`475`
-- 最近完成功能迭代：`225`（bcrypt + rtsp + stun）
+- `.hl` 文件：`283`（69 根目录 + 214 内核模块）
+- H-L 总行数：`~75,500`
+- 内核模块：`214`
+- Shell 命令：`490`
+- 最近完成功能迭代：`228`（rtp + socks + zlib）
+
+## Iteration 228 — zlib.hl：DEFLATE 压缩算法
+
+- **`bare-kernel/hl/zlib.hl`** 新增（~270 行）
+  - DEFLATE 压缩算法（RFC 1951）+ zlib 容器格式（RFC 1950）
+  - 注：简化实现，仅支持无压缩存储块（BTYPE=00），不实现 LZ77 匹配和 Huffman 编码
+  - 用途：通用数据压缩，广泛用于 gzip/PNG/HTTP 压缩
+  - `zlib_compress(data, len)` — 压缩数据：添加 zlib 头部（2 字节）+ 无压缩块 + Adler-32 校验和（4 字节）
+  - `zlib_decompress(data, len)` — 解压数据：验证头部 + 解析块 + 校验 Adler-32
+  - `_zlib_deflate(data, len, output, pos)` — DEFLATE 编码：分割成 ≤65535 字节的块，写入块头（BFINAL + BTYPE + LEN + NLEN）
+  - `_zlib_inflate(data, start_pos, len, output)` — DEFLATE 解码：读取块头 + 验证 NLEN=65535-LEN + 复制字面数据
+  - `_zlib_adler32(data, len)` — 计算 Adler-32 校验和：两个 16 位累加器（s1, s2）模 65521
+  - zlib 头部：CMF（压缩方法=8，窗口大小=32K）+ FLG（检验位）
+  - `zlib_set_level(level)` — 设置压缩级别（1-9），简化版仅影响元数据
+  - `zlib_get_ratio(original_len)` — 计算压缩率：返回百分比（100=无压缩，0=完美压缩）
+  - `zlib_test()` — 自测试：压缩 "Hello, ZLIB! ..." → 解压 → 验证长度
+  - ZLIB_BUF=0x11B0000（18481152），256 KB 工作缓冲区（窗口 + 输出）
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`zlib_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 5 条命令：
+  - `zlib compress <data>` / `zlib decompress <data>` / `zlib level <n>` / `zlib ratio <orig> <comp>` / `zlib test`
+
+## Iteration 227 — socks.hl：SOCKS5 代理协议
+
+- **`bare-kernel/hl/socks.hl`** 新增（~270 行）
+  - SOCKS5 代理协议客户端（RFC 1928）
+  - 用途：通过代理服务器建立 TCP 连接，支持防火墙穿透和匿名访问
+  - TCP 端口 1080（标准代理端口）
+  - `socks_connect(dest_host, dest_port)` — 通过代理连接：连接代理 → 握手 → 连接请求
+  - `_socks_handshake(sock)` — SOCKS5 握手：方法选择（无认证/用户名密码）
+  - `_socks_auth_userpass(sock)` — 用户名密码认证：version=1 + ulen + username + plen + password
+  - `_socks_request_connect(sock, dest_host, dest_port)` — CONNECT 请求：cmd=1 + atyp（IPv4/域名）+ addr + port
+  - `socks_set_proxy(host, port)` — 配置代理服务器地址
+  - `socks_set_auth(username, password)` — 设置认证凭据
+  - 地址类型：ATYP_IPV4=1（4 字节 IP），ATYP_DOMAIN=3（长度 + 域名），ATYP_IPV6=4（16 字节）
+  - 回复码：SUCCESS=0，FAILURE=1，NOT_ALLOWED=2，NET_UNREACHABLE=3，HOST_UNREACHABLE=4，CONN_REFUSED=5
+  - `_socks_is_ip(str)` — 判断字符串是否为 IP 地址（3 个点 + 数字）
+  - `socks_get_error(code)` — 获取错误描述
+  - SOCKS_BUF=0x11A0000（18415616），64 KB 消息缓冲区
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`socks_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 5 条命令：
+  - `socks proxy <host> <port>` / `socks auth <user> <pass>` / `socks connect <host> <port>` / `socks close` / `socks test`
+
+## Iteration 226 — rtp.hl：实时传输协议
+
+- **`bare-kernel/hl/rtp.hl`** 新增（~280 行）
+  - RTP（Real-time Transport Protocol）实时传输协议（RFC 3550）
+  - 用途：音视频流传输，配合 RTSP 使用（RTSP 控制，RTP 传输数据）
+  - UDP 传输，无固定端口（RTSP SETUP 协商）
+  - `rtp_create_packet(payload_data, payload_len, marker)` — 创建 RTP 包：12 字节头部 + 载荷
+  - `rtp_parse_packet(data, len)` — 解析 RTP 包：提取版本/载荷类型/序列号/时间戳/SSRC
+  - RTP 头部（12 字节）：V(2) + P(1) + X(1) + CC(4) + M(1) + PT(7) + Sequence(16) + Timestamp(32) + SSRC(32)
+  - V（版本）：固定为 2
+  - M（Marker）：标记位，用于标识关键帧或片段结束
+  - PT（Payload Type）：载荷类型，0=PCMU，8=PCMA，31=H.261，32=MPV
+  - SSRC（同步源标识符）：随机生成 32 位标识符，区分不同音视频流
+  - 序列号：每个包递增，用于检测丢包和重排序
+  - 时间戳：基于采样率递增（如 8kHz 音频每 20ms 增加 160）
+  - `rtp_set_payload_type(pt)` — 设置载荷类型（0-127）
+  - `rtp_get_payload_name(pt)` — 获取载荷类型名称（PCMU/G722/H261/MPV 等）
+  - `_rtp_generate_ssrc()` — 生成随机 SSRC：基于 uptime 和 ticks 哈希
+  - RTP_BUF=0x1190000（18350080），64 KB 消息缓冲区
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`rtp_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 5 条命令：
+  - `rtp create <len> <mark>` / `rtp parse <data>` / `rtp setpt <pt>` / `rtp info` / `rtp test`
 
 ## Iteration 225 — stun.hl：STUN NAT 穿透协议
 

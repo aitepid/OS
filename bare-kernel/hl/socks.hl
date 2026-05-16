@@ -1,0 +1,397 @@
+# socks.hl - SOCKS Proxy Protocol (SOCKS5)
+# Implements SOCKS5 client (RFC 1928) for proxying TCP connections
+
+# Memory layout
+global SOCKS_BUF = 0x11A0000
+global SOCKS_VERSION = 5
+global SOCKS_PORT = 1080
+
+# Authentication methods
+global SOCKS_AUTH_NONE = 0
+global SOCKS_AUTH_GSSAPI = 1
+global SOCKS_AUTH_USERPASS = 2
+
+# Command codes
+global SOCKS_CMD_CONNECT = 1
+global SOCKS_CMD_BIND = 2
+global SOCKS_CMD_UDP_ASSOC = 3
+
+# Address types
+global SOCKS_ATYP_IPV4 = 1
+global SOCKS_ATYP_DOMAIN = 3
+global SOCKS_ATYP_IPV6 = 4
+
+# Reply codes
+global SOCKS_REP_SUCCESS = 0
+global SOCKS_REP_FAILURE = 1
+global SOCKS_REP_NOT_ALLOWED = 2
+global SOCKS_REP_NET_UNREACHABLE = 3
+global SOCKS_REP_HOST_UNREACHABLE = 4
+global SOCKS_REP_CONN_REFUSED = 5
+global SOCKS_REP_TTL_EXPIRED = 6
+global SOCKS_REP_CMD_NOT_SUPPORTED = 7
+global SOCKS_REP_ATYP_NOT_SUPPORTED = 8
+
+# Connection state
+global socks_proxy_host = 0
+global socks_proxy_port = 0
+global socks_username = 0
+global socks_password = 0
+global socks_socket = 0
+
+fn socks_init() {
+    socks_proxy_host = 0
+    socks_proxy_port = SOCKS_PORT
+    socks_username = 0
+    socks_password = 0
+    socks_socket = -1
+    serial_print("SOCKS5 client ready")
+}
+
+# Configure proxy server
+fn socks_set_proxy(host, port) {
+    socks_proxy_host = host
+    if (port > 0) {
+        socks_proxy_port = port
+    }
+    return 0
+}
+
+# Set authentication credentials
+fn socks_set_auth(username, password) {
+    socks_username = username
+    socks_password = password
+    return 0
+}
+
+# Connect through SOCKS5 proxy
+fn socks_connect(dest_host, dest_port) {
+    if (socks_proxy_host == 0) {
+        serial_print("SOCKS: proxy not configured")
+        return -1
+    }
+
+    # Connect to proxy server
+    var sock = socket(2, 1, 0)  # AF_INET, SOCK_STREAM
+    if (sock < 0) {
+        serial_print("SOCKS: socket creation failed")
+        return -2
+    }
+
+    var proxy_addr = _socks_build_sockaddr(socks_proxy_host, socks_proxy_port)
+    var conn_result = connect(sock, proxy_addr, 16)
+    if (conn_result < 0) {
+        serial_print("SOCKS: proxy connection failed")
+        close(sock)
+        return -3
+    }
+
+    # Perform SOCKS5 handshake
+    var auth_result = _socks_handshake(sock)
+    if (auth_result < 0) {
+        serial_print("SOCKS: handshake failed")
+        close(sock)
+        return -4
+    }
+
+    # Send connection request
+    var connect_result = _socks_request_connect(sock, dest_host, dest_port)
+    if (connect_result < 0) {
+        serial_print("SOCKS: connection request failed")
+        close(sock)
+        return -5
+    }
+
+    socks_socket = sock
+    return sock
+}
+
+# SOCKS5 handshake (method selection)
+fn _socks_handshake(sock) {
+    var req = SOCKS_BUF
+    var pos = 0
+
+    # Version
+    set_at(req, pos, SOCKS_VERSION)
+    pos = pos + 1
+
+    # Number of methods
+    var num_methods = 1
+    if (socks_username != 0) {
+        num_methods = 2
+    }
+    set_at(req, pos, num_methods)
+    pos = pos + 1
+
+    # Methods
+    set_at(req, pos, SOCKS_AUTH_NONE)
+    pos = pos + 1
+
+    if (socks_username != 0) {
+        set_at(req, pos, SOCKS_AUTH_USERPASS)
+        pos = pos + 1
+    }
+
+    # Send handshake
+    var sent = send(sock, req, pos, 0)
+    if (sent != pos) {
+        return -1
+    }
+
+    # Receive response (2 bytes)
+    var resp = SOCKS_BUF + 1024
+    var received = recv(sock, resp, 2, 0)
+    if (received != 2) {
+        return -2
+    }
+
+    var resp_version = get_at(resp, 0)
+    var chosen_method = get_at(resp, 1)
+
+    if (resp_version != SOCKS_VERSION) {
+        return -3
+    }
+
+    if (chosen_method == 255) {  # No acceptable method
+        return -4
+    }
+
+    # Perform authentication if needed
+    if (chosen_method == SOCKS_AUTH_USERPASS) {
+        return _socks_auth_userpass(sock)
+    }
+
+    return 0
+}
+
+# Username/password authentication
+fn _socks_auth_userpass(sock) {
+    var req = SOCKS_BUF + 2048
+    var pos = 0
+
+    # Version (1 for username/password auth)
+    set_at(req, pos, 1)
+    pos = pos + 1
+
+    # Username length and username
+    var ulen = strlen(socks_username)
+    set_at(req, pos, ulen)
+    pos = pos + 1
+    var i = 0
+    while (i < ulen) {
+        set_at(req, pos, get_at(socks_username, i))
+        pos = pos + 1
+        i = i + 1
+    }
+
+    # Password length and password
+    var plen = strlen(socks_password)
+    set_at(req, pos, plen)
+    pos = pos + 1
+    i = 0
+    while (i < plen) {
+        set_at(req, pos, get_at(socks_password, i))
+        pos = pos + 1
+        i = i + 1
+    }
+
+    # Send auth request
+    var sent = send(sock, req, pos, 0)
+    if (sent != pos) {
+        return -1
+    }
+
+    # Receive response (2 bytes)
+    var resp = SOCKS_BUF + 3072
+    var received = recv(sock, resp, 2, 0)
+    if (received != 2) {
+        return -2
+    }
+
+    var status = get_at(resp, 1)
+    if (status != 0) {
+        return -3  # Auth failed
+    }
+
+    return 0
+}
+
+# Send CONNECT request
+fn _socks_request_connect(sock, dest_host, dest_port) {
+    var req = SOCKS_BUF + 4096
+    var pos = 0
+
+    # Version
+    set_at(req, pos, SOCKS_VERSION)
+    pos = pos + 1
+
+    # Command: CONNECT
+    set_at(req, pos, SOCKS_CMD_CONNECT)
+    pos = pos + 1
+
+    # Reserved
+    set_at(req, pos, 0)
+    pos = pos + 1
+
+    # Address type and address
+    if (_socks_is_ip(dest_host) == 1) {
+        # IPv4 address
+        set_at(req, pos, SOCKS_ATYP_IPV4)
+        pos = pos + 1
+
+        var ip_parts = _socks_parse_ip(dest_host)
+        var i = 0
+        while (i < 4) {
+            set_at(req, pos, get_at(ip_parts, i))
+            pos = pos + 1
+            i = i + 1
+        }
+    } else {
+        # Domain name
+        set_at(req, pos, SOCKS_ATYP_DOMAIN)
+        pos = pos + 1
+
+        var hlen = strlen(dest_host)
+        set_at(req, pos, hlen)
+        pos = pos + 1
+
+        var i = 0
+        while (i < hlen) {
+            set_at(req, pos, get_at(dest_host, i))
+            pos = pos + 1
+            i = i + 1
+        }
+    }
+
+    # Port (big-endian)
+    set_at(req, pos, dest_port / 256)
+    set_at(req, pos + 1, dest_port % 256)
+    pos = pos + 2
+
+    # Send request
+    var sent = send(sock, req, pos, 0)
+    if (sent != pos) {
+        return -1
+    }
+
+    # Receive response
+    var resp = SOCKS_BUF + 5120
+    var received = recv(sock, resp, 256, 0)
+    if (received < 10) {
+        return -2
+    }
+
+    var resp_version = get_at(resp, 0)
+    var reply = get_at(resp, 1)
+
+    if (resp_version != SOCKS_VERSION) {
+        return -3
+    }
+
+    if (reply != SOCKS_REP_SUCCESS) {
+        return 0 - (10 + reply)  # Return negative error code
+    }
+
+    return 0
+}
+
+# Check if string is IP address
+fn _socks_is_ip(str) {
+    var i = 0
+    var len = strlen(str)
+    var dots = 0
+    var has_digit = 0
+
+    while (i < len) {
+        var ch = get_at(str, i)
+        if (ch >= 48 && ch <= 57) {  # '0'-'9'
+            has_digit = 1
+        } else if (ch == 46) {  # '.'
+            dots = dots + 1
+        } else {
+            return 0  # Not IP
+        }
+        i = i + 1
+    }
+
+    if (dots == 3 && has_digit == 1) {
+        return 1
+    }
+    return 0
+}
+
+# Parse IP address string to 4-byte array
+fn _socks_parse_ip(ip_str) {
+    var result = SOCKS_BUF + 6144
+    var part_idx = 0
+    var num = 0
+    var i = 0
+    var len = strlen(ip_str)
+
+    while (i < len) {
+        var ch = get_at(ip_str, i)
+        if (ch == 46) {  # '.'
+            set_at(result, part_idx, num)
+            part_idx = part_idx + 1
+            num = 0
+        } else if (ch >= 48 && ch <= 57) {
+            num = num * 10 + (ch - 48)
+        }
+        i = i + 1
+    }
+    set_at(result, part_idx, num)
+
+    return result
+}
+
+# Build sockaddr structure
+fn _socks_build_sockaddr(ip_str, port) {
+    var sa = SOCKS_BUF + 7168
+
+    # AF_INET = 2
+    set_at(sa, 0, 2)
+    set_at(sa, 1, 0)
+
+    # Port (big-endian)
+    set_at(sa, 2, port / 256)
+    set_at(sa, 3, port % 256)
+
+    # IP address
+    var ip_parts = _socks_parse_ip(ip_str)
+    set_at(sa, 4, get_at(ip_parts, 0))
+    set_at(sa, 5, get_at(ip_parts, 1))
+    set_at(sa, 6, get_at(ip_parts, 2))
+    set_at(sa, 7, get_at(ip_parts, 3))
+
+    # Zero padding
+    var i = 8
+    while (i < 16) {
+        set_at(sa, i, 0)
+        i = i + 1
+    }
+
+    return sa
+}
+
+# Get reply code description
+fn socks_get_error(code) {
+    if (code == SOCKS_REP_SUCCESS) { return "Success" }
+    if (code == SOCKS_REP_FAILURE) { return "General failure" }
+    if (code == SOCKS_REP_NOT_ALLOWED) { return "Not allowed" }
+    if (code == SOCKS_REP_NET_UNREACHABLE) { return "Network unreachable" }
+    if (code == SOCKS_REP_HOST_UNREACHABLE) { return "Host unreachable" }
+    if (code == SOCKS_REP_CONN_REFUSED) { return "Connection refused" }
+    if (code == SOCKS_REP_TTL_EXPIRED) { return "TTL expired" }
+    if (code == SOCKS_REP_CMD_NOT_SUPPORTED) { return "Command not supported" }
+    if (code == SOCKS_REP_ATYP_NOT_SUPPORTED) { return "Address type not supported" }
+    return "Unknown error"
+}
+
+# Close SOCKS connection
+fn socks_close() {
+    if (socks_socket >= 0) {
+        close(socks_socket)
+        socks_socket = -1
+    }
+    return 0
+}

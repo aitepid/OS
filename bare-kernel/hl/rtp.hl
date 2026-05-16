@@ -1,0 +1,314 @@
+# rtp.hl - Real-time Transport Protocol (RTP)
+# Implements RTP (RFC 3550) for real-time audio/video streaming over UDP
+
+# Memory layout
+global RTP_BUF = 0x1190000
+global RTP_HEADER_SIZE = 12
+global RTP_VERSION = 2
+global RTP_MAX_PACKET = 1500
+
+# RTP session state
+global rtp_ssrc = 0
+global rtp_sequence = 0
+global rtp_timestamp = 0
+global rtp_payload_type = 0
+global rtp_initialized = 0
+
+# Payload types (RFC 3551)
+global RTP_PT_PCMU = 0    # G.711 μ-law audio
+global RTP_PT_GSM = 3     # GSM audio
+global RTP_PT_G723 = 4    # G.723 audio
+global RTP_PT_PCMA = 8    # G.711 A-law audio
+global RTP_PT_G722 = 9    # G.722 audio
+global RTP_PT_L16_2 = 10  # Linear 16-bit stereo
+global RTP_PT_L16_1 = 11  # Linear 16-bit mono
+global RTP_PT_QCELP = 12  # QCELP audio
+global RTP_PT_MPA = 14    # MPEG audio
+global RTP_PT_G728 = 15   # G.728 audio
+global RTP_PT_G729 = 18   # G.729 audio
+global RTP_PT_H261 = 31   # H.261 video
+global RTP_PT_MPV = 32    # MPEG video
+global RTP_PT_H263 = 34   # H.263 video
+
+fn rtp_init() {
+    rtp_ssrc = _rtp_generate_ssrc()
+    rtp_sequence = _rtp_random_u16()
+    rtp_timestamp = _rtp_random_u32()
+    rtp_payload_type = RTP_PT_PCMU
+    rtp_initialized = 1
+    serial_print("RTP ready")
+}
+
+# Create RTP packet with payload
+fn rtp_create_packet(payload_data, payload_len, marker) {
+    var pkt = RTP_BUF
+    var pos = 0
+
+    # Byte 0: V(2) + P(1) + X(1) + CC(4)
+    # V=2, P=0 (no padding), X=0 (no extension), CC=0 (no CSRC)
+    set_at(pkt, pos, 128)  # 10000000 = version 2
+    pos = pos + 1
+
+    # Byte 1: M(1) + PT(7)
+    var m_pt = rtp_payload_type
+    if (marker == 1) {
+        m_pt = m_pt + 128  # Set marker bit
+    }
+    set_at(pkt, pos, m_pt)
+    pos = pos + 1
+
+    # Bytes 2-3: Sequence number (big-endian)
+    set_at(pkt, pos, rtp_sequence / 256)
+    set_at(pkt, pos + 1, rtp_sequence % 256)
+    pos = pos + 2
+
+    # Bytes 4-7: Timestamp (big-endian)
+    _rtp_write_u32(pkt, pos, rtp_timestamp)
+    pos = pos + 4
+
+    # Bytes 8-11: SSRC (big-endian)
+    _rtp_write_u32(pkt, pos, rtp_ssrc)
+    pos = pos + 4
+
+    # Copy payload
+    var i = 0
+    while (i < payload_len && pos < RTP_MAX_PACKET) {
+        set_at(pkt, pos, get_at(payload_data, i))
+        pos = pos + 1
+        i = i + 1
+    }
+
+    # Increment sequence and timestamp
+    rtp_sequence = (rtp_sequence + 1) % 65536
+    rtp_timestamp = rtp_timestamp + 160  # 20ms at 8kHz
+
+    return pos  # Total packet length
+}
+
+# Parse incoming RTP packet
+fn rtp_parse_packet(data, len) {
+    if (len < RTP_HEADER_SIZE) {
+        serial_print("RTP: packet too short")
+        return 0
+    }
+
+    var result = RTP_BUF + 16384
+
+    # Parse header
+    var v_p_x_cc = get_at(data, 0)
+    var version = v_p_x_cc / 64  # Top 2 bits
+    var padding = (v_p_x_cc / 32) % 2
+    var extension = (v_p_x_cc / 16) % 2
+    var csrc_count = v_p_x_cc % 16
+
+    if (version != RTP_VERSION) {
+        serial_print("RTP: wrong version")
+        return 0
+    }
+
+    var m_pt = get_at(data, 1)
+    var marker = m_pt / 128
+    var payload_type = m_pt % 128
+
+    var sequence = get_at(data, 2) * 256 + get_at(data, 3)
+    var timestamp = _rtp_read_u32(data, 4)
+    var ssrc = _rtp_read_u32(data, 8)
+
+    # Store parsed values
+    set_at(result, 0, version)
+    set_at(result, 1, padding)
+    set_at(result, 2, extension)
+    set_at(result, 3, csrc_count)
+    set_at(result, 4, marker)
+    set_at(result, 5, payload_type)
+    set_at(result, 6, sequence / 256)
+    set_at(result, 7, sequence % 256)
+    _rtp_write_u32(result, 8, timestamp)
+    _rtp_write_u32(result, 12, ssrc)
+
+    # Calculate payload offset
+    var header_len = RTP_HEADER_SIZE + (csrc_count * 4)
+    if (extension == 1) {
+        header_len = header_len + 4  # Extension header
+    }
+
+    set_at(result, 16, header_len)
+    return result
+}
+
+# Get payload from parsed packet
+fn rtp_get_payload(data, len, parsed_info) {
+    var header_len = get_at(parsed_info, 16)
+    if (header_len >= len) {
+        return 0
+    }
+
+    var payload_buf = RTP_BUF + 32768
+    var payload_len = len - header_len
+    var i = 0
+
+    while (i < payload_len) {
+        set_at(payload_buf, i, get_at(data, header_len + i))
+        i = i + 1
+    }
+
+    return payload_buf
+}
+
+# Set payload type for outgoing packets
+fn rtp_set_payload_type(pt) {
+    if (pt >= 0 && pt < 128) {
+        rtp_payload_type = pt
+        return 0
+    }
+    return -1
+}
+
+# Get current sequence number
+fn rtp_get_sequence() {
+    return rtp_sequence
+}
+
+# Get current timestamp
+fn rtp_get_timestamp() {
+    return rtp_timestamp
+}
+
+# Get SSRC
+fn rtp_get_ssrc() {
+    return rtp_ssrc
+}
+
+# Set SSRC (for testing)
+fn rtp_set_ssrc(ssrc) {
+    rtp_ssrc = ssrc
+}
+
+# Advance timestamp by samples
+fn rtp_advance_timestamp(samples) {
+    rtp_timestamp = rtp_timestamp + samples
+}
+
+# Generate random SSRC identifier
+fn _rtp_generate_ssrc() {
+    # Use timer and some variation for randomness
+    var t1 = get_uptime()
+    var t2 = get_ticks()
+    return (t1 * 31337 + t2 * 7919) % 4294967296
+}
+
+# Generate random 16-bit value
+fn _rtp_random_u16() {
+    var t = get_ticks()
+    return (t * 1103) % 65536
+}
+
+# Generate random 32-bit value
+fn _rtp_random_u32() {
+    var t1 = get_uptime()
+    var t2 = get_ticks()
+    return (t1 * 48271 + t2 * 69621) % 4294967296
+}
+
+# Write 32-bit value in big-endian
+fn _rtp_write_u32(buf, offset, value) {
+    set_at(buf, offset + 0, (value / 16777216) % 256)
+    set_at(buf, offset + 1, (value / 65536) % 256)
+    set_at(buf, offset + 2, (value / 256) % 256)
+    set_at(buf, offset + 3, value % 256)
+}
+
+# Read 32-bit value in big-endian
+fn _rtp_read_u32(buf, offset) {
+    var b0 = get_at(buf, offset + 0)
+    var b1 = get_at(buf, offset + 1)
+    var b2 = get_at(buf, offset + 2)
+    var b3 = get_at(buf, offset + 3)
+    return b0 * 16777216 + b1 * 65536 + b2 * 256 + b3
+}
+
+# Get payload type name
+fn rtp_get_payload_name(pt) {
+    if (pt == RTP_PT_PCMU) { return "PCMU" }
+    if (pt == RTP_PT_GSM) { return "GSM" }
+    if (pt == RTP_PT_G723) { return "G723" }
+    if (pt == RTP_PT_PCMA) { return "PCMA" }
+    if (pt == RTP_PT_G722) { return "G722" }
+    if (pt == RTP_PT_L16_2) { return "L16-2ch" }
+    if (pt == RTP_PT_L16_1) { return "L16-1ch" }
+    if (pt == RTP_PT_QCELP) { return "QCELP" }
+    if (pt == RTP_PT_MPA) { return "MPA" }
+    if (pt == RTP_PT_G728) { return "G728" }
+    if (pt == RTP_PT_G729) { return "G729" }
+    if (pt == RTP_PT_H261) { return "H261" }
+    if (pt == RTP_PT_MPV) { return "MPV" }
+    if (pt == RTP_PT_H263) { return "H263" }
+    return "Unknown"
+}
+
+# Format RTP info string
+fn rtp_format_info(parsed_info) {
+    var pt = get_at(parsed_info, 5)
+    var seq = get_at(parsed_info, 6) * 256 + get_at(parsed_info, 7)
+    var ts = _rtp_read_u32(parsed_info, 8)
+    var ssrc = _rtp_read_u32(parsed_info, 12)
+    var marker = get_at(parsed_info, 4)
+
+    var buf = RTP_BUF + 49152
+    var pos = 0
+
+    pos = _rtp_append_str(buf, pos, "RTP PT=")
+    pos = _rtp_append_num(buf, pos, pt)
+    pos = _rtp_append_str(buf, pos, " (")
+    pos = _rtp_append_str(buf, pos, rtp_get_payload_name(pt))
+    pos = _rtp_append_str(buf, pos, ") seq=")
+    pos = _rtp_append_num(buf, pos, seq)
+    pos = _rtp_append_str(buf, pos, " ts=")
+    pos = _rtp_append_num(buf, pos, ts)
+    pos = _rtp_append_str(buf, pos, " ssrc=")
+    pos = _rtp_append_num(buf, pos, ssrc)
+
+    if (marker == 1) {
+        pos = _rtp_append_str(buf, pos, " [M]")
+    }
+
+    set_at(buf, pos, 0)
+    return buf
+}
+
+# Helper: append string
+fn _rtp_append_str(buf, pos, str) {
+    var i = 0
+    var len = strlen(str)
+    while (i < len) {
+        set_at(buf, pos, get_at(str, i))
+        pos = pos + 1
+        i = i + 1
+    }
+    return pos
+}
+
+# Helper: append number
+fn _rtp_append_num(buf, pos, num) {
+    if (num == 0) {
+        set_at(buf, pos, 48)
+        return pos + 1
+    }
+
+    var digits = RTP_BUF + 61440
+    var d_pos = 0
+
+    while (num > 0) {
+        set_at(digits, d_pos, 48 + (num % 10))
+        num = num / 10
+        d_pos = d_pos + 1
+    }
+
+    while (d_pos > 0) {
+        d_pos = d_pos - 1
+        set_at(buf, pos, get_at(digits, d_pos))
+        pos = pos + 1
+    }
+
+    return pos
+}

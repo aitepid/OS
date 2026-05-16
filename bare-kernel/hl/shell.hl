@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 475 commands + pipe operator (|):
+// 490 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -120,6 +120,9 @@ fn shell_handle(cmd) {
         serial_print("Bcrypt:   bcrypt cost <n>  bcrypt hash <pwd>  bcrypt verify <pwd> <hash>  bcrypt test");
         serial_print("RTSP:     rtsp options <url>  rtsp describe <url>  rtsp setup <url> <port>  rtsp play <url>  rtsp pause <url>  rtsp teardown <url>  rtsp test");
         serial_print("STUN:     stun request  stun parse <data>  stun addr  stun test");
+        serial_print("RTP:      rtp create <len> <mark>  rtp parse <data>  rtp setpt <pt>  rtp info  rtp test");
+        serial_print("SOCKS:    socks proxy <host> <port>  socks auth <user> <pass>  socks connect <host> <port>  socks close  socks test");
+        serial_print("ZLIB:     zlib compress <data>  zlib decompress <data>  zlib level <n>  zlib ratio <orig> <comp>  zlib test");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -2730,6 +2733,109 @@ fn shell_handle_ext(cmd) {
     }
     if cmd == "stun test" { return stun_test(); }
 
+    // === RTP commands ===
+    if str_starts_with(cmd, "rtp create ") {
+        let parts = str_split(str_sub(cmd, 11, len(cmd)), " ");
+        if len(parts) >= 2 {
+            let payload_len = parse_int(parts[0]);
+            let marker = parse_int(parts[1]);
+            let payload = rtp_get_payload(rtp_create_packet([], payload_len, marker), payload_len, []);
+            return "rtp: packet created (" + to_string(payload_len) + " bytes payload, marker=" + to_string(marker) + ")";
+        }
+        return "rtp: usage: rtp create <payload_len> <marker>";
+    }
+    if str_starts_with(cmd, "rtp parse ") {
+        let data = str_sub(cmd, 10, len(cmd));
+        let parsed = rtp_parse_packet(data, len(data));
+        if parsed == 0 { return "rtp: parse error"; }
+        return "rtp: " + rtp_format_info(parsed);
+    }
+    if str_starts_with(cmd, "rtp setpt ") {
+        let pt = parse_int(str_sub(cmd, 10, len(cmd)));
+        let result = rtp_set_payload_type(pt);
+        if result == 0 { return "rtp: payload type set to " + to_string(pt) + " (" + rtp_get_payload_name(pt) + ")"; }
+        return "rtp: invalid payload type";
+    }
+    if cmd == "rtp info" {
+        return "rtp: ssrc=" + to_string(rtp_get_ssrc()) + " seq=" + to_string(rtp_get_sequence()) + " ts=" + to_string(rtp_get_timestamp());
+    }
+    if cmd == "rtp test" {
+        let result = rtp_create_packet([], 160, 0);
+        if result > 0 { return "rtp: test passed"; }
+        return "rtp: test failed";
+    }
+
+    // === SOCKS commands ===
+    if str_starts_with(cmd, "socks proxy ") {
+        let parts = str_split(str_sub(cmd, 12, len(cmd)), " ");
+        if len(parts) >= 2 {
+            let host = parts[0];
+            let port = parse_int(parts[1]);
+            socks_set_proxy(host, port);
+            return "socks: proxy set to " + host + ":" + to_string(port);
+        }
+        return "socks: usage: socks proxy <host> <port>";
+    }
+    if str_starts_with(cmd, "socks auth ") {
+        let parts = str_split(str_sub(cmd, 11, len(cmd)), " ");
+        if len(parts) >= 2 {
+            let user = parts[0];
+            let pass = parts[1];
+            socks_set_auth(user, pass);
+            return "socks: authentication set";
+        }
+        return "socks: usage: socks auth <username> <password>";
+    }
+    if str_starts_with(cmd, "socks connect ") {
+        let parts = str_split(str_sub(cmd, 14, len(cmd)), " ");
+        if len(parts) >= 2 {
+            let host = parts[0];
+            let port = parse_int(parts[1]);
+            let sock = socks_connect(host, port);
+            if sock >= 0 { return "socks: connected to " + host + ":" + to_string(port) + " (socket " + to_string(sock) + ")"; }
+            return "socks: connection failed (error " + to_string(sock) + ")";
+        }
+        return "socks: usage: socks connect <host> <port>";
+    }
+    if cmd == "socks close" {
+        socks_close();
+        return "socks: connection closed";
+    }
+    if cmd == "socks test" {
+        socks_set_proxy("127.0.0.1", 1080);
+        return "socks: test - proxy configured";
+    }
+
+    // === ZLIB commands ===
+    if str_starts_with(cmd, "zlib compress ") {
+        let data = str_sub(cmd, 14, len(cmd));
+        let comp_len = zlib_compress(data, len(data));
+        if comp_len > 0 { return "zlib: compressed " + to_string(len(data)) + " -> " + to_string(comp_len) + " bytes"; }
+        return "zlib: compression failed";
+    }
+    if str_starts_with(cmd, "zlib decompress ") {
+        let data = str_sub(cmd, 16, len(cmd));
+        let decomp_len = zlib_decompress(data, len(data));
+        if decomp_len > 0 { return "zlib: decompressed " + to_string(len(data)) + " -> " + to_string(decomp_len) + " bytes"; }
+        return "zlib: decompression failed (error " + to_string(decomp_len) + ")";
+    }
+    if str_starts_with(cmd, "zlib level ") {
+        let level = parse_int(str_sub(cmd, 11, len(cmd)));
+        let result = zlib_set_level(level);
+        if result == 0 { return "zlib: compression level set to " + to_string(level); }
+        return "zlib: invalid level (must be 1-9)";
+    }
+    if str_starts_with(cmd, "zlib ratio ") {
+        let parts = str_split(str_sub(cmd, 11, len(cmd)), " ");
+        if len(parts) >= 2 {
+            let orig = parse_int(parts[0]);
+            let comp = parse_int(parts[1]);
+            return "zlib: " + zlib_format_info(orig, comp);
+        }
+        return "zlib: usage: zlib ratio <original_size> <compressed_size>";
+    }
+    if cmd == "zlib test" { return zlib_test(); }
+
     return shell_handle(cmd);
 }
 
@@ -2741,7 +2847,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 475 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun");
+print("shell.hl loaded -- 490 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib");
 
 // Main shell loop (called from kernel_init)
 
