@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 306 commands + pipe operator (|):
+// 324 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -93,6 +93,9 @@ fn shell_handle(cmd) {
         serial_print("SNMP:     snmp  snmp start  snmp stop  snmp mib  snmp get <host> <comm> <oid>  snmp walk <host> [comm]");
         serial_print("TOML:     toml load <path>  toml list  toml get <sec> <key>  toml set <sec> <key> <val>  toml save <path>  toml del <sec> <key>  toml clear");
         serial_print("XML:      xml load <path>  xml find <tag>  xml text <tag>  xml attr <tag> <attr>  xml dump  xml clear");
+        serial_print("YAML:     yaml load <path>  yaml list  yaml get <key>  yaml clear  yaml count");
+        serial_print("MsgPack:  msgpack reset  msgpack uint/int/str/bool <val>  msgpack nil  msgpack hex  msgpack test");
+        serial_print("TFTP:     tftp get <host> <remote> <local>  tftp put <host> <remote> <local>  tftp start/stop/status");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -2176,6 +2179,80 @@ fn shell_handle_ext(cmd) {
         return xml_attr(idx, attrname);
     }
 
+    // YAML
+    if cmd == "yaml list" { return yaml_list(); }
+    if cmd == "yaml clear" { yaml_clear(); return "yaml: cleared"; }
+    if cmd == "yaml count" { return "yaml: " + to_string(yaml_count()) + " entries"; }
+    if str_starts_with(cmd, "yaml load ") {
+        let path = str_sub(cmd, 10, len(cmd));
+        let n = yaml_load(path);
+        if n < 0 { return "yaml: load failed"; }
+        return "yaml: loaded " + to_string(n) + " entries from " + path;
+    }
+    if str_starts_with(cmd, "yaml get ") {
+        let key = str_sub(cmd, 9, len(cmd));
+        let val = yaml_get(key);
+        if len(val) == 0 { return "(not found)"; }
+        return val;
+    }
+
+    // MsgPack
+    if cmd == "msgpack reset" { msgpack_reset(); return "msgpack: buffer reset"; }
+    if cmd == "msgpack nil" { msgpack_nil(); return "msgpack: nil encoded"; }
+    if cmd == "msgpack hex" { return msgpack_get_result(); }
+    if cmd == "msgpack test" { msgpack_selftest(); return ""; }
+    if str_starts_with(cmd, "msgpack uint ") {
+        let n = parse_int(str_sub(cmd, 13, len(cmd)));
+        msgpack_uint(n);
+        return "msgpack: uint(" + to_string(n) + ") encoded";
+    }
+    if str_starts_with(cmd, "msgpack int ") {
+        let n = parse_int(str_sub(cmd, 12, len(cmd)));
+        msgpack_int(n);
+        return "msgpack: int(" + to_string(n) + ") encoded";
+    }
+    if str_starts_with(cmd, "msgpack str ") {
+        let s = str_sub(cmd, 12, len(cmd));
+        msgpack_str(s);
+        return "msgpack: str(\"" + s + "\") encoded";
+    }
+    if str_starts_with(cmd, "msgpack bool ") {
+        let v = parse_int(str_sub(cmd, 13, len(cmd)));
+        msgpack_bool(v);
+        return "msgpack: bool(" + to_string(v) + ") encoded";
+    }
+
+    // TFTP
+    if cmd == "tftp status" { return tftp_status(); }
+    if cmd == "tftp start" { tftp_server_start(); return "tftp: server started"; }
+    if cmd == "tftp stop" { tftp_server_stop(); return "tftp: server stopped"; }
+    if str_starts_with(cmd, "tftp get ") {
+        let rest = str_sub(cmd, 9, len(cmd));
+        let sp1 = str_find(rest, " ");
+        if sp1 < 0 { return "usage: tftp get <host> <remote> <local>"; }
+        let host = str_sub(rest, 0, sp1);
+        let rest2 = str_sub(rest, sp1 + 1, len(rest));
+        let sp2 = str_find(rest2, " ");
+        if sp2 < 0 { return "usage: tftp get <host> <remote> <local>"; }
+        let remote = str_sub(rest2, 0, sp2);
+        let local = str_sub(rest2, sp2 + 1, len(rest2));
+        tftp_get(host, remote, local);
+        return "";
+    }
+    if str_starts_with(cmd, "tftp put ") {
+        let rest = str_sub(cmd, 9, len(cmd));
+        let sp1 = str_find(rest, " ");
+        if sp1 < 0 { return "usage: tftp put <host> <remote> <local>"; }
+        let host = str_sub(rest, 0, sp1);
+        let rest2 = str_sub(rest, sp1 + 1, len(rest));
+        let sp2 = str_find(rest2, " ");
+        if sp2 < 0 { return "usage: tftp put <host> <remote> <local>"; }
+        let remote = str_sub(rest2, 0, sp2);
+        let local = str_sub(rest2, sp2 + 1, len(rest2));
+        tftp_put(host, remote, local);
+        return "";
+    }
+
     return shell_handle(cmd);
 }
 
@@ -2187,7 +2264,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 306 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + snmp + toml + xml");
+print("shell.hl loaded -- 324 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + snmp + toml + xml + yaml + msgpack + tftp");
 
 // Main shell loop (called from kernel_init)
 

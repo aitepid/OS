@@ -1,0 +1,299 @@
+// yaml.hl -- YAML 1.2 Minimal Parser
+//
+// Iteration 190: Parse YAML documents from VFS or memory strings.
+//
+// Supported YAML subset:
+//   # comment lines (full-line only)
+//   key: value          — scalar mapping
+//   key: "quoted"       — double-quoted string
+//   key: 'quoted'       — single-quoted string
+//   - item              — sequence item (key stored as "-N")
+//   key:                — empty/block header (stored with null type)
+//
+// Type detection: true/false → bool, ~ or null → null,
+//   numeric → int or float, else string.
+//
+// Storage: YAML_MAX (64) entries in parallel flat arrays.
+//   Each entry: key, value_string, type_tag, indent_level
+//   Type tags: "s"=string, "i"=integer, "f"=float, "b"=boolean, "n"=null
+//
+// Public API:
+//   yaml_init()
+//   yaml_parse_str(s)        → entry count / -1 on error
+//   yaml_load(path)          → entry count / -1 on error
+//   yaml_get(key)            → value string or ""
+//   yaml_get_int(key)        → integer or 0
+//   yaml_get_bool(key)       → 1/0
+//   yaml_list()              → formatted dump string
+//   yaml_count()
+//   yaml_clear()
+//
+// Shell:
+//   yaml load <path>
+//   yaml list
+//   yaml get <key>
+//   yaml clear
+//   yaml count
+
+let YAML_MAX    = 64;
+let YAML_BUF    = 15990784;   // 0xF40000  64 KB scratch
+let YAML_BUF_SZ = 65536;
+
+let mut yaml_keys    = [];
+let mut yaml_vals    = [];
+let mut yaml_types   = [];
+let mut yaml_indents = [];
+let mut yaml_count_n = 0;
+let mut yaml_seq_idx = 0;
+
+fn yaml_init() {
+    yaml_keys    = [];
+    yaml_vals    = [];
+    yaml_types   = [];
+    yaml_indents = [];
+    yaml_count_n = 0;
+    yaml_seq_idx = 0;
+    let mut i = 0;
+    while i < YAML_MAX {
+        push(yaml_keys,    "");
+        push(yaml_vals,    "");
+        push(yaml_types,   "s");
+        push(yaml_indents, 0);
+        i = i + 1;
+    }
+    print("yaml: init — max " + to_string(YAML_MAX) + " entries, indent-depth tracking");
+    return 0;
+}
+
+fn yaml_count() { return yaml_count_n; }
+
+fn yaml_clear() {
+    yaml_count_n = 0;
+    yaml_seq_idx = 0;
+    let mut i = 0;
+    while i < YAML_MAX {
+        set_at(yaml_keys,    i, "");
+        set_at(yaml_vals,    i, "");
+        set_at(yaml_types,   i, "s");
+        set_at(yaml_indents, i, 0);
+        i = i + 1;
+    }
+    return 0;
+}
+
+// ============================================================
+// Helpers: trim, type detection, quote stripping
+// ============================================================
+
+fn _yaml_trim(s) {
+    let mut start = 0;
+    let n = len(s);
+    let mut end = n;
+    while start < end {
+        let c = str_char_code(s, start);
+        if c == 32 { start = start + 1; }
+        else { if c == 9 { start = start + 1; } else { start = n + 1; } }
+    }
+    if start > n { start = start - n - 1; }
+    while end > start {
+        let c = str_char_code(s, end - 1);
+        if c == 32 { end = end - 1; }
+        else { if c == 9 { end = end - 1; } else { end = 0 - 1; } }
+    }
+    if end < 0 { end = end + n + 1; }
+    if start >= n { return ""; }
+    if end <= 0 { return ""; }
+    return str_sub(s, start, end);
+}
+
+fn _yaml_detect_type(val) {
+    if val == "true"  { return "b"; }
+    if val == "false" { return "b"; }
+    if val == "null"  { return "n"; }
+    if val == "~"     { return "n"; }
+    if len(val) == 0  { return "n"; }
+    let mut all_num = 1;
+    let mut has_dot = 0;
+    let mut i = 0;
+    if str_char_code(val, 0) == 45 { i = 1; }   // leading '-'
+    while i < len(val) {
+        let c = str_char_code(val, i);
+        if c == 46 { has_dot = 1; }
+        else { if c < 48 { all_num = 0; } else { if c > 57 { all_num = 0; } } }
+        i = i + 1;
+    }
+    if all_num == 1 {
+        if has_dot == 1 { return "f"; }
+        return "i";
+    }
+    return "s";
+}
+
+fn _yaml_strip_quotes(s) {
+    let n = len(s);
+    if n < 2 { return s; }
+    let c0 = str_char_code(s, 0);
+    let cn = str_char_code(s, n - 1);
+    if c0 == 34 { if cn == 34 { return str_sub(s, 1, n - 1); } }
+    if c0 == 39 { if cn == 39 { return str_sub(s, 1, n - 1); } }
+    return s;
+}
+
+// ============================================================
+// Count leading spaces (indent level)
+// ============================================================
+
+fn _yaml_indent(line_raw) {
+    let n = len(line_raw);
+    let mut i = 0;
+    while i < n {
+        let c = str_char_code(line_raw, i);
+        if c == 32 { i = i + 1; }
+        else { if c == 9 { i = i + 1; } else { return i; } }
+    }
+    return n;
+}
+
+// ============================================================
+// Store one entry
+// ============================================================
+
+fn _yaml_store(key, val, typ, indent) {
+    if yaml_count_n >= YAML_MAX { return 0; }
+    let slot = yaml_count_n;
+    set_at(yaml_keys,    slot, key);
+    set_at(yaml_vals,    slot, val);
+    set_at(yaml_types,   slot, typ);
+    set_at(yaml_indents, slot, indent);
+    yaml_count_n = yaml_count_n + 1;
+    return slot;
+}
+
+// ============================================================
+// Parse YAML string
+// ============================================================
+
+fn yaml_parse_str(s) {
+    yaml_clear();
+    let n = len(s);
+    let mut line_start = 0;
+    let mut li = 0;
+    while li <= n {
+        let is_nl = 0;
+        if li < n { if str_char_code(s, li) == 10 { is_nl = 1; } }
+        if is_nl == 1 {
+            let line_raw = str_sub(s, line_start, li);
+            line_start = li + 1;
+            let indent = _yaml_indent(line_raw);
+            let line = _yaml_trim(line_raw);
+            let ll = len(line);
+            if ll > 0 {
+                let c0 = str_char_code(line, 0);
+                if c0 == 35 { }   // '#' full-line comment — skip
+                else {
+                    if c0 == 45 {   // '-' sequence item
+                        if ll > 1 {
+                            if str_char_code(line, 1) == 32 {
+                                let item_raw = _yaml_trim(str_sub(line, 2, ll));
+                                let item = _yaml_strip_quotes(item_raw);
+                                let key = "-" + to_string(yaml_seq_idx);
+                                yaml_seq_idx = yaml_seq_idx + 1;
+                                _yaml_store(key, item, _yaml_detect_type(item), indent);
+                            }
+                        }
+                    } else {
+                        // key: value  or  key:
+                        let colon_spc = str_find(line, ": ");
+                        if colon_spc > 0 {
+                            let key = _yaml_trim(str_sub(line, 0, colon_spc));
+                            let raw_val = _yaml_trim(str_sub(line, colon_spc + 2, ll));
+                            // Strip trailing inline comment
+                            let mut val_raw = raw_val;
+                            let hpos = str_find(raw_val, " #");
+                            if hpos > 0 { val_raw = _yaml_trim(str_sub(raw_val, 0, hpos)); }
+                            let val = _yaml_strip_quotes(val_raw);
+                            _yaml_store(key, val, _yaml_detect_type(val), indent);
+                        } else {
+                            // key: (block header — empty value)
+                            let colon_end = str_find(line, ":");
+                            if colon_end > 0 {
+                                if colon_end == ll - 1 {
+                                    let key = str_sub(line, 0, colon_end);
+                                    _yaml_store(key, "", "n", indent);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        li = li + 1;
+    }
+    return yaml_count_n;
+}
+
+// ============================================================
+// Load from VFS
+// ============================================================
+
+fn yaml_load(path) {
+    let fd = vfs_open(path, 0);
+    if fd < 0 { print("yaml: cannot open " + path); return 0 - 1; }
+    let n = vfs_read(fd, YAML_BUF, YAML_BUF_SZ);
+    vfs_close(fd);
+    if n <= 0 { return 0; }
+    let mut text = "";
+    let mut i = 0;
+    while i < n {
+        let b = mem_read_u8(YAML_BUF + i);
+        if b == 13 { i = i + 1; }
+        else { text = text + str_from_code(b); i = i + 1; }
+    }
+    let cnt = yaml_parse_str(text);
+    print("yaml: loaded " + path + " — " + to_string(cnt) + " entries");
+    return cnt;
+}
+
+// ============================================================
+// Access
+// ============================================================
+
+fn yaml_get(key) {
+    let mut i = 0;
+    while i < yaml_count_n {
+        if yaml_keys[i] == key { return yaml_vals[i]; }
+        i = i + 1;
+    }
+    return "";
+}
+
+fn yaml_get_int(key) {
+    let v = yaml_get(key);
+    if len(v) == 0 { return 0; }
+    return parse_int(v);
+}
+
+fn yaml_get_bool(key) {
+    let v = yaml_get(key);
+    if v == "true" { return 1; }
+    return 0;
+}
+
+fn yaml_list() {
+    if yaml_count_n == 0 { return "(no YAML entries parsed)\n"; }
+    let mut out = "YAML entries (" + to_string(yaml_count_n) + "):\n";
+    let mut i = 0;
+    while i < yaml_count_n {
+        let d = yaml_indents[i];
+        let mut ind = "";
+        let mut k = 0;
+        while k < d { ind = ind + " "; k = k + 1; }
+        out = out + ind + yaml_keys[i] + ": " + yaml_vals[i]
+            + "  (" + yaml_types[i] + ")\n";
+        i = i + 1;
+    }
+    return out;
+}
+
+print("yaml.hl loaded");
+print("YAML: 1.2 minimal parser — scalars/sequences/mappings, type detection, VFS load");

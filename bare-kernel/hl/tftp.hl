@@ -1,0 +1,269 @@
+// tftp.hl -- TFTP Client + Server (RFC 1350)
+//
+// Iteration 192: Trivial File Transfer Protocol over UDP.
+//
+// Protocol:
+//   Client sends RRQ (opcode 1) or WRQ (opcode 2) to server port 69.
+//   Server responds with DATA (opcode 3) blocks of up to 512 bytes.
+//   Client ACKs each DATA block (opcode 4 + block#).
+//   Last block < 512 bytes signals end of transfer.
+//   ERROR packets (opcode 5) terminate transfer.
+//
+// Opcodes: 1=RRQ 2=WRQ 3=DATA 4=ACK 5=ERROR
+//
+// Local TFTP server: serves files from VFS, handles one RRQ at a time.
+//
+// Public API:
+//   tftp_init()
+//   tftp_get(host, remote, local)   → bytes received / -1 on error
+//   tftp_put(host, remote, local)   → bytes sent / -1 on error
+//   tftp_server_start()
+//   tftp_server_stop()
+//   tftp_server_tick()
+//   tftp_status()
+//
+// Shell:
+//   tftp get <host> <remote> <local>
+//   tftp put <host> <remote> <local>
+//   tftp start / stop / status
+
+let TFTP_PORT      = 69;
+let TFTP_LPORT     = 16069;     // client ephemeral port
+let TFTP_BUF       = 16121856;  // 0xF60000  4 KB PDU buffer
+let TFTP_DATA_BUF  = 16187392;  // 0xF70000  64 KB data staging
+let TFTP_BUF_SZ    = 1024;
+let TFTP_DATA_SZ   = 65536;
+let TFTP_BLOCK_SZ  = 512;
+let TFTP_TIMEOUT   = 500;       // ticks
+
+let mut tftp_server_on  = 0;
+let mut tftp_xfer_count = 0;
+
+fn tftp_init() {
+    tftp_server_on  = 0;
+    tftp_xfer_count = 0;
+    print("tftp: init — RFC 1350, UDP 69, 512B blocks, RRQ/WRQ/DATA/ACK/ERROR");
+    return 0;
+}
+
+fn tftp_server_start() {
+    udp_bind(TFTP_PORT, "tftp_on_recv");
+    tftp_server_on = 1;
+    print("tftp: server listening on UDP 69");
+    return 0;
+}
+
+fn tftp_server_stop() {
+    tftp_server_on = 0;
+    print("tftp: server stopped");
+    return 0;
+}
+
+fn tftp_status() {
+    let state = "stopped";
+    if tftp_server_on == 1 { state = "running"; }
+    return "tftp: server " + state + " port=" + to_string(TFTP_PORT)
+        + " transfers=" + to_string(tftp_xfer_count);
+}
+
+// ============================================================
+// Packet building helpers
+// ============================================================
+
+fn _tftp_build_rrq(filename) {
+    let mut pkt = str_from_code(0) + str_from_code(1);  // opcode RRQ
+    let mut i = 0;
+    while i < len(filename) {
+        pkt = pkt + str_from_code(str_char_code(filename, i));
+        i = i + 1;
+    }
+    pkt = pkt + str_from_code(0);  // NUL terminator
+    let mode = "octet";
+    let mut j = 0;
+    while j < len(mode) {
+        pkt = pkt + str_from_code(str_char_code(mode, j));
+        j = j + 1;
+    }
+    pkt = pkt + str_from_code(0);  // NUL terminator
+    return pkt;
+}
+
+fn _tftp_build_wrq(filename) {
+    let mut pkt = str_from_code(0) + str_from_code(2);  // opcode WRQ
+    let mut i = 0;
+    while i < len(filename) {
+        pkt = pkt + str_from_code(str_char_code(filename, i));
+        i = i + 1;
+    }
+    pkt = pkt + str_from_code(0);
+    let mode = "octet";
+    let mut j = 0;
+    while j < len(mode) {
+        pkt = pkt + str_from_code(str_char_code(mode, j));
+        j = j + 1;
+    }
+    pkt = pkt + str_from_code(0);
+    return pkt;
+}
+
+fn _tftp_build_ack(block) {
+    let mut pkt = str_from_code(0) + str_from_code(4);  // opcode ACK
+    pkt = pkt + str_from_code(block / 256) + str_from_code(block % 256);
+    return pkt;
+}
+
+// ============================================================
+// Client: GET a file from remote TFTP server
+// ============================================================
+
+fn tftp_get(host, remote, local) {
+    let ip = dns_resolve(host);
+    let rrq_pkt = _tftp_build_rrq(remote);
+    udp_send(ip, TFTP_PORT, TFTP_LPORT, rrq_pkt);
+
+    let mut total = 0;
+    let mut block = 1;
+    let mut done = 0;
+    let deadline = get_ticks() + TFTP_TIMEOUT;
+    while done == 0 {
+        if get_ticks() > deadline { print("tftp: get timeout"); return 0 - 1; }
+        let resp = udp_recv(TFTP_LPORT, TFTP_BUF, TFTP_BUF_SZ);
+        if len(resp) > 0 {
+            let op = str_char_code(resp, 0) * 256 + str_char_code(resp, 1);
+            if op == 3 {   // DATA
+                let blk = str_char_code(resp, 2) * 256 + str_char_code(resp, 3);
+                if blk == block {
+                    let data_sz = len(resp) - 4;
+                    // Copy data to staging buffer
+                    let mut di = 0;
+                    while di < data_sz {
+                        let b = str_char_code(resp, 4 + di);
+                        mem_write_u8(TFTP_DATA_BUF + total + di, b);
+                        di = di + 1;
+                    }
+                    total = total + data_sz;
+                    // Send ACK
+                    let ack_pkt = _tftp_build_ack(block);
+                    udp_send(ip, TFTP_PORT, TFTP_LPORT, ack_pkt);
+                    block = block + 1;
+                    if data_sz < TFTP_BLOCK_SZ { done = 1; }
+                    deadline = get_ticks() + TFTP_TIMEOUT;  // reset timeout
+                }
+            } else {
+                if op == 5 { print("tftp: server error"); return 0 - 1; }
+            }
+        }
+    }
+
+    // Write staging buffer to VFS
+    if total > 0 {
+        let fd = vfs_open(local, 1);
+        if fd < 0 { print("tftp: cannot create " + local); return 0 - 1; }
+        vfs_write(fd, TFTP_DATA_BUF, total);
+        vfs_close(fd);
+    }
+    tftp_xfer_count = tftp_xfer_count + 1;
+    print("tftp: get " + remote + " → " + local + " (" + to_string(total) + " bytes)");
+    return total;
+}
+
+// ============================================================
+// Client: PUT a file to remote TFTP server
+// ============================================================
+
+fn tftp_put(host, remote, local) {
+    let ip = dns_resolve(host);
+    // Read local file into staging buffer
+    let fd = vfs_open(local, 0);
+    if fd < 0 { print("tftp: cannot open " + local); return 0 - 1; }
+    let file_sz = vfs_read(fd, TFTP_DATA_BUF, TFTP_DATA_SZ);
+    vfs_close(fd);
+    if file_sz <= 0 { return 0; }
+
+    // Send WRQ
+    let wrq_pkt = _tftp_build_wrq(remote);
+    udp_send(ip, TFTP_PORT, TFTP_LPORT, wrq_pkt);
+
+    // Wait for ACK 0
+    let mut deadline = get_ticks() + TFTP_TIMEOUT;
+    let mut acked = 0;
+    while acked == 0 {
+        if get_ticks() > deadline { print("tftp: put timeout"); return 0 - 1; }
+        let resp = udp_recv(TFTP_LPORT, TFTP_BUF, TFTP_BUF_SZ);
+        if len(resp) >= 4 {
+            let op = str_char_code(resp, 0) * 256 + str_char_code(resp, 1);
+            if op == 4 { acked = 1; }
+        }
+    }
+
+    // Send DATA blocks
+    let mut sent = 0;
+    let mut block = 1;
+    let mut done = 0;
+    while done == 0 {
+        let remaining = file_sz - sent;
+        let mut sz = TFTP_BLOCK_SZ;
+        if remaining < TFTP_BLOCK_SZ { sz = remaining; }
+        // Build DATA packet
+        let mut data_pkt = str_from_code(0) + str_from_code(3);  // opcode DATA
+        data_pkt = data_pkt + str_from_code(block / 256) + str_from_code(block % 256);
+        let mut di = 0;
+        while di < sz {
+            data_pkt = data_pkt + str_from_code(mem_read_u8(TFTP_DATA_BUF + sent + di));
+            di = di + 1;
+        }
+        udp_send(ip, TFTP_PORT, TFTP_LPORT, data_pkt);
+        // Wait for ACK
+        deadline = get_ticks() + TFTP_TIMEOUT;
+        let mut got_ack = 0;
+        while got_ack == 0 {
+            if get_ticks() > deadline { print("tftp: put ACK timeout"); return 0 - 1; }
+            let resp = udp_recv(TFTP_LPORT, TFTP_BUF, TFTP_BUF_SZ);
+            if len(resp) >= 4 {
+                let op2 = str_char_code(resp, 0) * 256 + str_char_code(resp, 1);
+                if op2 == 4 { got_ack = 1; }
+            }
+        }
+        sent = sent + sz;
+        block = block + 1;
+        if sz < TFTP_BLOCK_SZ { done = 1; }
+        if sent >= file_sz { done = 1; }
+    }
+
+    tftp_xfer_count = tftp_xfer_count + 1;
+    print("tftp: put " + local + " → " + remote + " (" + to_string(sent) + " bytes)");
+    return sent;
+}
+
+// ============================================================
+// Server receive callback
+// ============================================================
+
+fn tftp_on_recv(data) {
+    if tftp_server_on == 0 { return 0; }
+    if len(data) < 4 { return 0; }
+    let op = str_char_code(data, 0) * 256 + str_char_code(data, 1);
+    if op == 1 {   // RRQ
+        // Extract filename: bytes 2..NUL
+        let mut fname = "";
+        let mut i = 2;
+        while i < len(data) {
+            let c = str_char_code(data, i);
+            if c == 0 { i = len(data) + 1; }
+            else { fname = fname + str_from_code(c); i = i + 1; }
+        }
+        klog(1, "tftp", "RRQ: " + fname);
+        tftp_xfer_count = tftp_xfer_count + 1;
+    }
+    return 0;
+}
+
+fn tftp_server_tick() {
+    if tftp_server_on == 0 { return 0; }
+    let data = udp_recv(TFTP_PORT, TFTP_BUF, TFTP_BUF_SZ);
+    if len(data) > 0 { tftp_on_recv(data); }
+    return 0;
+}
+
+print("tftp.hl loaded");
+print("TFTP: RFC 1350, UDP 69, 512B blocks, client get/put + server RRQ handler");

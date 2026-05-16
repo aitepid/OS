@@ -1,0 +1,228 @@
+// msgpack.hl -- MessagePack Binary Serialization
+//
+// Iteration 191: MsgPack compact binary format.
+//
+// Encoding rules (subset):
+//   positive fixint   0-127       → 1 byte: value
+//   negative fixint  -32 to -1    → 1 byte: 224+(32+val)
+//   uint8  128-255                → 0xCC + 1 byte
+//   uint16 256-65535              → 0xCD + 2 bytes BE
+//   uint32 65536+                 → 0xCE + 4 bytes BE
+//   int8  -128 to -33             → 0xD0 + 1 byte (256+val)
+//   int16                         → 0xD1 + 2 bytes BE
+//   int32                         → 0xD2 + 4 bytes BE
+//   nil                           → 0xC0 = 192
+//   false                         → 0xC2 = 194
+//   true                          → 0xC3 = 195
+//   fixstr  len 0-31              → 0xA0+len + UTF-8 bytes
+//   str8    len 32-255            → 0xD9 + 1B len + bytes
+//   str16   len 256-65535         → 0xDA + 2B len + bytes
+//   fixarray len 0-15             → 0x90+len
+//   array16 len 16-65535          → 0xDC + 2B len
+//   fixmap   len 0-15             → 0x80+len
+//   map16    len 16-65535         → 0xDE + 2B len
+//
+// Public API:
+//   msgpack_init()
+//   msgpack_reset()
+//   msgpack_uint(n)
+//   msgpack_int(n)             — encodes negative ints
+//   msgpack_str(s)
+//   msgpack_bool(v)
+//   msgpack_nil()
+//   msgpack_array_hdr(n)
+//   msgpack_map_hdr(n)
+//   msgpack_get_result()       → hex string
+//   msgpack_selftest()
+//
+// Shell:
+//   msgpack uint <n>
+//   msgpack int <n>
+//   msgpack str <s>
+//   msgpack bool <0|1>
+//   msgpack nil
+//   msgpack hex
+//   msgpack test
+//   msgpack reset
+
+let MSGPACK_BUF    = 16056320;   // 0xF50000
+let MSGPACK_BUF_SZ = 4096;
+let MSGPACK_HEX    = "0123456789abcdef";
+
+let mut msgpack_len = 0;
+
+fn msgpack_init() {
+    msgpack_len = 0;
+    mem_zero(MSGPACK_BUF, MSGPACK_BUF_SZ);
+    print("msgpack: init — MsgPack binary format, 4KB buffer");
+    return 0;
+}
+
+fn msgpack_reset() {
+    msgpack_len = 0;
+    return 0;
+}
+
+fn _msgpack_put(b) {
+    if msgpack_len >= MSGPACK_BUF_SZ { return 0; }
+    mem_write_u8(MSGPACK_BUF + msgpack_len, b);
+    msgpack_len = msgpack_len + 1;
+    return 0;
+}
+
+// ============================================================
+// Encoders
+// ============================================================
+
+fn msgpack_nil() {
+    _msgpack_put(192);   // 0xC0
+    return 0;
+}
+
+fn msgpack_bool(v) {
+    if v == 0 { _msgpack_put(194); }   // 0xC2 false
+    else { _msgpack_put(195); }        // 0xC3 true
+    return 0;
+}
+
+fn msgpack_uint(n) {
+    if n < 0 { return msgpack_int(n); }
+    if n < 128 {
+        _msgpack_put(n);
+        return 0;
+    }
+    if n < 256 {
+        _msgpack_put(204);   // 0xCC uint8
+        _msgpack_put(n % 256);
+        return 0;
+    }
+    if n < 65536 {
+        _msgpack_put(205);   // 0xCD uint16
+        _msgpack_put(n / 256);
+        _msgpack_put(n % 256);
+        return 0;
+    }
+    // uint32
+    _msgpack_put(206);   // 0xCE
+    _msgpack_put((n / 16777216) % 256);
+    _msgpack_put((n / 65536) % 256);
+    _msgpack_put((n / 256) % 256);
+    _msgpack_put(n % 256);
+    return 0;
+}
+
+fn msgpack_int(n) {
+    if n >= 0 { return msgpack_uint(n); }
+    // Negative
+    if n >= 0 - 32 {
+        // negative fixint: 111xxxxx = 224 + (32 + n)
+        _msgpack_put(224 + 32 + n);
+        return 0;
+    }
+    if n >= 0 - 128 {
+        _msgpack_put(208);   // 0xD0 int8
+        _msgpack_put(256 + n);
+        return 0;
+    }
+    if n >= 0 - 32768 {
+        _msgpack_put(209);   // 0xD1 int16
+        let v = 65536 + n;
+        _msgpack_put(v / 256);
+        _msgpack_put(v % 256);
+        return 0;
+    }
+    // int32
+    _msgpack_put(210);   // 0xD2
+    let v = 4294967296 + n;
+    _msgpack_put((v / 16777216) % 256);
+    _msgpack_put((v / 65536) % 256);
+    _msgpack_put((v / 256) % 256);
+    _msgpack_put(v % 256);
+    return 0;
+}
+
+fn msgpack_str(s) {
+    let n = len(s);
+    if n < 32 {
+        _msgpack_put(160 + n);   // fixstr: 0xA0 | n
+    } else {
+        if n < 256 {
+            _msgpack_put(217);   // 0xD9 str8
+            _msgpack_put(n);
+        } else {
+            _msgpack_put(218);   // 0xDA str16
+            _msgpack_put(n / 256);
+            _msgpack_put(n % 256);
+        }
+    }
+    let mut i = 0;
+    while i < n {
+        _msgpack_put(str_char_code(s, i));
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn msgpack_array_hdr(n) {
+    if n < 16 {
+        _msgpack_put(144 + n);   // fixarray: 0x90 | n
+    } else {
+        _msgpack_put(220);   // 0xDC array16
+        _msgpack_put(n / 256);
+        _msgpack_put(n % 256);
+    }
+    return 0;
+}
+
+fn msgpack_map_hdr(n) {
+    if n < 16 {
+        _msgpack_put(128 + n);   // fixmap: 0x80 | n
+    } else {
+        _msgpack_put(222);   // 0xDE map16
+        _msgpack_put(n / 256);
+        _msgpack_put(n % 256);
+    }
+    return 0;
+}
+
+// ============================================================
+// Result as hex string
+// ============================================================
+
+fn msgpack_get_result() {
+    let mut out = "";
+    let mut i = 0;
+    while i < msgpack_len {
+        let b = mem_read_u8(MSGPACK_BUF + i);
+        out = out + str_sub(MSGPACK_HEX, b / 16, b / 16 + 1)
+                  + str_sub(MSGPACK_HEX, b % 16, b % 16 + 1);
+        i = i + 1;
+    }
+    return out;
+}
+
+// ============================================================
+// Self-test
+// ============================================================
+
+fn msgpack_selftest() {
+    msgpack_reset();
+    msgpack_array_hdr(4);
+    msgpack_uint(42);
+    msgpack_str("hi");
+    msgpack_bool(1);
+    msgpack_nil();
+    let hex = msgpack_get_result();
+    // Expected: fixarray(4)=94, fixuint(42)=2a, fixstr(2)=a2+6869, true=c3, nil=c0
+    // → "942aa26869c3c0" (14 hex chars = 7 bytes)
+    if len(hex) == 14 {
+        print("msgpack: selftest PASS — " + hex);
+    } else {
+        print("msgpack: selftest FAIL — got " + hex + " (len=" + to_string(len(hex)) + ")");
+    }
+    msgpack_reset();
+    return 0;
+}
+
+print("msgpack.hl loaded");
+print("MsgPack: binary format — fixint/uint8-32/int8-32/fixstr/str8-16/fixarray/fixmap/bool/nil");

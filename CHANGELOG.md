@@ -2,11 +2,62 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`244`（69 根目录 + 175 内核模块）
-- H-L 总行数：`~65,900`
-- 内核模块：`175`
-- Shell 命令：`306`
-- 最近完成功能迭代：`189`（snmp + toml + xml）
+- `.hl` 文件：`247`（69 根目录 + 178 内核模块）
+- H-L 总行数：`~67,700`
+- 内核模块：`178`
+- Shell 命令：`324`
+- 最近完成功能迭代：`192`（yaml + msgpack + tftp）
+
+## Iteration 192 — tftp.hl：TFTP 文件传输客户端 + 服务器
+
+- **`bare-kernel/hl/tftp.hl`** 新增（~230 行）
+  - RFC 1350 简单文件传输协议；UDP 端口 69，512B 数据块
+  - 客户端模式：`tftp_get(host, remote, local)` / `tftp_put(host, remote, local)`
+  - 服务器模式：`tftp_server_start/stop()`，UDP 绑定回调 `tftp_on_recv`
+  - 包构建辅助：`_tftp_build_rrq/wrq/ack` — 纯字符串拼接（无位运算）
+  - RRQ (opcode 1) / WRQ (opcode 2) / DATA (opcode 3) / ACK (opcode 4) / ERROR (opcode 5)
+  - `tftp_get` 逐块接收 DATA，发送 ACK，最后块 <512B 结束
+  - `tftp_put` 发送 WRQ，等待 ACK 0，逐块发送 DATA，等待 ACK
+  - TFTP_BUF=0xF60000, TFTP_DATA_BUF=0xF70000（暂存 64 KB 文件数据）
+- **kernel_init.hl** Phase 7：`tftp_init()`
+- **shell.hl** 新增 5 条命令：
+  - `tftp get <host> <remote> <local>` / `tftp put <host> <remote> <local>`
+  - `tftp start/stop/status`
+
+## Iteration 191 — msgpack.hl：MessagePack 二进制序列化
+
+- **`bare-kernel/hl/msgpack.hl`** 新增（~200 行）
+  - MessagePack 紧凑二进制格式编码器
+  - 正整数 fixint (0-127) / uint8 (0xCC) / uint16 (0xCD) / uint32 (0xCE)
+  - 负整数 fixint (-32 to -1, 224+32+val) / int8 (0xD0) / int16 (0xD1) / int32 (0xD2)
+  - fixstr (0xA0+len, len 0-31) / str8 (0xD9) / str16 (0xDA)
+  - fixarray (0x90+len) / array16 (0xDC) / fixmap (0x80+len) / map16 (0xDE)
+  - nil (0xC0=192) / false (0xC2=194) / true (0xC3=195)
+  - `msgpack_uint/int/str/bool/nil/array_hdr/map_hdr` — 编码函数
+  - `msgpack_get_result()` → 十六进制字符串输出
+  - `msgpack_selftest()` — array[4] + uint(42) + str("hi") + true + nil
+  - MSGPACK_BUF=0xF50000（4 KB）
+- **kernel_init.hl** Phase 7：`msgpack_init()`
+- **shell.hl** 新增 8 条命令：
+  - `msgpack reset` / `msgpack uint/int/str/bool <val>` / `msgpack nil`
+  - `msgpack hex` / `msgpack test`
+
+## Iteration 190 — yaml.hl：YAML 1.2 配置解析器
+
+- **`bare-kernel/hl/yaml.hl`** 新增（~290 行）
+  - YAML 1.2 最小子集：标量映射、序列、缩进深度追踪
+  - 支持：`# 注释` / `key: value` / `key: "quoted"` / `- item` 序列 / `key:` 空块头
+  - 类型检测：true/false → bool, null/~ → null, 数字 → int/float, 其他 → string
+  - 并行数组存储：`yaml_keys/vals/types/indents[]`（YAML_MAX=64）
+  - `_yaml_indent(line_raw)` — 统计前导空格/Tab 数量
+  - `yaml_parse_str(s)` — 逐行分割，识别注释/序列项（`- `）/键值对（`key: val`）
+  - 序列项存储为 "-0", "-1", "-2" 等动态键名
+  - `yaml_load(path)` / `yaml_get(key)` / `yaml_get_int/bool` / `yaml_list()`
+  - YAML_BUF=0xF40000（64 KB）
+- **kernel_init.hl** Phase 7：`yaml_init()`
+- **shell.hl** 新增 5 条命令：
+  - `yaml load <path>` / `yaml list` / `yaml get <key>`
+  - `yaml clear` / `yaml count`
 
 ## Iteration 189 — xml.hl：SAX 风格 XML 解析器
 
