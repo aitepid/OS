@@ -1,0 +1,269 @@
+// base64.hl -- Base64 Encoder / Decoder (RFC 4648)
+//
+// Iteration 172: Pure-arithmetic Base64 for VFS files and byte arrays.
+//
+// Encoding:
+//   Every 3 input bytes → 4 Base64 ASCII characters.
+//   Each 6-bit group mapped to A-Z (0-25), a-z (26-51), 0-9 (52-61),
+//   '+' (62), '/' (63).  Padding '=' appended when input % 3 != 0.
+//
+// All bitwise operations emulated with integer arithmetic:
+//   b >> n  =  b / (2^n)
+//   b & mask = b % (mask+1)
+//   b << n  =  b * (2^n)
+//
+// Scratch memory:
+//   B64_IN_BUF  = 0xE1C000 (14794752)  64 KB  input
+//   B64_OUT_BUF = 0xE2C000 (14860288)  64 KB  output
+//
+// Public API:
+//   b64_init()
+//   b64_encode_file(src, dst)   → output size (-1 on error)
+//   b64_decode_file(src, dst)   → output size (-1 on error)
+//   b64_encode_str(text)        → base64 string (encodes UTF-8 bytes)
+//   b64_decode_str(b64)         → decoded string
+
+let B64_IN_BUF  = 14794752;   // 0xE1C000
+let B64_OUT_BUF = 14860288;   // 0xE2C000
+let B64_BUF_SZ  = 65536;      // 64 KB
+
+// Alphabet lookup: index 0-63 → ASCII code
+let B64_ALPHA = [
+    65, 66, 67, 68, 69, 70, 71, 72,   // A-H
+    73, 74, 75, 76, 77, 78, 79, 80,   // I-P
+    81, 82, 83, 84, 85, 86, 87, 88,   // Q-X
+    89, 90,                            // Y-Z
+    97, 98, 99, 100, 101, 102, 103, 104,  // a-h
+    105, 106, 107, 108, 109, 110, 111, 112, // i-p
+    113, 114, 115, 116, 117, 118, 119, 120, // q-x
+    121, 122,                           // y-z
+    48, 49, 50, 51, 52, 53, 54, 55,   // 0-7
+    56, 57,                            // 8-9
+    43,                                // +
+    47                                 // /
+];
+
+fn b64_init() {
+    print("base64: init — RFC 4648, arithmetic-only bit ops");
+    return 0;
+}
+
+// ============================================================
+// I/O helpers
+// ============================================================
+
+fn _b64_read(path) {
+    let fd = vfs_open(path, 0);
+    if fd < 0 { return 0; }
+    let n = vfs_read(fd, B64_IN_BUF, B64_BUF_SZ);
+    vfs_close(fd);
+    return n;
+}
+
+fn _b64_write(path, sz) {
+    let fd = vfs_open(path, 1);
+    if fd < 0 { return 0 - 1; }
+    vfs_write(fd, B64_OUT_BUF, sz);
+    vfs_close(fd);
+    return sz;
+}
+
+fn _b64_rb(off)      { return mem_read_u8(B64_IN_BUF  + off); }
+fn _b64_wb(off, v)   { mem_write_u8(B64_OUT_BUF + off, v); return 0; }
+fn _b64_wbo(off, v)  { mem_write_u8(B64_IN_BUF  + off, v); return 0; }
+
+// ============================================================
+// Decode table: ASCII → 6-bit value (-1 if invalid)
+// ============================================================
+
+fn _b64_dec_char(c) {
+    if c >= 65 { if c <= 90 { return c - 65; } }       // A-Z → 0-25
+    if c >= 97 { if c <= 122 { return c - 97 + 26; } } // a-z → 26-51
+    if c >= 48 { if c <= 57  { return c - 48 + 52; } } // 0-9 → 52-61
+    if c == 43 { return 62; }  // +
+    if c == 47 { return 63; }  // /
+    return 0 - 1;              // invalid / padding
+}
+
+// ============================================================
+// Encode: file → file
+// ============================================================
+
+fn b64_encode_file(src, dst) {
+    let in_sz = _b64_read(src);
+    if in_sz <= 0 { return 0 - 1; }
+
+    let mut out = 0;
+    let mut i   = 0;
+    while i < in_sz {
+        let b1 = _b64_rb(i);
+        let b2_raw = i + 1;
+        let b3_raw = i + 2;
+        let b2 = 0;
+        let b3 = 0;
+        if b2_raw < in_sz { b2 = _b64_rb(b2_raw); }
+        if b3_raw < in_sz { b3 = _b64_rb(b3_raw); }
+
+        // 6-bit groups (arithmetic shift)
+        let v1 = b1 / 4;
+        let v2 = (b1 % 4) * 16 + b2 / 16;
+        let v3 = (b2 % 16) * 4 + b3 / 64;
+        let v4 = b3 % 64;
+
+        _b64_wb(out, B64_ALPHA[v1]); out = out + 1;
+        _b64_wb(out, B64_ALPHA[v2]); out = out + 1;
+        if b2_raw < in_sz {
+            _b64_wb(out, B64_ALPHA[v3]); out = out + 1;
+        } else {
+            _b64_wb(out, 61); out = out + 1;  // '='
+        }
+        if b3_raw < in_sz {
+            _b64_wb(out, B64_ALPHA[v4]); out = out + 1;
+        } else {
+            _b64_wb(out, 61); out = out + 1;  // '='
+        }
+
+        i = i + 3;
+        if out >= B64_BUF_SZ - 8 { i = in_sz; }
+    }
+
+    let r = _b64_write(dst, out);
+    if r < 0 { return 0 - 1; }
+    print("base64: encode " + src + " → " + dst + "  " + to_string(in_sz) + " → " + to_string(out) + " bytes");
+    return out;
+}
+
+// ============================================================
+// Decode: file → file
+// ============================================================
+
+fn b64_decode_file(src, dst) {
+    let in_sz = _b64_read(src);
+    if in_sz <= 0 { return 0 - 1; }
+
+    // Write decoded bytes directly into OUT_BUF
+    let mut out = 0;
+    let mut i   = 0;
+    while i + 3 < in_sz {
+        let c1 = _b64_rb(i);
+        let c2 = _b64_rb(i + 1);
+        let c3 = _b64_rb(i + 2);
+        let c4 = _b64_rb(i + 3);
+        let v1 = _b64_dec_char(c1);
+        let v2 = _b64_dec_char(c2);
+        let v3 = _b64_dec_char(c3);
+        let v4 = _b64_dec_char(c4);
+        if v1 >= 0 {
+            if v2 >= 0 {
+                // Byte 1: top 6 bits of v1 + top 2 bits of v2
+                let byte1 = v1 * 4 + v2 / 16;
+                _b64_wb(out, byte1); out = out + 1;
+                if c3 == 61 { i = in_sz; }  // padding → done
+                else {
+                    if v3 >= 0 {
+                        let byte2 = (v2 % 16) * 16 + v3 / 4;
+                        _b64_wb(out, byte2); out = out + 1;
+                        if c4 == 61 { i = in_sz; }
+                        else {
+                            if v4 >= 0 {
+                                let byte3 = (v3 % 4) * 64 + v4;
+                                _b64_wb(out, byte3); out = out + 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 4;
+        if out >= B64_BUF_SZ - 4 { i = in_sz; }
+    }
+
+    let r = _b64_write(dst, out);
+    if r < 0 { return 0 - 1; }
+    print("base64: decode " + src + " → " + dst + "  " + to_string(in_sz) + " → " + to_string(out) + " bytes");
+    return out;
+}
+
+// ============================================================
+// String API (encode HL string → base64 string)
+// ============================================================
+
+fn b64_encode_str(text) {
+    let n = len(text);
+    if n == 0 { return ""; }
+    // Write text bytes into IN_BUF
+    let mut i = 0;
+    while i < n {
+        let c = str_char_code(text, i);
+        _b64_wbo(i, c);
+        i = i + 1;
+    }
+    // Encode into OUT_BUF
+    let mut out = 0;
+    i = 0;
+    while i < n {
+        let b1 = mem_read_u8(B64_IN_BUF + i);
+        let b2 = 0;
+        let b3 = 0;
+        if i + 1 < n { b2 = mem_read_u8(B64_IN_BUF + i + 1); }
+        if i + 2 < n { b3 = mem_read_u8(B64_IN_BUF + i + 2); }
+        _b64_wb(out, B64_ALPHA[b1 / 4]); out = out + 1;
+        _b64_wb(out, B64_ALPHA[(b1 % 4) * 16 + b2 / 16]); out = out + 1;
+        if i + 1 < n { _b64_wb(out, B64_ALPHA[(b2 % 16) * 4 + b3 / 64]); }
+        else { _b64_wb(out, 61); }
+        out = out + 1;
+        if i + 2 < n { _b64_wb(out, B64_ALPHA[b3 % 64]); }
+        else { _b64_wb(out, 61); }
+        out = out + 1;
+        i = i + 3;
+    }
+    // Read OUT_BUF → HL string
+    let mut result = "";
+    let mut j = 0;
+    while j < out {
+        result = result + str_from_byte(mem_read_u8(B64_OUT_BUF + j));
+        j = j + 1;
+    }
+    return result;
+}
+
+fn b64_decode_str(b64) {
+    let n = len(b64);
+    if n == 0 { return ""; }
+    let mut out = 0;
+    let mut i = 0;
+    while i + 3 < n {
+        let v1 = _b64_dec_char(str_char_code(b64, i));
+        let v2 = _b64_dec_char(str_char_code(b64, i + 1));
+        let v3 = _b64_dec_char(str_char_code(b64, i + 2));
+        let v4 = _b64_dec_char(str_char_code(b64, i + 3));
+        if v1 >= 0 {
+            if v2 >= 0 {
+                _b64_wb(out, v1 * 4 + v2 / 16); out = out + 1;
+                let c3ch = str_char_code(b64, i + 2);
+                if c3ch == 61 { i = n; }
+                else {
+                    if v3 >= 0 {
+                        _b64_wb(out, (v2 % 16) * 16 + v3 / 4); out = out + 1;
+                        let c4ch = str_char_code(b64, i + 3);
+                        if c4ch == 61 { i = n; }
+                        else {
+                            if v4 >= 0 { _b64_wb(out, (v3 % 4) * 64 + v4); out = out + 1; }
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 4;
+    }
+    let mut result = "";
+    let mut j = 0;
+    while j < out {
+        result = result + str_from_byte(mem_read_u8(B64_OUT_BUF + j));
+        j = j + 1;
+    }
+    return result;
+}
+
+print("base64.hl loaded");
+print("Base64: RFC 4648, arithmetic shift emulation, encode/decode file+string");

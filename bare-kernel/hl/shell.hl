@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 223 commands + pipe operator (|):
+// 236 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -75,6 +75,9 @@ fn shell_handle(cmd) {
         serial_print("SQLite:   db list  db create <name> <col1,col2>  db insert <name> <v1,v2>  db select <name>  db where <name> <col> <val>  db delete <name> <col> <val>  db drop <name>  db schema <name>");
         serial_print("Diff:     diff <pathA> <pathB>  diffstat <pathA> <pathB>  diffstr <textA> <textB>");
         serial_print("Clock:    clock  clock close  clock alarm <HH> <MM>  clock time");
+        serial_print("Base64:   b64encode <src> <dst>  b64decode <src> <dst>  b64str <text>");
+        serial_print("INI:      ini load <path>  ini list  ini get <sec> <key>  ini set <sec> <key> <val>  ini save <path>  ini del <sec> <key>");
+        serial_print("Profiler: prof report  prof top <n>  prof inc <name>  prof reset  prof spans  prof sample  prof ring");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -1575,6 +1578,100 @@ fn shell_handle_ext(cmd) {
         return "Alarm set for " + to_string(h) + ":" + to_string(m);
     }
 
+    // === Base64 commands ===
+    if str_starts_with(cmd, "b64encode ") {
+        let args = str_sub(cmd, 10, len(cmd));
+        let sp = str_find(args, " ");
+        if sp < 0 { return "Usage: b64encode <src> <dst>"; }
+        let src = str_sub(args, 0, sp);
+        let dst = str_sub(args, sp + 1, len(args));
+        let n = b64_encode_file(src, dst);
+        if n < 0 { return "Error: b64encode failed"; }
+        return "Encoded to " + dst + "  " + to_string(n) + " bytes";
+    }
+    if str_starts_with(cmd, "b64decode ") {
+        let args = str_sub(cmd, 10, len(cmd));
+        let sp = str_find(args, " ");
+        if sp < 0 { return "Usage: b64decode <src> <dst>"; }
+        let src = str_sub(args, 0, sp);
+        let dst = str_sub(args, sp + 1, len(args));
+        let n = b64_decode_file(src, dst);
+        if n < 0 { return "Error: b64decode failed"; }
+        return "Decoded to " + dst + "  " + to_string(n) + " bytes";
+    }
+    if str_starts_with(cmd, "b64str ") {
+        let text = str_sub(cmd, 7, len(cmd));
+        return b64_encode_str(text);
+    }
+
+    // === INI commands ===
+    if str_starts_with(cmd, "ini load ") {
+        let path = str_sub(cmd, 9, len(cmd));
+        let n = ini_load(path);
+        if n < 0 { return "Error: cannot open " + path; }
+        return "Loaded " + to_string(n) + " entries from " + path;
+    }
+    if cmd == "ini list" { return ini_list(); }
+    if str_starts_with(cmd, "ini get ") {
+        let args = str_sub(cmd, 8, len(cmd));
+        let sp = str_find(args, " ");
+        if sp < 0 { return "Usage: ini get <section> <key>"; }
+        let sec = str_sub(args, 0, sp);
+        let key = str_sub(args, sp + 1, len(args));
+        let v = ini_get(sec, key);
+        if len(v) == 0 { return "(not found)"; }
+        return v;
+    }
+    if str_starts_with(cmd, "ini set ") {
+        let args = str_sub(cmd, 8, len(cmd));
+        let sp1 = str_find(args, " ");
+        if sp1 < 0 { return "Usage: ini set <section> <key> <val>"; }
+        let sec  = str_sub(args, 0, sp1);
+        let rest = str_sub(args, sp1 + 1, len(args));
+        let sp2  = str_find(rest, " ");
+        if sp2 < 0 { return "Usage: ini set <section> <key> <val>"; }
+        let key = str_sub(rest, 0, sp2);
+        let val = str_sub(rest, sp2 + 1, len(rest));
+        ini_set(sec, key, val);
+        return "Set [" + sec + "] " + key + " = " + val;
+    }
+    if str_starts_with(cmd, "ini save ") {
+        let path = str_sub(cmd, 9, len(cmd));
+        let n = ini_save(path);
+        if n < 0 { return "Error: cannot write " + path; }
+        return "Saved " + to_string(n) + " bytes to " + path;
+    }
+    if str_starts_with(cmd, "ini del ") {
+        let args = str_sub(cmd, 8, len(cmd));
+        let sp = str_find(args, " ");
+        if sp < 0 { return "Usage: ini del <section> <key>"; }
+        let sec = str_sub(args, 0, sp);
+        let key = str_sub(args, sp + 1, len(args));
+        let r = ini_delete(sec, key);
+        if r == 1 { return "Deleted [" + sec + "] " + key; }
+        return "(not found)";
+    }
+
+    // === Profiler commands ===
+    if cmd == "prof report" { return prof_report(); }
+    if cmd == "prof reset"  { prof_reset(); return "Profiler reset"; }
+    if cmd == "prof spans"  { return prof_span_report(); }
+    if cmd == "prof ring"   { return prof_ring_report(); }
+    if cmd == "prof sample" { let t = prof_sample(); return "Sampled tick=" + to_string(t); }
+    if str_starts_with(cmd, "prof top ") {
+        let n = parse_int(str_sub(cmd, 9, len(cmd)));
+        return prof_top(n);
+    }
+    if str_starts_with(cmd, "prof inc ") {
+        let name = str_sub(cmd, 9, len(cmd));
+        let v = prof_inc(name);
+        return name + " = " + to_string(v);
+    }
+    if str_starts_with(cmd, "prof get ") {
+        let name = str_sub(cmd, 9, len(cmd));
+        return name + " = " + to_string(prof_get(name));
+    }
+
     return shell_handle(cmd);
 }
 
@@ -1586,7 +1683,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 223 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock");
+print("shell.hl loaded -- 236 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler");
 
 // Main shell loop (called from kernel_init)
 

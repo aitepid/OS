@@ -1,0 +1,291 @@
+// profiler.hl -- Kernel Performance Profiler
+//
+// Iteration 174: Named event counters + timer-tick sampling for hot-path analysis.
+//
+// Two complementary mechanisms:
+//
+//   1. Named counters — lightweight increment counters for any labelled event.
+//      Up to PROF_MAX_CTRS = 32 counters.
+//      prof_inc(name) increments (or creates) counter for 'name'.
+//      prof_report() returns a sorted-by-count formatted table.
+//
+//   2. Tick sampler — records get_ticks() samples in a circular ring.
+//      PROF_RING_SZ = 64 samples.
+//      prof_sample() stores current tick; prof_ring_report() shows histogram.
+//
+//   3. Span timing — measure elapsed ticks between start/stop for named spans.
+//      Up to PROF_MAX_SPANS = 8 active spans.
+//      prof_span_start(name) → span_id
+//      prof_span_stop(id)    → elapsed ticks
+//      prof_span_report()    → summary of completed spans
+//
+// Public API:
+//   prof_init()
+//   prof_inc(name)                → new count
+//   prof_get(name)                → current count (0 if unknown)
+//   prof_reset()                  → clear all counters
+//   prof_report()                 → formatted counter table string
+//   prof_sample()                 → push current tick into ring
+//   prof_ring_report()            → ring-buffer snapshot string
+//   prof_span_start(name)         → span_id  (0-PROF_MAX_SPANS-1, -1 on full)
+//   prof_span_stop(span_id)       → elapsed ticks
+//   prof_span_report()            → formatted span summary string
+//   prof_top(n)                   → top-N counter names string
+
+let PROF_MAX_CTRS  = 32;
+let PROF_RING_SZ   = 64;
+let PROF_MAX_SPANS = 8;
+
+// Named counters
+let mut prof_ctr_names  = [];
+let mut prof_ctr_vals   = [];
+let mut prof_ctr_count  = 0;
+
+// Tick ring
+let mut prof_ring       = [];
+let mut prof_ring_head  = 0;
+let mut prof_ring_full  = 0;
+
+// Span timing
+let mut prof_span_names  = [];
+let mut prof_span_starts = [];
+let mut prof_span_active = [];   // 1 = running, 0 = free
+let mut prof_span_total  = [];   // accumulated ticks
+let mut prof_span_hits   = [];   // number of completed stop()s
+
+fn prof_init() {
+    prof_ctr_names  = [];
+    prof_ctr_vals   = [];
+    prof_ctr_count  = 0;
+    let mut i = 0;
+    while i < PROF_MAX_CTRS {
+        push(prof_ctr_names, "");
+        push(prof_ctr_vals,  0);
+        i = i + 1;
+    }
+    prof_ring      = [];
+    prof_ring_head = 0;
+    prof_ring_full = 0;
+    i = 0;
+    while i < PROF_RING_SZ {
+        push(prof_ring, 0);
+        i = i + 1;
+    }
+    prof_span_names  = [];
+    prof_span_starts = [];
+    prof_span_active = [];
+    prof_span_total  = [];
+    prof_span_hits   = [];
+    i = 0;
+    while i < PROF_MAX_SPANS {
+        push(prof_span_names,  "");
+        push(prof_span_starts, 0);
+        push(prof_span_active, 0);
+        push(prof_span_total,  0);
+        push(prof_span_hits,   0);
+        i = i + 1;
+    }
+    print("profiler: init — " + to_string(PROF_MAX_CTRS) + " counters, "
+          + to_string(PROF_RING_SZ) + "-sample ring, " + to_string(PROF_MAX_SPANS) + " spans");
+    return 0;
+}
+
+// ============================================================
+// Named counters
+// ============================================================
+
+fn _prof_find(name) {
+    let mut i = 0;
+    while i < prof_ctr_count {
+        if prof_ctr_names[i] == name { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn prof_inc(name) {
+    let idx = _prof_find(name);
+    if idx >= 0 {
+        let v = prof_ctr_vals[idx] + 1;
+        set_at(prof_ctr_vals, idx, v);
+        return v;
+    }
+    if prof_ctr_count >= PROF_MAX_CTRS { return 0 - 1; }
+    set_at(prof_ctr_names, prof_ctr_count, name);
+    set_at(prof_ctr_vals,  prof_ctr_count, 1);
+    prof_ctr_count = prof_ctr_count + 1;
+    return 1;
+}
+
+fn prof_get(name) {
+    let idx = _prof_find(name);
+    if idx >= 0 { return prof_ctr_vals[idx]; }
+    return 0;
+}
+
+fn prof_reset() {
+    let mut i = 0;
+    while i < PROF_MAX_CTRS {
+        set_at(prof_ctr_names, i, "");
+        set_at(prof_ctr_vals,  i, 0);
+        i = i + 1;
+    }
+    prof_ctr_count = 0;
+    // Clear ring
+    i = 0;
+    while i < PROF_RING_SZ { set_at(prof_ring, i, 0); i = i + 1; }
+    prof_ring_head = 0;
+    prof_ring_full = 0;
+    return 0;
+}
+
+fn prof_report() {
+    if prof_ctr_count == 0 { return "(no profiler counters)"; }
+    let mut out = "Profiler counters (" + to_string(prof_ctr_count) + "):\n";
+    out = out + "  Counter                    Count\n";
+    out = out + "  -------------------------  -----\n";
+    // Simple insertion-sort by count descending for display
+    let mut order = [];
+    let mut i = 0;
+    while i < prof_ctr_count { push(order, i); i = i + 1; }
+    // Bubble sort (small N)
+    let no = len(order);
+    let mut si = 0;
+    while si < no {
+        let mut sj = 0;
+        while sj < no - si - 1 {
+            if prof_ctr_vals[order[sj]] < prof_ctr_vals[order[sj + 1]] {
+                let tmp = order[sj];
+                set_at(order, sj, order[sj + 1]);
+                set_at(order, sj + 1, tmp);
+            }
+            sj = sj + 1;
+        }
+        si = si + 1;
+    }
+    i = 0;
+    while i < no {
+        let idx = order[i];
+        let nm  = prof_ctr_names[idx];
+        let v   = prof_ctr_vals[idx];
+        // Pad name to 26 chars
+        let mut padded = nm;
+        let mut pk = len(nm);
+        while pk < 26 { padded = padded + " "; pk = pk + 1; }
+        out = out + "  " + padded + to_string(v) + "\n";
+        i = i + 1;
+    }
+    return out;
+}
+
+fn prof_top(n) {
+    if prof_ctr_count == 0 { return "(no counters)"; }
+    let mut lim = n;
+    if lim > prof_ctr_count { lim = prof_ctr_count; }
+    // Find top lim by linear selection
+    let mut out = "Top " + to_string(lim) + " counters:\n";
+    let mut picked = [];
+    let mut ti = 0;
+    while ti < lim {
+        let mut best_idx = 0 - 1;
+        let mut best_val = 0 - 1;
+        let mut ci = 0;
+        while ci < prof_ctr_count {
+            // Skip already picked
+            let mut skip = 0;
+            let mut pi = 0;
+            while pi < len(picked) { if picked[pi] == ci { skip = 1; } pi = pi + 1; }
+            if skip == 0 {
+                if prof_ctr_vals[ci] > best_val {
+                    best_val = prof_ctr_vals[ci];
+                    best_idx = ci;
+                }
+            }
+            ci = ci + 1;
+        }
+        if best_idx >= 0 {
+            push(picked, best_idx);
+            out = out + "  #" + to_string(ti + 1) + " " + prof_ctr_names[best_idx]
+                + " = " + to_string(prof_ctr_vals[best_idx]) + "\n";
+        }
+        ti = ti + 1;
+    }
+    return out;
+}
+
+// ============================================================
+// Tick ring sampler
+// ============================================================
+
+fn prof_sample() {
+    let t = get_ticks();
+    set_at(prof_ring, prof_ring_head, t);
+    prof_ring_head = (prof_ring_head + 1) % PROF_RING_SZ;
+    if prof_ring_head == 0 { prof_ring_full = 1; }
+    return t;
+}
+
+fn prof_ring_report() {
+    let mut n = prof_ring_head;
+    if prof_ring_full == 1 { n = PROF_RING_SZ; }
+    if n == 0 { return "(no ring samples)"; }
+    let mut out = "Ring samples (" + to_string(n) + "/" + to_string(PROF_RING_SZ) + "):\n";
+    let mut i = 0;
+    while i < n {
+        out = out + "  [" + to_string(i) + "] tick=" + to_string(prof_ring[i]) + "\n";
+        i = i + 1;
+    }
+    return out;
+}
+
+// ============================================================
+// Span timing
+// ============================================================
+
+fn prof_span_start(name) {
+    // Find free slot
+    let mut i = 0;
+    while i < PROF_MAX_SPANS {
+        if prof_span_active[i] == 0 {
+            set_at(prof_span_names,  i, name);
+            set_at(prof_span_starts, i, get_ticks());
+            set_at(prof_span_active, i, 1);
+            return i;
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn prof_span_stop(span_id) {
+    if span_id < 0 { return 0; }
+    if span_id >= PROF_MAX_SPANS { return 0; }
+    if prof_span_active[span_id] == 0 { return 0; }
+    let elapsed = get_ticks() - prof_span_starts[span_id];
+    set_at(prof_span_total,  span_id, prof_span_total[span_id] + elapsed);
+    set_at(prof_span_hits,   span_id, prof_span_hits[span_id]  + 1);
+    set_at(prof_span_active, span_id, 0);
+    return elapsed;
+}
+
+fn prof_span_report() {
+    let mut out = "Span timing:\n";
+    let mut found = 0;
+    let mut i = 0;
+    while i < PROF_MAX_SPANS {
+        if prof_span_hits[i] > 0 {
+            let avg = prof_span_total[i] / prof_span_hits[i];
+            out = out + "  " + prof_span_names[i]
+                + "  total=" + to_string(prof_span_total[i])
+                + " ticks  hits=" + to_string(prof_span_hits[i])
+                + "  avg=" + to_string(avg) + "\n";
+            found = found + 1;
+        }
+        i = i + 1;
+    }
+    if found == 0 { return "(no span data)"; }
+    return out;
+}
+
+print("profiler.hl loaded");
+print("Profiler: 32 named counters + 64-sample tick ring + 8 span timers");

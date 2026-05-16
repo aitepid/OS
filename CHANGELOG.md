@@ -2,11 +2,53 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`226`（69 根目录 + 157 内核模块）
-- H-L 总行数：`~67,000`
-- 内核模块：`157`
-- Shell 命令：`223`
-- 最近完成功能迭代：`171`（sqlite + diff + ui_clock）
+- `.hl` 文件：`229`（69 根目录 + 160 内核模块）
+- H-L 总行数：`~68,000`
+- 内核模块：`160`
+- Shell 命令：`236`
+- 最近完成功能迭代：`174`（base64 + ini + profiler）
+
+## Iteration 174 — profiler.hl：内核性能分析器
+
+- **`bare-kernel/hl/profiler.hl`** 新增（~230 行）
+  - **命名计数器**：最多 32 个命名事件计数器；`prof_inc(name)` 创建或递增
+  - `prof_report()`：按计数降序冒泡排序后格式化输出
+  - `prof_top(n)`：Top-N 计数器（线性选择算法）
+  - **tick 采样环**：64 槽圆形缓冲区；`prof_sample()` 存储当前 get_ticks()
+  - **Span 计时器**：最多 8 个命名跨度；`prof_span_start/stop` 记录累计时钟 tick 和命中次数
+  - `prof_span_report()`：输出总耗时 / 命中次数 / 平均
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`prof_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 8 条命令：
+  - `prof report` / `prof reset` / `prof top <n>` / `prof inc <name>`
+  - `prof get <name>` / `prof spans` / `prof sample` / `prof ring`
+
+## Iteration 173 — ini.hl：INI 配置文件解析器
+
+- **`bare-kernel/hl/ini.hl`** 新增（~230 行）
+  - 支持 `[section]` / `key = value` / `;#` 注释 / 空行
+  - 存储：平坦并行数组 ini_secs/keys/vals，最多 64 条目
+  - `_ini_trim(s)`：去除行首尾空白/制表符
+  - `ini_load(path)`：VFS 读取 → 逐行解析 → 填充数组
+  - `ini_save(path)`：按 section 分组 → 生成输出字符串 → VFS 写入
+  - `ini_get/set/delete/list`：O(n) 线性查找，索引覆盖更新
+  - 缓冲区：INI_BUF_ADDR=0xE39000（64 KB）
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`ini_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 6 条命令：
+  - `ini load <path>` / `ini list` / `ini get <sec> <key>`
+  - `ini set <sec> <key> <val>` / `ini save <path>` / `ini del <sec> <key>`
+
+## Iteration 172 — base64.hl：Base64 编解码（RFC 4648）
+
+- **`bare-kernel/hl/base64.hl`** 新增（~220 行）
+  - 纯算术位操作仿真（无 HL 位运算）：`b1 / 4` = `b1 >> 2`，`b1 % 4 * 16` = `(b1 & 3) << 4` 等
+  - 64 元素字母表数组 B64_ALPHA（A-Z a-z 0-9 + /）
+  - `b64_encode_file(src, dst)` / `b64_decode_file(src, dst)`：VFS 文件编解码
+  - `b64_encode_str(text)` / `b64_decode_str(b64)`：HL 字符串直接编解码
+  - `_b64_dec_char(c)`：ASCII → 6-bit 值（对 '=' padding 返回 -1）
+  - 缓冲区：B64_IN_BUF=0xE1C000，B64_OUT_BUF=0xE2C000（各 64 KB）
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`b64_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 3 条命令：
+  - `b64encode <src> <dst>` / `b64decode <src> <dst>` / `b64str <text>`
 
 ## Iteration 171 — ui_clock.hl：数字时钟小部件
 
