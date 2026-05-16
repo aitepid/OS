@@ -2,11 +2,62 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`247`（69 根目录 + 178 内核模块）
-- H-L 总行数：`~67,700`
-- 内核模块：`178`
-- Shell 命令：`324`
-- 最近完成功能迭代：`192`（yaml + msgpack + tftp）
+- `.hl` 文件：`250`（69 根目录 + 181 内核模块）
+- H-L 总行数：`~68,400`
+- 内核模块：`181`
+- Shell 命令：`344`
+- 最近完成功能迭代：`195`（bson + bencode + mime）
+
+## Iteration 195 — mime.hl：MIME 多部分消息解析器
+
+- **`bare-kernel/hl/mime.hl`** 新增（~300 行）
+  - MIME multipart/mixed 格式解析器（邮件/HTTP）
+  - 结构：headers（key: value）→ 空行 → body（多部分用 boundary 分隔）
+  - `_mime_extract_boundary(ctype)` — 从 Content-Type 提取 boundary 字符串
+  - `mime_parse_str(s)` — 按 boundary 分割，每部分提取 headers + body
+  - `mime_part_header(idx, key)` — 获取指定部分的 header 值
+  - `mime_part_body(idx)` / `mime_part_count()` / `mime_list()`
+  - MIME_MAX=8 部分；MIME_BUF=0xFA0000（64 KB）
+  - 并行数组：`mime_part_headers/bodies/ctypes[]`
+- **kernel_init.hl** Phase 7：`mime_init()`
+- **shell.hl** 新增 6 条命令：
+  - `mime load <path>` / `mime list` / `mime part <idx>`
+  - `mime header <idx> <key>` / `mime clear` / `mime count`
+
+## Iteration 194 — bencode.hl：Bencode（BitTorrent）编码器
+
+- **`bare-kernel/hl/bencode.hl`** 新增（~120 行）
+  - BitTorrent metainfo 格式编码器
+  - 整数：`i<number>e` (e.g., `i42e`)
+  - 字符串：`<length>:<data>` (e.g., `4:spam`)
+  - 列表：`l<items>e` (e.g., `li42e4:spame`)
+  - 字典：`d<key-value>e` (e.g., `d3:keyi42ee`)
+  - `bencode_int(n)` / `bencode_str(s)` / `bencode_list_start/end()` / `bencode_dict_start/end()`
+  - `bencode_get_result()` → bencode 字符串
+  - `bencode_selftest()` — 字典 {"answer":42, "msg":"hello"}
+  - BENCODE_BUF=0xF90000（4 KB）
+- **kernel_init.hl** Phase 7：`bencode_init()`
+- **shell.hl** 新增 9 条命令：
+  - `bencode reset` / `bencode int/str <val>`
+  - `bencode lstart/lend` / `bencode dstart/dend`
+  - `bencode show` / `bencode test`
+
+## Iteration 193 — bson.hl：BSON（Binary JSON）编码器
+
+- **`bare-kernel/hl/bson.hl`** 新增（~200 行）
+  - MongoDB BSON 二进制 JSON 格式
+  - 文档结构：4B 总长度（LE）+ 元素列表 + 0x00 终止符
+  - 元素：1B 类型 + cstring 名称 + 值（类型相关）
+  - 支持类型：0x10=int32 / 0x02=string / 0x08=boolean / 0x0A=null
+  - `bson_int32(name, val)` / `bson_str(name, val)` / `bson_bool(name, val)` / `bson_null(name)`
+  - `bson_finalize()` — 写入文档长度头部
+  - `bson_get_result()` → 十六进制字符串
+  - `bson_selftest()` — 编码 {"answer":42, "msg":"hi", "ok":true, "empty":null}
+  - BSON_BUF=0xF80000（4 KB）
+- **kernel_init.hl** Phase 7：`bson_init()`
+- **shell.hl** 新增 7 条命令：
+  - `bson reset` / `bson int/str/bool/null <name> [val]`
+  - `bson hex` / `bson test`
 
 ## Iteration 192 — tftp.hl：TFTP 文件传输客户端 + 服务器
 

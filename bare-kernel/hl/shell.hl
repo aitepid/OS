@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 324 commands + pipe operator (|):
+// 344 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -96,6 +96,9 @@ fn shell_handle(cmd) {
         serial_print("YAML:     yaml load <path>  yaml list  yaml get <key>  yaml clear  yaml count");
         serial_print("MsgPack:  msgpack reset  msgpack uint/int/str/bool <val>  msgpack nil  msgpack hex  msgpack test");
         serial_print("TFTP:     tftp get <host> <remote> <local>  tftp put <host> <remote> <local>  tftp start/stop/status");
+        serial_print("BSON:     bson reset  bson int/str/bool/null <name> [val]  bson hex  bson test");
+        serial_print("Bencode:  bencode reset  bencode int/str <val>  bencode lstart/lend  bencode dstart/dend  bencode show  bencode test");
+        serial_print("MIME:     mime load <path>  mime list  mime part <idx>  mime header <idx> <key>  mime clear  mime count");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -2253,6 +2256,85 @@ fn shell_handle_ext(cmd) {
         return "";
     }
 
+    // BSON
+    if cmd == "bson reset" { bson_reset(); return "bson: buffer reset"; }
+    if cmd == "bson hex" { return bson_get_result(); }
+    if cmd == "bson test" { bson_selftest(); return ""; }
+    if str_starts_with(cmd, "bson int ") {
+        let rest = str_sub(cmd, 9, len(cmd));
+        let sp = str_find(rest, " ");
+        if sp < 0 { return "usage: bson int <name> <val>"; }
+        let name = str_sub(rest, 0, sp);
+        let val = parse_int(str_sub(rest, sp + 1, len(rest)));
+        bson_int32(name, val);
+        return "bson: int32(" + name + ", " + to_string(val) + ") encoded";
+    }
+    if str_starts_with(cmd, "bson str ") {
+        let rest = str_sub(cmd, 9, len(cmd));
+        let sp = str_find(rest, " ");
+        if sp < 0 { return "usage: bson str <name> <val>"; }
+        let name = str_sub(rest, 0, sp);
+        let val = str_sub(rest, sp + 1, len(rest));
+        bson_str(name, val);
+        return "bson: str(" + name + ", \"" + val + "\") encoded";
+    }
+    if str_starts_with(cmd, "bson bool ") {
+        let rest = str_sub(cmd, 10, len(cmd));
+        let sp = str_find(rest, " ");
+        if sp < 0 { return "usage: bson bool <name> <0|1>"; }
+        let name = str_sub(rest, 0, sp);
+        let val = parse_int(str_sub(rest, sp + 1, len(rest)));
+        bson_bool(name, val);
+        return "bson: bool(" + name + ", " + to_string(val) + ") encoded";
+    }
+    if str_starts_with(cmd, "bson null ") {
+        let name = str_sub(cmd, 10, len(cmd));
+        bson_null(name);
+        return "bson: null(" + name + ") encoded";
+    }
+
+    // Bencode
+    if cmd == "bencode reset" { bencode_reset(); return "bencode: buffer reset"; }
+    if cmd == "bencode lstart" { bencode_list_start(); return "bencode: list started"; }
+    if cmd == "bencode lend" { bencode_list_end(); return "bencode: list ended"; }
+    if cmd == "bencode dstart" { bencode_dict_start(); return "bencode: dict started"; }
+    if cmd == "bencode dend" { bencode_dict_end(); return "bencode: dict ended"; }
+    if cmd == "bencode show" { return bencode_get_result(); }
+    if cmd == "bencode test" { bencode_selftest(); return ""; }
+    if str_starts_with(cmd, "bencode int ") {
+        let n = parse_int(str_sub(cmd, 12, len(cmd)));
+        bencode_int(n);
+        return "bencode: int(" + to_string(n) + ") encoded";
+    }
+    if str_starts_with(cmd, "bencode str ") {
+        let s = str_sub(cmd, 12, len(cmd));
+        bencode_str(s);
+        return "bencode: str(\"" + s + "\") encoded";
+    }
+
+    // MIME
+    if cmd == "mime list" { return mime_list(); }
+    if cmd == "mime clear" { mime_clear(); return "mime: cleared"; }
+    if cmd == "mime count" { return "mime: " + to_string(mime_part_count()) + " parts"; }
+    if str_starts_with(cmd, "mime load ") {
+        let path = str_sub(cmd, 10, len(cmd));
+        let n = mime_load(path);
+        if n < 0 { return "mime: load failed"; }
+        return "mime: loaded " + to_string(n) + " parts from " + path;
+    }
+    if str_starts_with(cmd, "mime part ") {
+        let idx = parse_int(str_sub(cmd, 10, len(cmd)));
+        return mime_part_body(idx);
+    }
+    if str_starts_with(cmd, "mime header ") {
+        let rest = str_sub(cmd, 12, len(cmd));
+        let sp = str_find(rest, " ");
+        if sp < 0 { return "usage: mime header <idx> <key>"; }
+        let idx = parse_int(str_sub(rest, 0, sp));
+        let key = str_sub(rest, sp + 1, len(rest));
+        return mime_part_header(idx, key);
+    }
+
     return shell_handle(cmd);
 }
 
@@ -2264,7 +2346,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 324 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + snmp + toml + xml + yaml + msgpack + tftp");
+print("shell.hl loaded -- 344 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + snmp + toml + xml + yaml + msgpack + tftp + bson + bencode + mime");
 
 // Main shell loop (called from kernel_init)
 

@@ -1,0 +1,150 @@
+// bencode.hl -- Bencode (BitTorrent) Encoder/Decoder
+//
+// Iteration 194: Bencode binary-to-text format.
+//
+// Bencode syntax:
+//   Integers:    i<number>e       (e.g., i42e)
+//   Strings:     <length>:<data>  (e.g., 4:spam)
+//   Lists:       l<items>e        (e.g., li42e4:spame)
+//   Dictionaries: d<key-value>e   (e.g., d3:keyi42ee)
+//
+// Keys in dictionaries must be strings and sorted lexicographically.
+//
+// Public API:
+//   bencode_init()
+//   bencode_reset()
+//   bencode_int(n)
+//   bencode_str(s)
+//   bencode_list_start()
+//   bencode_list_end()
+//   bencode_dict_start()
+//   bencode_dict_end()
+//   bencode_get_result()       → bencode string
+//   bencode_selftest()
+//
+// Shell:
+//   bencode int <n>
+//   bencode str <s>
+//   bencode lstart / bencode lend
+//   bencode dstart / bencode dend
+//   bencode show
+//   bencode test
+//   bencode reset
+
+let BENCODE_BUF    = 16318464;   // 0xF90000
+let BENCODE_BUF_SZ = 4096;
+
+let mut bencode_len = 0;
+
+fn bencode_init() {
+    bencode_len = 0;
+    mem_zero(BENCODE_BUF, BENCODE_BUF_SZ);
+    print("bencode: init — Bencode format (BitTorrent), 4KB buffer");
+    return 0;
+}
+
+fn bencode_reset() {
+    bencode_len = 0;
+    return 0;
+}
+
+fn _bencode_put(b) {
+    if bencode_len >= BENCODE_BUF_SZ { return 0; }
+    mem_write_u8(BENCODE_BUF + bencode_len, b);
+    bencode_len = bencode_len + 1;
+    return 0;
+}
+
+fn _bencode_puts(s) {
+    let n = len(s);
+    let mut i = 0;
+    while i < n {
+        _bencode_put(str_char_code(s, i));
+        i = i + 1;
+    }
+    return 0;
+}
+
+// ============================================================
+// Encoders
+// ============================================================
+
+fn bencode_int(n) {
+    _bencode_put(105);   // 'i'
+    let s = to_string(n);
+    _bencode_puts(s);
+    _bencode_put(101);   // 'e'
+    return 0;
+}
+
+fn bencode_str(s) {
+    let n = len(s);
+    let len_str = to_string(n);
+    _bencode_puts(len_str);
+    _bencode_put(58);    // ':'
+    _bencode_puts(s);
+    return 0;
+}
+
+fn bencode_list_start() {
+    _bencode_put(108);   // 'l'
+    return 0;
+}
+
+fn bencode_list_end() {
+    _bencode_put(101);   // 'e'
+    return 0;
+}
+
+fn bencode_dict_start() {
+    _bencode_put(100);   // 'd'
+    return 0;
+}
+
+fn bencode_dict_end() {
+    _bencode_put(101);   // 'e'
+    return 0;
+}
+
+// ============================================================
+// Result as string
+// ============================================================
+
+fn bencode_get_result() {
+    let mut out = "";
+    let mut i = 0;
+    while i < bencode_len {
+        out = out + str_from_code(mem_read_u8(BENCODE_BUF + i));
+        i = i + 1;
+    }
+    return out;
+}
+
+// ============================================================
+// Self-test
+// ============================================================
+
+fn bencode_selftest() {
+    bencode_reset();
+    bencode_dict_start();
+    bencode_str("answer");
+    bencode_int(42);
+    bencode_str("msg");
+    bencode_str("hello");
+    bencode_dict_end();
+    let result = bencode_get_result();
+    // Expected: d6:answeri42e3:msg5:helloe
+    let expected = "d6:answeri42e3:msg5:helloe";
+    if result == expected {
+        print("bencode: selftest PASS — " + result);
+    } else {
+        print("bencode: selftest FAIL");
+        print("  expected: " + expected);
+        print("  got:      " + result);
+    }
+    bencode_reset();
+    return 0;
+}
+
+print("bencode.hl loaded");
+print("Bencode: BitTorrent encoding — integers/strings/lists/dicts, torrent metainfo format");
