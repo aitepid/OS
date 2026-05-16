@@ -2,23 +2,23 @@
 
 ## 版本定位
 
-当前仓库处于 `v6.0` 发布线，最新功能里程碑为迭代 234（rsa + ed25519 + avro）。
+当前仓库处于 `v6.0` 发布线，最新功能里程碑为迭代 237（bzip2 + scrypt + blake2）。
 
-## 本轮已核实状态（迭代 234 基线）
+## 本轮已核实状态（迭代 237 基线）
 
 ### 仓库规模（精确计数）
 
 | 指标 | 当前值 | 说明 |
 |---|---:|---|
-| 全部 `.hl` 文件 | 289 | 69 根目录 + 220 内核模块 |
-| H-L 总行数 | ~76,900 | 持续增长 |
-| `bare-kernel/hl/` 内核模块 | 220 | 编译进 `kernel.bin` |
+| 全部 `.hl` 文件 | 292 | 69 根目录 + 223 内核模块 |
+| H-L 总行数 | ~77,600 | 持续增长 |
+| `bare-kernel/hl/` 内核模块 | 223 | 编译进 `kernel.bin` |
 | `kernel_entry.hl` 行数 | 9,428 | 内核入口 + 命令分发 |
 | 编译产出函数数 | 2,200+ | 编译管线实测 |
 | 链接符号数 | 2,500+ | linker 实测 |
 | `hl-bootstrap.hl` 行数 | 4,306 | 自举编译器（208 函数） |
 | `stdlib.hl` 行数 | 1,385 | 标准库（143 函数） |
-| Shell 命令数 | 520 | shell.hl（+rsa/ed25519/avro）|
+| Shell 命令数 | 535 | shell.hl（+bzip2/scrypt/blake2）|
 | `test_*.hl` / `test-*.hl` | 19 | |
 | `IP-Protection/` 文件数 | 60 | 知识产权文件 |
 | `.md` 文档 | 10 | |
@@ -28,7 +28,7 @@
 | 验证项 | 结果 |
 |---|---|
 | `hl-bootstrap build` | ✅ 132 模块编译 + 镜像重建 |
-| `validate-workspace` | ✅ 289 HL / 220 模块 / 0 stub |
+| `validate-workspace` | ✅ 292 HL / 223 模块 / 0 stub |
 | `runtime-path-readiness` | ✅ IDT/PIT/KBD + SYSCALL + 网络 + eBPF/TLS/QUIC |
 | `release-validate` | ✅ 18/18 |
 

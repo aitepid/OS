@@ -2,11 +2,78 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`289`（69 根目录 + 220 内核模块）
-- H-L 总行数：`~76,900`
-- 内核模块：`220`
-- Shell 命令：`520`
-- 最近完成功能迭代：`234`（rsa + ed25519 + avro）
+- `.hl` 文件：`292`（69 根目录 + 223 内核模块）
+- H-L 总行数：`~77,600`
+- 内核模块：`223`
+- Shell 命令：`535`
+- 最近完成功能迭代：`237`（bzip2 + scrypt + blake2）
+
+## Iteration 237 — blake2.hl：BLAKE2 哈希函数
+
+- **`bare-kernel/hl/blake2.hl`** 新增（~280 行）
+  - BLAKE2 现代加密哈希函数（SHA-3 竞赛决赛选手）
+  - 注：简化实现，受 H-L 语言约束（模拟位运算）
+  - 用途：快速加密哈希，比 MD5/SHA-1 更安全，比 SHA-256 更快
+  - `blake2_hash_data(data, len)` — 计算 BLAKE2b-256 哈希（32 字节）
+  - `_blake2_init_state(digest_size)` — 初始化状态：8 个 IV 常量 XOR 参数块
+  - `_blake2_compress(block, offset, is_final)` — 压缩函数：12 轮混合（简化为 4 轮）
+  - `_blake2_mix(v, a, b, c, d, block, offset)` — G 混合函数：加法 + XOR + 循环移位
+  - BLAKE2 状态：8 个 32 位字（h0-h7）
+  - 工作向量：16 个 32 位字（v0-v15）
+  - 块大小：128 字节（BLAKE2b）
+  - 摘要大小：32 字节（可配置 1-64）
+  - `blake2_get_hex()` — 获取哈希的十六进制表示
+  - `_blake2_rotr32(val, bits)` — 循环右移：模拟 (val >> n) | (val << (32-n))
+  - BLAKE2 优势：无长度扩展攻击，支持密钥哈希（HMAC 内置），可调输出长度
+  - BLAKE2_BUF=0x1240000（19070976），64 KB 工作缓冲区
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`blake2_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 5 条命令：
+  - `blake2 hash <data>` / `blake2 hex` / `blake2 digest` / `blake2 size` / `blake2 test`
+
+## Iteration 236 — scrypt.hl：scrypt 密钥派生
+
+- **`bare-kernel/hl/scrypt.hl`** 新增（~260 行）
+  - scrypt 密码密钥派生函数（内存困难算法）
+  - 注：简化实现，N=1024（真实建议 ≥16384），受内存限制
+  - 用途：密码存储，抵御 ASIC/GPU 暴力破解（比 bcrypt 更强）
+  - `scrypt_derive(password, salt)` — 派生密钥：PBKDF2 + ROMix + PBKDF2
+  - `_scrypt_pbkdf2(password, pwd_len, salt, salt_len, iter, dklen)` — 简化 PBKDF2
+  - `_scrypt_romix(block, block_len, n)` — ROMix 内存困难函数：填充 V 数组 + 随机访问
+  - `_scrypt_block_mix(block, len)` — 块混合：Salsa20/8 核心（简化）
+  - scrypt 参数：N=1024（CPU/内存成本），r=8（块大小），p=1（并行度）
+  - 派生密钥长度：32 字节（256 位）
+  - ROMix 第一阶段：生成 N 个顺序块存入 V 数组
+  - ROMix 第二阶段：根据 X 内容随机访问 V 数组并混合
+  - 内存使用：N * r * 128 字节（简化版限制 N≤64 避免过大内存）
+  - `scrypt_set_cost(n)` — 设置成本因子（1-4096）
+  - `scrypt_get_key_hex()` — 获取派生密钥的十六进制表示
+  - SCRYPT_BUF=0x1230000（19005440），512 KB 工作缓冲区（V 数组 + 中间态）
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`scrypt_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 5 条命令：
+  - `scrypt derive <pwd> <salt>` / `scrypt cost <n>` / `scrypt key` / `scrypt hex` / `scrypt test`
+
+## Iteration 235 — bzip2.hl：bzip2 压缩算法
+
+- **`bare-kernel/hl/bzip2.hl`** 新增（~270 行）
+  - bzip2 压缩算法（Burrows-Wheeler Transform + RLE）
+  - 注：简化实现，BWT 限制 256 字节块（真实 bzip2 使用 900KB 块）
+  - 用途：高压缩比，优于 gzip，常用于文本压缩
+  - `bzip2_compress(data, len)` — 压缩：BWT + RLE + bzip2 容器格式
+  - `bzip2_decompress(data, len)` — 解压：验证魔数 + 逆 RLE + 逆 BWT
+  - bzip2 文件头：魔数 "BZh"（3 字节）+ 块大小 '9'（1 字节）
+  - 流头部：0x314159265359（π 的十六进制，6 字节）
+  - `_bzip2_bwt(data, len)` — Burrows-Wheeler Transform：生成所有旋转 → 排序 → 提取最后一列
+  - BWT 输出：变换后的字符串 + 原始位置索引
+  - `_bzip2_compress_block(data, len, output, pos)` — 单块压缩：BWT + RLE
+  - Run-Length Encoding：连续 ≥4 个相同字节 → 4 个字节 + 额外计数（最多 255）
+  - `_bzip2_compare_rotation(data, len, rot1, rot2)` — 比较两个旋转的字典序
+  - 流尾标记：0x177245385090（6 字节）
+  - 流 CRC：32 位校验和（4 字节）
+  - `_bzip2_crc32(data, len)` — 简化 CRC32 计算
+  - BZIP2_BUF=0x1220000（18939904），512 KB 工作缓冲区（旋转数组 + 排序缓冲）
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`bzip2_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 5 条命令：
+  - `bzip2 compress <data>` / `bzip2 decompress <data>` / `bzip2 output` / `bzip2 ratio` / `bzip2 test`
 
 ## Iteration 234 — avro.hl：Apache Avro 序列化
 

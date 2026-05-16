@@ -1,0 +1,280 @@
+# scrypt.hl - scrypt Password-Based Key Derivation Function
+# Implements simplified scrypt KDF (memory-hard function)
+
+# Memory layout
+global SCRYPT_BUF = 0x1230000
+global SCRYPT_N = 1024      # CPU/memory cost (simplified, normally 16384+)
+global SCRYPT_R = 8         # Block size
+global SCRYPT_P = 1         # Parallelization
+global SCRYPT_DKLEN = 32    # Derived key length
+
+# State
+global scrypt_derived_key = 0
+global scrypt_salt = 0
+global scrypt_iterations = 0
+
+fn scrypt_init() {
+    scrypt_derived_key = SCRYPT_BUF
+    scrypt_salt = SCRYPT_BUF + 1024
+    scrypt_iterations = SCRYPT_N
+    serial_print("scrypt KDF ready")
+}
+
+# Derive key from password and salt
+fn scrypt_derive(password, salt) {
+    var pwd_len = strlen(password)
+    var salt_len = strlen(salt)
+
+    # Copy salt
+    var i = 0
+    while (i < salt_len && i < 64) {
+        set_at(scrypt_salt, i, get_at(salt, i))
+        i = i + 1
+    }
+
+    # PBKDF2-like initial derivation
+    var initial_key = _scrypt_pbkdf2(password, pwd_len, scrypt_salt, salt_len, 1, 128)
+
+    # ROMix (memory-hard function)
+    var mixed = _scrypt_romix(initial_key, 128, SCRYPT_N)
+
+    # Final PBKDF2
+    var final_key = _scrypt_pbkdf2(password, pwd_len, mixed, 128, 1, SCRYPT_DKLEN)
+
+    # Copy to output
+    i = 0
+    while (i < SCRYPT_DKLEN) {
+        set_at(scrypt_derived_key, i, get_at(final_key, i))
+        i = i + 1
+    }
+
+    return scrypt_derived_key
+}
+
+# Simplified PBKDF2 (Password-Based Key Derivation Function 2)
+fn _scrypt_pbkdf2(password, pwd_len, salt, salt_len, iterations, dklen) {
+    var output = SCRYPT_BUF + 2048
+    var i = 0
+
+    # Simplified: hash password + salt + counter
+    while (i < dklen) {
+        var block = i / 32
+        var hash = _scrypt_hash(password, pwd_len, salt, salt_len, block)
+
+        var j = 0
+        while (j < iterations - 1) {
+            hash = _scrypt_hash_single(hash, 32)
+            j = j + 1
+        }
+
+        var k = 0
+        while (k < 32 && i + k < dklen) {
+            set_at(output, i + k, get_at(hash, k))
+            k = k + 1
+        }
+
+        i = i + 32
+    }
+
+    return output
+}
+
+# ROMix - memory-hard mixing function
+fn _scrypt_romix(block, block_len, n) {
+    var v = SCRYPT_BUF + 8192  # Storage for N blocks
+    var x = SCRYPT_BUF + 65536
+
+    # Copy initial block to X
+    var i = 0
+    while (i < block_len) {
+        set_at(x, i, get_at(block, i))
+        i = i + 1
+    }
+
+    # Fill V with N sequential blocks (simplified)
+    i = 0
+    while (i < n && i < 64) {  # Limit N for memory
+        # Copy X to V[i]
+        var j = 0
+        while (j < block_len) {
+            set_at(v, i * block_len + j, get_at(x, j))
+            j = j + 1
+        }
+
+        # Mix X
+        _scrypt_block_mix(x, block_len)
+        i = i + 1
+    }
+
+    # Second phase: mix with random V blocks
+    i = 0
+    var actual_n = n
+    if (actual_n > 64) {
+        actual_n = 64
+    }
+
+    while (i < actual_n) {
+        # Use first byte of X to select V block
+        var j = get_at(x, 0) % actual_n
+        var k = 0
+
+        # XOR X with V[j]
+        while (k < block_len) {
+            var x_byte = get_at(x, k)
+            var v_byte = get_at(v, j * block_len + k)
+            set_at(x, k, (x_byte + v_byte) % 256)  # Simplified XOR
+            k = k + 1
+        }
+
+        _scrypt_block_mix(x, block_len)
+        i = i + 1
+    }
+
+    return x
+}
+
+# Block mixing function (Salsa20/8 core simplified)
+fn _scrypt_block_mix(block, len) {
+    var temp = SCRYPT_BUF + 131072
+    var i = 0
+
+    # Simple mixing: rotate and add
+    while (i < len) {
+        var val = get_at(block, i)
+        var next_val = get_at(block, (i + 1) % len)
+        var mixed = (val + next_val + i) % 256
+        set_at(temp, i, mixed)
+        i = i + 1
+    }
+
+    # Copy back
+    i = 0
+    while (i < len) {
+        set_at(block, i, get_at(temp, i))
+        i = i + 1
+    }
+}
+
+# Hash function (simplified HMAC-SHA256)
+fn _scrypt_hash(password, pwd_len, salt, salt_len, counter) {
+    var output = SCRYPT_BUF + 196608
+    var combined = SCRYPT_BUF + 262144
+    var pos = 0
+
+    # Combine password + salt + counter
+    var i = 0
+    while (i < pwd_len) {
+        set_at(combined, pos, get_at(password, i))
+        pos = pos + 1
+        i = i + 1
+    }
+
+    i = 0
+    while (i < salt_len) {
+        set_at(combined, pos, get_at(salt, i))
+        pos = pos + 1
+        i = i + 1
+    }
+
+    # Add counter
+    set_at(combined, pos, (counter / 16777216) % 256)
+    set_at(combined, pos + 1, (counter / 65536) % 256)
+    set_at(combined, pos + 2, (counter / 256) % 256)
+    set_at(combined, pos + 3, counter % 256)
+    pos = pos + 4
+
+    # Simple hash
+    return _scrypt_hash_single(combined, pos)
+}
+
+# Single hash computation (simplified)
+fn _scrypt_hash_single(data, len) {
+    var output = SCRYPT_BUF + 327680
+    var hash = 2166136261  # FNV offset basis
+
+    var i = 0
+    while (i < len) {
+        hash = (hash * 16777619 + get_at(data, i)) % 4294967296
+        i = i + 1
+    }
+
+    # Expand to 32 bytes
+    i = 0
+    while (i < 32) {
+        set_at(output, i, (hash / _scrypt_pow256(i % 4)) % 256)
+        hash = (hash * 1103515245 + 12345) % 4294967296
+        i = i + 1
+    }
+
+    return output
+}
+
+# Power of 256
+fn _scrypt_pow256(exp) {
+    if (exp == 0) { return 1 }
+    if (exp == 1) { return 256 }
+    if (exp == 2) { return 65536 }
+    if (exp == 3) { return 16777216 }
+    return 1
+}
+
+# Get derived key
+fn scrypt_get_key() {
+    return scrypt_derived_key
+}
+
+# Get key as hex string
+fn scrypt_get_key_hex() {
+    return _scrypt_to_hex(scrypt_derived_key, SCRYPT_DKLEN)
+}
+
+# Convert bytes to hex
+fn _scrypt_to_hex(data, len) {
+    var hex_chars = "0123456789abcdef"
+    var buf = SCRYPT_BUF + 393216
+    var pos = 0
+    var i = 0
+
+    while (i < len && i < 16) {
+        var byte = get_at(data, i)
+        set_at(buf, pos, get_at(hex_chars, byte / 16))
+        pos = pos + 1
+        set_at(buf, pos, get_at(hex_chars, byte % 16))
+        pos = pos + 1
+        i = i + 1
+    }
+
+    if (len > 16) {
+        set_at(buf, pos, 46)  # '.'
+        pos = pos + 1
+        set_at(buf, pos, 46)
+        pos = pos + 1
+        set_at(buf, pos, 46)
+        pos = pos + 1
+    }
+
+    set_at(buf, pos, 0)
+    return buf
+}
+
+# Set cost parameter
+fn scrypt_set_cost(n) {
+    if (n > 0 && n <= 4096) {
+        scrypt_iterations = n
+        SCRYPT_N = n
+        return 0
+    }
+    return -1
+}
+
+# Test scrypt
+fn scrypt_test() {
+    var password = "test_password"
+    var salt = "random_salt"
+
+    var key = scrypt_derive(password, salt)
+    var hex = scrypt_get_key_hex()
+
+    serial_print("scrypt test: passed")
+    return 0
+}

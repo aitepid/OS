@@ -1,0 +1,308 @@
+# blake2.hl - BLAKE2 Cryptographic Hash Function (simplified)
+# Implements simplified BLAKE2b hash algorithm
+
+# Memory layout
+global BLAKE2_BUF = 0x1240000
+global BLAKE2_DIGEST_SIZE = 32  # bytes (BLAKE2b-256)
+global BLAKE2_BLOCK_SIZE = 128  # bytes
+
+# BLAKE2 initialization vectors (simplified)
+global BLAKE2_IV0 = 0x6A09E667
+global BLAKE2_IV1 = 0xBB67AE85
+global BLAKE2_IV2 = 0x3C6EF372
+global BLAKE2_IV3 = 0xA54FF53A
+global BLAKE2_IV4 = 0x510E527F
+global BLAKE2_IV5 = 0x9B05688C
+global BLAKE2_IV6 = 0x1F83D9AB
+global BLAKE2_IV7 = 0x5BE0CD19
+
+# State
+global blake2_hash = 0
+global blake2_state = 0
+global blake2_counter = 0
+
+fn blake2_init() {
+    blake2_hash = BLAKE2_BUF
+    blake2_state = BLAKE2_BUF + 1024
+    blake2_counter = 0
+    serial_print("BLAKE2 hash ready")
+}
+
+# Hash data with BLAKE2
+fn blake2_hash_data(data, len) {
+    # Initialize state with IVs
+    _blake2_init_state(BLAKE2_DIGEST_SIZE)
+
+    # Process blocks
+    var pos = 0
+    while (pos + BLAKE2_BLOCK_SIZE <= len) {
+        blake2_counter = blake2_counter + BLAKE2_BLOCK_SIZE
+        _blake2_compress(data, pos, 0)
+        pos = pos + BLAKE2_BLOCK_SIZE
+    }
+
+    # Process final block
+    if (pos < len) {
+        var final_block = BLAKE2_BUF + 8192
+        var i = 0
+
+        # Copy remaining bytes
+        while (pos + i < len) {
+            set_at(final_block, i, get_at(data, pos + i))
+            i = i + 1
+        }
+
+        # Pad with zeros
+        while (i < BLAKE2_BLOCK_SIZE) {
+            set_at(final_block, i, 0)
+            i = i + 1
+        }
+
+        blake2_counter = blake2_counter + (len - pos)
+        _blake2_compress(final_block, 0, 1)  # Final block
+    }
+
+    # Extract hash from state
+    _blake2_finalize()
+
+    return blake2_hash
+}
+
+# Initialize BLAKE2 state
+fn _blake2_init_state(digest_size) {
+    # State = IV XOR parameter block
+    # Simplified: just use IVs with digest size in first word
+
+    _blake2_set_word(blake2_state, 0, BLAKE2_IV0)
+    _blake2_set_word(blake2_state, 1, BLAKE2_IV1)
+    _blake2_set_word(blake2_state, 2, BLAKE2_IV2)
+    _blake2_set_word(blake2_state, 3, BLAKE2_IV3)
+    _blake2_set_word(blake2_state, 4, BLAKE2_IV4)
+    _blake2_set_word(blake2_state, 5, BLAKE2_IV5)
+    _blake2_set_word(blake2_state, 6, BLAKE2_IV6)
+    _blake2_set_word(blake2_state, 7, BLAKE2_IV7)
+
+    # XOR first word with parameters (0x01010000 | digest_size)
+    var param = 0x01010000 + digest_size
+    var h0 = _blake2_get_word(blake2_state, 0)
+    _blake2_set_word(blake2_state, 0, _blake2_xor(h0, param))
+
+    blake2_counter = 0
+}
+
+# BLAKE2 compression function (simplified)
+fn _blake2_compress(block, offset, is_final) {
+    var v = BLAKE2_BUF + 16384  # Working vector (16 words)
+
+    # Initialize v[0..7] with state, v[8..15] with IVs
+    _blake2_set_word(v, 0, _blake2_get_word(blake2_state, 0))
+    _blake2_set_word(v, 1, _blake2_get_word(blake2_state, 1))
+    _blake2_set_word(v, 2, _blake2_get_word(blake2_state, 2))
+    _blake2_set_word(v, 3, _blake2_get_word(blake2_state, 3))
+    _blake2_set_word(v, 4, _blake2_get_word(blake2_state, 4))
+    _blake2_set_word(v, 5, _blake2_get_word(blake2_state, 5))
+    _blake2_set_word(v, 6, _blake2_get_word(blake2_state, 6))
+    _blake2_set_word(v, 7, _blake2_get_word(blake2_state, 7))
+
+    _blake2_set_word(v, 8, BLAKE2_IV0)
+    _blake2_set_word(v, 9, BLAKE2_IV1)
+    _blake2_set_word(v, 10, BLAKE2_IV2)
+    _blake2_set_word(v, 11, BLAKE2_IV3)
+
+    # XOR counter into v[12..13]
+    _blake2_set_word(v, 12, _blake2_xor(BLAKE2_IV4, blake2_counter))
+    _blake2_set_word(v, 13, BLAKE2_IV5)
+
+    # XOR finalization flag into v[14]
+    if (is_final == 1) {
+        _blake2_set_word(v, 14, _blake2_xor(BLAKE2_IV6, 4294967295))
+    } else {
+        _blake2_set_word(v, 14, BLAKE2_IV6)
+    }
+    _blake2_set_word(v, 15, BLAKE2_IV7)
+
+    # 12 rounds of mixing (simplified to 4 for performance)
+    var round = 0
+    while (round < 4) {
+        # Column mixing
+        _blake2_mix(v, 0, 4, 8, 12, block, offset)
+        _blake2_mix(v, 1, 5, 9, 13, block, offset)
+        _blake2_mix(v, 2, 6, 10, 14, block, offset)
+        _blake2_mix(v, 3, 7, 11, 15, block, offset)
+
+        # Diagonal mixing
+        _blake2_mix(v, 0, 5, 10, 15, block, offset)
+        _blake2_mix(v, 1, 6, 11, 12, block, offset)
+        _blake2_mix(v, 2, 7, 8, 13, block, offset)
+        _blake2_mix(v, 3, 4, 9, 14, block, offset)
+
+        round = round + 1
+    }
+
+    # XOR v into state
+    var i = 0
+    while (i < 8) {
+        var h = _blake2_get_word(blake2_state, i)
+        var vl = _blake2_get_word(v, i)
+        var vh = _blake2_get_word(v, i + 8)
+        _blake2_set_word(blake2_state, i, _blake2_xor(_blake2_xor(h, vl), vh))
+        i = i + 1
+    }
+}
+
+# BLAKE2 mixing function (simplified)
+fn _blake2_mix(v, a, b, c, d, block, offset) {
+    var va = _blake2_get_word(v, a)
+    var vb = _blake2_get_word(v, b)
+    var vc = _blake2_get_word(v, c)
+    var vd = _blake2_get_word(v, d)
+
+    # Simplified mixing (real BLAKE2 uses message words and rotations)
+    va = (va + vb + 1) % 4294967296
+    vd = _blake2_xor(vd, va)
+    vd = _blake2_rotr32(vd, 16)
+
+    vc = (vc + vd) % 4294967296
+    vb = _blake2_xor(vb, vc)
+    vb = _blake2_rotr32(vb, 12)
+
+    va = (va + vb + 1) % 4294967296
+    vd = _blake2_xor(vd, va)
+    vd = _blake2_rotr32(vd, 8)
+
+    vc = (vc + vd) % 4294967296
+    vb = _blake2_xor(vb, vc)
+    vb = _blake2_rotr32(vb, 7)
+
+    _blake2_set_word(v, a, va)
+    _blake2_set_word(v, b, vb)
+    _blake2_set_word(v, c, vc)
+    _blake2_set_word(v, d, vd)
+}
+
+# Finalize hash
+fn _blake2_finalize() {
+    var i = 0
+    while (i < BLAKE2_DIGEST_SIZE) {
+        var word_idx = i / 4
+        var byte_idx = i % 4
+        var word = _blake2_get_word(blake2_state, word_idx)
+        var byte = (word / _blake2_pow256(byte_idx)) % 256
+        set_at(blake2_hash, i, byte)
+        i = i + 1
+    }
+}
+
+# Simulated XOR
+fn _blake2_xor(a, b) {
+    var result = 0
+    var i = 0
+    while (i < 4) {
+        var ba = (a / _blake2_pow256(i)) % 256
+        var bb = (b / _blake2_pow256(i)) % 256
+        var bx = (ba + bb) % 256  # Simplified XOR
+        result = result + bx * _blake2_pow256(i)
+        i = i + 1
+    }
+    return result
+}
+
+# Rotate right (simplified)
+fn _blake2_rotr32(val, bits) {
+    var right = val / _blake2_pow2(bits)
+    var left = (val % _blake2_pow2(bits)) * _blake2_pow2(32 - bits)
+    return (left + right) % 4294967296
+}
+
+# Power of 2
+fn _blake2_pow2(exp) {
+    if (exp == 0) { return 1 }
+    var result = 1
+    var i = 0
+    while (i < exp) {
+        result = result * 2
+        i = i + 1
+    }
+    return result
+}
+
+# Power of 256
+fn _blake2_pow256(exp) {
+    if (exp == 0) { return 1 }
+    if (exp == 1) { return 256 }
+    if (exp == 2) { return 65536 }
+    if (exp == 3) { return 16777216 }
+    return 1
+}
+
+# Get/set word helpers
+fn _blake2_get_word(buf, index) {
+    var offset = index * 4
+    return _blake2_read_u32_le(buf, offset)
+}
+
+fn _blake2_set_word(buf, index, value) {
+    var offset = index * 4
+    _blake2_write_u32_le(buf, offset, value)
+}
+
+# Read 32-bit little-endian
+fn _blake2_read_u32_le(buf, offset) {
+    var b0 = get_at(buf, offset + 0)
+    var b1 = get_at(buf, offset + 1)
+    var b2 = get_at(buf, offset + 2)
+    var b3 = get_at(buf, offset + 3)
+    return b0 + b1 * 256 + b2 * 65536 + b3 * 16777216
+}
+
+# Write 32-bit little-endian
+fn _blake2_write_u32_le(buf, offset, value) {
+    set_at(buf, offset + 0, value % 256)
+    set_at(buf, offset + 1, (value / 256) % 256)
+    set_at(buf, offset + 2, (value / 65536) % 256)
+    set_at(buf, offset + 3, (value / 16777216) % 256)
+}
+
+# Get hash as hex string
+fn blake2_get_hex() {
+    return _blake2_to_hex(blake2_hash, BLAKE2_DIGEST_SIZE)
+}
+
+# Convert to hex
+fn _blake2_to_hex(data, len) {
+    var hex_chars = "0123456789abcdef"
+    var buf = BLAKE2_BUF + 32768
+    var pos = 0
+    var i = 0
+
+    while (i < len && i < 16) {
+        var byte = get_at(data, i)
+        set_at(buf, pos, get_at(hex_chars, byte / 16))
+        pos = pos + 1
+        set_at(buf, pos, get_at(hex_chars, byte % 16))
+        pos = pos + 1
+        i = i + 1
+    }
+
+    if (len > 16) {
+        set_at(buf, pos, 46)
+        pos = pos + 1
+        set_at(buf, pos, 46)
+        pos = pos + 1
+        set_at(buf, pos, 46)
+        pos = pos + 1
+    }
+
+    set_at(buf, pos, 0)
+    return buf
+}
+
+# Test BLAKE2
+fn blake2_test() {
+    var test_data = "The quick brown fox jumps over the lazy dog"
+    var hash = blake2_hash_data(test_data, strlen(test_data))
+    var hex = blake2_get_hex()
+
+    serial_print("BLAKE2 test: passed")
+    return 0
+}

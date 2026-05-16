@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 520 commands + pipe operator (|):
+// 535 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -129,6 +129,9 @@ fn shell_handle(cmd) {
         serial_print("RSA:      rsa genkey  rsa encrypt <msg>  rsa decrypt <cipher>  rsa pubkey  rsa test");
         serial_print("Ed25519:  ed25519 genkey  ed25519 sign <msg>  ed25519 verify <msg> <sig>  ed25519 pubkey  ed25519 test");
         serial_print("Avro:     avro start  avro addint <val>  avro addstr <str>  avro person <name> <age>  avro test");
+        serial_print("Bzip2:    bzip2 compress <data>  bzip2 decompress <data>  bzip2 output  bzip2 ratio  bzip2 test");
+        serial_print("Scrypt:   scrypt derive <pwd> <salt>  scrypt cost <n>  scrypt key  scrypt hex  scrypt test");
+        serial_print("BLAKE2:   blake2 hash <data>  blake2 hex  blake2 digest  blake2 size  blake2 test");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -2990,6 +2993,71 @@ fn shell_handle_ext(cmd) {
     }
     if cmd == "avro test" { return avro_test(); }
 
+    // === Bzip2 commands ===
+    if str_starts_with(cmd, "bzip2 compress ") {
+        let data = str_sub(cmd, 15, len(cmd));
+        let comp_len = bzip2_compress(data, len(data));
+        if comp_len > 0 { return "bzip2: compressed " + to_string(len(data)) + " -> " + to_string(comp_len) + " bytes"; }
+        return "bzip2: compression failed";
+    }
+    if str_starts_with(cmd, "bzip2 decompress ") {
+        let data = str_sub(cmd, 17, len(cmd));
+        let decomp_len = bzip2_decompress(data, len(data));
+        if decomp_len > 0 { return "bzip2: decompressed " + to_string(len(data)) + " -> " + to_string(decomp_len) + " bytes"; }
+        return "bzip2: decompression failed (error " + to_string(decomp_len) + ")";
+    }
+    if cmd == "bzip2 output" {
+        let len = bzip2_get_output_len();
+        return "bzip2: output buffer has " + to_string(len) + " bytes";
+    }
+    if cmd == "bzip2 ratio" {
+        let len = bzip2_get_output_len();
+        return "bzip2: output = " + to_string(len) + " bytes";
+    }
+    if cmd == "bzip2 test" { return bzip2_test(); }
+
+    // === Scrypt commands ===
+    if str_starts_with(cmd, "scrypt derive ") {
+        let parts = str_split(str_sub(cmd, 14, len(cmd)), " ");
+        if len(parts) >= 2 {
+            let pwd = parts[0];
+            let salt = parts[1];
+            scrypt_derive(pwd, salt);
+            return "scrypt: key derived - " + scrypt_get_key_hex();
+        }
+        return "scrypt: usage: scrypt derive <password> <salt>";
+    }
+    if str_starts_with(cmd, "scrypt cost ") {
+        let n = parse_int(str_sub(cmd, 12, len(cmd)));
+        let result = scrypt_set_cost(n);
+        if result == 0 { return "scrypt: cost set to " + to_string(n); }
+        return "scrypt: invalid cost (must be 1-4096)";
+    }
+    if cmd == "scrypt key" {
+        return "scrypt: key buffer ready";
+    }
+    if cmd == "scrypt hex" {
+        return "scrypt: " + scrypt_get_key_hex();
+    }
+    if cmd == "scrypt test" { return scrypt_test(); }
+
+    // === BLAKE2 commands ===
+    if str_starts_with(cmd, "blake2 hash ") {
+        let data = str_sub(cmd, 12, len(cmd));
+        blake2_hash_data(data, len(data));
+        return "blake2: " + blake2_get_hex();
+    }
+    if cmd == "blake2 hex" {
+        return "blake2: " + blake2_get_hex();
+    }
+    if cmd == "blake2 digest" {
+        return "blake2: digest size = 32 bytes";
+    }
+    if cmd == "blake2 size" {
+        return "blake2: block size = 128 bytes";
+    }
+    if cmd == "blake2 test" { return blake2_test(); }
+
     return shell_handle(cmd);
 }
 
@@ -3001,7 +3069,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 520 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro");
+print("shell.hl loaded -- 535 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2");
 
 // Main shell loop (called from kernel_init)
 
