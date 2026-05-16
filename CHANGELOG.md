@@ -2,11 +2,54 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`241`（69 根目录 + 172 内核模块）
-- H-L 总行数：`~64,100`
-- 内核模块：`172`
-- Shell 命令：`288`
-- 最近完成功能迭代：`186`（ftp + cbor + syslog_srv）
+- `.hl` 文件：`244`（69 根目录 + 175 内核模块）
+- H-L 总行数：`~65,900`
+- 内核模块：`175`
+- Shell 命令：`306`
+- 最近完成功能迭代：`189`（snmp + toml + xml）
+
+## Iteration 189 — xml.hl：SAX 风格 XML 解析器
+
+- **`bare-kernel/hl/xml.hl`** 新增（~290 行）
+  - SAX 启发式 DOM-lite 解析；XML_MAX=64，XML_BUF=0xF30000（64 KB）
+  - 并行数组：`xml_tags/texts/attrs/depths/parents[]`
+  - `_xml_decode_entities(s)` — 处理 `&amp; &lt; &gt; &quot; &apos;`
+  - `xml_parse_str(s)` — 跳过 PI（`<?`）、注释（`<!`）、解析开合/自闭标签
+  - `xml_attr(idx, name)` — 扫描原始 attr 字符串，支持单/双引号值
+  - `xml_find(tag)` / `xml_find_all(tag)` / `xml_dump()` / `xml_load(path)`
+  - Parent 栈用 HL 动态数组模拟 push/pop
+- **kernel_init.hl** Phase 7：`xml_init()`
+- **shell.hl** 新增 6 条命令：
+  - `xml load` / `xml find` / `xml text` / `xml attr` / `xml dump` / `xml clear`
+
+## Iteration 188 — toml.hl：TOML v1 配置解析/写入
+
+- **`bare-kernel/hl/toml.hl`** 新增（~280 行）
+  - TOML_MAX=64，TOML_BUF=0xF20000（64 KB）；并行数组存储 section/key/val/type
+  - 类型标签：`"s"` 字符串 / `"i"` 整数 / `"f"` 浮点 / `"b"` 布尔 / `"a"` 数组
+  - `_toml_detect_type(val)` — 识别 true/false/`[`/数字/字符串
+  - `_toml_parse_val(raw)` — 剥离 `"..."` / `'...'` 外层引号
+  - `toml_load(path)` — VFS 读取，跳过 `\r`，按行分割，解析 `[section]` 和 `key=value`
+  - `toml_save(path)` — 按 section 分组输出，字符串加引号
+  - `toml_get/set/delete/get_int/get_bool/list/clear/count`
+- **kernel_init.hl** Phase 7：`toml_init()`
+- **shell.hl** 新增 7 条命令：
+  - `toml load/list/get/set/save/del/clear`
+
+## Iteration 187 — snmp.hl：SNMP v2c 代理 + 客户端
+
+- **`bare-kernel/hl/snmp.hl`** 新增（~240 行）
+  - RFC 3416 SNMP v2c；SNMP_PORT=161，SNMP_LPORT=16161，SNMP_BUF=0xF10000
+  - BER 编码辅助：`_snmp_write_len/int/octstr/timeticks`
+  - OID 编码：`_snmp_encode_oid(off, oid_str)` — 点分字符串→弧数组→DER 7bit 续位编码
+  - 本地 MIB-II sysGroup：7 个 OID（sysDescr/sysObjectID/sysUpTime/sysContact/sysName/sysLocation/ifNumber）
+  - 代理模式：`snmp_agent_start/stop()`，UDP 161 回调 `snmp_on_recv`
+  - 客户端：`snmp_get(host, community, oid)` — 本地直查 / 远端 UDP 轮询
+  - `snmp_walk(host, community)` — 批量查询 5 个标准 OID
+- **kernel_init.hl** Phase 7：`snmp_init()`
+- **shell.hl** 新增 5 条命令（`snmp walk` 变参）：
+  - `snmp` / `snmp start/stop` / `snmp mib` / `snmp get` / `snmp walk`
+
 
 ## Iteration 186 — syslog_srv.hl：UDP syslog 远端日志服务
 

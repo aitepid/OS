@@ -1,0 +1,319 @@
+// xml.hl -- Simple XML Parser (SAX-inspired, DOM-lite result)
+//
+// Iteration 189: Parse XML documents from VFS or memory strings.
+//
+// Supported XML subset:
+//   <?xml version="1.0"?>       — processing instruction (skipped)
+//   <!-- comment -->            — skipped
+//   <tag attr="val">text</tag>  — element with attributes + text content
+//   <tag attr="val"/>           — self-closing element
+//   &amp; &lt; &gt; &quot;      — standard entities
+//
+// Storage: XML_MAX (64) element nodes in parallel flat arrays.
+//   Each node: tag_name, text_content, attr_str (raw attribute substring),
+//              depth (nesting level), parent_idx (-1 = root)
+//
+// Attribute access: _xml_attr_get(attr_str, name) scans the raw attr string.
+//
+// Public API:
+//   xml_init()
+//   xml_parse_str(s)            → element count / -1 on error
+//   xml_load(path)              → element count / -1 on error
+//   xml_find(tag)               → first element index with that tag / -1
+//   xml_find_all(tag)           → array of matching indices
+//   xml_text(idx)               → text content of element
+//   xml_attr(idx, name)         → attribute value or ""
+//   xml_tag(idx)                → tag name
+//   xml_count()
+//   xml_dump()                  → pretty-printed description string
+//
+// Shell:
+//   xml load <path>
+//   xml find <tag>
+//   xml text <tag>
+//   xml attr <tag> <attrname>
+//   xml dump
+//   xml clear
+
+let XML_MAX    = 64;
+let XML_BUF    = 15925248;   // 0xF30000  64 KB file load scratch
+let XML_BUF_SZ = 65536;
+
+let mut xml_tags    = [];   // tag name strings
+let mut xml_texts   = [];   // text content strings
+let mut xml_attrs   = [];   // raw attribute substring
+let mut xml_depths  = [];   // nesting depth
+let mut xml_parents = [];   // parent element index (-1 = root)
+let mut xml_count_n = 0;
+
+fn xml_init() {
+    xml_tags    = [];
+    xml_texts   = [];
+    xml_attrs   = [];
+    xml_depths  = [];
+    xml_parents = [];
+    xml_count_n = 0;
+    let mut i = 0;
+    while i < XML_MAX {
+        push(xml_tags,    "");
+        push(xml_texts,   "");
+        push(xml_attrs,   "");
+        push(xml_depths,  0);
+        push(xml_parents, 0 - 1);
+        i = i + 1;
+    }
+    print("xml: init — max " + to_string(XML_MAX) + " elements, SAX-style, entity decode");
+    return 0;
+}
+
+fn xml_count() { return xml_count_n; }
+fn xml_tag(idx) { if idx < 0 { return ""; } return xml_tags[idx]; }
+fn xml_text(idx) { if idx < 0 { return ""; } return xml_texts[idx]; }
+
+// ============================================================
+// Entity decoding
+// ============================================================
+
+fn _xml_decode_entities(s) {
+    let mut out = "";
+    let n = len(s);
+    let mut i = 0;
+    while i < n {
+        let c = str_char_code(s, i);
+        if c == 38 {   // '&'
+            // Find ';'
+            let mut j = i + 1;
+            while j < n {
+                if str_char_code(s, j) == 59 { j = n + 1; }
+                else { j = j + 1; }
+            }
+            if j > n {
+                let ent = str_sub(s, i + 1, j - 1 - n + n);
+                // Simplify: re-find ';' from i
+                let semi = str_find(str_sub(s, i, n), ";");
+                if semi > 0 {
+                    let ent2 = str_sub(s, i + 1, i + semi);
+                    if ent2 == "amp"  { out = out + "&"; }
+                    else { if ent2 == "lt"   { out = out + "<"; }
+                    else { if ent2 == "gt"   { out = out + ">"; }
+                    else { if ent2 == "quot" { out = out + "\""; }
+                    else { if ent2 == "apos" { out = out + "'"; }
+                    else { out = out + "&" + ent2 + ";"; } } } } }
+                    i = i + semi + 1;
+                } else { out = out + str_from_code(c); i = i + 1; }
+            } else { out = out + str_from_code(c); i = i + 1; }
+        } else {
+            out = out + str_from_code(c);
+            i = i + 1;
+        }
+    }
+    return out;
+}
+
+// ============================================================
+// Attribute access: scan "key=\"val\" key2=\"val2\""
+// ============================================================
+
+fn xml_attr(idx, name) {
+    if idx < 0 { return ""; }
+    if idx >= xml_count_n { return ""; }
+    let astr = xml_attrs[idx];
+    if len(astr) == 0 { return ""; }
+    // Find "name=" in astr
+    let pattern = name + "=";
+    let pos = str_find(astr, pattern);
+    if pos < 0 { return ""; }
+    let vstart = pos + len(pattern);
+    if vstart >= len(astr) { return ""; }
+    let delim = str_char_code(astr, vstart);
+    if delim == 34 {   // '"'
+        let vend = str_find(str_sub(astr, vstart + 1, len(astr)), "\"");
+        if vend < 0 { return ""; }
+        return _xml_decode_entities(str_sub(astr, vstart + 1, vstart + 1 + vend));
+    }
+    if delim == 39 {   // "'"
+        let vend = str_find(str_sub(astr, vstart + 1, len(astr)), "'");
+        if vend < 0 { return ""; }
+        return _xml_decode_entities(str_sub(astr, vstart + 1, vstart + 1 + vend));
+    }
+    // Unquoted: read until space or >
+    let mut j = vstart;
+    while j < len(astr) {
+        let c = str_char_code(astr, j);
+        if c == 32 { j = len(astr) + 1; }
+        else { if c == 62 { j = len(astr) + 1; }
+        else { j = j + 1; } }
+    }
+    return str_sub(astr, vstart, j);
+}
+
+// ============================================================
+// Parser: scan XML string, populate element arrays
+// ============================================================
+
+fn xml_parse_str(s) {
+    xml_count_n = 0;
+    let n = len(s);
+    let mut i = 0;
+    let mut depth = 0;
+    let mut parent_stack = [];   // stack of parent indices
+    push(parent_stack, 0 - 1);  // sentinel
+
+    while i < n {
+        let c = str_char_code(s, i);
+        if c == 60 {   // '<'
+            // Find matching '>'
+            let gt = str_find(str_sub(s, i + 1, n), ">");
+            if gt < 0 { i = n; }
+            else {
+                let inner = str_sub(s, i + 1, i + 1 + gt);
+                i = i + gt + 2;
+                let ilen = len(inner);
+                if ilen == 0 { }
+                else {
+                    let c0 = str_char_code(inner, 0);
+                    // Skip declarations and comments
+                    if c0 == 63 { }   // '?' processing instruction
+                    else {
+                        if c0 == 33 { }  // '!' comment/DOCTYPE
+                        else {
+                            if c0 == 47 {   // '/' closing tag
+                                depth = depth - 1;
+                                if len(parent_stack) > 1 {
+                                    // pop parent
+                                    let new_stack = [];
+                                    let mut k = 0;
+                                    while k < len(parent_stack) - 1 {
+                                        push(new_stack, parent_stack[k]);
+                                        k = k + 1;
+                                    }
+                                    parent_stack = new_stack;
+                                }
+                            } else {
+                                // Opening or self-closing tag
+                                let self_close = 0;
+                                if str_char_code(inner, ilen - 1) == 47 { let self_close = 1; }
+                                // Extract tag name (up to first space or '/')
+                                let mut tn_end = 0;
+                                while tn_end < ilen {
+                                    let tc = str_char_code(inner, tn_end);
+                                    if tc == 32 { tn_end = ilen + 1; }
+                                    else { if tc == 47 { tn_end = ilen + 1; }
+                                    else { tn_end = tn_end + 1; } }
+                                }
+                                if tn_end > ilen { let tn_end = tn_end - ilen - 1; }
+                                let tag_name = str_sub(inner, 0, tn_end);
+                                // Extract attributes
+                                let attr_str = "";
+                                if tn_end < ilen {
+                                    let astart = tn_end + 1;
+                                    let aend = ilen;
+                                    if self_close == 1 { let aend = ilen - 1; }
+                                    let attr_str = _xml_decode_entities(str_sub(inner, astart, aend));
+                                }
+                                // Gather text content: everything until next '<'
+                                let mut text_content = "";
+                                if self_close == 0 {
+                                    let next_lt = str_find(str_sub(s, i, n), "<");
+                                    if next_lt > 0 {
+                                        text_content = _xml_decode_entities(
+                                            str_sub(s, i, i + next_lt));
+                                    }
+                                }
+                                // Store element
+                                if xml_count_n < XML_MAX {
+                                    let slot = xml_count_n;
+                                    let cur_parent = parent_stack[len(parent_stack) - 1];
+                                    set_at(xml_tags,    slot, tag_name);
+                                    set_at(xml_texts,   slot, text_content);
+                                    set_at(xml_attrs,   slot, attr_str);
+                                    set_at(xml_depths,  slot, depth);
+                                    set_at(xml_parents, slot, cur_parent);
+                                    xml_count_n = xml_count_n + 1;
+                                    if self_close == 0 {
+                                        push(parent_stack, slot);
+                                        depth = depth + 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else { i = i + 1; }
+    }
+    return xml_count_n;
+}
+
+// ============================================================
+// Load from VFS
+// ============================================================
+
+fn xml_load(path) {
+    let fd = vfs_open(path, 0);
+    if fd < 0 { print("xml: cannot open " + path); return 0 - 1; }
+    let n = vfs_read(fd, XML_BUF, XML_BUF_SZ);
+    vfs_close(fd);
+    if n <= 0 { return 0; }
+    let mut text = "";
+    let mut i = 0;
+    while i < n {
+        let b = mem_read_u8(XML_BUF + i);
+        if b == 13 { i = i + 1; }
+        else { text = text + str_from_code(b); i = i + 1; }
+    }
+    let cnt = xml_parse_str(text);
+    print("xml: loaded " + path + " — " + to_string(cnt) + " elements");
+    return cnt;
+}
+
+// ============================================================
+// Find
+// ============================================================
+
+fn xml_find(tag) {
+    let mut i = 0;
+    while i < xml_count_n {
+        if xml_tags[i] == tag { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn xml_find_all(tag) {
+    let mut result = [];
+    let mut i = 0;
+    while i < xml_count_n {
+        if xml_tags[i] == tag { push(result, i); }
+        i = i + 1;
+    }
+    return result;
+}
+
+// ============================================================
+// Dump
+// ============================================================
+
+fn xml_dump() {
+    if xml_count_n == 0 { return "(no XML elements parsed)\n"; }
+    let mut out = "XML elements (" + to_string(xml_count_n) + "):\n";
+    let mut i = 0;
+    while i < xml_count_n {
+        let d = xml_depths[i];
+        let mut indent = "";
+        let mut k = 0;
+        while k < d { indent = indent + "  "; k = k + 1; }
+        let text = xml_texts[i];
+        let attr = xml_attrs[i];
+        out = out + indent + "<" + xml_tags[i];
+        if len(attr) > 0 { out = out + " " + attr; }
+        out = out + ">";
+        if len(text) > 0 { out = out + text; }
+        out = out + "\n";
+        i = i + 1;
+    }
+    return out;
+}
+
+print("xml.hl loaded");
+print("XML: SAX-inspired parser — elements+attrs+text+entities, 64 nodes, VFS load + find/attr/dump");

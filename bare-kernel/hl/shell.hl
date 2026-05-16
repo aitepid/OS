@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 288 commands + pipe operator (|):
+// 306 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -90,6 +90,9 @@ fn shell_handle(cmd) {
         serial_print("FTP:      ftp  ftp connect <host>  ftp auth <id> <user> <pass>  ftp ls <id> [path]  ftp get <id> <rem> <loc>  ftp put <id> <loc> <rem>  ftp pwd <id>  ftp cd <id> <path>  ftp quit <id>");
         serial_print("CBOR:     cbor uint <n>  cbor neg <n>  cbor str <s>  cbor bool <0|1>  cbor null  cbor hex <hexstr>  cbor test");
         serial_print("Syslogd:  syslogd  syslogd start  syslogd stop  syslogd clear  syslogd status  syslogd last <n>");
+        serial_print("SNMP:     snmp  snmp start  snmp stop  snmp mib  snmp get <host> <comm> <oid>  snmp walk <host> [comm]");
+        serial_print("TOML:     toml load <path>  toml list  toml get <sec> <key>  toml set <sec> <key> <val>  toml save <path>  toml del <sec> <key>  toml clear");
+        serial_print("XML:      xml load <path>  xml find <tag>  xml text <tag>  xml attr <tag> <attr>  xml dump  xml clear");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -2068,6 +2071,111 @@ fn shell_handle_ext(cmd) {
         return syslog_srv_list(n);
     }
 
+    // SNMP
+    if cmd == "snmp" { return snmp_status(); }
+    if cmd == "snmp start" { snmp_agent_start(); return "snmp: agent started on UDP 161"; }
+    if cmd == "snmp stop" { snmp_agent_stop(); return "snmp: agent stopped"; }
+    if cmd == "snmp mib" { return snmp_mib_dump(); }
+    if str_starts_with(cmd, "snmp get ") {
+        let rest = str_sub(cmd, 9, len(cmd));
+        let sp1 = str_find(rest, " ");
+        if sp1 < 0 { return "usage: snmp get <host> <community> <oid>"; }
+        let host = str_sub(rest, 0, sp1);
+        let rest2 = str_sub(rest, sp1 + 1, len(rest));
+        let sp2 = str_find(rest2, " ");
+        if sp2 < 0 { return "usage: snmp get <host> <community> <oid>"; }
+        let community = str_sub(rest2, 0, sp2);
+        let oid = str_sub(rest2, sp2 + 1, len(rest2));
+        return snmp_get(host, community, oid);
+    }
+    if str_starts_with(cmd, "snmp walk ") {
+        let rest = str_sub(cmd, 10, len(cmd));
+        let sp1 = str_find(rest, " ");
+        if sp1 < 0 { return snmp_walk(rest, "public"); }
+        let host = str_sub(rest, 0, sp1);
+        let community = str_sub(rest, sp1 + 1, len(rest));
+        return snmp_walk(host, community);
+    }
+
+    // TOML
+    if cmd == "toml list" { return toml_list(); }
+    if cmd == "toml clear" { toml_clear(); return "toml: cleared"; }
+    if str_starts_with(cmd, "toml load ") {
+        let path = str_sub(cmd, 10, len(cmd));
+        let n = toml_load(path);
+        if n < 0 { return "toml: load failed"; }
+        return "toml: loaded " + to_string(n) + " entries from " + path;
+    }
+    if str_starts_with(cmd, "toml save ") {
+        let path = str_sub(cmd, 10, len(cmd));
+        toml_save(path);
+        return "toml: saved to " + path;
+    }
+    if str_starts_with(cmd, "toml get ") {
+        let rest = str_sub(cmd, 9, len(cmd));
+        let sp = str_find(rest, " ");
+        if sp < 0 { return "usage: toml get <section> <key>"; }
+        let section = str_sub(rest, 0, sp);
+        let key = str_sub(rest, sp + 1, len(rest));
+        let val = toml_get(section, key);
+        if len(val) == 0 { return "(not found)"; }
+        return val;
+    }
+    if str_starts_with(cmd, "toml set ") {
+        let rest = str_sub(cmd, 9, len(cmd));
+        let sp1 = str_find(rest, " ");
+        if sp1 < 0 { return "usage: toml set <section> <key> <val>"; }
+        let section = str_sub(rest, 0, sp1);
+        let rest2 = str_sub(rest, sp1 + 1, len(rest));
+        let sp2 = str_find(rest2, " ");
+        if sp2 < 0 { return "usage: toml set <section> <key> <val>"; }
+        let key = str_sub(rest2, 0, sp2);
+        let val = str_sub(rest2, sp2 + 1, len(rest2));
+        toml_set(section, key, val);
+        return "toml: set [" + section + "] " + key + " = " + val;
+    }
+    if str_starts_with(cmd, "toml del ") {
+        let rest = str_sub(cmd, 9, len(cmd));
+        let sp = str_find(rest, " ");
+        if sp < 0 { return "usage: toml del <section> <key>"; }
+        let section = str_sub(rest, 0, sp);
+        let key = str_sub(rest, sp + 1, len(rest));
+        toml_delete(section, key);
+        return "toml: deleted [" + section + "] " + key;
+    }
+
+    // XML
+    if cmd == "xml dump" { return xml_dump(); }
+    if cmd == "xml clear" { xml_init(); return "xml: cleared"; }
+    if str_starts_with(cmd, "xml load ") {
+        let path = str_sub(cmd, 9, len(cmd));
+        let n = xml_load(path);
+        if n < 0 { return "xml: load failed"; }
+        return "xml: loaded " + to_string(n) + " elements from " + path;
+    }
+    if str_starts_with(cmd, "xml find ") {
+        let tag = str_sub(cmd, 9, len(cmd));
+        let idx = xml_find(tag);
+        if idx < 0 { return "xml: tag <" + tag + "> not found"; }
+        return "xml: found <" + tag + "> at index " + to_string(idx);
+    }
+    if str_starts_with(cmd, "xml text ") {
+        let tag = str_sub(cmd, 9, len(cmd));
+        let idx = xml_find(tag);
+        if idx < 0 { return "xml: tag <" + tag + "> not found"; }
+        return xml_text(idx);
+    }
+    if str_starts_with(cmd, "xml attr ") {
+        let rest = str_sub(cmd, 9, len(cmd));
+        let sp = str_find(rest, " ");
+        if sp < 0 { return "usage: xml attr <tag> <attrname>"; }
+        let tag = str_sub(rest, 0, sp);
+        let attrname = str_sub(rest, sp + 1, len(rest));
+        let idx = xml_find(tag);
+        if idx < 0 { return "xml: tag <" + tag + "> not found"; }
+        return xml_attr(idx, attrname);
+    }
+
     return shell_handle(cmd);
 }
 
@@ -2079,7 +2187,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 288 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd");
+print("shell.hl loaded -- 306 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + snmp + toml + xml");
 
 // Main shell loop (called from kernel_init)
 
