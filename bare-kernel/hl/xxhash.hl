@@ -1,0 +1,270 @@
+# xxhash.hl - xxHash Fast Non-Cryptographic Hash (simplified)
+# Implements simplified xxHash32 and xxHash64 algorithms
+
+# Memory layout
+global XXHASH_BUF = 0x1280000
+global XXHASH_PRIME1_32 = 2654435761
+global XXHASH_PRIME2_32 = 2246822519
+global XXHASH_PRIME3_32 = 3266489917
+global XXHASH_PRIME4_32 = 668265263
+global XXHASH_PRIME5_32 = 374761393
+
+# State
+global xxhash_state = 0
+global xxhash_result = 0
+global xxhash_seed = 0
+
+fn xxhash_init() {
+    xxhash_state = XXHASH_BUF
+    xxhash_result = 0
+    xxhash_seed = 0
+    serial_print("xxHash fast non-cryptographic hash ready")
+}
+
+# Hash data with xxHash32
+fn xxhash32(data, len) {
+    var seed = xxhash_seed
+    var hash = 0
+
+    if (len >= 16) {
+        # Process 16-byte blocks
+        var v1 = (seed + XXHASH_PRIME1_32 + XXHASH_PRIME2_32) % 4294967296
+        var v2 = (seed + XXHASH_PRIME2_32) % 4294967296
+        var v3 = seed
+        var v4 = (seed - XXHASH_PRIME1_32) % 4294967296
+
+        var pos = 0
+        while (pos + 16 <= len) {
+            # Read 4 bytes at each position
+            var k1 = _xxhash_read32(data, pos)
+            var k2 = _xxhash_read32(data, pos + 4)
+            var k3 = _xxhash_read32(data, pos + 8)
+            var k4 = _xxhash_read32(data, pos + 12)
+
+            # Round for each lane
+            v1 = _xxhash_round32(v1, k1)
+            v2 = _xxhash_round32(v2, k2)
+            v3 = _xxhash_round32(v3, k3)
+            v4 = _xxhash_round32(v4, k4)
+
+            pos = pos + 16
+        }
+
+        # Merge accumulators
+        hash = _xxhash_rotl32(v1, 1) + _xxhash_rotl32(v2, 7) + _xxhash_rotl32(v3, 12) + _xxhash_rotl32(v4, 18)
+        hash = hash % 4294967296
+
+        # Process remaining bytes
+        while (pos < len) {
+            var byte = get_at(data, pos)
+            hash = (hash + byte * XXHASH_PRIME5_32) % 4294967296
+            hash = (_xxhash_rotl32(hash, 11) * XXHASH_PRIME1_32) % 4294967296
+            pos = pos + 1
+        }
+    } else {
+        # Small input: use seed + length
+        hash = (seed + XXHASH_PRIME5_32 + len) % 4294967296
+
+        var pos = 0
+        while (pos < len) {
+            var byte = get_at(data, pos)
+            hash = (hash + byte * XXHASH_PRIME5_32) % 4294967296
+            hash = (_xxhash_rotl32(hash, 11) * XXHASH_PRIME1_32) % 4294967296
+            pos = pos + 1
+        }
+    }
+
+    # Final avalanche
+    hash = (hash + len) % 4294967296
+    hash = _xxhash_avalanche32(hash)
+
+    xxhash_result = hash
+    return hash
+}
+
+# Round function for xxHash32
+fn _xxhash_round32(acc, input) {
+    acc = (acc + input * XXHASH_PRIME2_32) % 4294967296
+    acc = (_xxhash_rotl32(acc, 13) * XXHASH_PRIME1_32) % 4294967296
+    return acc
+}
+
+# Avalanche (final mix) for xxHash32
+fn _xxhash_avalanche32(hash) {
+    hash = (hash + (hash / 32768)) % 4294967296
+    hash = (hash * XXHASH_PRIME2_32) % 4294967296
+    hash = (hash + (hash / 8192)) % 4294967296
+    hash = (hash * XXHASH_PRIME3_32) % 4294967296
+    hash = (hash + (hash / 16384)) % 4294967296
+    return hash
+}
+
+# Rotate left (32-bit)
+fn _xxhash_rotl32(value, bits) {
+    if (bits == 0) { return value }
+
+    # Simulate (value << bits) | (value >> (32 - bits))
+    var left = (value * _xxhash_pow2(bits)) % 4294967296
+    var right = value / _xxhash_pow2(32 - bits)
+    return (left + right) % 4294967296
+}
+
+# Read 32-bit little-endian value
+fn _xxhash_read32(data, pos) {
+    var b0 = get_at(data, pos)
+    var b1 = 0
+    var b2 = 0
+    var b3 = 0
+
+    if (pos + 1 < strlen(data)) { b1 = get_at(data, pos + 1) }
+    if (pos + 2 < strlen(data)) { b2 = get_at(data, pos + 2) }
+    if (pos + 3 < strlen(data)) { b3 = get_at(data, pos + 3) }
+
+    return (b0 + b1 * 256 + b2 * 65536 + b3 * 16777216) % 4294967296
+}
+
+# Power of 2
+fn _xxhash_pow2(exp) {
+    if (exp <= 0) { return 1 }
+    if (exp >= 32) { return 0 }  # Overflow for 32-bit
+
+    var result = 1
+    var i = 0
+    while (i < exp) {
+        result = result * 2
+        i = i + 1
+    }
+    return result
+}
+
+# Hash64 (simplified version using 32-bit arithmetic)
+fn xxhash64(data, len) {
+    # Simplified: use xxHash32 twice with different seeds
+    var seed1 = xxhash_seed
+    var seed2 = (xxhash_seed * 2654435761) % 4294967296
+
+    xxhash_seed = seed1
+    var hash1 = xxhash32(data, len)
+
+    xxhash_seed = seed2
+    var hash2 = xxhash32(data, len)
+
+    xxhash_seed = seed1  # Restore original seed
+
+    # Combine two 32-bit hashes (simplified)
+    xxhash_result = hash1
+    set_at(xxhash_state, 0, hash1 % 256)
+    set_at(xxhash_state, 1, (hash1 / 256) % 256)
+    set_at(xxhash_state, 2, (hash1 / 65536) % 256)
+    set_at(xxhash_state, 3, (hash1 / 16777216) % 256)
+    set_at(xxhash_state, 4, hash2 % 256)
+    set_at(xxhash_state, 5, (hash2 / 256) % 256)
+    set_at(xxhash_state, 6, (hash2 / 65536) % 256)
+    set_at(xxhash_state, 7, (hash2 / 16777216) % 256)
+
+    return hash1
+}
+
+# Set seed
+fn xxhash_set_seed(seed) {
+    xxhash_seed = seed % 4294967296
+    return 0
+}
+
+# Get result as hex
+fn xxhash_get_hex() {
+    return _xxhash_to_hex(xxhash_result)
+}
+
+# Get result as 64-bit hex (from state)
+fn xxhash_get_hex64() {
+    var hex_chars = "0123456789abcdef"
+    var buf = XXHASH_BUF + 65536
+    var pos = 0
+
+    var i = 7
+    while (i >= 0) {
+        var byte = get_at(xxhash_state, i)
+        set_at(buf, pos, get_at(hex_chars, byte / 16))
+        pos = pos + 1
+        set_at(buf, pos, get_at(hex_chars, byte % 16))
+        pos = pos + 1
+        i = i - 1
+    }
+
+    set_at(buf, pos, 0)
+    return buf
+}
+
+# Convert 32-bit value to hex
+fn _xxhash_to_hex(value) {
+    var hex_chars = "0123456789abcdef"
+    var buf = XXHASH_BUF + 131072
+    var pos = 0
+
+    # Write 8 hex digits (32 bits)
+    var i = 7
+    while (i >= 0) {
+        var shift = i * 4
+        var nibble = (value / _xxhash_pow2(shift)) % 16
+        set_at(buf, pos, get_at(hex_chars, nibble))
+        pos = pos + 1
+        i = i - 1
+    }
+
+    set_at(buf, pos, 0)
+    return buf
+}
+
+# Get result as decimal
+fn xxhash_get_result() {
+    return xxhash_result
+}
+
+# Benchmark helper
+fn xxhash_benchmark(data, len, iterations) {
+    var i = 0
+    var start_ticks = get_ticks()
+
+    while (i < iterations) {
+        xxhash32(data, len)
+        i = i + 1
+    }
+
+    var end_ticks = get_ticks()
+    var elapsed = end_ticks - start_ticks
+
+    return elapsed
+}
+
+# Test xxHash
+fn xxhash_test() {
+    var test_data = "The quick brown fox jumps over the lazy dog"
+    var len = strlen(test_data)
+
+    # Test with default seed (0)
+    xxhash_set_seed(0)
+    var hash1 = xxhash32(test_data, len)
+
+    # Test determinism
+    var hash2 = xxhash32(test_data, len)
+    if (hash1 != hash2) {
+        serial_print("xxHash test: determinism failed")
+        return -1
+    }
+
+    # Test different seed produces different hash
+    xxhash_set_seed(12345)
+    var hash3 = xxhash32(test_data, len)
+    if (hash1 == hash3) {
+        serial_print("xxHash test: seed variation failed")
+        return -2
+    }
+
+    # Test xxHash64
+    xxhash_set_seed(0)
+    var hash64 = xxhash64(test_data, len)
+
+    serial_print("xxHash test: passed")
+    return 0
+}

@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 550 commands + pipe operator (|):
+// 565 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -135,6 +135,9 @@ fn shell_handle(cmd) {
         serial_print("Snappy:   snappy compress <data>  snappy decompress <data>  snappy output  snappy len  snappy test");
         serial_print("Argon2:   argon2 hash <pwd> <salt>  argon2 variant <id>  argon2 cost <n>  argon2 hex  argon2 test");
         serial_print("Poly1305: poly1305 key <key>  poly1305 update <msg>  poly1305 tag  poly1305 verify <tag>  poly1305 test");
+        serial_print("xxHash:   xxhash seed <n>  xxhash hash <data>  xxhash64 <data>  xxhash hex  xxhash test");
+        serial_print("SipHash:  siphash key <key>  siphash hash <data>  siphash hex  siphash result  siphash test");
+        serial_print("Zstd:     zstd compress <data>  zstd decompress <data>  zstd level <n>  zstd ratio <orig>  zstd test");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -3137,6 +3140,74 @@ fn shell_handle_ext(cmd) {
     }
     if cmd == "poly1305 test" { return poly1305_test(); }
 
+    // === xxHash commands ===
+    if str_starts_with(cmd, "xxhash seed ") {
+        let seed = parse_int(str_sub(cmd, 12, len(cmd)));
+        xxhash_set_seed(seed);
+        return "xxhash: seed set to " + to_string(seed);
+    }
+    if str_starts_with(cmd, "xxhash hash ") {
+        let data = str_sub(cmd, 12, len(cmd));
+        let hash = xxhash32(data, len(data));
+        return "xxhash32: " + xxhash_get_hex() + " (" + to_string(hash) + ")";
+    }
+    if str_starts_with(cmd, "xxhash64 ") {
+        let data = str_sub(cmd, 9, len(cmd));
+        let hash = xxhash64(data, len(data));
+        return "xxhash64: " + xxhash_get_hex64();
+    }
+    if cmd == "xxhash hex" {
+        return "xxhash: " + xxhash_get_hex();
+    }
+    if cmd == "xxhash test" { return xxhash_test(); }
+
+    // === SipHash commands ===
+    if str_starts_with(cmd, "siphash key ") {
+        let key = str_sub(cmd, 12, len(cmd));
+        let result = siphash_set_key(key);
+        if result == 0 { return "siphash: key set (16 bytes)"; }
+        return "siphash: key too short (need 16 bytes)";
+    }
+    if str_starts_with(cmd, "siphash hash ") {
+        let data = str_sub(cmd, 13, len(cmd));
+        let hash = siphash(data, len(data));
+        return "siphash: " + siphash_get_hex() + " (" + to_string(hash) + ")";
+    }
+    if cmd == "siphash hex" {
+        return "siphash: " + siphash_get_hex();
+    }
+    if cmd == "siphash result" {
+        let result = siphash_get_result();
+        return "siphash: result = " + to_string(result);
+    }
+    if cmd == "siphash test" { return siphash_test(); }
+
+    // === Zstd commands ===
+    if str_starts_with(cmd, "zstd compress ") {
+        let data = str_sub(cmd, 14, len(cmd));
+        let comp_len = zstd_compress(data, len(data));
+        if comp_len > 0 { return "zstd: compressed " + to_string(len(data)) + " -> " + to_string(comp_len) + " bytes"; }
+        return "zstd: compression failed";
+    }
+    if str_starts_with(cmd, "zstd decompress ") {
+        let data = str_sub(cmd, 16, len(cmd));
+        let decomp_len = zstd_decompress(data, len(data));
+        if decomp_len > 0 { return "zstd: decompressed " + to_string(len(data)) + " -> " + to_string(decomp_len) + " bytes"; }
+        return "zstd: decompression failed (error " + to_string(decomp_len) + ")";
+    }
+    if str_starts_with(cmd, "zstd level ") {
+        let level = parse_int(str_sub(cmd, 11, len(cmd)));
+        let result = zstd_set_level(level);
+        if result == 0 { return "zstd: compression level set to " + to_string(level); }
+        return "zstd: invalid level (must be 1-9)";
+    }
+    if str_starts_with(cmd, "zstd ratio ") {
+        let orig = parse_int(str_sub(cmd, 11, len(cmd)));
+        let ratio = zstd_get_ratio(orig);
+        return "zstd: compression ratio = " + to_string(ratio) + "%";
+    }
+    if cmd == "zstd test" { return zstd_test(); }
+
     return shell_handle(cmd);
 }
 
@@ -3148,7 +3219,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 550 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305");
+print("shell.hl loaded -- 565 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd");
 
 // Main shell loop (called from kernel_init)
 

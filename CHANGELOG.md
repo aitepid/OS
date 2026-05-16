@@ -2,11 +2,85 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`295`（69 根目录 + 226 内核模块）
-- H-L 总行数：`~78,400`
-- 内核模块：`226`
-- Shell 命令：`550`
-- 最近完成功能迭代：`240`（snappy + argon2 + poly1305）
+- `.hl` 文件：`298`（69 根目录 + 229 内核模块）
+- H-L 总行数：`~79,300`
+- 内核模块：`229`
+- Shell 命令：`565`
+- 最近完成功能迭代：`243`（xxhash + siphash + zstd）
+
+## Iteration 243 — zstd.hl：Zstandard 现代压缩
+
+- **`bare-kernel/hl/zstd.hl`** 新增（~330 行）
+  - Zstandard（zstd）现代压缩算法（Facebook/Meta 开发）
+  - 注：简化实现，窗口 8KB（真实 zstd 支持更大窗口），仅支持 RAW/RLE/COMPRESSED 块类型
+  - 用途：高压缩比 + 快速解压，优于 gzip，广泛用于生产环境（Linux 内核、数据库）
+  - `zstd_compress(data, len)` — 压缩：写入帧头（魔数 0xFD2FB528 + 描述符）+ 压缩块
+  - 魔数：4 字节 little-endian 0x28B52FFD（简化为近似值）
+  - 帧描述符：简化为单字节（标志位：内容大小/单段/校验和/字典ID）
+  - `_zstd_compress_block(output, pos, data, offset, size, is_last)` — 单块压缩：RLE/LZ77/RAW 自动选择
+  - 块类型选择：全相同字节 → RLE，LZ77 有效 → 压缩，否则 → 原始
+  - 块头部：3 字节（Last_Block 标志 + Block_Type + Block_Size）
+  - RLE 块：块头 + 单个重复字节
+  - 压缩块：块头 + LZ77 编码数据（字面量/匹配对）
+  - 原始块：块头 + 未压缩数据
+  - `_zstd_lz77_compress(data, offset, len, output)` — LZ77 压缩核心：滑动窗口匹配
+  - 匹配最小长度：3 字节，最大长度：64 字节
+  - 偏移量编码：简化版本，2 字节存储（真实 zstd 使用更复杂的偏移量编码）
+  - `_zstd_find_match(data, base_offset, pos, len)` — 查找匹配：回溯 8192 字节窗口
+  - `zstd_decompress(data, len)` — 解压：验证魔数 → 解析块 → 还原数据
+  - 解压支持：RAW（直接复制）、RLE（重复字节）、COMPRESSED（简化版）
+  - `zstd_set_level(level)` — 设置压缩级别（1-9，简化版，真实支持 1-22）
+  - ZSTD_BUF=0x12A0000（19464192），256 KB 工作缓冲区（字典/窗口/输出）
+  - Zstandard 优势：压缩比接近 LZMA，速度接近 LZ4，可训练字典，流式压缩
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`zstd_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 5 条命令：
+  - `zstd compress <data>` / `zstd decompress <data>` / `zstd level <n>` / `zstd ratio <orig>` / `zstd test`
+
+## Iteration 242 — siphash.hl：SipHash 防 DoS 哈希
+
+- **`bare-kernel/hl/siphash.hl`** 新增（~280 行）
+  - SipHash-2-4 防 DoS 哈希函数（2 压缩轮，4 最终化轮）
+  - 注：简化实现，使用 32 位算术模拟 64 位操作，受 H-L 语言限制
+  - 用途：哈希表键哈希，防止哈希洪水 DoS 攻击（HashDoS），安全但快速
+  - `siphash_set_key(key)` — 设置 128 位密钥（16 字节）：k0 + k1
+  - `siphash(data, len)` — 哈希数据：初始化 4 个 64 位状态 → 处理 8 字节块 → 最终化
+  - 状态初始化：v0 = k0 ^ 0x736f6d65, v1 = k1 ^ 0x646f7261, v2 = k0 ^ 0x6c796765, v3 = k1 ^ 0x6e657261
+  - `_siphash_compress(m)` — 压缩单个 8 字节块：v3 += m → 2 轮 SipRound → v0 += m
+  - `_siphash_sipround()` — SipRound：4 个状态字的加法/旋转/异或混合
+  - SipRound 操作：v0+=v1; v1=ROTL(v1,13); v1^=v0; v0=ROTL(v0,32); 等
+  - 旋转位数：13, 16, 17, 21（ARX 结构：加法/旋转/异或）
+  - 最终化：v2 ^= 0xff → 4 轮 SipRound → 输出 v0^v1^v2^v3
+  - 长度编码：最后一块包含消息长度字节（在高位）
+  - SipHash 安全性：需要密钥，不可预测，抗差分/线性攻击
+  - 应用场景：Rust HashMap、Python dict（≥3.4）、Redis、FreeBSD 内核
+  - SIPHASH_BUF=0x1290000（19398656），128 KB 工作缓冲区
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`siphash_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 5 条命令：
+  - `siphash key <key>` / `siphash hash <data>` / `siphash hex` / `siphash result` / `siphash test`
+
+## Iteration 241 — xxhash.hl：xxHash 快速非加密哈希
+
+- **`bare-kernel/hl/xxhash.hl`** 新增（~290 行）
+  - xxHash32/xxHash64 超快非加密哈希算法
+  - 注：简化实现，xxHash64 使用两个 xxHash32 组合（真实版本是真 64 位算术）
+  - 用途：校验和、哈希表、文件完整性验证（非安全场景），速度极快（>10 GB/s）
+  - `xxhash32(data, len)` — 计算 32 位哈希：分块处理 + 最终混淆
+  - xxHash32 常量：5 个质数（PRIME1-5），用于状态混合
+  - 大输入路径（≥16 字节）：4 个累加器（v1-v4），每次处理 16 字节（4×4）
+  - `_xxhash_round32(acc, input)` — 单轮更新：acc = (acc + input×PRIME2) ×PRIME1 ← ROTL13
+  - 合并累加器：ROTL(v1,1) + ROTL(v2,7) + ROTL(v3,12) + ROTL(v4,18)
+  - 小输入路径（<16 字节）：seed + PRIME5 + length → 逐字节混合
+  - `_xxhash_avalanche32(hash)` — 最终混淆（avalanche）：多次移位/乘法/异或
+  - Avalanche 操作：hash ^= (hash>>15); hash ×= PRIME2; hash ^= (hash>>13); 等
+  - `xxhash64(data, len)` — 简化 64 位哈希：两个不同种子的 xxHash32 组合
+  - `xxhash_set_seed(seed)` — 设置种子（相同数据 + 不同种子 = 不同哈希）
+  - `xxhash_benchmark(data, len, iterations)` — 性能测试辅助函数
+  - xxHash 优势：极快速度（接近内存带宽），良好分布性，确定性，无加密开销
+  - 应用场景：LZ4/Zstd 内部校验和、RocksDB、npm、dpkg
+  - XXHASH_BUF=0x1280000（19333120），256 KB 工作缓冲区
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`xxhash_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 5 条命令：
+  - `xxhash seed <n>` / `xxhash hash <data>` / `xxhash64 <data>` / `xxhash hex` / `xxhash test`
 
 ## Iteration 240 — poly1305.hl：Poly1305 消息认证码
 

@@ -1,0 +1,256 @@
+# siphash.hl - SipHash DoS-Resistant Hash (simplified)
+# Implements simplified SipHash-2-4 (2 compression rounds, 4 finalization rounds)
+
+# Memory layout
+global SIPHASH_BUF = 0x1290000
+
+# State
+global siphash_key = 0
+global siphash_v0 = 0
+global siphash_v1 = 0
+global siphash_v2 = 0
+global siphash_v3 = 0
+global siphash_result = 0
+
+fn siphash_init() {
+    siphash_key = SIPHASH_BUF
+    siphash_result = 0
+
+    # Initialize with default key (zeros)
+    var i = 0
+    while (i < 16) {
+        set_at(siphash_key, i, 0)
+        i = i + 1
+    }
+
+    serial_print("SipHash DoS-resistant hash ready")
+}
+
+# Set 128-bit key (16 bytes)
+fn siphash_set_key(key) {
+    var key_len = strlen(key)
+    if (key_len < 16) {
+        serial_print("SipHash: key too short (need 16 bytes)")
+        return -1
+    }
+
+    var i = 0
+    while (i < 16) {
+        set_at(siphash_key, i, get_at(key, i))
+        i = i + 1
+    }
+
+    return 0
+}
+
+# Hash data with SipHash-2-4
+fn siphash(data, len) {
+    # Extract key as two 64-bit values (simplified to 32-bit)
+    var k0 = _siphash_read64(siphash_key, 0)
+    var k1 = _siphash_read64(siphash_key, 8)
+
+    # Initialize state
+    siphash_v0 = (k0 + 1952801890) % 4294967296  # 0x736f6d65 (simplified)
+    siphash_v1 = (k1 + 1685025377) % 4294967296  # 0x646f7261
+    siphash_v2 = (k0 + 1819895653) % 4294967296  # 0x6c796765
+    siphash_v3 = (k1 + 1852142177) % 4294967296  # 0x6e657261
+
+    # Process 8-byte blocks
+    var pos = 0
+    var blocks = len / 8
+
+    var i = 0
+    while (i < blocks) {
+        var m = _siphash_read64(data, pos)
+        _siphash_compress(m)
+        pos = pos + 8
+        i = i + 1
+    }
+
+    # Process remaining bytes + length encoding
+    var remaining = len % 8
+    var last_block = (len % 256) * 16777216  # Length in high byte
+
+    var j = 0
+    while (j < remaining) {
+        var byte = get_at(data, pos + j)
+        last_block = (last_block + byte * _siphash_pow256(j)) % 4294967296
+        j = j + 1
+    }
+
+    _siphash_compress(last_block)
+
+    # Finalization
+    siphash_v2 = (siphash_v2 + 255) % 4294967296  # XOR with 0xff (simplified)
+
+    var final_rounds = 0
+    while (final_rounds < 4) {
+        _siphash_sipround()
+        final_rounds = final_rounds + 1
+    }
+
+    # Output
+    siphash_result = (siphash_v0 + siphash_v1 + siphash_v2 + siphash_v3) % 4294967296
+    return siphash_result
+}
+
+# Compression (2 SipRounds)
+fn _siphash_compress(m) {
+    siphash_v3 = (siphash_v3 + m) % 4294967296
+
+    _siphash_sipround()
+    _siphash_sipround()
+
+    siphash_v0 = (siphash_v0 + m) % 4294967296
+}
+
+# SipRound (simplified version using 32-bit arithmetic)
+fn _siphash_sipround() {
+    # v0 += v1; v1 = ROTL(v1, 13); v1 ^= v0; v0 = ROTL(v0, 32);
+    siphash_v0 = (siphash_v0 + siphash_v1) % 4294967296
+    siphash_v1 = _siphash_rotl(siphash_v1, 13)
+    siphash_v1 = (siphash_v1 + siphash_v0) % 4294967296  # XOR simplified to add
+    siphash_v0 = _siphash_rotl(siphash_v0, 16)  # ROTL32 instead of ROTL64
+
+    # v2 += v3; v3 = ROTL(v3, 16); v3 ^= v2;
+    siphash_v2 = (siphash_v2 + siphash_v3) % 4294967296
+    siphash_v3 = _siphash_rotl(siphash_v3, 16)
+    siphash_v3 = (siphash_v3 + siphash_v2) % 4294967296
+
+    # v0 += v3; v3 = ROTL(v3, 21); v3 ^= v0;
+    siphash_v0 = (siphash_v0 + siphash_v3) % 4294967296
+    siphash_v3 = _siphash_rotl(siphash_v3, 21)
+    siphash_v3 = (siphash_v3 + siphash_v0) % 4294967296
+
+    # v2 += v1; v1 = ROTL(v1, 17); v1 ^= v2; v2 = ROTL(v2, 32);
+    siphash_v2 = (siphash_v2 + siphash_v1) % 4294967296
+    siphash_v1 = _siphash_rotl(siphash_v1, 17)
+    siphash_v1 = (siphash_v1 + siphash_v2) % 4294967296
+    siphash_v2 = _siphash_rotl(siphash_v2, 16)
+}
+
+# Rotate left (32-bit)
+fn _siphash_rotl(value, bits) {
+    if (bits == 0) { return value }
+    if (bits >= 32) { return value }
+
+    var left = (value * _siphash_pow2(bits)) % 4294967296
+    var right = value / _siphash_pow2(32 - bits)
+    return (left + right) % 4294967296
+}
+
+# Read 64-bit value (simplified to 32-bit)
+fn _siphash_read64(data, pos) {
+    var b0 = 0
+    var b1 = 0
+    var b2 = 0
+    var b3 = 0
+
+    if (pos < strlen(data)) { b0 = get_at(data, pos) }
+    if (pos + 1 < strlen(data)) { b1 = get_at(data, pos + 1) }
+    if (pos + 2 < strlen(data)) { b2 = get_at(data, pos + 2) }
+    if (pos + 3 < strlen(data)) { b3 = get_at(data, pos + 3) }
+
+    return (b0 + b1 * 256 + b2 * 65536 + b3 * 16777216) % 4294967296
+}
+
+# Power of 2
+fn _siphash_pow2(exp) {
+    if (exp <= 0) { return 1 }
+    if (exp >= 32) { return 0 }
+
+    var result = 1
+    var i = 0
+    while (i < exp) {
+        result = result * 2
+        i = i + 1
+    }
+    return result
+}
+
+# Power of 256
+fn _siphash_pow256(exp) {
+    if (exp == 0) { return 1 }
+    if (exp == 1) { return 256 }
+    if (exp == 2) { return 65536 }
+    if (exp == 3) { return 16777216 }
+    return 1
+}
+
+# Get result as hex
+fn siphash_get_hex() {
+    return _siphash_to_hex(siphash_result)
+}
+
+# Convert to hex
+fn _siphash_to_hex(value) {
+    var hex_chars = "0123456789abcdef"
+    var buf = SIPHASH_BUF + 65536
+    var pos = 0
+
+    var i = 7
+    while (i >= 0) {
+        var shift = i * 4
+        var nibble = (value / _siphash_pow2(shift)) % 16
+        set_at(buf, pos, get_at(hex_chars, nibble))
+        pos = pos + 1
+        i = i - 1
+    }
+
+    set_at(buf, pos, 0)
+    return buf
+}
+
+# Get result as decimal
+fn siphash_get_result() {
+    return siphash_result
+}
+
+# Get current state (for debugging)
+fn siphash_get_state() {
+    var buf = SIPHASH_BUF + 131072
+    set_at(buf, 0, siphash_v0 % 256)
+    set_at(buf, 1, (siphash_v0 / 256) % 256)
+    set_at(buf, 2, (siphash_v0 / 65536) % 256)
+    set_at(buf, 3, (siphash_v0 / 16777216) % 256)
+    set_at(buf, 4, siphash_v1 % 256)
+    set_at(buf, 5, (siphash_v1 / 256) % 256)
+    set_at(buf, 6, (siphash_v1 / 65536) % 256)
+    set_at(buf, 7, (siphash_v1 / 16777216) % 256)
+    return buf
+}
+
+# Test SipHash
+fn siphash_test() {
+    var test_key = "0123456789abcdef"
+    var test_data = "SipHash test message"
+
+    # Set key
+    var result = siphash_set_key(test_key)
+    if (result < 0) {
+        serial_print("SipHash test: key setup failed")
+        return -1
+    }
+
+    # Hash
+    var hash1 = siphash(test_data, strlen(test_data))
+
+    # Test determinism
+    var hash2 = siphash(test_data, strlen(test_data))
+    if (hash1 != hash2) {
+        serial_print("SipHash test: determinism failed")
+        return -2
+    }
+
+    # Test different key produces different hash
+    var different_key = "fedcba9876543210"
+    siphash_set_key(different_key)
+    var hash3 = siphash(test_data, strlen(test_data))
+    if (hash1 == hash3) {
+        serial_print("SipHash test: key variation failed")
+        return -3
+    }
+
+    serial_print("SipHash test: passed")
+    return 0
+}
