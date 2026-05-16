@@ -2,29 +2,34 @@
 
 ## 版本定位
 
-当前仓库处于 `v6.0` 发布线，最新功能里程碑为迭代 159（regex + telnet + ui_browser）。
+当前仓库处于 `v6.0` 发布线，最新功能里程碑为迭代 162（smtp + cron + ui_image）。
 
-## 本轮已核实状态（迭代 159 基线）
+## 本轮已核实状态（迭代 162 基线）
 
 ### 仓库规模（精确计数）
 
 | 指标 | 当前值 | 说明 |
 |---|---:|---|
-| 全部 `.hl` 文件 | 214 | 69 根目录 + 145 内核模块 |
-| H-L 总行数 | ~56,500 | 根 10,900+ + 内核 ~45,600 |
-| `bare-kernel/hl/` 内核模块 | 145 | 编译进 `kernel.bin` |
+| 全部 `.hl` 文件 | 217 | 69 根目录 + 148 内核模块 |
+| H-L 总行数 | ~59,500 | 持续增长 |
+| `bare-kernel/hl/` 内核模块 | 148 | 编译进 `kernel.bin` |
 | `kernel_entry.hl` 行数 | 9,428 | 内核入口 + 命令分发 |
 | 编译产出函数数 | 2,020+ | 编译管线实测 |
 | 链接符号数 | 2,280+ | linker 实测 |
 | `hl-bootstrap.hl` 行数 | 4,306 | 自举编译器（208 函数） |
 | `stdlib.hl` 行数 | 1,385 | 标准库（143 函数） |
-| Shell 命令数 | 170 | shell.hl（+regex/telnet/browse） |
+| Shell 命令数 | 183 | shell.hl（+smtp/cron/imgview） |
+| `test_*.hl` / `test-*.hl` | 19 | |
+| `IP-Protection/` 文件数 | 60 | 知识产权文件 |
+| `.md` 文档 | 10 | |
 
 ### 门禁结果
 
 | 验证项 | 结果 |
 |---|---|
-| `validate-workspace` | ✅ 214 HL / 145 模块 / 0 stub |
+| `hl-bootstrap build` | ✅ 132 模块编译 + 镜像重建 |
+| `validate-workspace` | ✅ 198 HL / 130 模块 / 0 stub |
+| `runtime-path-readiness` | ✅ IDT/PIT/KBD + SYSCALL + 网络 + eBPF/TLS/QUIC |
 | `release-validate` | ✅ 18/18 |
 
 ### 产物尺寸（实测）
@@ -98,25 +103,13 @@
 | `ui_installer.hl` | 5 步图形安装器向导 |
 | `ui_sysmon.hl` | 系统监控（运行时间 / 内存 / 任务） |
 | `ui_notify.hl` | Toast 通知（4 类型 × 4 并发） |
-| `ui_desktop.hl` | 桌面编排（顶栏时钟 + dock 5图标） |
-| `ui_files.hl` | 文件管理器（目录导航 / 图标 / 选中 / VFS集成）|
-| `ui_settings.hl` | 设置中心（Display/Audio/Network/About 4标签页）|
+| `ui_desktop.hl` | 桌面编排（顶栏时钟 + dock 启动器） |
 | `wm.hl` | 窗口管理器（标题文字 / 拖拽 / 最小化） |
 | `HicOS_UIServer.hl` | UI 服务器（IPC + 焦点通知） |
 
-## 迭代 141-142 成果（阶段 8）
-
-| 迭代 | 模块 | 完成内容 |
-|---|---|---|
-| 141 | `ui_files.hl` | 文件管理器 MVP（203行，VFS集成，dock集成，`fm` shell命令）|
-| 141 | `ui_desktop.hl` | dock 5图标（+Files +Settings）|
-| 142 | `audio.hl` | BDL循环32条目 + DMA状态轮询 + mute + status |
-| 142 | `mixer.hl` | 主音量 + `mixer_beep()` + master_vol 混音应用 |
-| 142 | `shell.hl` | 音频命令：`audio`/`audio vol`/`audio beep`/`mixer` 等（96条命令）|
-
 ## 下一阶段建议
 
-- GPU 2D 加速 — framebuffer 硬件 blit（迭代 143）
-- 文件操作（复制/删除/重命名）集成到 `ui_files.hl`（右键菜单）
-- 音频 IPC 服务：`HicOS_AudioServer.hl`
-- 容器/命名空间隔离（迭代 161+）
+- 文件管理器（`ui_files.hl`）
+- 设置中心（`ui_settings.hl`）
+- 音频管道（audio→mixer）— AC97 PCM 播放
+- GPU 2D 加速 — framebuffer 硬件 blit

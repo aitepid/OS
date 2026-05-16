@@ -1,0 +1,342 @@
+// ui_image.hl -- BMP Image Viewer
+//
+// Iteration 162: Load and display 24/32-bit BMP images from VFS.
+//
+// Window: 480x380 (image area: 448x320, toolbar: 32px, status: 16px)
+//
+// BMP format (little-endian):
+//   Offset 0:  signature "BM" (2 bytes)
+//   Offset 2:  file size (4 bytes)
+//   Offset 10: pixel data offset (4 bytes)
+//   Offset 14: BITMAPINFOHEADER size (4 bytes, must be 40)
+//   Offset 18: width  (4 bytes, signed)
+//   Offset 22: height (4 bytes, signed — negative = top-down)
+//   Offset 26: planes (2 bytes, must be 1)
+//   Offset 28: bpp (2 bytes: 24 or 32)
+//   Offset 30: compression (4 bytes: 0=none, 3=bitfields)
+//   Offset 54+: pixel data (rows bottom-up for positive height)
+//
+// Row stride: ceil(bpp*width/32)*4 bytes (padded to 4-byte boundary)
+//
+// Zoom: 1x (pixel-exact) or 2x (nearest-neighbour doubling).
+// Pan: not implemented (image centered if smaller than viewport).
+//
+// Public API:
+//   uiimg_open()
+//   uiimg_load(path)       → 1 success / 0 fail
+//   uiimg_draw()           → render (wm_draw_all)
+//   uiimg_key(k)
+//   uiimg_click(mx, my)
+//   uiimg_close()
+//   uiimg_is_open()
+
+let UIIMG_WIN_X   = 60;
+let UIIMG_WIN_Y   = 50;
+let UIIMG_WIN_W   = 480;
+let UIIMG_WIN_H   = 380;
+let UIIMG_TOOLBAR_H = 32;
+let UIIMG_STATUS_H  = 16;
+let UIIMG_VIEW_H    = 332;   // WIN_H - title(20) - toolbar - status
+
+// BMP load buffer (scratch): 0x9D0000  4 MB
+let UIIMG_LOAD_BUF = 10289152;   // 0x9D0000
+let UIIMG_MAX_BYTES = 4194304;
+
+// State
+let mut uiimg_open_flag  = 0;
+let mut uiimg_path       = "";
+let mut uiimg_width      = 0;
+let mut uiimg_height     = 0;
+let mut uiimg_bpp        = 0;
+let mut uiimg_data_off   = 0;    // byte offset in LOAD_BUF where pixels start
+let mut uiimg_loaded     = 0;    // 1 if valid BMP is loaded
+let mut uiimg_zoom       = 1;    // 1 or 2
+let mut uiimg_status     = "No image loaded";
+
+// ============================================================
+// BMP header parser
+// ============================================================
+
+// Read little-endian u16 from buffer at offset
+fn _bmp_u16(off) {
+    let b0 = mem_read_u8(UIIMG_LOAD_BUF + off);
+    let b1 = mem_read_u8(UIIMG_LOAD_BUF + off + 1);
+    return b0 + b1 * 256;
+}
+
+// Read little-endian u32 from buffer at offset
+fn _bmp_u32(off) {
+    let b0 = mem_read_u8(UIIMG_LOAD_BUF + off);
+    let b1 = mem_read_u8(UIIMG_LOAD_BUF + off + 1);
+    let b2 = mem_read_u8(UIIMG_LOAD_BUF + off + 2);
+    let b3 = mem_read_u8(UIIMG_LOAD_BUF + off + 3);
+    return b0 + b1 * 256 + b2 * 65536 + b3 * 16777216;
+}
+
+// Read little-endian i32 (treat as signed: value > 2^31 → negative)
+fn _bmp_i32(off) {
+    let v = _bmp_u32(off);
+    if v > 2147483647 { return 0 - (4294967296 - v); }
+    return v;
+}
+
+// Parse BMP header into uiimg_* globals. Returns 1 on success.
+fn _bmp_parse_header() {
+    // Check "BM" signature
+    let b0 = mem_read_u8(UIIMG_LOAD_BUF);
+    let b1 = mem_read_u8(UIIMG_LOAD_BUF + 1);
+    if b0 != 66 { return 0; }   // 'B'
+    if b1 != 77 { return 0; }   // 'M'
+
+    let data_off  = _bmp_u32(10);
+    let hdr_size  = _bmp_u32(14);
+    if hdr_size < 40 { return 0; }   // need BITMAPINFOHEADER
+
+    let width  = _bmp_i32(18);
+    let height = _bmp_i32(22);
+    let bpp    = _bmp_u16(28);
+    let compr  = _bmp_u32(30);
+
+    if bpp != 24 { if bpp != 32 { return 0; } }  // only 24/32-bit supported
+    if compr != 0 { if compr != 3 { return 0; } } // no/bitfields only
+
+    uiimg_width    = width;
+    uiimg_height   = height;
+    uiimg_bpp      = bpp;
+    uiimg_data_off = data_off;
+    return 1;
+}
+
+// Row stride in bytes (padded to 4-byte boundary)
+fn _bmp_stride() {
+    let bytes_per_row = uiimg_width * (uiimg_bpp / 8);
+    let pad = bytes_per_row % 4;
+    if pad == 0 { return bytes_per_row; }
+    return bytes_per_row + (4 - pad);
+}
+
+// Get pixel color at (x, y) in image coords — returns 0xAARRGGBB
+fn _bmp_pixel(x, y) {
+    let h = uiimg_height;
+    // For positive height: rows stored bottom-up
+    let mut row = y;
+    if h > 0 { row = h - 1 - y; }
+
+    let stride = _bmp_stride();
+    let byte_off = uiimg_data_off + row * stride + x * (uiimg_bpp / 8);
+    let b = mem_read_u8(UIIMG_LOAD_BUF + byte_off);
+    let g = mem_read_u8(UIIMG_LOAD_BUF + byte_off + 1);
+    let r = mem_read_u8(UIIMG_LOAD_BUF + byte_off + 2);
+    // Compose as 0xFFRRGGBB
+    return 4278190080 + r * 65536 + g * 256 + b;
+}
+
+// ============================================================
+// Load
+// ============================================================
+
+fn uiimg_load(path) {
+    uiimg_loaded = 0;
+    uiimg_status = "Loading: " + path;
+    _uiimg_status_draw();
+
+    let fd = vfs_open(path, O_RDONLY);
+    if fd < 0 {
+        uiimg_status = "Error: cannot open " + path;
+        _uiimg_status_draw();
+        return 0;
+    }
+    let n = vfs_read(fd, UIIMG_LOAD_BUF, UIIMG_MAX_BYTES);
+    vfs_close(fd);
+
+    if n < 54 {
+        uiimg_status = "Error: file too small (" + to_string(n) + " bytes)";
+        _uiimg_status_draw();
+        return 0;
+    }
+
+    let ok = _bmp_parse_header();
+    if ok == 0 {
+        uiimg_status = "Error: not a supported BMP (need 24/32-bit uncompressed)";
+        _uiimg_status_draw();
+        return 0;
+    }
+
+    uiimg_path   = path;
+    uiimg_loaded = 1;
+    uiimg_status = path + "  " + to_string(uiimg_width) + "x" + to_string(uiimg_height)
+        + " " + to_string(uiimg_bpp) + "bpp";
+    _uiimg_status_draw();
+    _uiimg_image_draw();
+    _uiimg_toolbar_draw();
+    return 1;
+}
+
+// ============================================================
+// Drawing
+// ============================================================
+
+fn _uiimg_toolbar_draw() {
+    let wx  = UIIMG_WIN_X;
+    let wy  = UIIMG_WIN_Y + 20;
+    let bg  = ui_theme_panel_color();
+    let bdr = ui_theme_border_color();
+    vesa_fill_rect(wx, wy, UIIMG_WIN_W, UIIMG_TOOLBAR_H, bg);
+    vesa_rect(wx, wy, UIIMG_WIN_W, UIIMG_TOOLBAR_H, bdr);
+
+    ui_button(wx + 4,   wy + 4, 60, 24, "Open");
+    ui_button(wx + 68,  wy + 4, 60, 24, "Close");
+
+    // Zoom buttons
+    if uiimg_zoom == 1 {
+        ui_button_active(wx + 148, wy + 4, 32, 24, "1x");
+        ui_button(wx + 184, wy + 4, 32, 24, "2x");
+    } else {
+        ui_button(wx + 148, wy + 4, 32, 24, "1x");
+        ui_button_active(wx + 184, wy + 4, 32, 24, "2x");
+    }
+
+    // Info
+    if uiimg_loaded == 1 {
+        ui_draw_text(wx + 228, wy + 8, uiimg_status, ui_theme_text_color(), 0);
+    }
+    return 0;
+}
+
+fn _uiimg_status_draw() {
+    if uiimg_open_flag == 0 { return 0; }
+    let wx = UIIMG_WIN_X;
+    let wy = UIIMG_WIN_Y + 20 + UIIMG_TOOLBAR_H;
+    vesa_fill_rect(wx, wy, UIIMG_WIN_W, UIIMG_STATUS_H, ui_theme_panel_color());
+    ui_draw_text(wx + 4, wy + 1, uiimg_status, ui_theme_text_color(), 0);
+    return 0;
+}
+
+fn _uiimg_image_draw() {
+    if uiimg_open_flag == 0 { return 0; }
+    let vx = UIIMG_WIN_X;
+    let vy = UIIMG_WIN_Y + 20 + UIIMG_TOOLBAR_H + UIIMG_STATUS_H;
+    let vw = UIIMG_WIN_W;
+    let vh = UIIMG_VIEW_H;
+
+    // Clear viewport
+    vesa_fill_rect(vx, vy, vw, vh, ui_theme_surface_color());
+
+    if uiimg_loaded == 0 {
+        ui_draw_text(vx + 16, vy + 16, "No image — use 'Open' or shell: imgview <path.bmp>",
+            ui_theme_text_color(), 0);
+        return 0;
+    }
+
+    // Center image in viewport
+    let disp_w = uiimg_width * uiimg_zoom;
+    let disp_h = uiimg_height;
+    if uiimg_height < 0 { disp_h = 0 - uiimg_height; }
+    let disp_h2 = disp_h * uiimg_zoom;
+    let mut ox = (vw - disp_w) / 2;
+    let mut oy = (vh - disp_h2) / 2;
+    if ox < 0 { ox = 0; }
+    if oy < 0 { oy = 0; }
+
+    // Render pixels
+    let real_h = disp_h;
+    let mut py = 0;
+    while py < real_h {
+        if vy + oy + py * uiimg_zoom >= vy + vh { py = real_h; }
+        else {
+            let mut px = 0;
+            while px < uiimg_width {
+                if vx + ox + px * uiimg_zoom < vx + vw {
+                    let color = _bmp_pixel(px, py);
+                    if uiimg_zoom == 1 {
+                        vesa_putpixel(vx + ox + px, vy + oy + py, color);
+                    } else {
+                        vesa_fill_rect(vx + ox + px * 2, vy + oy + py * 2, 2, 2, color);
+                    }
+                }
+                px = px + 1;
+            }
+            py = py + 1;
+        }
+    }
+    return 0;
+}
+
+fn uiimg_draw() {
+    if uiimg_open_flag == 0 { return 0; }
+    let wx = UIIMG_WIN_X;
+    let wy = UIIMG_WIN_Y;
+    let bdr = ui_theme_border_color();
+    vesa_fill_rect(wx, wy, UIIMG_WIN_W, 20, ui_theme_panel_color());
+    ui_draw_text(wx + 8, wy + 2, "Image Viewer", ui_theme_text_color(), 0);
+    vesa_rect(wx, wy, UIIMG_WIN_W, UIIMG_WIN_H, bdr);
+    _uiimg_toolbar_draw();
+    _uiimg_status_draw();
+    _uiimg_image_draw();
+    return 0;
+}
+
+// ============================================================
+// Input
+// ============================================================
+
+fn uiimg_key(k) {
+    if uiimg_open_flag == 0 { return 0; }
+    if k == 27 { uiimg_close(); return 1; }   // Esc
+    if k == 49 { uiimg_zoom = 1; _uiimg_image_draw(); _uiimg_toolbar_draw(); return 1; }  // '1' = 1x
+    if k == 50 { uiimg_zoom = 2; _uiimg_image_draw(); _uiimg_toolbar_draw(); return 1; }  // '2' = 2x
+    return 0;
+}
+
+fn uiimg_click(mx, my) {
+    if uiimg_open_flag == 0 { return 0; }
+    let wx  = UIIMG_WIN_X;
+    let wy  = UIIMG_WIN_Y + 20;
+    // Toolbar hit tests
+    if ui_button_hit(wx + 4,  wy + 4, 60, 24, mx, my) == 1 {
+        // Open: prompt via UI dialog
+        ui_dialog_show(UI_DIALOG_INFO, "Open Image", "Type path in shell: imgview <path.bmp>", 0, 0);
+        return 1;
+    }
+    if ui_button_hit(wx + 68, wy + 4, 60, 24, mx, my) == 1 {
+        uiimg_close();
+        return 1;
+    }
+    if ui_button_hit(wx + 148, wy + 4, 32, 24, mx, my) == 1 {
+        uiimg_zoom = 1;
+        _uiimg_image_draw();
+        _uiimg_toolbar_draw();
+        return 1;
+    }
+    if ui_button_hit(wx + 184, wy + 4, 32, 24, mx, my) == 1 {
+        uiimg_zoom = 2;
+        _uiimg_image_draw();
+        _uiimg_toolbar_draw();
+        return 1;
+    }
+    return 0;
+}
+
+// ============================================================
+// Lifecycle
+// ============================================================
+
+fn uiimg_open() {
+    uiimg_loaded   = 0;
+    uiimg_zoom     = 1;
+    uiimg_status   = "No image — use shell: imgview <path.bmp>";
+    uiimg_open_flag = 1;
+    uiimg_draw();
+    return 0;
+}
+
+fn uiimg_close() {
+    uiimg_open_flag = 0;
+    vesa_fill_rect(UIIMG_WIN_X, UIIMG_WIN_Y, UIIMG_WIN_W, UIIMG_WIN_H, ui_theme_bg_color());
+    return 0;
+}
+
+fn uiimg_is_open() { return uiimg_open_flag; }
+
+print("ui_image.hl loaded");
+print("Image Viewer: 24/32-bit BMP, bottom-up rows, 1x/2x zoom, centered viewport, 480x380 window");

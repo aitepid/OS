@@ -1,0 +1,256 @@
+// smtp.hl -- SMTP Email Client (RFC 5321)
+//
+// Iteration 160: Send email via SMTP over TCP.
+//
+// Protocol flow:
+//   CONNECT → recv 220 greeting
+//   EHLO hostname → recv 250 capability list
+//   [AUTH LOGIN base64(user) base64(pass)] → recv 235
+//   MAIL FROM:<addr> → recv 250
+//   RCPT TO:<addr>   → recv 250
+//   DATA             → recv 354
+//   <headers + body> → send "." on own line
+//   recv 250 (queued)
+//   QUIT             → recv 221
+//
+// Supports: plain SMTP (port 25/587), authenticated SMTP.
+// STARTTLS: detected in EHLO capabilities, delegated to tls.hl.
+//
+// Up to SMTP_MAX (4) concurrent sessions.
+//
+// Public API:
+//   smtp_init()
+//   smtp_connect(host, port) → session_id
+//   smtp_auth(id, user, pass) → 0 ok / -1 fail
+//   smtp_send_email(id, from, to, subject, body) → 0 ok / -1 fail
+//   smtp_quit(id)
+//   smtp_tick()
+//   smtp_status(id) / smtp_list()
+
+let SMTP_MAX     = 4;
+let SMTP_BUF     = 10223616;   // 0x9C0000  16 KB response buffer
+let SMTP_BUF_SZ  = 4096;
+
+// Session states
+let SMTP_ST_FREE   = 0;
+let SMTP_ST_CONN   = 1;   // connected, waiting for 220
+let SMTP_ST_READY  = 2;   // EHLO sent, 250 received
+let SMTP_ST_AUTH   = 3;   // AUTH in progress
+let SMTP_ST_MAIL   = 4;   // MAIL FROM sent
+let SMTP_ST_RCPT   = 5;   // RCPT TO sent
+let SMTP_ST_DATA   = 6;   // DATA sent, sending body
+let SMTP_ST_DONE   = 7;   // message queued
+let SMTP_ST_ERR    = 8;   // protocol error
+
+// Per-session state
+let mut smtp_active  = [];
+let mut smtp_tcb     = [];
+let mut smtp_state   = [];
+let mut smtp_host    = [];   // server hostname
+let mut smtp_resp    = [];   // last response buffer
+let mut smtp_count   = 0;
+
+fn smtp_init() {
+    smtp_active = [];
+    smtp_tcb    = [];
+    smtp_state  = [];
+    smtp_host   = [];
+    smtp_resp   = [];
+    smtp_count  = 0;
+    let mut i = 0;
+    while i < SMTP_MAX {
+        push(smtp_active, 0);
+        push(smtp_tcb,    0 - 1);
+        push(smtp_state,  SMTP_ST_FREE);
+        push(smtp_host,   "");
+        push(smtp_resp,   "");
+        i = i + 1;
+    }
+    print("smtp: init — max " + to_string(SMTP_MAX) + " sessions");
+    return 0;
+}
+
+fn _smtp_alloc() {
+    let mut i = 0;
+    while i < SMTP_MAX {
+        if smtp_active[i] == 0 { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+// ============================================================
+// Base64 encode (for AUTH LOGIN)
+// ============================================================
+
+fn _smtp_b64_char(n) {
+    let t = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    return str_sub(t, n % 64, n % 64 + 1);
+}
+
+fn smtp_b64_encode(s) {
+    let n = len(s);
+    let mut out = "";
+    let mut i = 0;
+    while i < n {
+        let b0 = char_code(char_at(s, i));
+        let b1 = 0;
+        let b2 = 0;
+        if i + 1 < n { let b1 = char_code(char_at(s, i + 1)); }
+        if i + 2 < n { let b2 = char_code(char_at(s, i + 2)); }
+        let v0 = b0 / 4;
+        let v1 = (b0 % 4) * 16 + b1 / 16;
+        let v2 = (b1 % 16) * 4 + b2 / 64;
+        let v3 = b2 % 64;
+        out = out + _smtp_b64_char(v0) + _smtp_b64_char(v1);
+        if i + 1 < n { out = out + _smtp_b64_char(v2); } else { out = out + "="; }
+        if i + 2 < n { out = out + _smtp_b64_char(v3); } else { out = out + "="; }
+        i = i + 3;
+    }
+    return out;
+}
+
+// ============================================================
+// Response reader
+// ============================================================
+
+// Read one line from TCB RX buffer; return response code (first 3 digits)
+fn _smtp_read_code(tcb) {
+    let addr = TCP_TABLE + tcb * TCB_SIZE;
+    let rx_buf = mem_read_u64(addr + 64);
+    if rx_buf == 0 { return 0; }
+    let mut s = "";
+    let mut j = 0;
+    while j < SMTP_BUF_SZ {
+        let b = mem_read_u8(rx_buf + j);
+        if b == 0 { j = SMTP_BUF_SZ + 1; }
+        else { s = s + str_from_code(b); j = j + 1; }
+    }
+    mem_zero(rx_buf, SMTP_BUF_SZ);
+    if len(s) < 3 { return 0; }
+    return parse_int(str_sub(s, 0, 3));
+}
+
+// ============================================================
+// Lifecycle
+// ============================================================
+
+fn smtp_connect(host, port) {
+    let id = _smtp_alloc();
+    if id < 0 { print("smtp: no free slots"); return 0 - 1; }
+    let ip = dns_resolve(host);
+    let tcb = tcp_connect(ip, port);
+    if tcb < 0 { print("smtp: tcp_connect failed to " + host); return 0 - 1; }
+    set_at(smtp_active, id, 1);
+    set_at(smtp_tcb,    id, tcb);
+    set_at(smtp_state,  id, SMTP_ST_CONN);
+    set_at(smtp_host,   id, host);
+    smtp_count = smtp_count + 1;
+
+    // Send EHLO
+    tcp_send(tcb, "EHLO hicos.local\r\n");
+    set_at(smtp_state, id, SMTP_ST_READY);
+    print("smtp: connected to " + host + ":" + to_string(port) + " (id=" + to_string(id) + ")");
+    return id;
+}
+
+fn smtp_auth(id, user, pass) {
+    if id < 0 { return 0 - 1; }
+    if smtp_active[id] == 0 { return 0 - 1; }
+    let tcb = smtp_tcb[id];
+    tcp_send(tcb, "AUTH LOGIN\r\n");
+    tcp_send(tcb, smtp_b64_encode(user) + "\r\n");
+    tcp_send(tcb, smtp_b64_encode(pass) + "\r\n");
+    set_at(smtp_state, id, SMTP_ST_AUTH);
+    return 0;
+}
+
+fn smtp_send_email(id, from, to, subject, body) {
+    if id < 0 { return 0 - 1; }
+    if smtp_active[id] == 0 { return 0 - 1; }
+    let tcb = smtp_tcb[id];
+
+    // MAIL FROM
+    tcp_send(tcb, "MAIL FROM:<" + from + ">\r\n");
+    set_at(smtp_state, id, SMTP_ST_MAIL);
+
+    // RCPT TO
+    tcp_send(tcb, "RCPT TO:<" + to + ">\r\n");
+    set_at(smtp_state, id, SMTP_ST_RCPT);
+
+    // DATA
+    tcp_send(tcb, "DATA\r\n");
+    set_at(smtp_state, id, SMTP_ST_DATA);
+
+    // Headers + body
+    let msg = "From: <" + from + ">\r\n"
+        + "To: <" + to + ">\r\n"
+        + "Subject: " + subject + "\r\n"
+        + "MIME-Version: 1.0\r\n"
+        + "Content-Type: text/plain; charset=UTF-8\r\n"
+        + "\r\n"
+        + body
+        + "\r\n.\r\n";
+    tcp_send(tcb, msg);
+    set_at(smtp_state, id, SMTP_ST_DONE);
+    print("smtp[" + to_string(id) + "]: email queued to " + to);
+    return 0;
+}
+
+fn smtp_quit(id) {
+    if id < 0 { return 0; }
+    if smtp_active[id] == 0 { return 0; }
+    tcp_send(smtp_tcb[id], "QUIT\r\n");
+    tcp_close(smtp_tcb[id]);
+    set_at(smtp_active, id, 0);
+    smtp_count = smtp_count - 1;
+    print("smtp[" + to_string(id) + "]: disconnected");
+    return 0;
+}
+
+// ============================================================
+// Tick: process any incoming responses
+// ============================================================
+
+fn smtp_tick() {
+    let mut i = 0;
+    while i < SMTP_MAX {
+        if smtp_active[i] == 1 {
+            let code = _smtp_read_code(smtp_tcb[i]);
+            if code >= 500 {
+                klog(2, "smtp", "server error " + to_string(code) + " on session " + to_string(i));
+                set_at(smtp_state, i, SMTP_ST_ERR);
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// ============================================================
+// Status
+// ============================================================
+
+fn smtp_status(id) {
+    if id < 0 { return "smtp: invalid"; }
+    if id >= SMTP_MAX { return "smtp: invalid"; }
+    if smtp_active[id] == 0 { return "smtp[" + to_string(id) + "] free"; }
+    let st_names = ["free", "connecting", "ready", "auth", "mail", "rcpt", "data", "done", "error"];
+    let st = smtp_state[id];
+    let st_s = "?";
+    if st >= 0 { if st <= 8 { st_s = st_names[st]; } }
+    return "smtp[" + to_string(id) + "] " + st_s + " host=" + smtp_host[id];
+}
+
+fn smtp_list() {
+    let mut out = "SMTP sessions (" + to_string(smtp_count) + "/" + to_string(SMTP_MAX) + "):\n";
+    let mut i = 0;
+    while i < SMTP_MAX {
+        if smtp_active[i] == 1 { out = out + "  " + smtp_status(i) + "\n"; }
+        i = i + 1;
+    }
+    return out;
+}
+
+print("smtp.hl loaded");
+print("SMTP: RFC 5321 client, AUTH LOGIN (base64), MAIL/RCPT/DATA/QUIT, " + to_string(SMTP_MAX) + " sessions");

@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 170 commands + pipe operator (|):
+// 183 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -62,6 +62,9 @@ fn shell_handle(cmd) {
         serial_print("Telnet:   telnet [host [port]]  telsend <id> <text>  telrecv <id>  telclose <id>  telnet tick");
         serial_print("Regex:    regex match <pat> <text>  regex find <pat> <text>  regex repl <pat> <repl> <text>");
         serial_print("Browser:  browse [url]  (graphical HTTP browser, HTML tag stripping)");
+        serial_print("SMTP:     smtp  smtp connect <host> <port>  smtp auth <id> <user> <pass>  smtp send <id> <from> <to> <subj> <body>  smtp quit <id>");
+        serial_print("Cron:     cron  cron add <secs> <cmd>  cron once <secs> <cmd>  cron rm <id>  cron en <id>  cron dis <id>");
+        serial_print("ImgView:  imgview <path.bmp>  imgview zoom <1|2>  (opens BMP image viewer)");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -799,6 +802,116 @@ fn shell_handle_ext(cmd) {
         return "Navigating to " + url;
     }
 
+    // --- SMTP ---
+    if cmd == "smtp" { return smtp_list(); }
+    if str_starts_with(cmd, "smtp connect ") {
+        let args = str_sub(cmd, 13, len(cmd));
+        let sp = str_find(args, " ");
+        if sp < 0 { return "Usage: smtp connect <host> <port>"; }
+        let host = str_sub(args, 0, sp);
+        let port = parse_int(str_sub(args, sp + 1, len(args)));
+        let id = smtp_connect(host, port);
+        if id < 0 { return "Error: smtp connect failed"; }
+        return "smtp[" + to_string(id) + "] connected to " + host;
+    }
+    if str_starts_with(cmd, "smtp auth ") {
+        let args = str_sub(cmd, 10, len(cmd));
+        let sp1 = str_find(args, " ");
+        if sp1 < 0 { return "Usage: smtp auth <id> <user> <pass>"; }
+        let id = parse_int(str_sub(args, 0, sp1));
+        let rest = str_sub(args, sp1 + 1, len(args));
+        let sp2 = str_find(rest, " ");
+        if sp2 < 0 { return "Usage: smtp auth <id> <user> <pass>"; }
+        let user = str_sub(rest, 0, sp2);
+        let pass = str_sub(rest, sp2 + 1, len(rest));
+        smtp_auth(id, user, pass);
+        return "smtp[" + to_string(id) + "] auth sent";
+    }
+    if str_starts_with(cmd, "smtp send ") {
+        let args = str_sub(cmd, 10, len(cmd));
+        let sp1 = str_find(args, " ");
+        if sp1 < 0 { return "Usage: smtp send <id> <from> <to> <subject> <body>"; }
+        let id = parse_int(str_sub(args, 0, sp1));
+        let rest1 = str_sub(args, sp1 + 1, len(args));
+        let sp2 = str_find(rest1, " ");
+        if sp2 < 0 { return "Usage: smtp send <id> <from> <to> <subject> <body>"; }
+        let from = str_sub(rest1, 0, sp2);
+        let rest2 = str_sub(rest1, sp2 + 1, len(rest1));
+        let sp3 = str_find(rest2, " ");
+        if sp3 < 0 { return "Usage: smtp send <id> <from> <to> <subject> <body>"; }
+        let to = str_sub(rest2, 0, sp3);
+        let rest3 = str_sub(rest2, sp3 + 1, len(rest2));
+        let sp4 = str_find(rest3, " ");
+        if sp4 < 0 { return "Usage: smtp send <id> <from> <to> <subject> <body>"; }
+        let subj = str_sub(rest3, 0, sp4);
+        let body = str_sub(rest3, sp4 + 1, len(rest3));
+        let r = smtp_send_email(id, from, to, subj, body);
+        if r < 0 { return "Error: smtp send failed"; }
+        return "smtp[" + to_string(id) + "] email queued to " + to;
+    }
+    if str_starts_with(cmd, "smtp quit ") {
+        let id = parse_int(str_sub(cmd, 10, len(cmd)));
+        smtp_quit(id);
+        return "smtp[" + to_string(id) + "] disconnected";
+    }
+
+    // --- Cron ---
+    if cmd == "cron" { return cron_list(); }
+    if str_starts_with(cmd, "cron add ") {
+        let args = str_sub(cmd, 9, len(cmd));
+        let sp = str_find(args, " ");
+        if sp < 0 { return "Usage: cron add <secs> <cmd>"; }
+        let secs = parse_int(str_sub(args, 0, sp));
+        let job_cmd = str_sub(args, sp + 1, len(args));
+        let id = cron_add_secs(job_cmd, secs, 1);
+        if id < 0 { return "Error: cron table full"; }
+        return "cron[" + to_string(id) + "] added every " + to_string(secs) + "s: " + job_cmd;
+    }
+    if str_starts_with(cmd, "cron once ") {
+        let args = str_sub(cmd, 10, len(cmd));
+        let sp = str_find(args, " ");
+        if sp < 0 { return "Usage: cron once <secs> <cmd>"; }
+        let secs = parse_int(str_sub(args, 0, sp));
+        let job_cmd = str_sub(args, sp + 1, len(args));
+        let id = cron_add_secs(job_cmd, secs, 0);
+        if id < 0 { return "Error: cron table full"; }
+        return "cron[" + to_string(id) + "] one-shot in " + to_string(secs) + "s: " + job_cmd;
+    }
+    if str_starts_with(cmd, "cron rm ") {
+        let id = parse_int(str_sub(cmd, 8, len(cmd)));
+        cron_remove(id);
+        return "cron[" + to_string(id) + "] removed";
+    }
+    if str_starts_with(cmd, "cron en ") {
+        let id = parse_int(str_sub(cmd, 8, len(cmd)));
+        cron_enable(id);
+        return "cron[" + to_string(id) + "] enabled";
+    }
+    if str_starts_with(cmd, "cron dis ") {
+        let id = parse_int(str_sub(cmd, 9, len(cmd)));
+        cron_disable(id);
+        return "cron[" + to_string(id) + "] disabled";
+    }
+
+    // --- Image Viewer ---
+    if cmd == "imgview" {
+        uiimg_open();
+        return "Image viewer opened — use: imgview <path.bmp>";
+    }
+    if str_starts_with(cmd, "imgview ") {
+        let arg = str_sub(cmd, 8, len(cmd));
+        if str_starts_with(arg, "zoom ") {
+            let z = parse_int(str_sub(arg, 5, len(arg)));
+            if z != 1 { if z != 2 { return "Error: zoom must be 1 or 2"; } }
+            uiimg_zoom = z;
+            return "zoom set to " + to_string(z) + "x";
+        }
+        if uiimg_is_open() == 0 { uiimg_open(); }
+        let r = uiimg_load(arg);
+        if r == 0 { return "Error: failed to load " + arg; }
+        return "Loaded: " + arg;
+    }
+
     if cmd == "ctr" {
         return ctr_list();
     }
@@ -1094,7 +1207,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 170 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse");
+print("shell.hl loaded -- 183 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview");
 
 // Main shell loop (called from kernel_init)
 

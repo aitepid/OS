@@ -2,417 +2,69 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`214`（69 根目录 + 145 内核模块）
-- H-L 总行数：`~56,500`（根 10,900+ + 内核 ~45,600）
-- 内核模块：`145`（编译产出 2,020+ 函数 / 2,280+ 符号）
+- `.hl` 文件：`217`（69 根目录 + 148 内核模块）
+- H-L 总行数：`~59,500`
+- 内核模块：`148`
+- Shell 命令：`183`
+- 最近完成功能迭代：`162`（smtp + cron + ui_image）
+
+## Iteration 162 — ui_image.hl：BMP 图像查看器
+
+- **`bare-kernel/hl/ui_image.hl`** 新增（~343 行）
+  - 480×380 图形窗口，图像区 448×320，工具栏 32px，状态栏 16px
+  - BMP 格式解析：小端 u16/u32/i32 读取；"BM" 签名校验；仅支持 24/32-bit 无压缩
+  - 行 stride = `ceil(bpp*width/32)*4`；正 height → 底部优先行顺序
+  - `_bmp_pixel(x,y)` 返回 0xFFRRGGBB；zoom=1 → `vesa_putpixel`，zoom=2 → `vesa_fill_rect` 2×2
+  - 加载缓冲：UIIMG_LOAD_BUF=0x9D0000（4 MB），通过 `vfs_read` 一次性读入
+  - 工具栏按钮：Open / Close / 1x（active 高亮）/ 2x（active 高亮）
+  - 键盘：Esc=关闭，'1'=1x zoom，'2'=2x zoom
+  - 公开 API：`uiimg_open/close/draw/key/click/load/is_open`
+- **`bare-kernel/hl/wm.hl`** 接入：`wm_draw_all` + `wm_key_dispatch` + `wm_mouse_click`
+- **`bare-kernel/hl/ui_desktop.hl`** dock 第 9 号图标 `UIDSK_APP_IMAGE`，标签 "Img"
+- **`bare-kernel/hl/shell.hl`** 新增 2 条命令：
+  - `imgview <path.bmp>`：打开查看器并加载 BMP
+  - `imgview zoom <1|2>`：切换缩放级别
+
+## Iteration 161 — cron.hl：内核定时任务调度器
+
+- **`bare-kernel/hl/cron.hl`** 新增（~220 行）
+  - CRON_MAX=16 槽位，100 Hz tick 时间基准（interval_secs × 100 = ticks）
+  - 每槽位 7 个状态数组：active / enabled / repeat / interval / next / cmd / fire_cnt
+  - `cron_tick()`：遍历所有槽位，`get_ticks() >= cron_next[i]` 时调用 `shell_handle(cmd)`
+  - 一次性任务：触发后自动移除；周期任务：重新设定 `now + interval`
+  - `cron_setup_system_jobs()`：注册 4 个系统任务（date 30s / dmesg 60s / ws tick 120s / telnet tick 60s）
+  - 便捷包装：`cron_add_secs(cmd, secs, repeat)` → `cron_add(cmd, secs*100, repeat)`
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`cron_init()` + `cron_setup_system_jobs()`
+- **`bare-kernel/hl/shell.hl`** 新增 6 条命令：
+  - `cron` / `cron add <secs> <cmd>` / `cron once <secs> <cmd>`
+  - `cron rm <id>` / `cron en <id>` / `cron dis <id>`
+
+## Iteration 160 — smtp.hl：SMTP 邮件客户端（RFC 5321）
+
+- **`bare-kernel/hl/smtp.hl`** 新增（~257 行）
+  - SMTP_MAX=4 并发会话，SMTP_BUF=0x9C0000（16 KB 响应缓冲）
+  - 9 个会话状态：FREE→CONN→READY→AUTH→MAIL→RCPT→DATA→DONE→ERR
+  - `smtp_b64_encode(s)`：三字节组 → 6-bit 索引 → BASE64 字符，支持 = 填充
+  - `smtp_send_email(id,from,to,subj,body)`：完整 MAIL FROM + RCPT TO + DATA + RFC 5322 头 + body + `\r\n.\r\n`
+  - `smtp_auth(id,user,pass)`：AUTH LOGIN + base64 用户名/密码
+  - `smtp_tick()`：轮询 TCB RX 缓冲，响应码 ≥500 时写入 klog(ERROR)
+  - `smtp_status/list`：格式化会话状态字符串
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`smtp_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 5 条命令：
+  - `smtp` / `smtp connect <host> <port>` / `smtp auth <id> <user> <pass>`
+  - `smtp send <id> <from> <to> <subj> <body>` / `smtp quit <id>`
+
+
+- H-L 总行数：`~47,800`（根 10,044 + 内核 ~37,756）
+- 内核模块：`130`（编译产出 1,700+ 函数 / 2,003+ 符号）
 - `kernel_entry.hl`：`9,428` 行
 - `hl-bootstrap.hl`：`4,306` 行，`208` 函数
 - `stdlib.hl`：`1,385` 行，`143` 函数
-- Shell 命令（`shell.hl`）：`170`
+- `kinterp.hl`：`~1,280` 行
+- Shell 命令（`shell.hl` if cmd ==）：`75`
 - `scripts/*.ps1`：`28`（9,729 行）
-- 最近完成功能迭代：`159`（regex + telnet + ui_browser + 18/18 验证通过）
-
-## Iteration 159 — 图形文本浏览器（ui_browser.hl）
-
-- **`bare-kernel/hl/ui_browser.hl`**: 新建（~280 行，14 个函数）
-  - HTTP/1.0 GET 浏览器，640×440 px 窗口
-  - URL 地址栏：文本输入 + Go / Back / Reload 按钮
-  - 状态栏（16px）：URL + 行数显示
-  - 内容区（396px）：20 行可见，滚动条指示器
-  - HTTP 响应解析：`_uibrowse_http_body` 跳过响应头（\r\n\r\n 分隔）
-  - HTML 标签剥离：`_uibrowse_strip_html` 删除 `<tags>` + 解码 `&amp;` `&lt;` `&gt;` `&quot;`
-  - 语义标签转换：`<br>` `<p>` `<li>` `<h1>` `<h2>` `<div>` → 换行/前缀
-  - 76 字符行宽折行，行数组存入 `uibrowse_lines`
-  - 键盘：Enter（导航）、Esc（关闭）、Bksp（编辑 URL）、A/Z（逐行滚动）
-  - 鼠标：工具栏按钮命中测试
-  - 单步后退历史（`uibrowse_back_url`）
-- **`bare-kernel/hl/wm.hl`**: 三处集成（draw/key/click 路由）
-- **`bare-kernel/hl/ui_desktop.hl`**: `UIDSK_APP_BROWSER=8`，dock 扩展至 9 个图标（"Web"）
-- **`shell.hl`**: 新增 `browse` / `browse <url>` 命令
-
-## Iteration 158 — Telnet 协议（telnet.hl）
-
-- **`bare-kernel/hl/telnet.hl`**: 新建（~270 行，16 个函数）
-  - RFC 854 Telnet 客户端 + 服务端，最多 4 并发会话
-  - IAC 状态机（8 状态）：DATA / IAC / WILL / WONT / DO / DONT / SB / SB_IAC
-  - Option 协商：ECHO(1) / SGA(3) / TTYPE(24) / NAWS(31)
-  - 自动响应：WILL ECHO → DO ECHO；DO TTYPE → WILL TTYPE + SB 窗口尺寸 80×24
-  - `telnet_connect(host, port)` → id（DNS + TCP 连接）
-  - `telnet_listen(port)` → id（服务端 TCP listen）
-  - `telnet_send(id, text)` 自动 IAC 转义（0xFF → 0xFF 0xFF）
-  - `telnet_recv(id)` → 解码纯文本（IAC 序列已剥离）
-  - `telnet_tick()` 扫描所有活跃会话 TCB RX 缓冲区
-  - `telnet_list()` / `telnet_status(id)` 状态诊断
-- **`kernel_init.hl`**: Phase 7 新增 `telnet_init()` 调用
-- **`shell.hl`**: 新增 5 条 telnet 命令（telnet/telsend/telrecv/telclose/telnet tick）
-
-## Iteration 157 — 正则表达式引擎（regex.hl）
-
-- **`bare-kernel/hl/regex.hl`**: 新建（~260 行，15 个函数）
-  - 回溯 NFA 正则引擎（Kernighan & Pike 方法，扩展版）
-  - 支持语法：`. * + ? | [ ] [^] ^ $ ( ) \\ \d \w \s \D \W \S`
-  - 字符类 `[a-z]`：范围匹配，`[^...]` 否定
-  - 贪婪量词：`*`（0+）`+`（1+）`?`（0/1）
-  - `^` 行首锚定，`$` 行尾锚定
-  - **API**:
-    - `regex_match(pat, text)` → 1/0（任意位置匹配）
-    - `regex_search(pat, text)` → `[found, start, end]`（首次匹配位置）
-    - `regex_replace(pat, text, repl)` → 替换首次匹配
-    - `regex_replace_all(pat, text, repl)` → 替换全部匹配
-    - `regex_split(pat, text)` → 分割字符串数组
-- **`shell.hl`**: 新增 3 条 regex 命令（regex match / find / repl）
-
-
-
-## Iteration 156 — 图形绘画应用（ui_paint.hl）
-
-- **`bare-kernel/hl/ui_paint.hl`**: 新建（~310 行，22 个函数）
-  - 图形绘画画布，480×380 px 窗口，白色画布区域
-  - 工具栏（36px）：4 工具按钮 + 8 色板 + 3 笔刷尺寸 + Clear
-  - 4 种工具：Pen（自由画）、Eraser（橡皮擦，3× 尺寸）、Line（贝塞尔直线，Bresenham 算法）、Fill（BFS 洪水填充，≤4096 px）
-  - 8 色调色板：黑/白/红/绿/蓝/黄/橙/灰（常量 ARGB 打包）
-  - 笔刷尺寸：1 / 2 / 4 像素（`vesa_fill_rect` 圆形点）
-  - 键盘快捷键：p=pen, e=eraser, l=line, f=fill, c=clear, Esc=关闭
-  - 鼠标：`uipaint_mouse_press/move/release`（`wm_mouse_move` 转发）
-- **`bare-kernel/hl/wm.hl`**: 四处集成
-  - `wm_draw_all()`: `uipaint_draw()` 条件渲染
-  - `wm_key_dispatch()`: `uipaint_key(k)` 键盘路由
-  - `wm_mouse_click()`: `uipaint_mouse_press(mx, my)` 点击路由
-  - `wm_mouse_move()`: `uipaint_mouse_move(mx, my)` 拖拽路由（新增）
-- **`bare-kernel/hl/ui_desktop.hl`**: `UIDSK_APP_PAINT=7`，dock 扩展至 8 个图标
-- **`shell.hl`**: 新增 `paint` 命令
-
-## Iteration 155 — WebSocket 协议（websocket.hl）
-
-- **`bare-kernel/hl/websocket.hl`**: 新建（~320 行，20 个函数）
-  - RFC 6455 全双工帧协议，基于 tcp.hl TCB 表
-  - 最多 8 个并发连接（`WS_MAX_CONN=8`），scratch buffer 0x990000
-  - 服务端：`ws_listen(port)` → TCP listen + 等待 HTTP Upgrade
-  - 客户端：`ws_connect(host, port, path)` → DNS + TCP + HTTP Upgrade 发送
-  - 帧构建：`ws_frame_build(opcode, payload, mask_key)` 支持 masking（客户端）
-  - 帧解析：`ws_frame_parse(data)` → `[opcode, payload, consumed]`，支持扩展长度
-  - Opcodes：text(1), binary(2), close(8), ping(9), pong(10)
-  - 自动 pong：收到 ping 帧后立即回复
-  - `ws_tick()` 扫描所有 OPEN 连接的 TCB RX 缓冲区
-  - `ws_accept_key(client_key)` 计算 Sec-WebSocket-Accept（SHA-1 近似 + base64）
-  - 状态查询：`ws_status(id)` / `ws_list()`
-- **`kernel_init.hl`**: Phase 7 新增 `ws_init()` 调用
-- **`shell.hl`**: 新增 7 条 ws 命令（ws connect/send/close/ping/info/tick/列表）
-
-## Iteration 154 — JSON 解析器与序列化（json.hl）
-
-- **`bare-kernel/hl/json.hl`**: 新建（~290 行，18 个函数）
-  - RFC 8259 JSON 支持，完全用 Hilbert-Lang 实现，无外部依赖
-  - 类型标记值表示：`[type, value]`，type=0..5（null/bool/num/str/arr/obj）
-  - 构造器：`json_null / json_bool / json_num / json_str / json_arr / json_obj`
-  - **解析**：`json_parse(str)` → 标记值（递归下降解析器）
-    - `_json_parse_string`：转义序列处理（\\n \\t \\r \\\" \\\\）
-    - `_json_parse_number`：带符号整数
-    - `_json_parse_array`：逗号分隔元素列表
-    - `_json_parse_object`：键值对，键必须是字符串
-    - `_json_skip_ws`：跳过空白字符
-  - **序列化**：`json_stringify(val)` → 紧凑 JSON 字符串
-  - **美化输出**：`json_pretty(val, indent)` → 缩进格式字符串
-  - 对象操作：`json_get(obj, key)` / `json_set(obj, key, val)`（不可变更新）
-  - 数组操作：`json_arr_get(arr, idx)` / `json_arr_len(arr)`
-- **`shell.hl`**: 新增 2 条 json 命令（`json parse <str>` / `json fmt <str>`）
-
-
-
-## Iteration 153 — 图形计算器（ui_calculator.hl）
-
-- **`bare-kernel/hl/ui_calculator.hl`**: 新建（~290 行，20 个函数）
-  - 4 功能图形计算器（+ − × ÷），240×320 px 窗口
-  - 4×5 按键网格：数字 0-9、运算符、C / ±/ % / . / =
-  - 状态机：`uicalc_acc`（累加器）+ `uicalc_cur`（当前输入字符串）+ `uicalc_op`（待运算符）
-  - 键盘输入：数字键 0-9、+ - * / = Enter Backspace Esc（关闭）c（清空）
-  - 鼠标点击：`uicalc_click(mx, my)` 逐按钮命中测试
-  - 0 行按中宽按钮（`_uicalc_btn_w` 自适应）
-  - 除零保护：`uicalc_error = 1` → 显示 "Error"
-  - 运算符按钮使用 `ui_button_active`（accent 色），数字键使用 `ui_button`（panel 色）
-  - 当前运算符在显示区右上角实时提示
-- **`bare-kernel/hl/ui_desktop.hl`**: 新增 `UIDSK_APP_CALC=6`，dock 扩展至 7 个应用图标
-  - 点击 "Calc" 图标 → `uicalc_open()`，已开启则调用 `uicalc_draw()` 刷新
-- **`bare-kernel/hl/wm.hl`**: 三处集成
-  - `wm_draw_all()` 新增：`if uicalc_is_open() { uicalc_draw(); }`
-  - `wm_key_dispatch()` 新增：计算器捕获键盘（优先于窗口焦点）
-  - `wm_mouse_click()` 新增：`uicalc_click(mx, my)` 内容区点击路由
-- **`shell.hl`**: 新增 `calc` 命令（→ `uicalc_open()`），命令总数 149 → 150
-
-## Iteration 152 — 最小 HTTP/1.1 服务器（http_server.hl）
-
-- **`bare-kernel/hl/http_server.hl`**: 新建（~270 行，12 个函数）
-  - 监听端口 8080，使用 tcp.hl TCB 表
-  - 支持 GET / HEAD 方法（其余返回 405）
-  - 内建路由：`GET /` → HTML 欢迎页，`GET /status` → 纯文本内核状态
-  - `/proc/*` 路由 → `procfs_read(path)` 代理
-  - 任意路径 → `vfs_open + vfs_read` 静态文件服务
-  - MIME 类型推断：`.html/.css/.js/.json` + 默认 `text/plain`
-  - 全局计数器：`httpd_req_count / httpd_err_count`
-  - `httpd_tick()` 扫描 TCB 表 ESTABLISHED 连接，处理后关闭
-  - `httpd_status()` 返回状态字符串
-- **`kernel_init.hl`**: Phase 7 末尾新增 `httpd_init()` 调用
-- **`shell.hl`**: 新增 4 条 httpd 命令（145 → 149 total）
-  - `httpd`：显示状态
-  - `httpd start`：启动服务器（绑定端口）
-  - `httpd stop`：停止服务器（关闭 TCB）
-  - `httpd tick`：手动触发一次 tick
-
-## Iteration 151 — 联合挂载文件系统（overlay_fs.hl）
-
-- **`bare-kernel/hl/overlay_fs.hl`**: 新建（~300 行，14 个函数）
-  - Linux overlayfs / Docker overlay2 同款两层模型：lower（只读）+ upper（读写）+ merged（合并视图）
-  - 最多 8 个挂载实例（`OVERLAY_MAX=8`）
-  - `overlay_create / overlay_destroy / overlay_mount / overlay_umount`
-  - `overlay_resolve(merged_path)` → `[real_path, layer]`（upper 优先，whiteout 截止）
-  - 写时复制：`overlay_copy_up(id, rel)` 将 lower 文件复制至 upper 后可写
-  - 删除语义：upper 层创建 `.wh.<name>` 文件遮蔽 lower 条目
-  - 目录列表：`overlay_readdir` 合并 upper + lower，过滤 whiteout
-  - `overlay_list()` / `overlay_status(id)`：状态与诊断
-- **`bare-kernel/hl/vfs.hl`**: 新增 `fs_type=5` 分发（`vfs_readdir/mkdir/unlink` 均路由到 overlay 函数）
-- **`kernel_init.hl`**: Phase 5 新增 `overlay_init()` 调用（inotify 之后）
-- **`shell.hl`**: 新增 4 条 overlay 命令（135 → 145 total）
-  - `overlay`：列出所有 overlay 实例
-  - `overlay new <lower> <upper> <merged>`：创建并挂载
-  - `overlay rm <id>`：卸载实例
-  - `overlay info <id>`：查看实例详情
-
-
-
-## Iteration 150 — 跨窗口剪贴板（clipboard.hl）
-
-- **`bare-kernel/hl/clipboard.hl`**: 新建（~120 行，12 个函数）
-  - 全局文本剪贴板：`clipboard_set_text(owner, text)` / `clipboard_get_text()`
-  - 主选择剪贴板（X11 风格）：`clipboard_set/get_selection()`
-  - 8 槽历史环形缓冲：`clipboard_history(idx)` 支持召回旧条目
-  - 64 KB 文本上限，超长自动截断
-  - 所有者窗口跟踪（owner_win_id），`clipboard_release(win_id)` 窗口关闭时释放
-  - Toast 通知：复制时调用 `ui_notify_info("Copied: ...")` 显示预览
-  - `clipboard_copy_text/paste/release` 便捷别名
-- **`bare-kernel/hl/ui_text_editor.hl`**: 新增三组快捷键
-  - `Ctrl+C`（key=3）：复制当前行到剪贴板
-  - `Ctrl+V`（key=22）：粘贴剪贴板文本（可打印 ASCII 逐字符插入）
-  - `Ctrl+S`（key=19）：保存文件 → `uitxed_save()`
-- **`kernel_init.hl`**: Phase 6 新增 `clipboard_init()` 调用（wm_init 之后）
-- **`shell.hl`**: 新增 4 条剪贴板命令（131 → 135 total）
-  - `clipboard`：状态查询
-  - `clip copy <text>`：复制文本到剪贴板
-  - `clip paste`：粘贴当前剪贴板内容
-  - `clip hist`：查看最近一条历史记录
-
-## Iteration 149 — 容器运行时完整集成（HicOS_ContainerRuntime.hl）
-
-- **`HicOS_ContainerRuntime.hl`**: 全面重写（~260 行，15 个函数）
-  - 完整三层隔离：每个容器自动创建 namespace（PID/UTS/IPC/MNT） + cgroup（默认 64 MB 内存限制）+ seccomp（默认 no-net 配置）
-  - 新增字段：`ctr_ns_ids / ctr_sc_ids / ctr_task_idx / ctr_exit_code / ctr_active`
-  - `ctr_create(name, rootfs)` → 调用 `ns_create / cgroup_create / seccomp_profile_no_net`
-  - `ctr_start(id)` → `task_create + ns_enter + cgroup_attach + seccomp_apply`
-  - `ctr_stop(id)` → `task_kill + ns_enter(root) + seccomp_detach`
-  - `ctr_pause/resume(id)` → `task_block/unblock`
-  - `ctr_destroy(id)` → 释放 ns + seccomp profile
-  - `ctr_set_mem_limit / ctr_set_cpu_quota / ctr_set_seccomp`：运行时调整资源与安全策略
-  - `ctr_list()` / `ctr_status(id)`：完整状态字符串
-- **`shell.hl`**: 新增 7 条容器命令（124 → 131 total）
-  - `ctr`：列出全部容器
-  - `ctr new <name> [root]`：创建容器（自动分配 ns + cg + sc）
-  - `ctr start/stop/rm <id>`：容器生命周期
-  - `ctr exec <id> <cmd>`：在容器 ns 上下文执行命令
-  - `ctr info <id>`：容器详情
-
-## Iteration 148 — 系统调用过滤沙箱（seccomp.hl）
-
-- **`bare-kernel/hl/seccomp.hl`**: 新建（~210 行，18 个函数）
-  - 4 种动作：`SECCOMP_ACT_ALLOW / KILL / ERRNO / TRACE`
-  - 5 种比较器：`CMP_ANY / EQ / NEQ / LT / GE`（支持 arg0 值过滤）
-  - 最多 32 个 profile，每 profile 最多 64 条规则，first-match-wins 语义
-  - `seccomp_check(task_idx, syscall_nr, arg0)` → 从 syscall dispatcher 调用
-  - 3 个预设 profile：`seccomp_profile_minimal()`（仅 6 个 syscall）、`seccomp_profile_no_net()`（屏蔽网络 syscall）、`seccomp_profile_audit()`（仅记录）
-  - `seccomp_apply(task_idx, profile_id)` / `seccomp_detach(task_idx)`：per-task 绑定
-  - 命中计数统计（`sc_hit_count[]`）
-- **`kernel_init.hl`**: Phase 9 新增 `seccomp_init()` 调用（secboot_init 之后）
-- **`shell.hl`**: 新增 4 条 seccomp 命令（116 → 124 total）
-  - `seccomp`：列出全部过滤规则
-  - `seccomp new <name>`：创建空 allow-all profile
-  - `seccomp deny <pid> <nr>`：添加 deny 规则
-  - `seccomp apply <tid> <pid>`：将 profile 绑定到任务
-- **`manifest.hl`**: 更新指标
-  - `KERNEL_MODULES=136`, `HL_FILES=205`, `SHELL_COMMANDS=135`, `KERNEL_FUNCTIONS=1840`
-- **发布验证**: 18/18 PASSED（205 HL 文件，136 模块）
-
-## Iteration 147 — 图形文本编辑器（ui_text_editor.hl）
-
-- **`bare-kernel/hl/ui_text_editor.hl`**: 新建（~370 行，26 个函数）
-  - 常量：`UITXED_MAX_LINES=512`，`UITXED_LINE_W=256`，8×16 字符网格
-  - 编辑器状态：`uitxed_lines[]`（字符串数组），光标 (row/col)，滚动偏移，文件名，dirty 标志
-  - 光标导航：`←/→/↑/↓` 移动，`Home/End`，`PgUp/PgDn`（整页翻滚）
-  - 编辑操作：`uitxed_insert_char()`、`uitxed_backspace()`（含跨行合并）、`uitxed_delete_char()`（含跨行合并）、`uitxed_newline()`（行拆分）
-  - VFS 集成：`uitxed_load(path)` — 逐字节读取 `/n` 分割；`uitxed_save()` — 逐行写回；`uitxed_save_as(path)`
-  - 渲染：行号槽（40px 灰底）、当前行高亮（accent color）、光标竖线闪烁、状态栏（行/列 + modified/saved）
-  - 窗口生命周期：`uitxed_open(path)` / `uitxed_close()` / `uitxed_update()` / `uitxed_is_open()`
-  - 键盘处理：可打印 ASCII（32-126）直接插入；功能键 scancodes 映射
-- **`wm.hl`**: 集成文本编辑器渲染与键盘路由
-  - `wm_draw_all()`: 新增 `if uitxed_is_open() { uitxed_update(); }`
-  - `wm_key_dispatch()`: 焦点窗口为编辑器时路由到 `uitxed_handle_key()`
-- **`ui_desktop.hl`**: dock 扩展到 6 个应用启动器
-  - `UIDSK_APP_EDITOR = 5`："Edit" 按钮 → `uitxed_open("")`
-  - `uidsk_app_count = 6`
-- **`shell.hl`**: 新增 2 条编辑器命令（114 → 116 total）
-  - `editor`：打开空白编辑器窗口
-  - `edit <file>`：从 VFS 加载并打开文件（路径不存在时创建新文件）
-  - help Editor 行新增
-
-## Iteration 146 — 进程命名空间隔离（namespace.hl）
-
-- **`bare-kernel/hl/namespace.hl`**: 新建（~280 行，21 个函数）
-  - 支持 4 种命名空间类型：`NS_TYPE_PID=1 / UTS=2 / IPC=4 / MNT=8`；最多 16 个命名空间
-  - 全局并行数组存储：`ns_active / ns_parent / ns_type_mask / ns_hostname / ns_domainname / ns_pid_base / ns_pid_map / ns_ipc_keys / ns_mnt_extra / ns_refcount`
-  - **PID 命名空间**：`ns_pid_alloc()` 为 global_pid 分配 ns-local PID；`ns_get_pid()` 翻译；`ns_pid_base[]` 内部计数器
-  - **UTS 命名空间**：`ns_set/get_hostname()` + `ns_set/get_domainname()` — 每 ns 独立 hostname
-  - **IPC 命名空间**：`ns_ipc_add_key()` 注册可见 key；`ns_ipc_key_valid()` 过滤 SysV 共享内存 key
-  - **MNT 命名空间**：`ns_mnt_add(ns_id, path)` — ns 私有挂载点；`ns_mount_visible()` — 递归父 ns 可见性查询
-  - `ns_create(parent, type_mask)` / `ns_clone(src, mask)` / `ns_destroy(id)` — 生命周期管理
-  - `ns_enter(task_idx, ns_id)`：任务分配（引用计数 +/−）；`ns_get(task_idx)` 查询
-  - `ns_list()` / `ns_status(id)`：状态字符串
-- **`kernel_init.hl`**: Phase 4 新增 `ns_init()` 调用（在 `signal_init_subsystem()` 之后）
-- **`shell.hl`**: 新增 6 条命名空间命令（108 → 114 total）
-  - `ns`：列出全部命名空间
-  - `ns new`：创建 ALL 类型子命名空间（parent = root ns）
-  - `ns info <id>`：显示指定命名空间详情
-  - `ns hostname <id> <name>`：修改 UTS 主机名
-  - `ns enter <task_idx> <ns_id>`：将任务迁入命名空间
-  - `ns del <id>`：销毁空命名空间（refcount=0 才允许）
-  - help Namespace 行新增
-- **`manifest.hl`**: 更新指标
-  - `KERNEL_MODULES=134`, `HL_FILES=203`, `SHELL_COMMANDS=116`, `KERNEL_FUNCTIONS=1760`
-- **发布验证**: 18/18 PASSED（203 HL 文件，134 模块）
-
-## Iteration 145 — HicOS_AudioServer IPC 音频服务
-
-- **`HicOS_AudioServer.hl`**: 新建（~240 行，21 个函数）
-  - IPC 消息协议（消息编号 300–351）：
-    - `AUS_MSG_CONNECT/DISCONNECT`：客户端注册与注销
-    - `AUS_MSG_PLAY/STOP`：流级别播放控制
-    - `AUS_MSG_SET_VOL/SET_MASTER`：流音量与主音量
-    - `AUS_MSG_BEEP`：高16位=频率，低16位=时长打包编码
-    - `AUS_MSG_MUTE/STATUS`：静音与状态查询
-    - `AUS_MSG_ACK/STATUS_REPLY`：服务端应答
-  - `aus_init()`：调用 `ac97_init()` + `mixer_set_master_vol(80%)` + 初始化客户端表
-  - `aus_connect(pid)`：从 `mixer_alloc_stream()` 分配流槽位，绑定 PID
-  - `aus_disconnect(cid)`：停止流 + 释放槽位
-  - `aus_play/stop(cid)`：委托 `mixer_stream_play/stop()`
-  - `aus_set_stream_vol(cid, vol)` / `aus_set_master(pct)`：音量控制
-  - `aus_beep(freq, dur_ms)`：委托 `mixer_beep()`
-  - `aus_mute(enable)`：委托 `ac97_mute()`
-  - `aus_handle_message(src_pid, type, data)`：完整 IPC 分发 + `ipc_send()` ACK
-  - `aus_tick()`：驱动 `mixer_mix()` + 轮询 `ipc_poll()` 处理客户端请求
-  - `aus_status()` / `aus_client_info(cid)`：状态字符串
-
-- **`mixer.hl`**: 新增 AudioServer 兼容包装（4 个函数）
-  - `mixer_alloc_stream()`：分配静默流槽（无需先提供缓冲区）
-  - `mixer_stream_play(sid)` / `mixer_stream_stop(sid)` / `mixer_stream_set_vol(sid, vol)`：AudioServer API 别名
-
-- **`kernel_init.hl`**: Phase 7 新增 `aus_init()` 调用（在 `ac97_init()` 之后）
-  - Phase 7 摘要行更新：新增 AudioServer
-
-- **`shell.hl`**: 新增 7 条 AudioServer 命令（101 → 108 total）
-  - `audioserver` / `aus`：显示 AudioServer 状态
-  - `aus connect`：注册内核 PID=1 为测试客户端
-  - `aus play <cid>` / `aus stop <cid>`：播放/停止指定客户端流
-  - `aus vol <pct>`：设置主音量（同步至 AC97）
-  - `aus beep <hz> <ms>`：通过 AudioServer 触发蜂鸣
-  - help AudioSvr 行新增
-
-- **`manifest.hl`**: 更新指标
-  - `HL_FILES = 201`, `SHELL_COMMANDS = 108`, `KERNEL_FUNCTIONS = 1720`
-
-- **发布验证**: 18/18 PASSED（201 HL 文件，132 模块）
-
-## Iteration 144 — 文件操作完整 + 上下文菜单（ui_files.hl + vfs.hl + shell.hl）
-
-- **`vfs.hl`**: 新增文件操作函数
-  - `vfs_copy(src_path, dst_path)`：512 字节分块读写，0x900000 暂存缓冲区，成功后 `inotify_emit(IN_CREATE)`
-  - `vfs_rename(src_path, dst_path)`：`vfs_copy` + `vfs_unlink` 实现跨路径移动
-  - 修复 `vfs_unlink` 后遗留孤立代码（stray `return 0 - 1; }`）
-- **`ui_files.hl`**: 完整重写（360 行，22 个函数）
-  - 上下文菜单系统：`UIFILES_CTX_{DELETE,NEWFOLD,COPY,CANCEL}`（4 项）
-  - `uifiles_ctx_render()`：覆盖式弹出菜单，带分隔线
-  - `uifiles_ctx_show/hide/handle_click()`：坐标命中测试 + 边界外点击关闭
-  - `uifiles_selected_path()`：返回当前选中项完整路径，正确处理 ".." 跳转
-  - `uifiles_op_delete()`：`vfs_unlink` + 自动刷新
-  - `uifiles_op_new_folder(name)`：`vfs_mkdir` + 自动刷新
-  - `uifiles_op_copy(dst_dir)`：`vfs_copy` 复制选中文件到目标目录
-  - `uifiles_handle_right_click()`：显示上下文菜单
-  - 渲染增强：文件列表 Type 列（DIR/file），滚动条缩略块
-- **`shell.hl`**: 新增 2 条文件命令（101 total）
-  - `cp <src> <dst>`：`vfs_copy` 包装，显示字节数
-  - `mv <src> <dst>`：`vfs_rename` 包装
-  - help Files 行更新（标注 cp/mv 用法）
-- **发布验证**: 18/18 PASSED（200 HL 文件，132 模块）
-
-## Iteration 143 — GPU 2D blit + 脏区追踪（vesa.hl）
-
-- **`vesa.hl`**: 脏区追踪 + blit 加速（新增 8 个函数）
-  - `vesa_dirty_{x1,y1,x2,y2}` + `vesa_dirty`：单 AABB 脏区状态
-  - `vesa_mark_dirty(x,y,w,h)`：扩展 AABB 以覆盖新绘制区域
-  - `vesa_fill_rect_fast()` 改进：绘制后自动调用 `vesa_mark_dirty`
-  - `vesa_flush_dirty()`：将脏区 AABB 通过 `gpu_blit()` 发送到 VirtIO GPU
-  - `vesa_flip()`：`gpu_flip()` 全屏刷新 + 清除脏区标志
-  - `vesa_blit_rect(dst_x,dst_y,src_x,src_y,w,h)`：帧缓冲内区域拷贝（方向感知）
-  - `vesa_blit_from(x,y,w,h,src_addr)`：外部 BGRA32 缓冲区 → 屏幕拷贝
-  - `vesa_dirty_info()`：脏区状态字符串（调试用）
-- **`shell.hl`**: 新增 3 条图形命令（99 total）
-  - `gpu flip`：强制全屏刷新
-  - `gpu dirty`：显示当前脏区状态
-  - `gpu`：增加脏区信息输出
-  - help 新增 Graphics 行
-- **发布验证**: 18/18 PASSED
-  - hicos-uefi.img 重新生成（34,603,008 bytes）
-
-## Iteration 142 — 音频管道增强（audio.hl + mixer.hl）
-
-- **`audio.hl`**: BDL 循环 + 状态跟踪 + mute 控制
-  - `BDL_MAX_ENTRIES = 32`：扩展为 32 条目循环 BDL
-  - 新增状态变量：`ac97_volume_pct` / `ac97_playing` / `ac97_bdl_head` / `ac97_bdl_queued`
-  - `ac97_play()` 重写：循环 BDL 入队，DMA 自动启动（only if idle）
-  - `ac97_is_playing()`：通过 NABM_SR DCH 位轮询 DMA 状态
-  - `ac97_status()`：返回 vol%/playing/bdl_head/SR/CIV 状态字符串
-  - `ac97_mute(enable)`：硬件静音（bit15）/ 恢复原音量
-  - `ac97_init()` 改进：BDL 清零 + 调用 `ac97_set_volume(80%)`
-- **`mixer.hl`**: 主音量 + beep 函数
-  - `mixer_master_vol`：全局主音量（0-255）
-  - `mixer_set_master_vol(vol)`：设置主音量并同步到 `ac97_set_volume()`
-  - `mixer_beep(freq_hz, dur_ms)`：通过混音器生成方波并播放
-  - `mixer_mix()` 改进：混音时应用 `master_scaled = scaled * mixer_master_vol / 255`
-  - `mixer_status()` 增强：显示 master vol
-- **`shell.hl`**: 新增 7 条音频命令（96 total）
-  - `audio`：显示 AC97 驱动状态
-  - `audio vol <0-100>`：设置主音量（同步 AC97 + mixer）
-  - `audio mute` / `audio unmute`：硬件静音控制
-  - `audio beep <hz> <ms>`：通过 mixer 播放指定频率方波
-  - `mixer`：显示混音器流状态
-  - help 新增 Audio 行
-
-## Iteration 141 — 文件管理器+设置中心+桌面dock完善
-
-- **`ui_files.hl`**: 新建（203 行，14 个函数）
-  - `uifiles_init()` / `uifiles_load_dir()` / `uifiles_navigate()`：VFS 目录遍历
-  - `uifiles_render()`: 路径导航栏 + 文件列表双列渲染（VESA）
-  - `uifiles_draw_icon()`: 文件夹 / 文件图标（vesa_rect + vesa_hline/vline）
-  - `uifiles_handle_click()`: 单击选中 + 双击导航（包含 ".." 上级目录）
-  - `uifiles_open()` / `uifiles_close()` / `uifiles_is_open()`：窗口生命周期
-- **`ui_settings.hl`**: 已有（340 行），补充集成
-  - 4 标签页：Display / Audio / Network / About
-  - `uisettings_is_open()` 接口完整
-- **`shell.hl`**: 新增 2 条命令（89 total）
-  - `fm` / `fileman`：打开图形文件管理器窗口
-  - help Files 行更新（标注 graphical）
-- **`ui_desktop.hl`**: dock 扩展到 5 个应用启动器
-  - `UIDSK_APP_FILES = 3`：Files 按钮 → `uifiles_open()`
-  - `UIDSK_APP_SETTINGS = 4`：Cfg 按钮 → `uisettings_open()`
-  - `uidsk_app_count = 5`
-- **`manifest.hl`**: 指标更新
-  - `KERNEL_MODULES = 132`
-  - `HL_FILES = 200`
+- 构建/测试主入口：`hl-bootstrap.cmd test`
+- 最近完成功能迭代：`133`（ext4真实读路径 + GPU桥接 + 词法器修复 + 字体光标）
 
 ## Iteration 140 — kernel_init修正+signal集成+mmap真实分发+WM启动终端窗口+sched_tick
 
