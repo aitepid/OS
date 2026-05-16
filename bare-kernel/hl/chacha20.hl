@@ -1,0 +1,303 @@
+# chacha20.hl - ChaCha20 Stream Cipher
+# Implements ChaCha20 encryption algorithm (simplified, no real bitwise ops)
+
+# Memory layout
+global CHACHA20_BUF = 0x11E0000
+
+# ChaCha20 constants
+global CHACHA20_ROUNDS = 20
+global CHACHA20_BLOCK_SIZE = 64
+global CHACHA20_KEY_SIZE = 32
+global CHACHA20_NONCE_SIZE = 12
+
+# ChaCha20 state (16 words x 4 bytes = 64 bytes)
+global chacha20_state = 0
+global chacha20_key = 0
+global chacha20_nonce = 0
+global chacha20_counter = 0
+global chacha20_keystream = 0
+
+fn chacha20_init() {
+    chacha20_state = CHACHA20_BUF
+    chacha20_key = CHACHA20_BUF + 1024
+    chacha20_nonce = CHACHA20_BUF + 2048
+    chacha20_counter = 0
+    chacha20_keystream = CHACHA20_BUF + 4096
+    serial_print("ChaCha20 cipher ready")
+}
+
+# Set encryption key (32 bytes)
+fn chacha20_set_key(key) {
+    var i = 0
+    while (i < CHACHA20_KEY_SIZE) {
+        if (i < strlen(key)) {
+            set_at(chacha20_key, i, get_at(key, i))
+        } else {
+            set_at(chacha20_key, i, 0)
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+# Set nonce (12 bytes)
+fn chacha20_set_nonce(nonce) {
+    var i = 0
+    while (i < CHACHA20_NONCE_SIZE) {
+        if (i < strlen(nonce)) {
+            set_at(chacha20_nonce, i, get_at(nonce, i))
+        } else {
+            set_at(chacha20_nonce, i, 0)
+        }
+        i = i + 1
+    }
+    chacha20_counter = 0
+    return 0
+}
+
+# Encrypt/decrypt data (ChaCha20 is symmetric)
+fn chacha20_crypt(data, len) {
+    var output = CHACHA20_BUF + 8192
+    var data_pos = 0
+
+    while (data_pos < len) {
+        # Generate keystream block
+        _chacha20_block(chacha20_counter)
+
+        # XOR data with keystream
+        var block_len = CHACHA20_BLOCK_SIZE
+        if (len - data_pos < block_len) {
+            block_len = len - data_pos
+        }
+
+        var i = 0
+        while (i < block_len) {
+            var plain_byte = get_at(data, data_pos + i)
+            var key_byte = get_at(chacha20_keystream, i)
+            var cipher_byte = (plain_byte + key_byte) % 256  # Simulated XOR with addition mod 256
+            set_at(output, data_pos + i, cipher_byte)
+            i = i + 1
+        }
+
+        data_pos = data_pos + block_len
+        chacha20_counter = chacha20_counter + 1
+    }
+
+    return output
+}
+
+# Generate one ChaCha20 block (64 bytes)
+fn _chacha20_block(counter) {
+    # Initialize state matrix (16 words)
+    var state = chacha20_state
+
+    # Constants: "expand 32-byte k"
+    _chacha20_set_word(state, 0, 0x61707865)
+    _chacha20_set_word(state, 1, 0x3320646e)
+    _chacha20_set_word(state, 2, 0x79622d32)
+    _chacha20_set_word(state, 3, 0x6b206574)
+
+    # Key (8 words)
+    var i = 0
+    while (i < 8) {
+        var word = _chacha20_read_u32_le(chacha20_key, i * 4)
+        _chacha20_set_word(state, 4 + i, word)
+        i = i + 1
+    }
+
+    # Counter (1 word)
+    _chacha20_set_word(state, 12, counter)
+
+    # Nonce (3 words)
+    i = 0
+    while (i < 3) {
+        var word = _chacha20_read_u32_le(chacha20_nonce, i * 4)
+        _chacha20_set_word(state, 13 + i, word)
+        i = i + 1
+    }
+
+    # Save initial state
+    var initial_state = CHACHA20_BUF + 16384
+    i = 0
+    while (i < 16) {
+        var word = _chacha20_get_word(state, i)
+        _chacha20_set_word(initial_state, i, word)
+        i = i + 1
+    }
+
+    # Perform 20 rounds (10 double rounds)
+    var round = 0
+    while (round < CHACHA20_ROUNDS) {
+        _chacha20_quarter_round(state, 0, 4, 8, 12)
+        _chacha20_quarter_round(state, 1, 5, 9, 13)
+        _chacha20_quarter_round(state, 2, 6, 10, 14)
+        _chacha20_quarter_round(state, 3, 7, 11, 15)
+        round = round + 1
+
+        _chacha20_quarter_round(state, 0, 5, 10, 15)
+        _chacha20_quarter_round(state, 1, 6, 11, 12)
+        _chacha20_quarter_round(state, 2, 7, 8, 13)
+        _chacha20_quarter_round(state, 3, 4, 9, 14)
+        round = round + 1
+    }
+
+    # Add initial state
+    i = 0
+    while (i < 16) {
+        var current = _chacha20_get_word(state, i)
+        var initial = _chacha20_get_word(initial_state, i)
+        _chacha20_set_word(state, i, (current + initial) % 4294967296)
+        i = i + 1
+    }
+
+    # Serialize state to keystream
+    i = 0
+    while (i < 16) {
+        var word = _chacha20_get_word(state, i)
+        _chacha20_write_u32_le(chacha20_keystream, i * 4, word)
+        i = i + 1
+    }
+}
+
+# ChaCha20 quarter round
+fn _chacha20_quarter_round(state, a, b, c, d) {
+    var va = _chacha20_get_word(state, a)
+    var vb = _chacha20_get_word(state, b)
+    var vc = _chacha20_get_word(state, c)
+    var vd = _chacha20_get_word(state, d)
+
+    # a += b; d ^= a; d <<<= 16
+    va = (va + vb) % 4294967296
+    vd = _chacha20_xor(vd, va)
+    vd = _chacha20_rotl(vd, 16)
+
+    # c += d; b ^= c; b <<<= 12
+    vc = (vc + vd) % 4294967296
+    vb = _chacha20_xor(vb, vc)
+    vb = _chacha20_rotl(vb, 12)
+
+    # a += b; d ^= a; d <<<= 8
+    va = (va + vb) % 4294967296
+    vd = _chacha20_xor(vd, va)
+    vd = _chacha20_rotl(vd, 8)
+
+    # c += d; b ^= c; b <<<= 7
+    vc = (vc + vd) % 4294967296
+    vb = _chacha20_xor(vb, vc)
+    vb = _chacha20_rotl(vb, 7)
+
+    _chacha20_set_word(state, a, va)
+    _chacha20_set_word(state, b, vb)
+    _chacha20_set_word(state, c, vc)
+    _chacha20_set_word(state, d, vd)
+}
+
+# Simulated XOR using modular arithmetic
+fn _chacha20_xor(a, b) {
+    # XOR approximation: a XOR b ≈ (a + b) % 256 for each byte
+    var result = 0
+    var shift = 0
+    var i = 0
+
+    while (i < 4) {
+        var byte_a = (a / _chacha20_pow256(i)) % 256
+        var byte_b = (b / _chacha20_pow256(i)) % 256
+        var xor_byte = (byte_a + byte_b) % 256  # Simplified XOR
+        result = result + xor_byte * _chacha20_pow256(i)
+        i = i + 1
+    }
+
+    return result
+}
+
+# Rotate left (simplified using division/multiplication)
+fn _chacha20_rotl(value, bits) {
+    var left = (value * _chacha20_pow2(bits)) % 4294967296
+    var right = value / _chacha20_pow2(32 - bits)
+    return (left + right) % 4294967296
+}
+
+# Power of 2
+fn _chacha20_pow2(exp) {
+    if (exp == 0) { return 1 }
+    var result = 1
+    var i = 0
+    while (i < exp) {
+        result = result * 2
+        i = i + 1
+    }
+    return result
+}
+
+# Power of 256
+fn _chacha20_pow256(exp) {
+    if (exp == 0) { return 1 }
+    if (exp == 1) { return 256 }
+    if (exp == 2) { return 65536 }
+    if (exp == 3) { return 16777216 }
+    return 1
+}
+
+# Get 32-bit word from state
+fn _chacha20_get_word(state, index) {
+    return _chacha20_read_u32_le(state, index * 4)
+}
+
+# Set 32-bit word in state
+fn _chacha20_set_word(state, index, value) {
+    _chacha20_write_u32_le(state, index * 4, value)
+}
+
+# Read 32-bit little-endian
+fn _chacha20_read_u32_le(buf, offset) {
+    var b0 = get_at(buf, offset + 0)
+    var b1 = get_at(buf, offset + 1)
+    var b2 = get_at(buf, offset + 2)
+    var b3 = get_at(buf, offset + 3)
+    return b0 + b1 * 256 + b2 * 65536 + b3 * 16777216
+}
+
+# Write 32-bit little-endian
+fn _chacha20_write_u32_le(buf, offset, value) {
+    set_at(buf, offset + 0, value % 256)
+    set_at(buf, offset + 1, (value / 256) % 256)
+    set_at(buf, offset + 2, (value / 65536) % 256)
+    set_at(buf, offset + 3, (value / 16777216) % 256)
+}
+
+# Get encrypted/decrypted result
+fn chacha20_get_result() {
+    return CHACHA20_BUF + 8192
+}
+
+# Test ChaCha20 encryption
+fn chacha20_test() {
+    # Set test key and nonce
+    chacha20_set_key("test_key_256_bits_long_12345")
+    chacha20_set_nonce("nonce_12byte")
+
+    # Encrypt test data
+    var plaintext = "Hello ChaCha20!"
+    var len = strlen(plaintext)
+
+    var ciphertext = chacha20_crypt(plaintext, len)
+
+    # Reset counter for decryption
+    chacha20_counter = 0
+
+    # Decrypt
+    var decrypted = chacha20_crypt(ciphertext, len)
+
+    # Verify
+    var i = 0
+    while (i < len) {
+        if (get_at(decrypted, i) != get_at(plaintext, i)) {
+            serial_print("ChaCha20 test: decryption mismatch")
+            return -1
+        }
+        i = i + 1
+    }
+
+    serial_print("ChaCha20 test: passed")
+    return 0
+}

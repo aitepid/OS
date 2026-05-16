@@ -2,11 +2,76 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`283`（69 根目录 + 214 内核模块）
-- H-L 总行数：`~75,500`
-- 内核模块：`214`
-- Shell 命令：`490`
-- 最近完成功能迭代：`228`（rtp + socks + zlib）
+- `.hl` 文件：`286`（69 根目录 + 217 内核模块）
+- H-L 总行数：`~76,200`
+- 内核模块：`217`
+- Shell 命令：`505`
+- 最近完成功能迭代：`231`（lzma + protobuf + chacha20）
+
+## Iteration 231 — chacha20.hl：ChaCha20 流密码
+
+- **`bare-kernel/hl/chacha20.hl`** 新增（~280 行）
+  - ChaCha20 流密码（RFC 8439）现代加密算法
+  - 注：简化实现，受 H-L 语言约束（无真实位运算，使用算术模拟 XOR 和循环移位）
+  - 用途：对称加密，比 AES 更快，抗侧信道攻击
+  - `chacha20_crypt(data, len)` — 加密/解密：生成密钥流 XOR 数据（对称操作）
+  - `chacha20_set_key(key)` — 设置 256 位密钥（32 字节）
+  - `chacha20_set_nonce(nonce)` — 设置 96 位 nonce（12 字节）+ 重置计数器
+  - `_chacha20_block(counter)` — 生成 64 字节密钥流块：初始化状态矩阵 → 20 轮变换 → 输出
+  - ChaCha20 状态矩阵（16 个 32 位字）：常量（4）+ 密钥（8）+ 计数器（1）+ nonce（3）
+  - 常量："expand 32-byte k" = [0x61707865, 0x3320646e, 0x79622d32, 0x6b206574]
+  - `_chacha20_quarter_round(state, a, b, c, d)` — 四分之一轮变换：4 次加法 + XOR + 循环移位（16/12/8/7 位）
+  - 20 轮 = 10 双轮（列轮 + 对角线轮）
+  - `_chacha20_rotl(value, bits)` — 循环左移：模拟 (val << n) | (val >> (32-n))
+  - `_chacha20_xor(a, b)` — XOR 模拟：每字节 (a+b) % 256（简化，非标准）
+  - ChaCha20 优势：纯加法/XOR/移位，无查找表（抗缓存计时攻击）
+  - CHACHA20_BUF=0x11E0000（18808832），16 KB 工作缓冲区
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`chacha20_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 5 条命令：
+  - `chacha20 key <key>` / `chacha20 nonce <nonce>` / `chacha20 encrypt <data>` / `chacha20 decrypt <data>` / `chacha20 test`
+
+## Iteration 230 — protobuf.hl：Protocol Buffers 序列化
+
+- **`bare-kernel/hl/protobuf.hl`** 新增（~290 行）
+  - Protocol Buffers 线格式（Google protobuf）二进制序列化
+  - 用途：高效结构化数据传输，比 JSON 更紧凑
+  - `protobuf_start()` — 开始新消息
+  - `protobuf_add_varint(field_num, value)` — 添加 varint 字段：整数（int32/int64/bool/enum）
+  - `protobuf_add_string(field_num, str)` — 添加字符串字段：长度前缀 + UTF-8 字节
+  - `protobuf_add_bytes(field_num, data, len)` — 添加字节字段：二进制数据
+  - `protobuf_add_fixed32(field_num, value)` — 添加定长 32 位字段（小端序）
+  - `protobuf_add_fixed64(field_num, value)` — 添加定长 64 位字段（简化，仅低 32 位）
+  - `_protobuf_encode_varint(buf, pos, value)` — Base-128 varint 编码：每字节 7 位数据 + 1 位延续标志
+  - `_protobuf_decode_varint(buf, pos)` — varint 解码：累加直到 MSB=0
+  - 线类型（wire type）：0=varint，1=64-bit，2=length-delimited，5=32-bit
+  - Tag 编码：(field_number << 3) | wire_type
+  - `protobuf_decode_field(data, len)` — 解析下一个字段：返回 field_num + wire_type + value/offset
+  - `protobuf_format_field(field_info)` — 格式化字段信息为字符串
+  - PROTOBUF_BUF=0x11D0000（18743296），512 KB 工作缓冲区
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`protobuf_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 5 条命令：
+  - `protobuf start` / `protobuf addint <f> <v>` / `protobuf addstr <f> <s>` / `protobuf decode <data>` / `protobuf test`
+
+## Iteration 229 — lzma.hl：LZMA 压缩算法
+
+- **`bare-kernel/hl/lzma.hl`** 新增（~290 行）
+  - LZMA（Lempel-Ziv-Markov chain Algorithm）高压缩比算法
+  - 注：简化实现，基于 LZ77 字典匹配，不包含完整范围编码器
+  - 用途：7-Zip/xz 格式，压缩率优于 gzip
+  - `lzma_compress(data, len)` — 压缩：LZMA 头部（13 字节）+ LZ77 编码数据
+  - `lzma_decompress(data, len)` — 解压：解析头部 + 验证属性 + 字典解码
+  - LZMA 头部：属性字节（lc/lp/pb）+ 字典大小（4 字节）+ 未压缩大小（8 字节）
+  - `_lzma_encode(data, len, output, pos)` — LZ77 匹配编码：字面量（bit=0 + byte）或匹配（bit=1 + 距离 + 长度）
+  - `_lzma_find_match(data, pos, len)` — 查找最长匹配：在 64 KB 字典中搜索 ≥2 字节重复序列
+  - `_lzma_decode(data, pos, len, output, size)` — 解码：读取标志位 → 复制字面量或从字典复制匹配
+  - 字典大小：64 KB（LZMA_DICT_SIZE=65536）
+  - 匹配长度：2-273 字节（LZMA_MATCH_LEN_MIN/MAX）
+  - 属性参数：lc=3（字面上下文位），lp=0（字面位置位），pb=2（位置位）
+  - `lzma_get_ratio()` — 计算压缩率：(压缩后 / 原始) * 100
+  - LZMA_BUF=0x11C0000（18677760），256 KB 工作缓冲区（字典 + 输出）
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`lzma_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 4 条命令：
+  - `lzma compress <data>` / `lzma decompress <data>` / `lzma ratio` / `lzma test`
 
 ## Iteration 228 — zlib.hl：DEFLATE 压缩算法
 

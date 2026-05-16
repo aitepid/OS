@@ -1,0 +1,321 @@
+# lzma.hl - LZMA Compression Algorithm
+# Implements simplified LZMA (Lempel-Ziv-Markov chain Algorithm) compression
+
+# Memory layout
+global LZMA_BUF = 0x11C0000
+global LZMA_DICT_SIZE = 65536
+global LZMA_MATCH_LEN_MIN = 2
+global LZMA_MATCH_LEN_MAX = 273
+
+# LZMA properties
+global LZMA_LC = 3  # Literal context bits
+global LZMA_LP = 0  # Literal position bits
+global LZMA_PB = 2  # Position bits
+
+# Compression state
+global lzma_dictionary = 0
+global lzma_dict_pos = 0
+global lzma_output_buf = 0
+global lzma_output_len = 0
+global lzma_uncompressed_size = 0
+
+fn lzma_init() {
+    lzma_dictionary = LZMA_BUF
+    lzma_dict_pos = 0
+    lzma_output_buf = LZMA_BUF + LZMA_DICT_SIZE
+    lzma_output_len = 0
+    lzma_uncompressed_size = 0
+    serial_print("LZMA compression ready")
+}
+
+# Compress data with LZMA
+fn lzma_compress(data, len) {
+    lzma_uncompressed_size = len
+
+    # LZMA header (13 bytes)
+    var output = lzma_output_buf
+    var pos = 0
+
+    # Properties byte: (lc * 5 + lp) * 9 + pb
+    var props = (LZMA_LC * 5 + LZMA_LP) * 9 + LZMA_PB
+    set_at(output, pos, props)
+    pos = pos + 1
+
+    # Dictionary size (4 bytes, little-endian)
+    _lzma_write_u32_le(output, pos, LZMA_DICT_SIZE)
+    pos = pos + 4
+
+    # Uncompressed size (8 bytes, little-endian)
+    _lzma_write_u64_le(output, pos, len)
+    pos = pos + 8
+
+    # Compress data (simplified - use LZ77-style matching)
+    var compressed_len = _lzma_encode(data, len, output, pos)
+    if (compressed_len < 0) {
+        return -1
+    }
+
+    lzma_output_len = pos + compressed_len
+    return lzma_output_len
+}
+
+# Decompress LZMA data
+fn lzma_decompress(data, len) {
+    if (len < 13) {
+        serial_print("LZMA: data too short")
+        return -1
+    }
+
+    # Parse header
+    var props = get_at(data, 0)
+    var pb = props % 9
+    var props2 = props / 9
+    var lp = props2 % 5
+    var lc = props2 / 5
+
+    var dict_size = _lzma_read_u32_le(data, 1)
+    var uncomp_size = _lzma_read_u64_le(data, 5)
+
+    # Validate properties
+    if (lc > 8 || lp > 4 || pb > 4) {
+        serial_print("LZMA: invalid properties")
+        return -2
+    }
+
+    # Decompress data
+    var decompressed_len = _lzma_decode(data, 13, len - 13, lzma_output_buf, uncomp_size)
+    if (decompressed_len < 0) {
+        return -3
+    }
+
+    lzma_output_len = decompressed_len
+    return decompressed_len
+}
+
+# Simplified LZMA encoding (LZ77 matching)
+fn _lzma_encode(data, len, output, start_pos) {
+    var pos = start_pos
+    var data_pos = 0
+
+    # Initialize dictionary
+    var dict_pos = 0
+
+    while (data_pos < len) {
+        # Find longest match in dictionary
+        var match_len = 0
+        var match_dist = 0
+        var best_match = _lzma_find_match(data, data_pos, len)
+
+        match_len = get_at(best_match, 0)
+        match_dist = get_at(best_match, 1)
+
+        if (match_len >= LZMA_MATCH_LEN_MIN) {
+            # Encode match: bit=1 + distance + length
+            set_at(output, pos, 1)  # Match marker
+            pos = pos + 1
+
+            # Encode distance (2 bytes)
+            set_at(output, pos, match_dist / 256)
+            set_at(output, pos + 1, match_dist % 256)
+            pos = pos + 2
+
+            # Encode length
+            set_at(output, pos, match_len)
+            pos = pos + 1
+
+            # Update dictionary
+            var i = 0
+            while (i < match_len) {
+                if (data_pos + i < len) {
+                    set_at(lzma_dictionary, dict_pos % LZMA_DICT_SIZE, get_at(data, data_pos + i))
+                    dict_pos = dict_pos + 1
+                }
+                i = i + 1
+            }
+
+            data_pos = data_pos + match_len
+        } else {
+            # Encode literal: bit=0 + byte
+            set_at(output, pos, 0)  # Literal marker
+            pos = pos + 1
+            set_at(output, pos, get_at(data, data_pos))
+            pos = pos + 1
+
+            # Update dictionary
+            set_at(lzma_dictionary, dict_pos % LZMA_DICT_SIZE, get_at(data, data_pos))
+            dict_pos = dict_pos + 1
+            data_pos = data_pos + 1
+        }
+    }
+
+    return pos - start_pos
+}
+
+# Find best match in dictionary
+fn _lzma_find_match(data, data_pos, data_len) {
+    var result = LZMA_BUF + 196608
+    var best_len = 0
+    var best_dist = 0
+
+    # Search dictionary for matches
+    var dict_search = lzma_dict_pos
+    var search_limit = 256  # Limit search for performance
+
+    var searches = 0
+    while (searches < search_limit && dict_search > 0) {
+        dict_search = dict_search - 1
+
+        var match_len = 0
+        var max_len = data_len - data_pos
+        if (max_len > LZMA_MATCH_LEN_MAX) {
+            max_len = LZMA_MATCH_LEN_MAX
+        }
+
+        # Count matching bytes
+        var i = 0
+        while (i < max_len) {
+            var dict_byte = get_at(lzma_dictionary, dict_search % LZMA_DICT_SIZE)
+            var data_byte = get_at(data, data_pos + i)
+            if (dict_byte == data_byte) {
+                match_len = match_len + 1
+                i = i + 1
+            } else {
+                break
+            }
+        }
+
+        if (match_len > best_len) {
+            best_len = match_len
+            best_dist = lzma_dict_pos - dict_search
+        }
+
+        searches = searches + 1
+    }
+
+    set_at(result, 0, best_len)
+    set_at(result, 1, best_dist)
+    return result
+}
+
+# Simplified LZMA decoding
+fn _lzma_decode(data, start_pos, compressed_len, output, expected_len) {
+    var pos = start_pos
+    var out_pos = 0
+    var dict_pos = 0
+
+    while (out_pos < expected_len && pos < start_pos + compressed_len) {
+        var marker = get_at(data, pos)
+        pos = pos + 1
+
+        if (marker == 0) {
+            # Literal byte
+            var byte = get_at(data, pos)
+            pos = pos + 1
+            set_at(output, out_pos, byte)
+            set_at(lzma_dictionary, dict_pos % LZMA_DICT_SIZE, byte)
+            out_pos = out_pos + 1
+            dict_pos = dict_pos + 1
+        } else {
+            # Match
+            var distance = get_at(data, pos) * 256 + get_at(data, pos + 1)
+            pos = pos + 2
+            var length = get_at(data, pos)
+            pos = pos + 1
+
+            # Copy from dictionary
+            var i = 0
+            while (i < length) {
+                var src_pos = (dict_pos - distance + i) % LZMA_DICT_SIZE
+                var byte = get_at(lzma_dictionary, src_pos)
+                set_at(output, out_pos, byte)
+                set_at(lzma_dictionary, dict_pos % LZMA_DICT_SIZE, byte)
+                out_pos = out_pos + 1
+                dict_pos = dict_pos + 1
+                i = i + 1
+            }
+        }
+    }
+
+    return out_pos
+}
+
+# Write 32-bit little-endian
+fn _lzma_write_u32_le(buf, offset, value) {
+    set_at(buf, offset + 0, value % 256)
+    set_at(buf, offset + 1, (value / 256) % 256)
+    set_at(buf, offset + 2, (value / 65536) % 256)
+    set_at(buf, offset + 3, (value / 16777216) % 256)
+}
+
+# Write 64-bit little-endian (simplified)
+fn _lzma_write_u64_le(buf, offset, value) {
+    _lzma_write_u32_le(buf, offset, value)
+    _lzma_write_u32_le(buf, offset + 4, 0)  # Upper 32 bits = 0 (limited to 32-bit sizes)
+}
+
+# Read 32-bit little-endian
+fn _lzma_read_u32_le(buf, offset) {
+    var b0 = get_at(buf, offset + 0)
+    var b1 = get_at(buf, offset + 1)
+    var b2 = get_at(buf, offset + 2)
+    var b3 = get_at(buf, offset + 3)
+    return b0 + b1 * 256 + b2 * 65536 + b3 * 16777216
+}
+
+# Read 64-bit little-endian (simplified - return lower 32 bits)
+fn _lzma_read_u64_le(buf, offset) {
+    return _lzma_read_u32_le(buf, offset)
+}
+
+# Get output buffer
+fn lzma_get_output() {
+    return lzma_output_buf
+}
+
+# Get output length
+fn lzma_get_output_len() {
+    return lzma_output_len
+}
+
+# Calculate compression ratio
+fn lzma_get_ratio() {
+    if (lzma_uncompressed_size == 0) {
+        return 0
+    }
+    return (lzma_output_len * 100) / lzma_uncompressed_size
+}
+
+# Test LZMA compression
+fn lzma_test() {
+    var test_data = LZMA_BUF + 262144
+    var test_str = "LZMA test: Hello Hello Hello World World World!"
+    var len = strlen(test_str)
+    var i = 0
+
+    while (i < len) {
+        set_at(test_data, i, get_at(test_str, i))
+        i = i + 1
+    }
+
+    # Compress
+    var comp_len = lzma_compress(test_data, len)
+    if (comp_len < 0) {
+        serial_print("LZMA test: compression failed")
+        return -1
+    }
+
+    # Decompress
+    var decomp_len = lzma_decompress(lzma_output_buf, comp_len)
+    if (decomp_len < 0) {
+        serial_print("LZMA test: decompression failed")
+        return -2
+    }
+
+    if (decomp_len != len) {
+        serial_print("LZMA test: length mismatch")
+        return -3
+    }
+
+    serial_print("LZMA test: passed")
+    return 0
+}

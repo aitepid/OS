@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 490 commands + pipe operator (|):
+// 505 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -123,6 +123,9 @@ fn shell_handle(cmd) {
         serial_print("RTP:      rtp create <len> <mark>  rtp parse <data>  rtp setpt <pt>  rtp info  rtp test");
         serial_print("SOCKS:    socks proxy <host> <port>  socks auth <user> <pass>  socks connect <host> <port>  socks close  socks test");
         serial_print("ZLIB:     zlib compress <data>  zlib decompress <data>  zlib level <n>  zlib ratio <orig> <comp>  zlib test");
+        serial_print("LZMA:     lzma compress <data>  lzma decompress <data>  lzma ratio  lzma test");
+        serial_print("Protobuf: protobuf start  protobuf addint <f> <v>  protobuf addstr <f> <s>  protobuf decode <data>  protobuf test");
+        serial_print("ChaCha20: chacha20 key <key>  chacha20 nonce <nonce>  chacha20 encrypt <data>  chacha20 decrypt <data>  chacha20 test");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -2836,6 +2839,82 @@ fn shell_handle_ext(cmd) {
     }
     if cmd == "zlib test" { return zlib_test(); }
 
+    // === LZMA commands ===
+    if str_starts_with(cmd, "lzma compress ") {
+        let data = str_sub(cmd, 14, len(cmd));
+        let comp_len = lzma_compress(data, len(data));
+        if comp_len > 0 { return "lzma: compressed " + to_string(len(data)) + " -> " + to_string(comp_len) + " bytes"; }
+        return "lzma: compression failed";
+    }
+    if str_starts_with(cmd, "lzma decompress ") {
+        let data = str_sub(cmd, 16, len(cmd));
+        let decomp_len = lzma_decompress(data, len(data));
+        if decomp_len > 0 { return "lzma: decompressed " + to_string(len(data)) + " -> " + to_string(decomp_len) + " bytes"; }
+        return "lzma: decompression failed (error " + to_string(decomp_len) + ")";
+    }
+    if cmd == "lzma ratio" {
+        let ratio = lzma_get_ratio();
+        return "lzma: compression ratio = " + to_string(ratio) + "%";
+    }
+    if cmd == "lzma test" { return lzma_test(); }
+
+    // === Protobuf commands ===
+    if cmd == "protobuf start" {
+        protobuf_start();
+        return "protobuf: message started";
+    }
+    if str_starts_with(cmd, "protobuf addint ") {
+        let parts = str_split(str_sub(cmd, 16, len(cmd)), " ");
+        if len(parts) >= 2 {
+            let field = parse_int(parts[0]);
+            let value = parse_int(parts[1]);
+            let len = protobuf_add_varint(field, value);
+            return "protobuf: added varint field " + to_string(field) + " = " + to_string(value) + " (total " + to_string(len) + " bytes)";
+        }
+        return "protobuf: usage: protobuf addint <field_num> <value>";
+    }
+    if str_starts_with(cmd, "protobuf addstr ") {
+        let parts = str_split(str_sub(cmd, 16, len(cmd)), " ");
+        if len(parts) >= 2 {
+            let field = parse_int(parts[0]);
+            let str = parts[1];
+            let len = protobuf_add_string(field, str);
+            return "protobuf: added string field " + to_string(field) + " = '" + str + "' (total " + to_string(len) + " bytes)";
+        }
+        return "protobuf: usage: protobuf addstr <field_num> <string>";
+    }
+    if str_starts_with(cmd, "protobuf decode ") {
+        let data = str_sub(cmd, 16, len(cmd));
+        protobuf_decode_start(data);
+        let field = protobuf_decode_field(data, len(data));
+        if field == 0 { return "protobuf: no fields found"; }
+        return "protobuf: " + protobuf_format_field(field);
+    }
+    if cmd == "protobuf test" { return protobuf_test(); }
+
+    // === ChaCha20 commands ===
+    if str_starts_with(cmd, "chacha20 key ") {
+        let key = str_sub(cmd, 13, len(cmd));
+        chacha20_set_key(key);
+        return "chacha20: key set (" + to_string(len(key)) + " bytes)";
+    }
+    if str_starts_with(cmd, "chacha20 nonce ") {
+        let nonce = str_sub(cmd, 15, len(cmd));
+        chacha20_set_nonce(nonce);
+        return "chacha20: nonce set (" + to_string(len(nonce)) + " bytes)";
+    }
+    if str_starts_with(cmd, "chacha20 encrypt ") {
+        let data = str_sub(cmd, 17, len(cmd));
+        let result = chacha20_crypt(data, len(data));
+        return "chacha20: encrypted " + to_string(len(data)) + " bytes";
+    }
+    if str_starts_with(cmd, "chacha20 decrypt ") {
+        let data = str_sub(cmd, 17, len(cmd));
+        let result = chacha20_crypt(data, len(data));
+        return "chacha20: decrypted " + to_string(len(data)) + " bytes";
+    }
+    if cmd == "chacha20 test" { return chacha20_test(); }
+
     return shell_handle(cmd);
 }
 
@@ -2847,7 +2926,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 490 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib");
+print("shell.hl loaded -- 505 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20");
 
 // Main shell loop (called from kernel_init)
 
