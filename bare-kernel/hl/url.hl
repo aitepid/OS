@@ -1,0 +1,210 @@
+// url.hl -- URL Encoding/Decoding (Percent Encoding)
+//
+// URL encoding (percent encoding) encodes special characters for URLs.
+// RFC 3986: Unreserved chars (A-Z, a-z, 0-9, -, _, ., ~) are unencoded.
+// Other chars encoded as %XX (percent + 2 hex digits).
+//
+// Features:
+//   - Encode strings for safe URL transmission
+//   - Decode percent-encoded URLs
+//   - Support for unreserved characters (RFC 3986)
+//   - Handle space as %20 (not +)
+//   - Parse query strings (key=value pairs)
+//
+// Memory:
+//   - URL_BUF: 0x1060000 (17170432), 64 KB encode/decode buffer
+
+let URL_BUF = 17170432;          // 0x1060000
+let URL_BUF_SZ = 65536;          // 64 KB
+let url_len = 0;
+
+fn url_init() {
+    url_len = 0;
+    return 0;
+}
+
+fn url_clear() {
+    url_len = 0;
+    return 0;
+}
+
+fn _url_is_unreserved(c) {
+    if c >= 65 { if c <= 90 { return 1; } }         // A-Z
+    if c >= 97 { if c <= 122 { return 1; } }        // a-z
+    if c >= 48 { if c <= 57 { return 1; } }         // 0-9
+    if c == 45 { return 1; }                        // -
+    if c == 95 { return 1; }                        // _
+    if c == 46 { return 1; }                        // .
+    if c == 126 { return 1; }                       // ~
+    return 0;
+}
+
+fn _url_hex_digit(n) {
+    if n < 10 { return 48 + n; }                    // 0-9
+    return 65 + (n - 10);                           // A-F
+}
+
+fn _url_from_hex(c) {
+    if c >= 48 { if c <= 57 { return c - 48; } }    // 0-9
+    if c >= 65 { if c <= 70 { return c - 65 + 10; } } // A-F
+    if c >= 97 { if c <= 102 { return c - 97 + 10; } } // a-f
+    return 0 - 1;
+}
+
+fn url_encode(data) {
+    url_clear();
+
+    let mut i = 0;
+    while i < len(data) {
+        let c = str_char_code(data, i);
+
+        if _url_is_unreserved(c) == 1 {
+            if url_len >= URL_BUF_SZ { return 0 - 1; }
+            mem_write_byte(URL_BUF + url_len, c);
+            url_len = url_len + 1;
+        } else {
+            if url_len + 3 > URL_BUF_SZ { return 0 - 1; }
+
+            let hi = c / 16;
+            let lo = c % 16;
+
+            mem_write_byte(URL_BUF + url_len, 37);
+            mem_write_byte(URL_BUF + url_len + 1, _url_hex_digit(hi));
+            mem_write_byte(URL_BUF + url_len + 2, _url_hex_digit(lo));
+            url_len = url_len + 3;
+        }
+
+        i = i + 1;
+    }
+
+    return url_len;
+}
+
+fn url_decode(data) {
+    url_clear();
+
+    let mut i = 0;
+    while i < len(data) {
+        let c = str_char_code(data, i);
+
+        if c == 37 {
+            if i + 2 < len(data) {
+                let hi = _url_from_hex(str_char_code(data, i + 1));
+                let lo = _url_from_hex(str_char_code(data, i + 2));
+
+                if hi >= 0 { if lo >= 0 {
+                    let val = hi * 16 + lo;
+                    if url_len >= URL_BUF_SZ { return 0 - 1; }
+                    mem_write_byte(URL_BUF + url_len, val);
+                    url_len = url_len + 1;
+                    i = i + 3;
+                } else {
+                    if url_len >= URL_BUF_SZ { return 0 - 1; }
+                    mem_write_byte(URL_BUF + url_len, c);
+                    url_len = url_len + 1;
+                    i = i + 1;
+                }} else {
+                    if url_len >= URL_BUF_SZ { return 0 - 1; }
+                    mem_write_byte(URL_BUF + url_len, c);
+                    url_len = url_len + 1;
+                    i = i + 1;
+                }
+            } else {
+                if url_len >= URL_BUF_SZ { return 0 - 1; }
+                mem_write_byte(URL_BUF + url_len, c);
+                url_len = url_len + 1;
+                i = i + 1;
+            }
+        } else {
+            if c == 43 {
+                if url_len >= URL_BUF_SZ { return 0 - 1; }
+                mem_write_byte(URL_BUF + url_len, 32);
+                url_len = url_len + 1;
+            } else {
+                if url_len >= URL_BUF_SZ { return 0 - 1; }
+                mem_write_byte(URL_BUF + url_len, c);
+                url_len = url_len + 1;
+            }
+            i = i + 1;
+        }
+    }
+
+    return url_len;
+}
+
+fn url_get_result() {
+    let mut result = "";
+    let mut i = 0;
+    while i < url_len {
+        result = result + str_from_code(mem_read_byte(URL_BUF + i));
+        i = i + 1;
+    }
+    return result;
+}
+
+fn url_parse_query(query) {
+    let mut out = "Query Parameters:\n";
+    let mut i = 0;
+
+    while i < len(query) {
+        let eq_pos = str_index_of(str_sub(query, i, len(query)), "=");
+        let amp_pos = str_index_of(str_sub(query, i, len(query)), "&");
+
+        if eq_pos < 0 { i = len(query); }
+
+        let key_end = i + eq_pos;
+        let key = str_sub(query, i, key_end);
+
+        let value_start = key_end + 1;
+        let value_end = len(query);
+
+        if amp_pos >= 0 {
+            if amp_pos > eq_pos {
+                value_end = i + amp_pos;
+            }
+        }
+
+        let value = str_sub(query, value_start, value_end);
+
+        url_decode(key);
+        let decoded_key = url_get_result();
+
+        url_decode(value);
+        let decoded_value = url_get_result();
+
+        out = out + "  " + decoded_key + " = " + decoded_value + "\n";
+
+        if amp_pos >= 0 {
+            i = value_end + 1;
+        } else {
+            i = len(query);
+        }
+    }
+
+    return out;
+}
+
+fn url_selftest() {
+    let test_data = "hello world";
+    let n = url_encode(test_data);
+    if n < 0 { return "url selftest: encode failed"; }
+
+    let encoded = url_get_result();
+    let expected = "hello%20world";
+
+    if encoded != expected {
+        return "url selftest: encode mismatch (expected=" + expected + ", got=" + encoded + ")";
+    }
+
+    let m = url_decode(encoded);
+    if m < 0 { return "url selftest: decode failed"; }
+
+    let decoded = url_get_result();
+    if decoded != test_data {
+        return "url selftest: roundtrip failed";
+    }
+
+    return "url selftest: pass";
+}
+
+print("url.hl loaded");

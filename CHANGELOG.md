@@ -2,11 +2,61 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`259`（69 根目录 + 190 内核模块）
-- H-L 总行数：`~70,700`
-- 内核模块：`190`
-- Shell 命令：`386`
-- 最近完成功能迭代：`204`（bmp + gif + wav）
+- `.hl` 文件：`262`（69 根目录 + 193 内核模块）
+- H-L 总行数：`~71,200`
+- 内核模块：`193`
+- Shell 命令：`397`
+- 最近完成功能迭代：`207`（base32 + hex + url）
+
+## Iteration 207 — url.hl：URL 编码/解码（百分号编码）
+
+- **`bare-kernel/hl/url.hl`** 新增（~200 行）
+  - URL 编码（百分号编码）— 特殊字符安全传输（RFC 3986）
+  - 非保留字符（A-Z/a-z/0-9/-/\_/./~）→ 直接传输；其他字符 → %XX（百分号 + 2 位十六进制）
+  - `_url_is_unreserved(c)` — 判断字符是否为非保留字符（无需编码）
+  - `url_encode(data)` — 逐字符扫描，非保留字符直通，其他转义为 %XX（hi/lo 十六进制）
+  - `url_decode(data)` — 解析 %XX → 字节值，支持 + → 空格（传统 form 编码）
+  - `_url_hex_digit(n)` / `_url_from_hex(c)` — 0-15 ↔ 0-9/A-F 转换
+  - `url_parse_query(query)` — 解析查询字符串（key=value&key=value）→ 解码 + 格式化输出
+  - `url_selftest()` — "hello world" → "hello%20world" → 解码 → 验证往返
+  - URL_BUF=0x1060000（17170432），64 KB 编码/解码缓冲区
+  - 空格编码为 %20（不是 +），符合 RFC 3986 标准
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`url_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 4 条命令：
+  - `url enc <text>` / `url dec <text>` / `url query <str>` / `url test`
+
+## Iteration 206 — hex.hl：十六进制编码/解码工具
+
+- **`bare-kernel/hl/hex.hl`** 新增（~210 行）
+  - 十六进制编码 — 二进制数据 → 可读十六进制字符串（每字节 → 2 字符）
+  - `hex_encode(data)` — 逐字节转换：hi = byte/16, lo = byte%16 → 0-9/A-F
+  - `hex_decode(data)` — 逐对字符解析：忽略分隔符（空格/冒号/短横线）→ 字节值
+  - `_hex_to_char(n)` — 0-15 → '0'-'9'/'A'-'F'
+  - `_hex_from_char(c)` — '0'-'9'/'A'-'F'/'a'-'f' → 0-15（大小写不敏感）
+  - `hex_dump(data, offset, len)` — 格式化十六进制转储（地址 + 十六进制 + ASCII）
+  - 转储格式：每行 16 字节，8 位地址 + 间隔 + 16×2 字符 + ASCII 视图（不可打印字符显示为 .）
+  - `hex_selftest()` — "abc" → "616263" → 解码 → 验证往返
+  - HEX_BUF=0x1050000（17104896），64 KB 编码/解码缓冲区
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`hex_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 4 条命令：
+  - `hex enc <text>` / `hex dec <text>` / `hex dump <text>` / `hex test`
+
+## Iteration 205 — base32.hl：Base32 编码/解码
+
+- **`bare-kernel/hl/base32.hl`** 新增（~230 行）
+  - Base32 二进制-文本编码 — 使用 32 个可打印字符（RFC 4648）
+  - 字符集：A-Z（26 字符）+ 2-7（6 字符）= 32，大小写不敏感
+  - 编码效率：5 位/字符，8 字节 → 13 字符（含填充）
+  - `base32_encode(data)` — 5 字节块 → 8 Base32 字符，不足部分填充 '='
+  - 位操作模拟：c0 = b0/8, c1 = (b0%8)*4 + b1/64, c2 = (b1/2)%32, ...（纯整数运算）
+  - `base32_decode(data)` — 8 字符 → 5 字节，大小写不敏感（a-z → A-Z）
+  - `_base32_encode_char(n)` — 0-25 → A-Z, 26-31 → 2-7
+  - `_base32_decode_char(c)` — A-Z/a-z → 0-25, 2-7 → 26-31
+  - `base32_selftest()` — "hello" → "NBSWY3DP" → 解码 → 验证往返
+  - BASE32_BUF=0x1040000（17039360），64 KB 编码/解码缓冲区
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`base32_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 3 条命令：
+  - `base32 enc <text>` / `base32 dec <text>` / `base32 test`
 
 ## Iteration 204 — wav.hl：WAV 音频格式解析器
 

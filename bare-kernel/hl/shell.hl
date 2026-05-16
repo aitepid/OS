@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 386 commands + pipe operator (|):
+// 397 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -99,6 +99,9 @@ fn shell_handle(cmd) {
         serial_print("BMP:      bmp load <path>  bmp info  bmp show <x> <y>  bmp test");
         serial_print("GIF:      gif load <path>  gif info  gif palette  gif test");
         serial_print("WAV:      wav load <path>  wav info  wav play  wav test");
+        serial_print("Base32:   base32 enc <text>  base32 dec <text>  base32 test");
+        serial_print("Hex:      hex enc <text>  hex dec <text>  hex dump <text>  hex test");
+        serial_print("URL:      url enc <text>  url dec <text>  url query <str>  url test");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -2241,6 +2244,59 @@ fn shell_handle_ext(cmd) {
     }
     if cmd == "wav test" { return wav_selftest(); }
 
+    // === Base32 encoding commands ===
+    if str_starts_with(cmd, "base32 enc ") {
+        let text = str_sub(cmd, 11, len(cmd));
+        let n = base32_encode(text);
+        if n < 0 { return "base32: encode failed"; }
+        return base32_get_result();
+    }
+    if str_starts_with(cmd, "base32 dec ") {
+        let text = str_sub(cmd, 11, len(cmd));
+        let n = base32_decode(text);
+        if n < 0 { return "base32: decode failed"; }
+        return base32_get_result();
+    }
+    if cmd == "base32 test" { return base32_selftest(); }
+
+    // === Hex encoding commands ===
+    if str_starts_with(cmd, "hex enc ") {
+        let text = str_sub(cmd, 8, len(cmd));
+        let n = hex_encode(text);
+        if n < 0 { return "hex: encode failed"; }
+        return hex_get_result();
+    }
+    if str_starts_with(cmd, "hex dec ") {
+        let text = str_sub(cmd, 8, len(cmd));
+        let n = hex_decode(text);
+        if n < 0 { return "hex: decode failed"; }
+        return hex_get_result();
+    }
+    if str_starts_with(cmd, "hex dump ") {
+        let text = str_sub(cmd, 9, len(cmd));
+        return hex_dump(text, 0, len(text));
+    }
+    if cmd == "hex test" { return hex_selftest(); }
+
+    // === URL encoding commands ===
+    if str_starts_with(cmd, "url enc ") {
+        let text = str_sub(cmd, 8, len(cmd));
+        let n = url_encode(text);
+        if n < 0 { return "url: encode failed"; }
+        return url_get_result();
+    }
+    if str_starts_with(cmd, "url dec ") {
+        let text = str_sub(cmd, 8, len(cmd));
+        let n = url_decode(text);
+        if n < 0 { return "url: decode failed"; }
+        return url_get_result();
+    }
+    if str_starts_with(cmd, "url query ") {
+        let query = str_sub(cmd, 10, len(cmd));
+        return url_parse_query(query);
+    }
+    if cmd == "url test" { return url_selftest(); }
+
     return shell_handle(cmd);
 }
 
@@ -2252,7 +2308,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 386 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav");
+print("shell.hl loaded -- 397 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url");
 
 // Main shell loop (called from kernel_init)
 
