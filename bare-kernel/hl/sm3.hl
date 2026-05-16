@@ -1,0 +1,303 @@
+# sm3.hl - SM3 Cryptographic Hash (simplified)
+# Implements simplified SM3 hash algorithm (Chinese national standard GB/T 32905-2016)
+
+# Memory layout
+global SM3_BUF = 0x12C0000
+global SM3_DIGEST_SIZE = 32  # 256 bits
+
+# SM3 initial values (IV)
+global SM3_IV0 = 1937774191   # 0x7380166f
+global SM3_IV1 = 1226093241   # 0x4914b2b9
+global SM3_IV2 = 388252375    # 0x172442d7
+global SM3_IV3 = 3666478592   # 0xda8a0600
+global SM3_IV4 = 2842636476   # 0xa96f30bc
+global SM3_IV5 = 372324522    # 0x163138aa
+global SM3_IV6 = 3817729613   # 0xe38dee4d
+global SM3_IV7 = 2969243214   # 0xb0fb0e4e
+
+# State
+global sm3_state = 0
+global sm3_buffer = 0
+global sm3_buffer_len = 0
+global sm3_total_len = 0
+
+fn sm3_init() {
+    sm3_state = SM3_BUF
+    sm3_buffer = SM3_BUF + 32
+    sm3_buffer_len = 0
+    sm3_total_len = 0
+
+    # Initialize state with IV
+    _sm3_reset_state()
+
+    serial_print("SM3 cryptographic hash ready")
+}
+
+# Reset state to IV
+fn _sm3_reset_state() {
+    set_at(sm3_state, 0, SM3_IV0 % 256)
+    set_at(sm3_state, 1, (SM3_IV0 / 256) % 256)
+    set_at(sm3_state, 2, (SM3_IV0 / 65536) % 256)
+    set_at(sm3_state, 3, (SM3_IV0 / 16777216) % 256)
+
+    set_at(sm3_state, 4, SM3_IV1 % 256)
+    set_at(sm3_state, 5, (SM3_IV1 / 256) % 256)
+    set_at(sm3_state, 6, (SM3_IV1 / 65536) % 256)
+    set_at(sm3_state, 7, (SM3_IV1 / 16777216) % 256)
+
+    set_at(sm3_state, 8, SM3_IV2 % 256)
+    set_at(sm3_state, 9, (SM3_IV2 / 256) % 256)
+    set_at(sm3_state, 10, (SM3_IV2 / 65536) % 256)
+    set_at(sm3_state, 11, (SM3_IV2 / 16777216) % 256)
+
+    set_at(sm3_state, 12, SM3_IV3 % 256)
+    set_at(sm3_state, 13, (SM3_IV3 / 256) % 256)
+    set_at(sm3_state, 14, (SM3_IV3 / 65536) % 256)
+    set_at(sm3_state, 15, (SM3_IV3 / 16777216) % 256)
+
+    set_at(sm3_state, 16, SM3_IV4 % 256)
+    set_at(sm3_state, 17, (SM3_IV4 / 256) % 256)
+    set_at(sm3_state, 18, (SM3_IV4 / 65536) % 256)
+    set_at(sm3_state, 19, (SM3_IV4 / 16777216) % 256)
+
+    set_at(sm3_state, 20, SM3_IV5 % 256)
+    set_at(sm3_state, 21, (SM3_IV5 / 256) % 256)
+    set_at(sm3_state, 22, (SM3_IV5 / 65536) % 256)
+    set_at(sm3_state, 23, (SM3_IV5 / 16777216) % 256)
+
+    set_at(sm3_state, 24, SM3_IV6 % 256)
+    set_at(sm3_state, 25, (SM3_IV6 / 256) % 256)
+    set_at(sm3_state, 26, (SM3_IV6 / 65536) % 256)
+    set_at(sm3_state, 27, (SM3_IV6 / 16777216) % 256)
+
+    set_at(sm3_state, 28, SM3_IV7 % 256)
+    set_at(sm3_state, 29, (SM3_IV7 / 256) % 256)
+    set_at(sm3_state, 30, (SM3_IV7 / 65536) % 256)
+    set_at(sm3_state, 31, (SM3_IV7 / 16777216) % 256)
+}
+
+# Hash data with SM3
+fn sm3_hash(data, len) {
+    _sm3_reset_state()
+    sm3_buffer_len = 0
+    sm3_total_len = 0
+
+    # Process data
+    var pos = 0
+    while (pos < len) {
+        var byte = get_at(data, pos)
+        set_at(sm3_buffer, sm3_buffer_len, byte)
+        sm3_buffer_len = sm3_buffer_len + 1
+        sm3_total_len = sm3_total_len + 1
+
+        # Process full block (64 bytes)
+        if (sm3_buffer_len == 64) {
+            _sm3_process_block(sm3_buffer)
+            sm3_buffer_len = 0
+        }
+
+        pos = pos + 1
+    }
+
+    # Finalize (padding + length)
+    _sm3_finalize()
+
+    return sm3_state
+}
+
+# Process single 512-bit (64-byte) block
+fn _sm3_process_block(block) {
+    var w = SM3_BUF + 65536  # Message schedule (68 words)
+    var w_prime = SM3_BUF + 131072  # W' (64 words)
+
+    # Expand message (simplified)
+    var i = 0
+    while (i < 16) {
+        var word = _sm3_read32_be(block, i * 4)
+        _sm3_write32(w, i * 4, word)
+        i = i + 1
+    }
+
+    # Extend (simplified version of SM3 extension)
+    i = 16
+    while (i < 68) {
+        var w_i3 = _sm3_read32(w, (i - 3) * 4)
+        var w_i8 = _sm3_read32(w, (i - 8) * 4)
+        var w_i13 = _sm3_read32(w, (i - 13) * 4)
+        var w_i16 = _sm3_read32(w, (i - 16) * 4)
+
+        # Simplified: W[i] = W[i-16] + W[i-13] + W[i-8] + W[i-3] (not exact SM3)
+        var word = (w_i16 + w_i13 + w_i8 + w_i3) % 4294967296
+        _sm3_write32(w, i * 4, word)
+        i = i + 1
+    }
+
+    # Compute W' (simplified)
+    i = 0
+    while (i < 64) {
+        var w_i = _sm3_read32(w, i * 4)
+        var w_i4 = _sm3_read32(w, (i + 4) * 4)
+        var w_prime_i = (w_i + w_i4) % 4294967296  # Simplified XOR as addition
+        _sm3_write32(w_prime, i * 4, w_prime_i)
+        i = i + 1
+    }
+
+    # Compression function (simplified, 16 rounds instead of 64)
+    var a = _sm3_read32(sm3_state, 0)
+    var b = _sm3_read32(sm3_state, 4)
+    var c = _sm3_read32(sm3_state, 8)
+    var d = _sm3_read32(sm3_state, 12)
+    var e = _sm3_read32(sm3_state, 16)
+    var f = _sm3_read32(sm3_state, 20)
+    var g = _sm3_read32(sm3_state, 24)
+    var h = _sm3_read32(sm3_state, 28)
+
+    i = 0
+    while (i < 16) {
+        var w_i = _sm3_read32(w, i * 4)
+        var w_prime_i = _sm3_read32(w_prime, i * 4)
+
+        # Simplified round (not exact SM3 compression)
+        var temp1 = (a + e + w_i) % 4294967296
+        var temp2 = (b + f + w_prime_i) % 4294967296
+
+        h = g
+        g = f
+        f = e
+        e = d
+        d = c
+        c = b
+        b = a
+        a = (temp1 + temp2) % 4294967296
+
+        i = i + 1
+    }
+
+    # Update state
+    _sm3_write32(sm3_state, 0, (_sm3_read32(sm3_state, 0) + a) % 4294967296)
+    _sm3_write32(sm3_state, 4, (_sm3_read32(sm3_state, 4) + b) % 4294967296)
+    _sm3_write32(sm3_state, 8, (_sm3_read32(sm3_state, 8) + c) % 4294967296)
+    _sm3_write32(sm3_state, 12, (_sm3_read32(sm3_state, 12) + d) % 4294967296)
+    _sm3_write32(sm3_state, 16, (_sm3_read32(sm3_state, 16) + e) % 4294967296)
+    _sm3_write32(sm3_state, 20, (_sm3_read32(sm3_state, 20) + f) % 4294967296)
+    _sm3_write32(sm3_state, 24, (_sm3_read32(sm3_state, 24) + g) % 4294967296)
+    _sm3_write32(sm3_state, 28, (_sm3_read32(sm3_state, 28) + h) % 4294967296)
+}
+
+# Finalize hash (padding + length)
+fn _sm3_finalize() {
+    # Append padding bit (0x80)
+    set_at(sm3_buffer, sm3_buffer_len, 128)
+    sm3_buffer_len = sm3_buffer_len + 1
+
+    # Pad with zeros
+    while (sm3_buffer_len < 56) {
+        set_at(sm3_buffer, sm3_buffer_len, 0)
+        sm3_buffer_len = sm3_buffer_len + 1
+    }
+
+    # If buffer too full, process and start new block
+    if (sm3_buffer_len > 56) {
+        while (sm3_buffer_len < 64) {
+            set_at(sm3_buffer, sm3_buffer_len, 0)
+            sm3_buffer_len = sm3_buffer_len + 1
+        }
+        _sm3_process_block(sm3_buffer)
+        sm3_buffer_len = 0
+
+        var i = 0
+        while (i < 56) {
+            set_at(sm3_buffer, i, 0)
+            i = i + 1
+        }
+        sm3_buffer_len = 56
+    }
+
+    # Append length (64-bit big-endian, in bits)
+    var bit_len = sm3_total_len * 8
+    set_at(sm3_buffer, 56, 0)
+    set_at(sm3_buffer, 57, 0)
+    set_at(sm3_buffer, 58, 0)
+    set_at(sm3_buffer, 59, 0)
+    set_at(sm3_buffer, 60, (bit_len / 16777216) % 256)
+    set_at(sm3_buffer, 61, (bit_len / 65536) % 256)
+    set_at(sm3_buffer, 62, (bit_len / 256) % 256)
+    set_at(sm3_buffer, 63, bit_len % 256)
+
+    _sm3_process_block(sm3_buffer)
+}
+
+# Read 32-bit big-endian
+fn _sm3_read32_be(buf, offset) {
+    var b0 = get_at(buf, offset)
+    var b1 = get_at(buf, offset + 1)
+    var b2 = get_at(buf, offset + 2)
+    var b3 = get_at(buf, offset + 3)
+    return b0 * 16777216 + b1 * 65536 + b2 * 256 + b3
+}
+
+# Read 32-bit little-endian
+fn _sm3_read32(buf, offset) {
+    var b0 = get_at(buf, offset)
+    var b1 = get_at(buf, offset + 1)
+    var b2 = get_at(buf, offset + 2)
+    var b3 = get_at(buf, offset + 3)
+    return b0 + b1 * 256 + b2 * 65536 + b3 * 16777216
+}
+
+# Write 32-bit little-endian
+fn _sm3_write32(buf, offset, value) {
+    set_at(buf, offset, value % 256)
+    set_at(buf, offset + 1, (value / 256) % 256)
+    set_at(buf, offset + 2, (value / 65536) % 256)
+    set_at(buf, offset + 3, (value / 16777216) % 256)
+}
+
+# Get hash as hex
+fn sm3_get_hex() {
+    var hex_chars = "0123456789abcdef"
+    var buf = SM3_BUF + 196608
+    var pos = 0
+
+    var i = 0
+    while (i < SM3_DIGEST_SIZE) {
+        var byte = get_at(sm3_state, i)
+        set_at(buf, pos, get_at(hex_chars, byte / 16))
+        pos = pos + 1
+        set_at(buf, pos, get_at(hex_chars, byte % 16))
+        pos = pos + 1
+        i = i + 1
+    }
+
+    set_at(buf, pos, 0)
+    return buf
+}
+
+# Test SM3
+fn sm3_test() {
+    var test_data = "abc"
+
+    sm3_hash(test_data, strlen(test_data))
+    var hex = sm3_get_hex()
+
+    # Test determinism
+    sm3_hash(test_data, strlen(test_data))
+    var hex2 = sm3_get_hex()
+
+    var i = 0
+    var match = 1
+    while (i < 64) {
+        if (get_at(hex, i) != get_at(hex2, i)) {
+            match = 0
+        }
+        i = i + 1
+    }
+
+    if (match == 0) {
+        serial_print("SM3 test: determinism failed")
+        return -1
+    }
+
+    serial_print("SM3 test: passed")
+    return 0
+}

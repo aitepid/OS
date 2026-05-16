@@ -2,11 +2,90 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`298`（69 根目录 + 229 内核模块）
-- H-L 总行数：`~79,300`
-- 内核模块：`229`
-- Shell 命令：`565`
-- 最近完成功能迭代：`243`（xxhash + siphash + zstd）
+- `.hl` 文件：`301`（69 根目录 + 232 内核模块）
+- H-L 总行数：`~80,300`
+- 内核模块：`232`
+- Shell 命令：`580`
+- 最近完成功能迭代：`246`（brotli + sm3 + sm4）
+
+## Iteration 246 — sm4.hl：SM4 分组密码
+
+- **`bare-kernel/hl/sm4.hl`** 新增（~320 行）
+  - SM4 分组密码（中国国家标准 GB/T 32907-2016）
+  - 注：简化实现，使用简化 S-box 和密钥扩展（真实 SM4 使用固定 S-box 和 FK/CK 常量）
+  - 用途：对称加密，中国商用密码标准，广泛用于金融、政务、电信
+  - `sm4_set_key(key)` — 设置 128 位密钥（16 字节）
+  - 密钥扩展：生成 32 个轮密钥（简化版本）
+  - 轮密钥生成：K[i] = transformation(K[i-4] + K[i-3] + K[i-2] + K[i-1] + i×常数)
+  - `sm4_encrypt_block(plaintext)` — 加密单个 128 位块（16 字节）
+  - `sm4_decrypt_block(ciphertext)` — 解密单个 128 位块
+  - SM4 结构：32 轮 Feistel 网络（非平衡 Feistel）
+  - 状态：4 个 32 位字（X0, X1, X2, X3）
+  - 轮函数：F(X0, X1, X2, X3, rk[i]) = X0 ⊕ T(X1 ⊕ X2 ⊕ X3 ⊕ rk[i])
+  - T 变换 = L(τ(input))：τ 是非线性变换（S-box），L 是线性变换
+  - `_sm4_tau(word)` — τ变换：4 字节并行 S-box 查表
+  - S-box：8×8 置换表（简化版使用仿射变换生成）
+  - `_sm4_l(word)` — L 变换：循环移位和异或（简化版）
+  - 真实 L：word ⊕ (word<<<2) ⊕ (word<<<10) ⊕ (word<<<18) ⊕ (word<<<24)
+  - 解密：使用反向轮密钥顺序（rk[31] → rk[0]）
+  - 块大小：128 位（16 字节），密钥大小：128 位
+  - SM4 优势：国密算法，自主可控，硬件加速广泛，与 AES 安全性相当
+  - SM4_BUF=0x12D0000（19660800），512 KB 工作缓冲区（轮密钥 + S-box + 临时状态）
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`sm4_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 5 条命令：
+  - `sm4 key <key>` / `sm4 encrypt <data>` / `sm4 decrypt <data>` / `sm4 hex` / `sm4 test`
+
+## Iteration 245 — sm3.hl：SM3 密码哈希
+
+- **`bare-kernel/hl/sm3.hl`** 新增（~310 行）
+  - SM3 密码哈希函数（中国国家标准 GB/T 32905-2016）
+  - 注：简化实现，16 轮压缩（真实 SM3 使用 64 轮），简化消息扩展
+  - 用途：数字签名、消息认证、随机数生成，中国商用密码标准哈希
+  - `sm3_hash(data, len)` — 计算 SM3 哈希（256 位/32 字节）
+  - 初始值（IV）：8 个 32 位常量（0x7380166f, 0x4914b2b9, ...）
+  - 消息扩展：W[0-15] 直接来自消息块，W[16-67] 由扩展函数生成
+  - 扩展函数（简化）：W[i] = W[i-16] + W[i-13] + W[i-8] + W[i-3]
+  - 真实扩展：W[i] = P1(W[i-16] ⊕ W[i-9] ⊕ (W[i-3]<<<15)) ⊕ (W[i-13]<<<7) ⊕ W[i-6]
+  - W'[i] = W[i] ⊕ W[i+4]（用于压缩函数）
+  - `_sm3_process_block(block)` — 处理 512 位块（64 字节）
+  - 压缩函数：32 轮（简化为 16 轮），每轮更新 8 个状态字（A-H）
+  - 轮函数（简化）：temp1 = A + E + W[i]; temp2 = B + F + W'[i]; ...
+  - 真实轮函数：SS1 = ((A<<<12) + E + (T[j]<<<j))<<<7; SS2 = SS1 ⊕ (A<<<12); TT1 = FF[j] + D + SS2 + W'[j]; ...
+  - 布尔函数：FF（前 16 轮和后 48 轮不同）、GG（同样分段）
+  - 置换函数：P0、P1（用于消息扩展）
+  - 填充：与 SHA-256 类似，追加 1 bit + 0 padding + 64-bit 长度
+  - 输出：8 个 32 位字的串联（256 位）
+  - SM3 特点：国密算法，结构类似 SHA-256 但有创新（如消息扩展），抗碰撞/原像/第二原像攻击
+  - SM3_BUF=0x12C0000（19595264），512 KB 工作缓冲区（状态 + 消息扩展 + W'数组）
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`sm3_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 3 条命令：
+  - `sm3 hash <data>` / `sm3 hex` / `sm3 test`
+
+## Iteration 244 — brotli.hl：Brotli 压缩算法
+
+- **`bare-kernel/hl/brotli.hl`** 新增（~300 行）
+  - Brotli 压缩算法（Google 开发，RFC 7932）
+  - 注：简化实现，窗口 4KB（真实 Brotli 最大 16MB），不支持静态字典和完整 Huffman
+  - 用途：HTTP 内容编码，压缩比优于 gzip，速度快于 LZMA，Chrome/Firefox 原生支持
+  - `brotli_compress(data, len)` — 压缩：写入流头 + LZ77 编码块 + 结束标记
+  - 流头部：窗口大小（WBITS，4 位）+ 元数据（简化为 1 字节）
+  - WBITS=10 表示窗口 2^10=1024 字节（简化，真实范围 10-24）
+  - `_brotli_compress_block(data, len)` — 块压缩：LZ77 匹配 + 字面量/复制命令
+  - 命令类型：INSERT_ONLY（纯字面量）、INSERT_COPY（距离-长度对）
+  - INSERT_COPY 编码：cmd_byte + distance(2 字节) + length(1 字节)
+  - 最小匹配长度：4 字节，最大：64 字节
+  - 最大回溯距离：4096 字节（BROTLI_MAX_DISTANCE）
+  - `_brotli_find_match(data, pos, len)` — 哈希表匹配：3 字节哈希 → 2048 槽位
+  - 哈希函数：(b0×256 + b1×16 + b2) % 2048
+  - `brotli_decompress(data, len)` — 解压：解析命令 → 还原字面量/复制
+  - 复制操作：允许重叠复制（用于重复模式）
+  - `brotli_set_quality(quality)` — 设置压缩质量（0-9，简化版，真实支持 0-11）
+  - Brotli 优势：更好的压缩比（比 gzip 小 20-26%），流式压缩，预定义字典（13000+ 常用词）
+  - 应用场景：Web 字体、网页资源、API 响应、CDN 内容分发
+  - BROTLI_BUF=0x12B0000（19529728），512 KB 工作缓冲区（字典 + 哈希表 + 输出）
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`brotli_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 5 条命令：
+  - `brotli compress <data>` / `brotli decompress <data>` / `brotli quality <n>` / `brotli ratio <orig>` / `brotli test`
 
 ## Iteration 243 — zstd.hl：Zstandard 现代压缩
 

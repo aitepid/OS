@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 565 commands + pipe operator (|):
+// 580 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -138,6 +138,9 @@ fn shell_handle(cmd) {
         serial_print("xxHash:   xxhash seed <n>  xxhash hash <data>  xxhash64 <data>  xxhash hex  xxhash test");
         serial_print("SipHash:  siphash key <key>  siphash hash <data>  siphash hex  siphash result  siphash test");
         serial_print("Zstd:     zstd compress <data>  zstd decompress <data>  zstd level <n>  zstd ratio <orig>  zstd test");
+        serial_print("Brotli:   brotli compress <data>  brotli decompress <data>  brotli quality <n>  brotli ratio <orig>  brotli test");
+        serial_print("SM3:      sm3 hash <data>  sm3 hex  sm3 test");
+        serial_print("SM4:      sm4 key <key>  sm4 encrypt <data>  sm4 decrypt <data>  sm4 hex  sm4 test");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -3208,6 +3211,64 @@ fn shell_handle_ext(cmd) {
     }
     if cmd == "zstd test" { return zstd_test(); }
 
+    // === Brotli commands ===
+    if str_starts_with(cmd, "brotli compress ") {
+        let data = str_sub(cmd, 16, len(cmd));
+        let comp_len = brotli_compress(data, len(data));
+        if comp_len > 0 { return "brotli: compressed " + to_string(len(data)) + " -> " + to_string(comp_len) + " bytes"; }
+        return "brotli: compression failed";
+    }
+    if str_starts_with(cmd, "brotli decompress ") {
+        let data = str_sub(cmd, 18, len(cmd));
+        let decomp_len = brotli_decompress(data, len(data));
+        if decomp_len > 0 { return "brotli: decompressed " + to_string(len(data)) + " -> " + to_string(decomp_len) + " bytes"; }
+        return "brotli: decompression failed (error " + to_string(decomp_len) + ")";
+    }
+    if str_starts_with(cmd, "brotli quality ") {
+        let quality = parse_int(str_sub(cmd, 15, len(cmd)));
+        let result = brotli_set_quality(quality);
+        if result == 0 { return "brotli: quality set to " + to_string(quality); }
+        return "brotli: invalid quality (must be 0-9)";
+    }
+    if str_starts_with(cmd, "brotli ratio ") {
+        let orig = parse_int(str_sub(cmd, 13, len(cmd)));
+        let ratio = brotli_get_ratio(orig);
+        return "brotli: compression ratio = " + to_string(ratio) + "%";
+    }
+    if cmd == "brotli test" { return brotli_test(); }
+
+    // === SM3 commands ===
+    if str_starts_with(cmd, "sm3 hash ") {
+        let data = str_sub(cmd, 9, len(cmd));
+        sm3_hash(data, len(data));
+        return "sm3: " + sm3_get_hex();
+    }
+    if cmd == "sm3 hex" {
+        return "sm3: " + sm3_get_hex();
+    }
+    if cmd == "sm3 test" { return sm3_test(); }
+
+    // === SM4 commands ===
+    if str_starts_with(cmd, "sm4 key ") {
+        let key = str_sub(cmd, 8, len(cmd));
+        let result = sm4_set_key(key);
+        if result == 0 { return "sm4: key set (16 bytes)"; }
+        return "sm4: key too short (need 16 bytes)";
+    }
+    if str_starts_with(cmd, "sm4 encrypt ") {
+        let data = str_sub(cmd, 12, len(cmd));
+        let ciphertext = sm4_encrypt_block(data);
+        if ciphertext != 0 { return "sm4: encrypted -> " + sm4_get_hex(ciphertext); }
+        return "sm4: encryption failed";
+    }
+    if str_starts_with(cmd, "sm4 decrypt ") {
+        let data = str_sub(cmd, 12, len(cmd));
+        let plaintext = sm4_decrypt_block(data);
+        if plaintext != 0 { return "sm4: decrypted"; }
+        return "sm4: decryption failed";
+    }
+    if cmd == "sm4 test" { return sm4_test(); }
+
     return shell_handle(cmd);
 }
 
@@ -3219,7 +3280,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 565 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd");
+print("shell.hl loaded -- 580 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4");
 
 // Main shell loop (called from kernel_init)
 

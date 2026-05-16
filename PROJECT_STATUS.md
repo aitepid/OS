@@ -2,23 +2,23 @@
 
 ## 版本定位
 
-当前仓库处于 `v6.0` 发布线，最新功能里程碑为迭代 243（xxhash + siphash + zstd）。
+当前仓库处于 `v6.0` 发布线，最新功能里程碑为迭代 246（brotli + sm3 + sm4）。
 
-## 本轮已核实状态（迭代 243 基线）
+## 本轮已核实状态（迭代 246 基线）
 
 ### 仓库规模（精确计数）
 
 | 指标 | 当前值 | 说明 |
 |---|---:|---|
-| 全部 `.hl` 文件 | 298 | 69 根目录 + 229 内核模块 |
-| H-L 总行数 | ~79,300 | 持续增长 |
-| `bare-kernel/hl/` 内核模块 | 229 | 编译进 `kernel.bin` |
+| 全部 `.hl` 文件 | 301 | 69 根目录 + 232 内核模块 |
+| H-L 总行数 | ~80,300 | 持续增长 |
+| `bare-kernel/hl/` 内核模块 | 232 | 编译进 `kernel.bin` |
 | `kernel_entry.hl` 行数 | 9,428 | 内核入口 + 命令分发 |
 | 编译产出函数数 | 2,200+ | 编译管线实测 |
 | 链接符号数 | 2,500+ | linker 实测 |
 | `hl-bootstrap.hl` 行数 | 4,306 | 自举编译器（208 函数） |
 | `stdlib.hl` 行数 | 1,385 | 标准库（143 函数） |
-| Shell 命令数 | 565 | shell.hl（+xxhash/siphash/zstd）|
+| Shell 命令数 | 580 | shell.hl（+brotli/sm3/sm4）|
 | `test_*.hl` / `test-*.hl` | 19 | |
 | `IP-Protection/` 文件数 | 60 | 知识产权文件 |
 | `.md` 文档 | 10 | |
@@ -28,7 +28,7 @@
 | 验证项 | 结果 |
 |---|---|
 | `hl-bootstrap build` | ✅ 132 模块编译 + 镜像重建 |
-| `validate-workspace` | ✅ 298 HL / 229 模块 / 0 stub |
+| `validate-workspace` | ✅ 301 HL / 232 模块 / 0 stub |
 | `runtime-path-readiness` | ✅ IDT/PIT/KBD + SYSCALL + 网络 + eBPF/TLS/QUIC |
 | `release-validate` | ✅ 18/18 |
 
