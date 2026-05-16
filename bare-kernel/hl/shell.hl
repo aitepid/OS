@@ -28,6 +28,7 @@ fn shell_handle(cmd) {
         serial_print("Firewall: fw  firewall  fw allow|block <port>  fw flush  fw policy input|output drop|accept");
         serial_print("Hardware: lspci lsusb cpus dev beep ahci usb acpi");
         serial_print("Audio:    audio  audio vol <0-100>  audio mute/unmute  audio beep <hz> <ms>  mixer");
+        serial_print("Graphics: gpu  gpu flip  gpu dirty");
         serial_print("Services: services svc start|stop|status <name>");
         serial_print("FS Events:inotify  watch <path>  pty [alloc|info <id>]");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
@@ -540,10 +541,18 @@ fn shell_handle_ext(cmd) {
         if gpu_initialized == 1 {
             print("GPU: " + to_string(gpu_display_w) + "x" + to_string(gpu_display_h) +
                   " fb=0x" + format_hex(gpu_fb_base(), 8) + " [active]");
+            print(vesa_dirty_info());
         } else {
             print("GPU: not initialized");
         }
         return "";
+    }
+    if cmd == "gpu flip" {
+        vesa_flip();
+        return "GPU: full-screen flip submitted";
+    }
+    if cmd == "gpu dirty" {
+        return vesa_dirty_info();
     }
     if cmd == "ext4" {
         if ext4_ready == 1 {
@@ -654,7 +663,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 96 commands + pipe(|) + echo>redirect + inotify + watch + pty + audio");
+print("shell.hl loaded -- 99 commands + pipe(|) + echo>redirect + inotify + watch + pty + audio + gpu");
 
 // Main shell loop (called from kernel_init)
 
