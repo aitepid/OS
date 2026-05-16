@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 160 commands + pipe operator (|):
+// 170 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -24,6 +24,9 @@
 //   Paint: paint (graphical canvas)
 //   JSON: json parse  json fmt
 //   WebSocket: ws  ws connect  ws send  ws close  ws ping  ws info  ws tick
+//   Telnet: telnet [host [port]]  telsend <id> <text>  telrecv <id>  telclose <id>  telnet tick
+//   Regex: regex match <pat> <text>  regex find <pat> <text>  regex repl <pat> <repl> <text>
+//   Browser: browse [url]
 //   Shell pipe: cmd1 | cmd2
 
 fn shell_handle(cmd) {
@@ -56,6 +59,9 @@ fn shell_handle(cmd) {
         serial_print("Paint:    paint (graphical canvas: pen/eraser/line/fill)");
         serial_print("JSON:     json parse <str>  json fmt <str>");
         serial_print("WebSock:  ws  ws connect <host> <port> [path]  ws send <id> <msg>  ws close/ping/info/tick");
+        serial_print("Telnet:   telnet [host [port]]  telsend <id> <text>  telrecv <id>  telclose <id>  telnet tick");
+        serial_print("Regex:    regex match <pat> <text>  regex find <pat> <text>  regex repl <pat> <repl> <text>");
+        serial_print("Browser:  browse [url]  (graphical HTTP browser, HTML tag stripping)");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -707,6 +713,92 @@ fn shell_handle_ext(cmd) {
         return "ws: tick processed";
     }
 
+    // --- Telnet ---
+    if cmd == "telnet" {
+        return telnet_list();
+    }
+    if str_starts_with(cmd, "telnet ") {
+        let rest = str_sub(cmd, 7, len(cmd));
+        let sp = str_find(rest, " ");
+        let host = rest;
+        let port = 23;
+        if sp >= 0 { host = str_sub(rest, 0, sp); port = parse_int(str_sub(rest, sp + 1, len(rest))); }
+        let id = telnet_connect(host, port);
+        if id < 0 { return "Error: telnet connect failed"; }
+        return "Telnet id=" + to_string(id) + " connected to " + host + ":" + to_string(port);
+    }
+    if str_starts_with(cmd, "telsend ") {
+        let rest = str_sub(cmd, 8, len(cmd));
+        let sp = str_find(rest, " ");
+        if sp < 0 { return "Usage: telsend <id> <text>"; }
+        let id = parse_int(str_sub(rest, 0, sp));
+        let text = str_sub(rest, sp + 1, len(rest));
+        telnet_send(id, text + "\r\n");
+        return "Sent to telnet[" + to_string(id) + "]";
+    }
+    if str_starts_with(cmd, "telrecv ") {
+        let id = parse_int(str_sub(cmd, 8, len(cmd)));
+        let data = telnet_recv(id);
+        if len(data) == 0 { return "(no data)"; }
+        return data;
+    }
+    if str_starts_with(cmd, "telclose ") {
+        let id = parse_int(str_sub(cmd, 9, len(cmd)));
+        telnet_close(id);
+        return "telnet[" + to_string(id) + "] closed";
+    }
+    if cmd == "telnet tick" {
+        telnet_tick();
+        return "telnet: tick processed";
+    }
+
+    // --- Regex ---
+    if str_starts_with(cmd, "regex match ") {
+        let rest = str_sub(cmd, 12, len(cmd));
+        let sp = str_find(rest, " ");
+        if sp < 0 { return "Usage: regex match <pattern> <text>"; }
+        let pat  = str_sub(rest, 0, sp);
+        let text = str_sub(rest, sp + 1, len(rest));
+        let r = regex_match(pat, text);
+        if r == 1 { return "match: YES"; }
+        return "match: NO";
+    }
+    if str_starts_with(cmd, "regex find ") {
+        let rest = str_sub(cmd, 11, len(cmd));
+        let sp = str_find(rest, " ");
+        if sp < 0 { return "Usage: regex find <pattern> <text>"; }
+        let pat  = str_sub(rest, 0, sp);
+        let text = str_sub(rest, sp + 1, len(rest));
+        let r = regex_search(pat, text);
+        if r[0] == 0 { return "not found"; }
+        return "found at [" + to_string(r[1]) + ".." + to_string(r[2]) + "]: "
+            + str_sub(text, r[1], r[2]);
+    }
+    if str_starts_with(cmd, "regex repl ") {
+        let rest = str_sub(cmd, 11, len(cmd));
+        let sp1 = str_find(rest, " ");
+        if sp1 < 0 { return "Usage: regex repl <pattern> <repl> <text>"; }
+        let pat  = str_sub(rest, 0, sp1);
+        let rest2 = str_sub(rest, sp1 + 1, len(rest));
+        let sp2 = str_find(rest2, " ");
+        if sp2 < 0 { return "Usage: regex repl <pattern> <repl> <text>"; }
+        let repl = str_sub(rest2, 0, sp2);
+        let text = str_sub(rest2, sp2 + 1, len(rest2));
+        return regex_replace(pat, text, repl);
+    }
+
+    // --- Browser ---
+    if cmd == "browse" {
+        uibrowse_open();
+        return "Browser opened";
+    }
+    if str_starts_with(cmd, "browse ") {
+        let url = str_sub(cmd, 7, len(cmd));
+        if uibrowse_is_open() == 0 { uibrowse_open(); }
+        uibrowse_navigate(url);
+        return "Navigating to " + url;
+    }
+
     if cmd == "ctr" {
         return ctr_list();
     }
@@ -1002,7 +1094,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 160 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws");
+print("shell.hl loaded -- 170 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse");
 
 // Main shell loop (called from kernel_init)
 

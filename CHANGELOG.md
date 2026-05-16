@@ -2,17 +2,67 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`211`（69 根目录 + 142 内核模块）
-- H-L 总行数：`~54,800`（根 10,900+ + 内核 ~43,900）
-- 内核模块：`142`（编译产出 1,950+ 函数 / 2,200+ 符号）
+- `.hl` 文件：`214`（69 根目录 + 145 内核模块）
+- H-L 总行数：`~56,500`（根 10,900+ + 内核 ~45,600）
+- 内核模块：`145`（编译产出 2,020+ 函数 / 2,280+ 符号）
 - `kernel_entry.hl`：`9,428` 行
 - `hl-bootstrap.hl`：`4,306` 行，`208` 函数
 - `stdlib.hl`：`1,385` 行，`143` 函数
-- `kinterp.hl`：`~1,280` 行
-- Shell 命令（`shell.hl`）：`160`
+- Shell 命令（`shell.hl`）：`170`
 - `scripts/*.ps1`：`28`（9,729 行）
-- 构建/测试主入口：`hl-bootstrap.cmd test`
-- 最近完成功能迭代：`156`（json + websocket + ui_paint + 18/18 验证通过）
+- 最近完成功能迭代：`159`（regex + telnet + ui_browser + 18/18 验证通过）
+
+## Iteration 159 — 图形文本浏览器（ui_browser.hl）
+
+- **`bare-kernel/hl/ui_browser.hl`**: 新建（~280 行，14 个函数）
+  - HTTP/1.0 GET 浏览器，640×440 px 窗口
+  - URL 地址栏：文本输入 + Go / Back / Reload 按钮
+  - 状态栏（16px）：URL + 行数显示
+  - 内容区（396px）：20 行可见，滚动条指示器
+  - HTTP 响应解析：`_uibrowse_http_body` 跳过响应头（\r\n\r\n 分隔）
+  - HTML 标签剥离：`_uibrowse_strip_html` 删除 `<tags>` + 解码 `&amp;` `&lt;` `&gt;` `&quot;`
+  - 语义标签转换：`<br>` `<p>` `<li>` `<h1>` `<h2>` `<div>` → 换行/前缀
+  - 76 字符行宽折行，行数组存入 `uibrowse_lines`
+  - 键盘：Enter（导航）、Esc（关闭）、Bksp（编辑 URL）、A/Z（逐行滚动）
+  - 鼠标：工具栏按钮命中测试
+  - 单步后退历史（`uibrowse_back_url`）
+- **`bare-kernel/hl/wm.hl`**: 三处集成（draw/key/click 路由）
+- **`bare-kernel/hl/ui_desktop.hl`**: `UIDSK_APP_BROWSER=8`，dock 扩展至 9 个图标（"Web"）
+- **`shell.hl`**: 新增 `browse` / `browse <url>` 命令
+
+## Iteration 158 — Telnet 协议（telnet.hl）
+
+- **`bare-kernel/hl/telnet.hl`**: 新建（~270 行，16 个函数）
+  - RFC 854 Telnet 客户端 + 服务端，最多 4 并发会话
+  - IAC 状态机（8 状态）：DATA / IAC / WILL / WONT / DO / DONT / SB / SB_IAC
+  - Option 协商：ECHO(1) / SGA(3) / TTYPE(24) / NAWS(31)
+  - 自动响应：WILL ECHO → DO ECHO；DO TTYPE → WILL TTYPE + SB 窗口尺寸 80×24
+  - `telnet_connect(host, port)` → id（DNS + TCP 连接）
+  - `telnet_listen(port)` → id（服务端 TCP listen）
+  - `telnet_send(id, text)` 自动 IAC 转义（0xFF → 0xFF 0xFF）
+  - `telnet_recv(id)` → 解码纯文本（IAC 序列已剥离）
+  - `telnet_tick()` 扫描所有活跃会话 TCB RX 缓冲区
+  - `telnet_list()` / `telnet_status(id)` 状态诊断
+- **`kernel_init.hl`**: Phase 7 新增 `telnet_init()` 调用
+- **`shell.hl`**: 新增 5 条 telnet 命令（telnet/telsend/telrecv/telclose/telnet tick）
+
+## Iteration 157 — 正则表达式引擎（regex.hl）
+
+- **`bare-kernel/hl/regex.hl`**: 新建（~260 行，15 个函数）
+  - 回溯 NFA 正则引擎（Kernighan & Pike 方法，扩展版）
+  - 支持语法：`. * + ? | [ ] [^] ^ $ ( ) \\ \d \w \s \D \W \S`
+  - 字符类 `[a-z]`：范围匹配，`[^...]` 否定
+  - 贪婪量词：`*`（0+）`+`（1+）`?`（0/1）
+  - `^` 行首锚定，`$` 行尾锚定
+  - **API**:
+    - `regex_match(pat, text)` → 1/0（任意位置匹配）
+    - `regex_search(pat, text)` → `[found, start, end]`（首次匹配位置）
+    - `regex_replace(pat, text, repl)` → 替换首次匹配
+    - `regex_replace_all(pat, text, repl)` → 替换全部匹配
+    - `regex_split(pat, text)` → 分割字符串数组
+- **`shell.hl`**: 新增 3 条 regex 命令（regex match / find / repl）
+
+
 
 ## Iteration 156 — 图形绘画应用（ui_paint.hl）
 

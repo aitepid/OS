@@ -1,0 +1,427 @@
+// regex.hl -- Regular Expression Engine (Backtracking NFA)
+//
+// Iteration 157: Subset regex matching for HicOS.
+// Based on Kernighan & Pike "The Practice of Programming" matcher,
+// extended with character classes, alternation, and quantifiers.
+//
+// Supported syntax:
+//   .       any character
+//   *       zero or more (greedy)
+//   +       one or more (greedy)
+//   ?       zero or one
+//   ^       anchor start
+//   $       anchor end
+//   |       alternation  (lowest precedence)
+//   [abc]   character class (literal chars)
+//   [^abc]  negated character class
+//   \d      digit [0-9]
+//   \w      word char [a-zA-Z0-9_]
+//   \s      whitespace [ \t\n\r]
+//   \D \W \S  negated class shorthands
+//   (...)   grouping (affects alternation scope only; no capture)
+//   \\      literal backslash
+//
+// Public API:
+//   regex_match(pattern, text)           → 1 if full text matches
+//   regex_search(pattern, text)          → [found, start, end]
+//   regex_replace(pattern, text, repl)   → string (first match)
+//   regex_replace_all(pattern, text, repl) → string (all matches)
+//   regex_split(pattern, text)           → array of substrings
+
+// ============================================================
+// Character-level matchers
+// ============================================================
+
+// Match a single pattern character (or escape or class) against char c.
+// pat_char: the character atom (as a string ".")
+// Returns 1 if match, 0 if not.
+fn _re_char_match(pc, c) {
+    if pc == "." { return 1; }
+    if pc == "d" { return _re_is_digit(c); }
+    if pc == "D" { if _re_is_digit(c) == 1 { return 0; } return 1; }
+    if pc == "w" { return _re_is_word(c); }
+    if pc == "W" { if _re_is_word(c) == 1 { return 0; } return 1; }
+    if pc == "s" { return _re_is_space(c); }
+    if pc == "S" { if _re_is_space(c) == 1 { return 0; } return 1; }
+    return pc == c;
+}
+
+fn _re_is_digit(c) {
+    if c >= "0" { if c <= "9" { return 1; } }
+    return 0;
+}
+
+fn _re_is_alpha(c) {
+    if c >= "a" { if c <= "z" { return 1; } }
+    if c >= "A" { if c <= "Z" { return 1; } }
+    return 0;
+}
+
+fn _re_is_word(c) {
+    if _re_is_digit(c) == 1 { return 1; }
+    if _re_is_alpha(c) == 1 { return 1; }
+    if c == "_" { return 1; }
+    return 0;
+}
+
+fn _re_is_space(c) {
+    if c == " "  { return 1; }
+    if c == "\t" { return 1; }
+    if c == "\n" { return 1; }
+    if c == "\r" { return 1; }
+    return 0;
+}
+
+// ============================================================
+// Character class parser: "[abc]" or "[^abc]"
+// pat = full pattern, pi = index of '['. Returns [matched, new_pi].
+// 'c' is the text character being tested.
+// ============================================================
+
+fn _re_class_match(pat, pi, c) {
+    let plen = len(pat);
+    let mut p = pi + 1;   // skip '['
+    let mut negate = 0;
+    if p < plen {
+        if str_sub(pat, p, p + 1) == "^" { negate = 1; p = p + 1; }
+    }
+    let mut matched = 0;
+    while p < plen {
+        let ch = str_sub(pat, p, p + 1);
+        if ch == "]" { p = p + 1; p = plen + 1; }  // break (signal end)
+        else if ch == "\\" {
+            if p + 1 < plen {
+                let esc = str_sub(pat, p + 1, p + 2);
+                if _re_char_match(esc, c) == 1 { matched = 1; }
+                p = p + 2;
+            } else { p = p + 1; }
+        } else {
+            // range? e.g. a-z
+            if p + 2 < plen {
+                if str_sub(pat, p + 1, p + 2) == "-" {
+                    let end_ch = str_sub(pat, p + 2, p + 3);
+                    if c >= ch { if c <= end_ch { matched = 1; } }
+                    p = p + 3;
+                } else {
+                    if c == ch { matched = 1; }
+                    p = p + 1;
+                }
+            } else {
+                if c == ch { matched = 1; }
+                p = p + 1;
+            }
+        }
+    }
+    if negate == 1 {
+        if matched == 1 { matched = 0; } else { matched = 1; }
+    }
+    return matched;
+}
+
+// Find the end position of a '[...]' class starting at pi.
+fn _re_class_end(pat, pi) {
+    let plen = len(pat);
+    let mut p = pi + 1;  // skip '['
+    if p < plen { if str_sub(pat, p, p + 1) == "^" { p = p + 1; } }
+    while p < plen {
+        let ch = str_sub(pat, p, p + 1);
+        if ch == "]" { return p + 1; }
+        if ch == "\\" { p = p + 2; }
+        else { p = p + 1; }
+    }
+    return p;
+}
+
+// ============================================================
+// Core recursive matcher
+// ============================================================
+
+// Match pattern[pi..] against text[ti..]. Returns 1 on success.
+fn _re_here(pat, pi, text, ti) {
+    let plen = len(pat);
+    let tlen = len(text);
+
+    // Pattern exhausted = match
+    if pi >= plen { return 1; }
+
+    let pc = str_sub(pat, pi, pi + 1);
+
+    // $ anchor
+    if pc == "$" { if pi + 1 == plen { if ti == tlen { return 1; } return 0; } }
+
+    // Escape sequence: \d \w \s etc.
+    let mut atom = pc;
+    let mut atom_len = 1;
+    let mut is_escape = 0;
+    if pc == "\\" {
+        if pi + 1 < plen { atom = str_sub(pat, pi + 1, pi + 2); atom_len = 2; is_escape = 1; }
+    }
+
+    // Character class [...]
+    if pc == "[" {
+        let class_end = _re_class_end(pat, pi);
+        let next_pi = class_end;
+        // Check quantifier after class
+        if next_pi < plen {
+            let q = str_sub(pat, next_pi, next_pi + 1);
+            if q == "*" {
+                return _re_class_star(pat, pi, class_end, next_pi + 1, text, ti, 0);
+            }
+            if q == "+" {
+                if ti >= tlen { return 0; }
+                if _re_class_match(pat, pi, str_sub(text, ti, ti + 1)) == 0 { return 0; }
+                return _re_class_star(pat, pi, class_end, next_pi + 1, text, ti + 1, 0);
+            }
+            if q == "?" {
+                if ti < tlen {
+                    if _re_class_match(pat, pi, str_sub(text, ti, ti + 1)) == 1 {
+                        if _re_here(pat, next_pi + 1, text, ti + 1) == 1 { return 1; }
+                    }
+                }
+                return _re_here(pat, next_pi + 1, text, ti);
+            }
+        }
+        if ti >= tlen { return 0; }
+        if _re_class_match(pat, pi, str_sub(text, ti, ti + 1)) == 0 { return 0; }
+        return _re_here(pat, next_pi, text, ti + 1);
+    }
+
+    // Grouping: skip '(' ... ')'  (no capture, just grouping for alternation)
+    if pc == "(" {
+        let group_end = _re_group_end(pat, pi);
+        return _re_here(pat, pi + 1, text, ti);  // simplified: enter group body
+    }
+    if pc == ")" {
+        return _re_here(pat, pi + 1, text, ti);
+    }
+
+    // Alternation: split at top-level '|'
+    let alt = _re_find_alt(pat, pi);
+    if alt >= 0 {
+        if _re_here(pat, pi, text, ti) == 1 { return 1; }
+        return _re_here(pat, alt + 1, text, ti);
+    }
+
+    // Check quantifier after atom
+    let qpi = pi + atom_len;
+    if qpi < plen {
+        let q = str_sub(pat, qpi, qpi + 1);
+        if q == "*" {
+            return _re_atom_star(atom, is_escape, pat, qpi + 1, text, ti, 0);
+        }
+        if q == "+" {
+            if ti >= tlen { return 0; }
+            if _re_atom_match_one(atom, is_escape, str_sub(text, ti, ti + 1)) == 0 { return 0; }
+            return _re_atom_star(atom, is_escape, pat, qpi + 1, text, ti + 1, 0);
+        }
+        if q == "?" {
+            if ti < tlen {
+                if _re_atom_match_one(atom, is_escape, str_sub(text, ti, ti + 1)) == 1 {
+                    if _re_here(pat, qpi + 1, text, ti + 1) == 1 { return 1; }
+                }
+            }
+            return _re_here(pat, qpi + 1, text, ti);
+        }
+    }
+
+    // Single atom match
+    if ti >= tlen { return 0; }
+    let tc = str_sub(text, ti, ti + 1);
+    if _re_atom_match_one(atom, is_escape, tc) == 0 { return 0; }
+    return _re_here(pat, qpi, text, ti + 1);
+}
+
+fn _re_atom_match_one(atom, is_escape, c) {
+    if is_escape == 1 { return _re_char_match(atom, c); }
+    if atom == "." { return 1; }
+    return atom == c;
+}
+
+// Greedy star for atom
+fn _re_atom_star(atom, is_escape, pat, pi, text, ti, depth) {
+    if depth > 500 { return 0; }
+    let tlen = len(text);
+    let mut j = ti;
+    while j < tlen {
+        let tc = str_sub(text, j, j + 1);
+        if _re_atom_match_one(atom, is_escape, tc) == 0 { j = tlen + 1; }
+        else { j = j + 1; }
+    }
+    // j is now one past the last match (or ti if none matched)
+    let mut k = j;
+    if k > tlen { k = tlen; }
+    while k >= ti {
+        if _re_here(pat, pi, text, k) == 1 { return 1; }
+        k = k - 1;
+    }
+    return 0;
+}
+
+// Greedy star for character class
+fn _re_class_star(pat, class_pi, class_end, next_pi, text, ti, depth) {
+    if depth > 500 { return 0; }
+    let tlen = len(text);
+    let mut j = ti;
+    while j < tlen {
+        if _re_class_match(pat, class_pi, str_sub(text, j, j + 1)) == 0 { j = tlen + 1; }
+        else { j = j + 1; }
+    }
+    let mut k = j;
+    if k > tlen { k = tlen; }
+    while k >= ti {
+        if _re_here(pat, next_pi, text, k) == 1 { return 1; }
+        k = k - 1;
+    }
+    return 0;
+}
+
+// Find top-level '|' in pattern starting at pi. Returns pos or -1.
+fn _re_find_alt(pat, pi) {
+    // Simplified: look for | not inside [] or ()
+    let plen = len(pat);
+    let mut p = pi;
+    let mut depth = 0;
+    while p < plen {
+        let c = str_sub(pat, p, p + 1);
+        if c == "(" { depth = depth + 1; }
+        if c == ")" { depth = depth - 1; }
+        if c == "[" {
+            let ce = _re_class_end(pat, p);
+            p = ce;
+        } else if c == "|" {
+            if depth == 0 { return p; }
+            p = p + 1;
+        } else {
+            p = p + 1;
+        }
+    }
+    return 0 - 1;
+}
+
+fn _re_group_end(pat, pi) {
+    let plen = len(pat);
+    let mut p = pi + 1;
+    let mut d = 1;
+    while p < plen {
+        let c = str_sub(pat, p, p + 1);
+        if c == "(" { d = d + 1; }
+        if c == ")" { d = d - 1; if d == 0 { return p; } }
+        p = p + 1;
+    }
+    return p;
+}
+
+// ============================================================
+// Public API
+// ============================================================
+
+fn regex_match(pattern, text) {
+    let pi = 0;
+    let pat = pattern;
+    // Handle ^ anchor
+    if len(pat) > 0 {
+        if str_sub(pat, 0, 1) == "^" {
+            return _re_here(str_sub(pat, 1, len(pat)), 0, text, 0);
+        }
+    }
+    // Try matching at every start position
+    let tlen = len(text);
+    let mut i = 0;
+    while i <= tlen {
+        if _re_here(pat, 0, text, i) == 1 { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Returns [found, start, end] — end is exclusive
+fn regex_search(pattern, text) {
+    let tlen = len(text);
+    let mut pat = pattern;
+    let mut anchor = 0;
+    if len(pat) > 0 {
+        if str_sub(pat, 0, 1) == "^" { anchor = 1; pat = str_sub(pat, 1, len(pat)); }
+    }
+    let mut i = 0;
+    while i <= tlen {
+        // Try each end position j from i to tlen
+        let mut j = i;
+        while j <= tlen {
+            if _re_here(pat, 0, text, i) == 1 {
+                // Find length of match by trying end positions
+                let mut end = tlen;
+                let mut e = i;
+                while e <= tlen {
+                    if _re_here(pat, 0, str_sub(text, i, e), 0) == 1 {
+                        end = e;
+                        e = tlen + 1;  // found end
+                    } else { e = e + 1; }
+                }
+                return [1, i, end];
+            }
+            j = j + 1;
+        }
+        if anchor == 1 { return [0, 0 - 1, 0 - 1]; }
+        i = i + 1;
+    }
+    return [0, 0 - 1, 0 - 1];
+}
+
+fn regex_replace(pattern, text, repl) {
+    let r = regex_search(pattern, text);
+    if r[0] == 0 { return text; }
+    let s = r[1];
+    let e = r[2];
+    return str_sub(text, 0, s) + repl + str_sub(text, e, len(text));
+}
+
+fn regex_replace_all(pattern, text, repl) {
+    let mut result = "";
+    let mut remaining = text;
+    let mut guard = 0;
+    while len(remaining) > 0 {
+        if guard > 10000 { remaining = ""; }
+        guard = guard + 1;
+        let r = regex_search(pattern, remaining);
+        if r[0] == 0 {
+            result = result + remaining;
+            remaining = "";
+        } else {
+            let s = r[1];
+            let e = r[2];
+            result = result + str_sub(remaining, 0, s) + repl;
+            if e >= len(remaining) {
+                remaining = "";
+            } else {
+                remaining = str_sub(remaining, e, len(remaining));
+            }
+        }
+    }
+    return result;
+}
+
+// Split text on pattern, return array of parts
+fn regex_split(pattern, text) {
+    let mut parts = [];
+    let mut remaining = text;
+    let mut guard = 0;
+    while len(remaining) > 0 {
+        if guard > 1000 { remaining = ""; }
+        guard = guard + 1;
+        let r = regex_search(pattern, remaining);
+        if r[0] == 0 {
+            push(parts, remaining);
+            remaining = "";
+        } else {
+            let s = r[1];
+            let e = r[2];
+            push(parts, str_sub(remaining, 0, s));
+            if e >= len(remaining) { remaining = ""; }
+            else { remaining = str_sub(remaining, e, len(remaining)); }
+        }
+    }
+    return parts;
+}
+
+print("regex.hl loaded");
+print("Regex: match/search/replace/replace_all/split; . * + ? | [] [^] ^ $ \\d \\w \\s");

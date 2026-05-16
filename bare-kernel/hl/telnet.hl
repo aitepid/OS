@@ -1,0 +1,344 @@
+// telnet.hl -- Telnet Protocol Client + Server (RFC 854)
+//
+// Iteration 158: Full-duplex text terminal over TCP with IAC option negotiation.
+//
+// Protocol:
+//   Normal bytes: transmitted as-is.
+//   IAC (0xFF): escape prefix for control sequences.
+//     IAC WILL/WONT/DO/DONT <option>  -- option negotiation
+//     IAC SB <option> ... IAC SE      -- sub-negotiation
+//     IAC IP  (244) -- interrupt process
+//     IAC AYT (246) -- are you there
+//     IAC EC  (247) -- erase char
+//     IAC EL  (248) -- erase line
+//
+// Standard options (auto-negotiated):
+//   TELOPT_ECHO  (1)  -- character echo
+//   TELOPT_SGA   (3)  -- suppress go-ahead
+//   TELOPT_NAWS  (31) -- negotiate window size
+//   TELOPT_TTYPE (24) -- terminal type
+//
+// Architecture:
+//   Up to TELNET_MAX (4) sessions.
+//   telnet_connect(host, port)  → session id (client)
+//   telnet_listen(port)         → session id (server)
+//   telnet_send(id, text)       → sends text (escapes 0xFF)
+//   telnet_recv(id)             → decoded text (IAC stripped)
+//   telnet_close(id)
+//   telnet_tick()               → process incoming data for all sessions
+
+let TELNET_MAX    = 4;
+let TELNET_BUF    = 10092544;  // 0x9A0000 — 16 KB IAC decode buffer
+let TELNET_BUF_SZ = 4096;
+
+// Telnet protocol constants
+let IAC  = 255;
+let DONT = 254;
+let DO   = 253;
+let WONT = 252;
+let WILL = 251;
+let SB   = 250;  // sub-negotiation begin
+let SE   = 240;  // sub-negotiation end
+let IP   = 244;  // interrupt process
+let AYT  = 246;  // are you there
+let EC   = 247;  // erase character
+let EL   = 248;  // erase line
+let GA   = 249;  // go ahead
+
+// Standard options
+let TELOPT_ECHO  = 1;
+let TELOPT_SGA   = 3;
+let TELOPT_TTYPE = 24;
+let TELOPT_NAWS  = 31;
+
+// Parser states
+let TELS_DATA    = 0;   // normal data
+let TELS_IAC     = 1;   // received 0xFF
+let TELS_WILL    = 2;   // received IAC WILL
+let TELS_WONT    = 3;   // received IAC WONT
+let TELS_DO      = 4;   // received IAC DO
+let TELS_DONT    = 5;   // received IAC DONT
+let TELS_SB      = 6;   // inside sub-negotiation
+let TELS_SB_IAC  = 7;   // IAC inside SB
+
+// Per-session state
+let mut tel_active   = [];
+let mut tel_tcb      = [];
+let mut tel_state    = [];   // parser state (TELS_*)
+let mut tel_data_buf = [];   // decoded data buffer (pending for telnet_recv)
+let mut tel_server   = [];   // 1 if server-side
+let mut tel_echo     = [];   // 1 if echo mode agreed
+let mut tel_sga      = [];   // 1 if suppress-go-ahead agreed
+let mut tel_count    = 0;
+
+fn telnet_init() {
+    tel_active   = [];
+    tel_tcb      = [];
+    tel_state    = [];
+    tel_data_buf = [];
+    tel_server   = [];
+    tel_echo     = [];
+    tel_sga      = [];
+    tel_count    = 0;
+    let mut i = 0;
+    while i < TELNET_MAX {
+        push(tel_active,   0);
+        push(tel_tcb,      0 - 1);
+        push(tel_state,    TELS_DATA);
+        push(tel_data_buf, "");
+        push(tel_server,   0);
+        push(tel_echo,     0);
+        push(tel_sga,      0);
+        i = i + 1;
+    }
+    print("telnet: init — max " + to_string(TELNET_MAX) + " sessions");
+    return 0;
+}
+
+fn _tel_alloc() {
+    let mut i = 0;
+    while i < TELNET_MAX {
+        if tel_active[i] == 0 { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+// ============================================================
+// Lifecycle
+// ============================================================
+
+fn telnet_connect(host, port) {
+    let id = _tel_alloc();
+    if id < 0 { print("telnet: no free slots"); return 0 - 1; }
+    let ip = dns_resolve(host);
+    let tcb = tcp_connect(ip, port);
+    if tcb < 0 { print("telnet: tcp_connect failed"); return 0 - 1; }
+    set_at(tel_active, id, 1);
+    set_at(tel_tcb,    id, tcb);
+    set_at(tel_server, id, 0);
+    set_at(tel_state,  id, TELS_DATA);
+    tel_count = tel_count + 1;
+    // Client: send initial option negotiation
+    _tel_send_will(id, TELOPT_TTYPE);
+    _tel_send_do(id, TELOPT_SGA);
+    _tel_send_do(id, TELOPT_ECHO);
+    print("telnet: connected to " + host + ":" + to_string(port) + " (id=" + to_string(id) + ")");
+    return id;
+}
+
+fn telnet_listen(port) {
+    let id = _tel_alloc();
+    if id < 0 { return 0 - 1; }
+    let tcb = tcp_listen(port);
+    if tcb < 0 { return 0 - 1; }
+    set_at(tel_active, id, 1);
+    set_at(tel_tcb,    id, tcb);
+    set_at(tel_server, id, 1);
+    set_at(tel_state,  id, TELS_DATA);
+    tel_count = tel_count + 1;
+    print("telnet: server listening on port " + to_string(port) + " (id=" + to_string(id) + ")");
+    return id;
+}
+
+fn telnet_close(id) {
+    if id < 0 { return 0; }
+    if id >= TELNET_MAX { return 0; }
+    if tel_active[id] == 0 { return 0; }
+    tcp_close(tel_tcb[id]);
+    set_at(tel_active, id, 0);
+    tel_count = tel_count - 1;
+    print("telnet: session " + to_string(id) + " closed");
+    return 0;
+}
+
+// ============================================================
+// Option negotiation helpers
+// ============================================================
+
+fn _tel_iac3(id, verb, opt) {
+    let frame = str_from_code(IAC) + str_from_code(verb) + str_from_code(opt);
+    tcp_send(tel_tcb[id], frame);
+    return 0;
+}
+
+fn _tel_send_will(id, opt) { return _tel_iac3(id, WILL, opt); }
+fn _tel_send_wont(id, opt) { return _tel_iac3(id, WONT, opt); }
+fn _tel_send_do(id, opt)   { return _tel_iac3(id, DO,   opt); }
+fn _tel_send_dont(id, opt) { return _tel_iac3(id, DONT, opt); }
+
+// Handle option: server decides whether to agree
+fn _tel_handle_will(id, opt) {
+    // Accept ECHO and SGA; refuse rest
+    if opt == TELOPT_ECHO { set_at(tel_echo, id, 1); _tel_send_do(id, opt); return 0; }
+    if opt == TELOPT_SGA  { set_at(tel_sga,  id, 1); _tel_send_do(id, opt); return 0; }
+    _tel_send_dont(id, opt);
+    return 0;
+}
+
+fn _tel_handle_do(id, opt) {
+    // Agree to TTYPE and NAWS; refuse the rest
+    if opt == TELOPT_TTYPE { _tel_send_will(id, opt); return 0; }
+    if opt == TELOPT_NAWS  {
+        // Send window size: 80x24
+        let sb = str_from_code(IAC) + str_from_code(SB)
+            + str_from_code(TELOPT_NAWS)
+            + str_from_code(0) + str_from_code(80)
+            + str_from_code(0) + str_from_code(24)
+            + str_from_code(IAC) + str_from_code(SE);
+        tcp_send(tel_tcb[id], sb);
+        _tel_send_will(id, opt);
+        return 0;
+    }
+    _tel_send_wont(id, opt);
+    return 0;
+}
+
+// ============================================================
+// Send
+// ============================================================
+
+fn telnet_send(id, text) {
+    if id < 0 { return 0 - 1; }
+    if tel_active[id] == 0 { return 0 - 1; }
+    // Escape 0xFF bytes in text
+    let mut out = "";
+    let n = len(text);
+    let mut i = 0;
+    while i < n {
+        let c = char_at(text, i);
+        let b = char_code(c);
+        if b == IAC {
+            out = out + str_from_code(IAC) + str_from_code(IAC);
+        } else {
+            out = out + c;
+        }
+        i = i + 1;
+    }
+    tcp_send(tel_tcb[id], out);
+    return 0;
+}
+
+// ============================================================
+// Receive / parse
+// ============================================================
+
+// Process raw bytes from TCP RX buffer, decode IAC sequences.
+fn _tel_parse(id, raw) {
+    let n = len(raw);
+    let mut i = 0;
+    let mut data = "";
+    let mut st = tel_state[id];
+
+    while i < n {
+        let b = char_code(char_at(raw, i));
+
+        if st == TELS_DATA {
+            if b == IAC { st = TELS_IAC; }
+            else { data = data + str_from_code(b); }
+        }
+        else if st == TELS_IAC {
+            if b == WILL { st = TELS_WILL; }
+            else if b == WONT { st = TELS_WONT; }
+            else if b == DO   { st = TELS_DO; }
+            else if b == DONT { st = TELS_DONT; }
+            else if b == SB   { st = TELS_SB; }
+            else if b == IAC  { data = data + str_from_code(IAC); st = TELS_DATA; }
+            else if b == AYT  {
+                tcp_send(tel_tcb[id], "[HicOS telnet]\r\n");
+                st = TELS_DATA;
+            }
+            else { st = TELS_DATA; }
+        }
+        else if st == TELS_WILL { _tel_handle_will(id, b); st = TELS_DATA; }
+        else if st == TELS_WONT { st = TELS_DATA; }  // ignore WONT
+        else if st == TELS_DO   { _tel_handle_do(id, b); st = TELS_DATA; }
+        else if st == TELS_DONT { _tel_send_wont(id, b); st = TELS_DATA; }
+        else if st == TELS_SB   {
+            if b == IAC { st = TELS_SB_IAC; }
+            // else: ignore sub-negotiation body
+        }
+        else if st == TELS_SB_IAC {
+            if b == SE { st = TELS_DATA; }
+            else { st = TELS_SB; }
+        }
+
+        i = i + 1;
+    }
+
+    set_at(tel_state, id, st);
+    // Append decoded data to session buffer
+    let old = tel_data_buf[id];
+    set_at(tel_data_buf, id, old + data);
+    return 0;
+}
+
+// Fetch and clear decoded data for session
+fn telnet_recv(id) {
+    if id < 0 { return ""; }
+    if id >= TELNET_MAX { return ""; }
+    let data = tel_data_buf[id];
+    set_at(tel_data_buf, id, "");
+    return data;
+}
+
+// ============================================================
+// Tick
+// ============================================================
+
+fn telnet_tick() {
+    let mut i = 0;
+    while i < TELNET_MAX {
+        if tel_active[i] == 1 {
+            let tcb = tel_tcb[i];
+            let addr = TCP_TABLE + tcb * TCB_SIZE;
+            let rx_buf = mem_read_u64(addr + 64);
+            if rx_buf > 0 {
+                let mut raw = "";
+                let mut j = 0;
+                while j < TELNET_BUF_SZ {
+                    let b = mem_read_u8(rx_buf + j);
+                    if b == 0 { j = TELNET_BUF_SZ + 1; }
+                    else { raw = raw + str_from_code(b); j = j + 1; }
+                }
+                if len(raw) > 0 {
+                    _tel_parse(i, raw);
+                    mem_zero(rx_buf, TELNET_BUF_SZ);
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// ============================================================
+// Status
+// ============================================================
+
+fn telnet_status(id) {
+    if id < 0 { return "telnet: invalid"; }
+    if id >= TELNET_MAX { return "telnet: invalid"; }
+    if tel_active[id] == 0 { return "telnet[" + to_string(id) + "] free"; }
+    let role = "client";
+    if tel_server[id] == 1 { role = "server"; }
+    return "telnet[" + to_string(id) + "] " + role
+        + " tcb=" + to_string(tel_tcb[id])
+        + " echo=" + to_string(tel_echo[id])
+        + " sga="  + to_string(tel_sga[id]);
+}
+
+fn telnet_list() {
+    let mut out = "Telnet sessions (" + to_string(tel_count) + "/" + to_string(TELNET_MAX) + "):\n";
+    let mut i = 0;
+    while i < TELNET_MAX {
+        if tel_active[i] == 1 {
+            out = out + "  " + telnet_status(i) + "\n";
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+print("telnet.hl loaded");
+print("Telnet: RFC 854 client+server, IAC WILL/WONT/DO/DONT, ECHO/SGA/NAWS/TTYPE, " + to_string(TELNET_MAX) + " sessions");
