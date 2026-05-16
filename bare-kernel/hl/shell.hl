@@ -27,6 +27,7 @@ fn shell_handle(cmd) {
         serial_print("Network:  ifconfig ping dns arp netstat");
         serial_print("Firewall: fw  firewall  fw allow|block <port>  fw flush  fw policy input|output drop|accept");
         serial_print("Hardware: lspci lsusb cpus dev beep ahci usb acpi");
+        serial_print("Audio:    audio  audio vol <0-100>  audio mute/unmute  audio beep <hz> <ms>  mixer");
         serial_print("Services: services svc start|stop|status <name>");
         serial_print("FS Events:inotify  watch <path>  pty [alloc|info <id>]");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
@@ -314,6 +315,41 @@ fn shell_handle_ext(cmd) {
     if cmd == "beep" {
         ac97_beep(440, 200);
         return "beep: 440 Hz, 200 ms (AC97)";
+    }
+    if cmd == "audio" {
+        return ac97_status();
+    }
+    if str_starts_with(cmd, "audio vol ") {
+        let pct = parse_int(str_sub(cmd, 10, len(cmd)));
+        ac97_set_volume(pct);
+        mixer_set_master_vol(pct * 255 / 100);
+        return "Volume set to " + to_string(pct) + "%";
+    }
+    if cmd == "audio mute" {
+        ac97_mute(1);
+        return "Audio muted";
+    }
+    if cmd == "audio unmute" {
+        ac97_mute(0);
+        return "Audio unmuted";
+    }
+    if str_starts_with(cmd, "audio beep ") {
+        // audio beep <freq> <ms>
+        let args = str_sub(cmd, 11, len(cmd));
+        let mut freq = 440;
+        let mut dur = 200;
+        let sp = str_find(args, " ");
+        if sp > 0 {
+            freq = parse_int(str_sub(args, 0, sp));
+            dur = parse_int(str_sub(args, sp + 1, len(args)));
+        } else {
+            freq = parse_int(args);
+        }
+        mixer_beep(freq, dur);
+        return "Playing " + to_string(freq) + " Hz for " + to_string(dur) + " ms";
+    }
+    if cmd == "mixer" {
+        return mixer_status();
     }
     if cmd == "env" {
         return "HOME=/root PATH=/bin:/usr/bin SHELL=/bin/sh USER=root TERM=vt100";
@@ -618,7 +654,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 87 commands + pipe(|) + echo>redirect + inotify + watch + pty");
+print("shell.hl loaded -- 96 commands + pipe(|) + echo>redirect + inotify + watch + pty + audio");
 
 // Main shell loop (called from kernel_init)
 

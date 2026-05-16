@@ -37,6 +37,13 @@ let MIXER_SAMPLE_RATE  = 44;  // 0x2C
 let BDL_ADDR = 8978432;       // 0x890000 -- BDL (32 * 8 = 256 bytes)
 let PCM_BUF_ADDR = 8978688;   // 0x890100 -- PCM data buffer (64 KB)
 let PCM_BUF_SIZE = 65536;
+let BDL_MAX_ENTRIES = 32;
+
+// Driver state
+let mut ac97_volume_pct = 80;    // 0-100 current master volume
+let mut ac97_playing = 0;        // 1 = DMA active
+let mut ac97_bdl_head = 0;       // next BDL entry to fill (circular, 0-31)
+let mut ac97_bdl_queued = 0;     // number of entries queued
 
 fn ac97_detect() {
     let devices = pci_scan();
@@ -65,13 +72,13 @@ fn ac97_init() {
     let pci_func = pci_info[2];
 
     ac97_mixer_bar = pci_bar(pci_bus, pci_dev, pci_func, 0);
-    ac97_mixer_bar = (ac97_mixer_bar / 4) * 4; // mask low 2 bits for I/O
+    ac97_mixer_bar = (ac97_mixer_bar / 4) * 4;
     ac97_nabm_bar = pci_bar(pci_bus, pci_dev, pci_func, 1);
     ac97_nabm_bar = (ac97_nabm_bar / 4) * 4;
 
     // Enable PCI bus mastering + I/O space
     let cmd = pci_config_read16(pci_bus, pci_dev, pci_func, 4);
-    pci_config_write16(pci_bus, pci_dev, pci_func, 4, cmd + 5); // 0x05 (Memory/IO + Bus Master)
+    pci_config_write16(pci_bus, pci_dev, pci_func, 4, cmd + 5);
 
     // Reset codec
     port_out_u16(ac97_mixer_bar + MIXER_RESET, 1);
@@ -79,35 +86,53 @@ fn ac97_init() {
     // Set sample rate to 44100 Hz
     port_out_u16(ac97_mixer_bar + MIXER_SAMPLE_RATE, 44100);
 
-    // Set master volume (0 = max, 0x8000 = mute)
-    port_out_u16(ac97_mixer_bar + MIXER_MASTER_VOL, 0);
-    port_out_u16(ac97_mixer_bar + MIXER_PCM_VOL, 2056); // 0x0808
+    // Set master volume to default
+    ac97_set_volume(ac97_volume_pct);
+    port_out_u16(ac97_mixer_bar + MIXER_PCM_VOL, 2056);
 
     // Enable cold reset in global control
     port_out_u32(ac97_nabm_bar + NABM_GLOB_CNT, 2);
+
+    // Clear BDL region
+    let mut e = 0;
+    while e < BDL_MAX_ENTRIES {
+        mem_write_u32(BDL_ADDR + e * 8, 0);
+        mem_write_u32(BDL_ADDR + e * 8 + 4, 0);
+        e = e + 1;
+    }
+    ac97_bdl_head = 0;
+    ac97_bdl_queued = 0;
+    ac97_playing = 0;
 
     print("AC97 initialized: mixer=0x" + format_hex(ac97_mixer_bar, 4) + " nabm=0x" + format_hex(ac97_nabm_bar, 4));
     return 1;
 }
 
 // Play a buffer of PCM samples (16-bit signed, stereo, 44100 Hz)
+// Enqueues in BDL circular buffer and starts DMA if not playing.
 fn ac97_play(samples_addr, sample_count) {
     if ac97_nabm_bar == 0 { return 0; }
-    // Setup BDL entry 0
-    mem_write_u32(BDL_ADDR + 0, samples_addr);
-    mem_write_u16(BDL_ADDR + 4, sample_count);
-    mem_write_u16(BDL_ADDR + 6, 49152); // 0xC000 last + IOC
 
-    // Set BDL base address
+    // Write BDL entry at head position
+    let entry = ac97_bdl_head % BDL_MAX_ENTRIES;
+    mem_write_u32(BDL_ADDR + entry * 8, samples_addr);
+    mem_write_u16(BDL_ADDR + entry * 8 + 4, sample_count);
+    mem_write_u16(BDL_ADDR + entry * 8 + 6, 49152); // IOC + last entry
+
+    ac97_bdl_head = (ac97_bdl_head + 1) % BDL_MAX_ENTRIES;
+    ac97_bdl_queued = ac97_bdl_queued + 1;
+
+    // Set BDL base address and last valid index
     port_out_u32(ac97_nabm_bar + NABM_PCMOUT_BDBAR, BDL_ADDR);
+    port_out_u8(ac97_nabm_bar + NABM_PCMOUT_LVI, entry);
 
-    // Set last valid index to 0
-    port_out_u8(ac97_nabm_bar + NABM_PCMOUT_LVI, 0);
+    if ac97_playing == 0 {
+        // Start DMA: set RPBM bit
+        port_out_u8(ac97_nabm_bar + NABM_PCMOUT_CR, 1);
+        ac97_playing = 1;
+    }
 
-    // Start playback: set RPBM bit in control register
-    port_out_u8(ac97_nabm_bar + NABM_PCMOUT_CR, 1);
-
-    return 0;
+    return entry;
 }
 
 // Stop playback
@@ -115,7 +140,32 @@ fn ac97_stop() {
     if ac97_nabm_bar != 0 {
         port_out_u8(ac97_nabm_bar + NABM_PCMOUT_CR, 0);
     }
+    ac97_playing = 0;
+    ac97_bdl_queued = 0;
     return 0;
+}
+
+// Check if DMA is still running (poll SR register)
+fn ac97_is_playing() {
+    if ac97_nabm_bar == 0 { return 0; }
+    let sr = port_in_u16(ac97_nabm_bar + NABM_PCMOUT_SR);
+    // Bit 1 = DCH (DMA controller halted) = done
+    if (sr / 2) % 2 == 1 { ac97_playing = 0; return 0; }
+    return 1;
+}
+
+// Query audio driver status
+fn ac97_status() {
+    if ac97_nabm_bar == 0 {
+        return "AC97: not detected";
+    }
+    let sr = port_in_u16(ac97_nabm_bar + NABM_PCMOUT_SR);
+    let civ = port_in_u8(ac97_nabm_bar + NABM_PCMOUT_CIV);
+    return "AC97: vol=" + to_string(ac97_volume_pct) + "%" +
+           " playing=" + to_string(ac97_playing) +
+           " bdl_head=" + to_string(ac97_bdl_head) +
+           " SR=0x" + format_hex(sr, 4) +
+           " CIV=" + to_string(civ);
 }
 
 // Generate a simple sine wave tone (for testing)
@@ -145,6 +195,7 @@ fn ac97_beep(freq_hz, duration_ms) {
 // Set master volume (0-100)
 fn ac97_set_volume(percent) {
     if percent > 100 { percent = 100; }
+    ac97_volume_pct = percent;
     // AC97 volume: 0=max, 63=min, bit 15=mute
     let vol = 63 - (percent * 63 / 100);
     if ac97_mixer_bar != 0 {
@@ -153,5 +204,16 @@ fn ac97_set_volume(percent) {
     return vol;
 }
 
+// Mute / unmute
+fn ac97_mute(enable) {
+    if ac97_mixer_bar == 0 { return 0; }
+    if enable == 1 {
+        port_out_u16(ac97_mixer_bar + MIXER_MASTER_VOL, 32768); // bit15 = mute
+    } else {
+        ac97_set_volume(ac97_volume_pct);
+    }
+    return 0;
+}
+
 print("audio.hl loaded");
-print("AC97: PCM playback, 44100 Hz 16-bit stereo");
+print("AC97: PCM playback, 44100 Hz 16-bit stereo, BDL circular, volume/mute/status");

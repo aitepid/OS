@@ -107,13 +107,25 @@
 | `ui_installer.hl` | 5 步图形安装器向导 |
 | `ui_sysmon.hl` | 系统监控（运行时间 / 内存 / 任务） |
 | `ui_notify.hl` | Toast 通知（4 类型 × 4 并发） |
-| `ui_desktop.hl` | 桌面编排（顶栏时钟 + dock 启动器） |
+| `ui_desktop.hl` | 桌面编排（顶栏时钟 + dock 5图标） |
+| `ui_files.hl` | 文件管理器（目录导航 / 图标 / 选中 / VFS集成）|
+| `ui_settings.hl` | 设置中心（Display/Audio/Network/About 4标签页）|
 | `wm.hl` | 窗口管理器（标题文字 / 拖拽 / 最小化） |
 | `HicOS_UIServer.hl` | UI 服务器（IPC + 焦点通知） |
 
+## 迭代 141-142 成果（阶段 8）
+
+| 迭代 | 模块 | 完成内容 |
+|---|---|---|
+| 141 | `ui_files.hl` | 文件管理器 MVP（203行，VFS集成，dock集成，`fm` shell命令）|
+| 141 | `ui_desktop.hl` | dock 5图标（+Files +Settings）|
+| 142 | `audio.hl` | BDL循环32条目 + DMA状态轮询 + mute + status |
+| 142 | `mixer.hl` | 主音量 + `mixer_beep()` + master_vol 混音应用 |
+| 142 | `shell.hl` | 音频命令：`audio`/`audio vol`/`audio beep`/`mixer` 等（96条命令）|
+
 ## 下一阶段建议
 
-- 文件管理器（`ui_files.hl`）
-- 设置中心（`ui_settings.hl`）
-- 音频管道（audio→mixer）— AC97 PCM 播放
-- GPU 2D 加速 — framebuffer 硬件 blit
+- GPU 2D 加速 — framebuffer 硬件 blit（迭代 143）
+- 文件操作（复制/删除/重命名）集成到 `ui_files.hl`（右键菜单）
+- 音频 IPC 服务：`HicOS_AudioServer.hl`
+- 容器/命名空间隔离（迭代 161+）

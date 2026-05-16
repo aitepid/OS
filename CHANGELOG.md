@@ -2,17 +2,63 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`198`（68 根目录 + 130 内核模块）
-- H-L 总行数：`~47,800`（根 10,044 + 内核 ~37,756）
-- 内核模块：`130`（编译产出 1,700+ 函数 / 2,003+ 符号）
+- `.hl` 文件：`200`（68 根目录 + 132 内核模块）
+- H-L 总行数：`~48,200`（根 10,044 + 内核 ~38,156）
+- 内核模块：`132`（编译产出 1,700+ 函数 / 2,003+ 符号）
 - `kernel_entry.hl`：`9,428` 行
 - `hl-bootstrap.hl`：`4,306` 行，`208` 函数
 - `stdlib.hl`：`1,385` 行，`143` 函数
 - `kinterp.hl`：`~1,280` 行
-- Shell 命令（`shell.hl` if cmd ==）：`75`
+- Shell 命令（`shell.hl` if cmd ==）：`79`
 - `scripts/*.ps1`：`28`（9,729 行）
 - 构建/测试主入口：`hl-bootstrap.cmd test`
-- 最近完成功能迭代：`133`（ext4真实读路径 + GPU桥接 + 词法器修复 + 字体光标）
+- 最近完成功能迭代：`142`（音频管道增强：BDL循环+主音量+mixer_beep+9条新Shell命令）
+
+## Iteration 142 — 音频管道增强（audio.hl + mixer.hl）
+
+- **`audio.hl`**: BDL 循环 + 状态跟踪 + mute 控制
+  - `BDL_MAX_ENTRIES = 32`：扩展为 32 条目循环 BDL
+  - 新增状态变量：`ac97_volume_pct` / `ac97_playing` / `ac97_bdl_head` / `ac97_bdl_queued`
+  - `ac97_play()` 重写：循环 BDL 入队，DMA 自动启动（only if idle）
+  - `ac97_is_playing()`：通过 NABM_SR DCH 位轮询 DMA 状态
+  - `ac97_status()`：返回 vol%/playing/bdl_head/SR/CIV 状态字符串
+  - `ac97_mute(enable)`：硬件静音（bit15）/ 恢复原音量
+  - `ac97_init()` 改进：BDL 清零 + 调用 `ac97_set_volume(80%)`
+- **`mixer.hl`**: 主音量 + beep 函数
+  - `mixer_master_vol`：全局主音量（0-255）
+  - `mixer_set_master_vol(vol)`：设置主音量并同步到 `ac97_set_volume()`
+  - `mixer_beep(freq_hz, dur_ms)`：通过混音器生成方波并播放
+  - `mixer_mix()` 改进：混音时应用 `master_scaled = scaled * mixer_master_vol / 255`
+  - `mixer_status()` 增强：显示 master vol
+- **`shell.hl`**: 新增 7 条音频命令（96 total）
+  - `audio`：显示 AC97 驱动状态
+  - `audio vol <0-100>`：设置主音量（同步 AC97 + mixer）
+  - `audio mute` / `audio unmute`：硬件静音控制
+  - `audio beep <hz> <ms>`：通过 mixer 播放指定频率方波
+  - `mixer`：显示混音器流状态
+  - help 新增 Audio 行
+
+## Iteration 141 — 文件管理器+设置中心+桌面dock完善
+
+- **`ui_files.hl`**: 新建（203 行，14 个函数）
+  - `uifiles_init()` / `uifiles_load_dir()` / `uifiles_navigate()`：VFS 目录遍历
+  - `uifiles_render()`: 路径导航栏 + 文件列表双列渲染（VESA）
+  - `uifiles_draw_icon()`: 文件夹 / 文件图标（vesa_rect + vesa_hline/vline）
+  - `uifiles_handle_click()`: 单击选中 + 双击导航（包含 ".." 上级目录）
+  - `uifiles_open()` / `uifiles_close()` / `uifiles_is_open()`：窗口生命周期
+- **`ui_settings.hl`**: 已有（340 行），补充集成
+  - 4 标签页：Display / Audio / Network / About
+  - `uisettings_is_open()` 接口完整
+- **`shell.hl`**: 新增 2 条命令（89 total）
+  - `fm` / `fileman`：打开图形文件管理器窗口
+  - help Files 行更新（标注 graphical）
+- **`ui_desktop.hl`**: dock 扩展到 5 个应用启动器
+  - `UIDSK_APP_FILES = 3`：Files 按钮 → `uifiles_open()`
+  - `UIDSK_APP_SETTINGS = 4`：Cfg 按钮 → `uisettings_open()`
+  - `uidsk_app_count = 5`
+- **`manifest.hl`**: 指标更新
+  - `KERNEL_MODULES = 132`
+  - `HL_FILES = 200`
 
 ## Iteration 140 — kernel_init修正+signal集成+mmap真实分发+WM启动终端窗口+sched_tick
 
