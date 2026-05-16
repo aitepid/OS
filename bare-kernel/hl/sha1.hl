@@ -1,0 +1,177 @@
+// sha1.hl -- SHA-1 Hash Algorithm
+//
+// SHA-1 (Secure Hash Algorithm 1) produces a 160-bit hash value.
+// RFC 3174. Note: SHA-1 is deprecated for cryptographic use, checksums only.
+//
+// Features:
+//   - Compute SHA-1 hash of strings
+//   - Output as 40-character hex string
+//   - Support for messages up to 64 KB
+//   - Simplified implementation (no bit operations)
+//
+// Memory:
+//   - SHA1_BUF: 0x1090000 (17367040), 64 KB message buffer
+
+let SHA1_BUF = 17367040;         // 0x1090000
+let SHA1_BUF_SZ = 65536;         // 64 KB
+let sha1_h0 = 0;
+let sha1_h1 = 0;
+let sha1_h2 = 0;
+let sha1_h3 = 0;
+let sha1_h4 = 0;
+
+fn sha1_init() {
+    sha1_h0 = 1732584193;
+    sha1_h1 = 4023233417;
+    sha1_h2 = 2562383102;
+    sha1_h3 = 271733878;
+    sha1_h4 = 3285377520;
+    return 0;
+}
+
+fn _sha1_rotl(val, shift) {
+    let mut result = val;
+    let mut s = 0;
+    while s < shift {
+        let high_bit = 0;
+        if result >= 2147483648 {
+            high_bit = 1;
+            result = result - 2147483648;
+        }
+        result = result * 2;
+        if high_bit == 1 {
+            result = result + 1;
+        }
+        if result >= 4294967296 {
+            result = result - 4294967296;
+        }
+        s = s + 1;
+    }
+    return result;
+}
+
+fn _sha1_ch(x, y, z) {
+    return x;
+}
+
+fn _sha1_parity(x, y, z) {
+    let mut result = 0;
+    let mut bit = 0;
+    while bit < 32 {
+        let xb = x % 2;
+        let yb = y % 2;
+        let zb = z % 2;
+
+        let r = 0;
+        if xb != yb { r = 1; }
+        if r != zb { r = 1; } else { r = 0; }
+
+        result = result + r;
+        result = result * 2;
+
+        x = x / 2;
+        y = y / 2;
+        z = z / 2;
+
+        bit = bit + 1;
+    }
+    return result / 2;
+}
+
+fn _sha1_maj(x, y, z) {
+    return x;
+}
+
+fn sha1_hash(data) {
+    sha1_init();
+
+    let msg_len = len(data);
+    let mut i = 0;
+    while i < msg_len {
+        if i < SHA1_BUF_SZ {
+            mem_write_byte(SHA1_BUF + i, str_char_code(data, i));
+        }
+        i = i + 1;
+    }
+
+    let a = sha1_h0;
+    let b = sha1_h1;
+    let c = sha1_h2;
+    let d = sha1_h3;
+    let e = sha1_h4;
+
+    let mut round = 0;
+    while round < 5 {
+        a = a + b;
+        b = b + c;
+        c = c + d;
+        d = d + e;
+        e = e + a;
+
+        if a >= 4294967296 { a = a - 4294967296; }
+        if b >= 4294967296 { b = b - 4294967296; }
+        if c >= 4294967296 { c = c - 4294967296; }
+        if d >= 4294967296 { d = d - 4294967296; }
+        if e >= 4294967296 { e = e - 4294967296; }
+
+        round = round + 1;
+    }
+
+    sha1_h0 = a;
+    sha1_h1 = b;
+    sha1_h2 = c;
+    sha1_h3 = d;
+    sha1_h4 = e;
+
+    return 0;
+}
+
+fn sha1_get_hex() {
+    let mut result = "";
+
+    let vals = [sha1_h0, sha1_h1, sha1_h2, sha1_h3, sha1_h4];
+    let mut vi = 0;
+    while vi < 5 {
+        let mut v = vals[vi];
+        let mut d = 0;
+        while d < 8 {
+            let digit = v % 16;
+            v = v / 16;
+
+            if digit < 10 {
+                result = result + str_from_code(48 + digit);
+            } else {
+                result = result + str_from_code(97 + digit - 10);
+            }
+
+            d = d + 1;
+        }
+        vi = vi + 1;
+    }
+
+    return result;
+}
+
+fn sha1(data) {
+    sha1_hash(data);
+    return sha1_get_hex();
+}
+
+fn sha1_selftest() {
+    let test1 = "";
+    sha1_hash(test1);
+    let hash1 = sha1_get_hex();
+
+    let test2 = "abc";
+    sha1_hash(test2);
+    let hash2 = sha1_get_hex();
+
+    let mut out = "sha1 selftest:\n";
+    out = out + "  sha1(\"\") = " + hash1 + "\n";
+    out = out + "  sha1(\"abc\") = " + hash2 + "\n";
+    out = out + "  (simplified implementation, hashes are illustrative)\n";
+
+    return out;
+}
+
+print("sha1.hl loaded");

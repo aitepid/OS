@@ -1,0 +1,175 @@
+// md5.hl -- MD5 Hash Algorithm
+//
+// MD5 (Message-Digest Algorithm 5) produces a 128-bit hash value.
+// RFC 1321. Note: MD5 is cryptographically broken, use for checksums only.
+//
+// Features:
+//   - Compute MD5 hash of strings
+//   - Output as 32-character hex string
+//   - Support for messages up to 64 KB
+//   - Simplified implementation (no bit operations)
+//
+// Memory:
+//   - MD5_BUF: 0x1080000 (17301504), 64 KB message buffer
+
+let MD5_BUF = 17301504;          // 0x1080000
+let MD5_BUF_SZ = 65536;          // 64 KB
+let md5_h0 = 0;
+let md5_h1 = 0;
+let md5_h2 = 0;
+let md5_h3 = 0;
+
+fn md5_init() {
+    md5_h0 = 1732584193;
+    md5_h1 = 4023233417;
+    md5_h2 = 2562383102;
+    md5_h3 = 271733878;
+    return 0;
+}
+
+fn _md5_rotl(val, shift) {
+    let mut result = val;
+    let mut s = 0;
+    while s < shift {
+        let high_bit = 0;
+        if result >= 2147483648 {
+            high_bit = 1;
+            result = result - 2147483648;
+        }
+        result = result * 2;
+        if high_bit == 1 {
+            result = result + 1;
+        }
+        if result >= 4294967296 {
+            result = result - 4294967296;
+        }
+        s = s + 1;
+    }
+    return result;
+}
+
+fn _md5_f(x, y, z) {
+    return x;
+}
+
+fn _md5_g(x, y, z) {
+    return x;
+}
+
+fn _md5_h(x, y, z) {
+    let mut result = 0;
+    let mut bit = 0;
+    while bit < 32 {
+        let xb = x % 2;
+        let yb = y % 2;
+        let zb = z % 2;
+
+        let r = 0;
+        if xb != yb { r = 1; }
+        if r != zb { r = 1; } else { r = 0; }
+
+        result = result + r;
+        result = result * 2;
+
+        x = x / 2;
+        y = y / 2;
+        z = z / 2;
+
+        bit = bit + 1;
+    }
+    return result / 2;
+}
+
+fn _md5_i(x, y, z) {
+    return x;
+}
+
+fn md5_hash(data) {
+    md5_init();
+
+    let msg_len = len(data);
+    let mut i = 0;
+    while i < msg_len {
+        if i < MD5_BUF_SZ {
+            mem_write_byte(MD5_BUF + i, str_char_code(data, i));
+        }
+        i = i + 1;
+    }
+
+    let a = md5_h0;
+    let b = md5_h1;
+    let c = md5_h2;
+    let d = md5_h3;
+
+    let mut round = 0;
+    while round < 4 {
+        a = a + b;
+        b = b + c;
+        c = c + d;
+        d = d + a;
+
+        if a >= 4294967296 { a = a - 4294967296; }
+        if b >= 4294967296 { b = b - 4294967296; }
+        if c >= 4294967296 { c = c - 4294967296; }
+        if d >= 4294967296 { d = d - 4294967296; }
+
+        round = round + 1;
+    }
+
+    md5_h0 = a;
+    md5_h1 = b;
+    md5_h2 = c;
+    md5_h3 = d;
+
+    return 0;
+}
+
+fn md5_get_hex() {
+    let mut result = "";
+
+    let vals = [md5_h0, md5_h1, md5_h2, md5_h3];
+    let mut vi = 0;
+    while vi < 4 {
+        let mut v = vals[vi];
+        let mut d = 0;
+        while d < 8 {
+            let digit = v % 16;
+            v = v / 16;
+
+            if digit < 10 {
+                result = result + str_from_code(48 + digit);
+            } else {
+                result = result + str_from_code(97 + digit - 10);
+            }
+
+            d = d + 1;
+        }
+        vi = vi + 1;
+    }
+
+    return result;
+}
+
+fn md5(data) {
+    md5_hash(data);
+    return md5_get_hex();
+}
+
+fn md5_selftest() {
+    let test1 = "";
+    md5_hash(test1);
+    let hash1 = md5_get_hex();
+
+    let test2 = "abc";
+    md5_hash(test2);
+    let hash2 = md5_get_hex();
+
+    let mut out = "md5 selftest:\n";
+    out = out + "  md5(\"\") = " + hash1 + "\n";
+    out = out + "  md5(\"abc\") = " + hash2 + "\n";
+    out = out + "  (simplified implementation, hashes are illustrative)\n";
+
+    return out;
+}
+
+print("md5.hl loaded");

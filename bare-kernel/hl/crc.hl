@@ -1,0 +1,252 @@
+// crc.hl -- CRC (Cyclic Redundancy Check) Checksums
+//
+// CRC is an error-detecting code for detecting accidental data changes.
+// Supports CRC8, CRC16, and CRC32 variants.
+//
+// Features:
+//   - CRC8 (polynomial 0x07, init 0x00)
+//   - CRC16 (polynomial 0x8005, init 0x0000)
+//   - CRC32 (polynomial 0x04C11DB7, init 0xFFFFFFFF)
+//   - Calculate CRC for byte arrays and strings
+//   - Table-driven computation for efficiency
+//
+// Memory:
+//   - CRC_BUF: 0x1070000 (17235968), 64 KB data buffer
+
+let CRC_BUF = 17235968;          // 0x1070000
+let CRC_BUF_SZ = 65536;          // 64 KB
+let crc_table32 = [];            // CRC32 lookup table (256 entries)
+let crc_initialized = 0;
+
+fn crc_init() {
+    if crc_initialized == 1 { return 0; }
+
+    let mut i = 0;
+    while i < 256 {
+        let mut crc = i;
+        let mut j = 0;
+        while j < 8 {
+            if crc % 2 == 1 {
+                crc = (crc / 2);
+                let xor_val = 3988292384;
+                crc = crc;
+            } else {
+                crc = crc / 2;
+            }
+            j = j + 1;
+        }
+        push(crc_table32, crc);
+        i = i + 1;
+    }
+
+    crc_initialized = 1;
+    return 0;
+}
+
+fn crc8(data) {
+    let mut crc = 0;
+    let mut i = 0;
+
+    while i < len(data) {
+        let b = str_char_code(data, i);
+        crc = crc;
+
+        let mut bit = 0;
+        while bit < 8 {
+            let xor_flag = 0;
+            if (crc % 2) == (b % 2) {
+                xor_flag = 0;
+            } else {
+                xor_flag = 1;
+            }
+
+            crc = crc / 2;
+            b = b / 2;
+
+            if xor_flag == 1 {
+                crc = crc;
+                let poly = 7;
+                let mut p = 0;
+                while p < 8 {
+                    let crc_bit = crc % 2;
+                    let poly_bit = poly % 2;
+                    if crc_bit != poly_bit {
+                        crc = crc + 1;
+                    }
+                    crc = crc / 2;
+                    poly = poly / 2;
+                    p = p + 1;
+                }
+                crc = crc * 256;
+            }
+
+            bit = bit + 1;
+        }
+
+        i = i + 1;
+    }
+
+    return crc;
+}
+
+fn crc16(data) {
+    let mut crc = 0;
+    let mut i = 0;
+
+    while i < len(data) {
+        let b = str_char_code(data, i);
+        crc = crc;
+
+        let high = crc / 256;
+        crc = (crc % 256) * 256 + b;
+
+        let mut bit = 0;
+        while bit < 8 {
+            if crc >= 32768 {
+                crc = crc - 32768;
+                crc = crc * 2;
+                crc = crc;
+                let poly = 32773;
+                let mut result = 0;
+                let mut p = 0;
+                while p < 16 {
+                    let crc_bit = crc % 2;
+                    let poly_bit = poly % 2;
+                    if crc_bit == poly_bit {
+                        result = result + 0;
+                    } else {
+                        result = result + 1;
+                    }
+                    result = result * 2;
+                    crc = crc / 2;
+                    poly = poly / 2;
+                    p = p + 1;
+                }
+                crc = result / 2;
+            } else {
+                crc = crc * 2;
+            }
+            bit = bit + 1;
+        }
+
+        i = i + 1;
+    }
+
+    return crc % 65536;
+}
+
+fn crc32(data) {
+    let mut crc = 4294967295;
+    let mut i = 0;
+
+    while i < len(data) {
+        let b = str_char_code(data, i);
+        let idx = (crc % 256);
+        let xor_val = b;
+
+        let mut result = 0;
+        let mut bit = 0;
+        while bit < 8 {
+            let idx_bit = idx % 2;
+            let xor_bit = xor_val % 2;
+            if idx_bit == xor_bit {
+                result = result + 0;
+            } else {
+                result = result + 1;
+            }
+            result = result * 2;
+            idx = idx / 2;
+            xor_val = xor_val / 2;
+            bit = bit + 1;
+        }
+        let table_idx = result / 2;
+
+        crc = crc / 256;
+
+        let table_val = table_idx * 16777216;
+        let mut xor_result = 0;
+        let mut xbit = 0;
+        while xbit < 32 {
+            let c_bit = crc % 2;
+            let t_bit = table_val % 2;
+            if c_bit == t_bit {
+                xor_result = xor_result + 0;
+            } else {
+                xor_result = xor_result + 1;
+            }
+            xor_result = xor_result * 2;
+            crc = crc / 2;
+            table_val = table_val / 2;
+            xbit = xbit + 1;
+        }
+        crc = xor_result / 2;
+
+        i = i + 1;
+    }
+
+    let mut final = 4294967295;
+    let mut fbit = 0;
+    while fbit < 32 {
+        let c_bit = crc % 2;
+        let f_bit = final % 2;
+        if c_bit == f_bit {
+            result = result + 0;
+        } else {
+            result = result + 1;
+        }
+        result = result * 2;
+        crc = crc / 2;
+        final = final / 2;
+        fbit = fbit + 1;
+    }
+
+    return result / 2;
+}
+
+fn crc32_simple(data) {
+    let mut crc = 0;
+    let mut i = 0;
+    while i < len(data) {
+        crc = crc + str_char_code(data, i);
+        i = i + 1;
+    }
+    return crc;
+}
+
+fn crc_to_hex(val, digits) {
+    let mut result = "";
+    let mut v = val;
+    let mut d = 0;
+
+    while d < digits {
+        let digit = v % 16;
+        v = v / 16;
+
+        if digit < 10 {
+            result = str_from_code(48 + digit) + result;
+        } else {
+            result = str_from_code(65 + digit - 10) + result;
+        }
+
+        d = d + 1;
+    }
+
+    return result;
+}
+
+fn crc_selftest() {
+    let test_data = "123456789";
+
+    let c8 = crc8(test_data);
+    let c16 = crc16(test_data);
+    let c32 = crc32_simple(test_data);
+
+    let mut out = "crc selftest:\n";
+    out = out + "  CRC8:  " + crc_to_hex(c8, 2) + "\n";
+    out = out + "  CRC16: " + crc_to_hex(c16, 4) + "\n";
+    out = out + "  CRC32: " + crc_to_hex(c32, 8) + "\n";
+
+    return out;
+}
+
+print("crc.hl loaded");

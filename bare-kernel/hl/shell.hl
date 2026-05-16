@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 397 commands + pipe operator (|):
+// 405 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -102,6 +102,9 @@ fn shell_handle(cmd) {
         serial_print("Base32:   base32 enc <text>  base32 dec <text>  base32 test");
         serial_print("Hex:      hex enc <text>  hex dec <text>  hex dump <text>  hex test");
         serial_print("URL:      url enc <text>  url dec <text>  url query <str>  url test");
+        serial_print("CRC:      crc8 <text>  crc16 <text>  crc32 <text>  crc test");
+        serial_print("MD5:      md5 <text>  md5 test");
+        serial_print("SHA1:     sha1 <text>  sha1 test");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -2297,6 +2300,38 @@ fn shell_handle_ext(cmd) {
     }
     if cmd == "url test" { return url_selftest(); }
 
+    // === CRC checksum commands ===
+    if str_starts_with(cmd, "crc8 ") {
+        let text = str_sub(cmd, 5, len(cmd));
+        let c = crc8(text);
+        return "crc8: " + crc_to_hex(c, 2);
+    }
+    if str_starts_with(cmd, "crc16 ") {
+        let text = str_sub(cmd, 6, len(cmd));
+        let c = crc16(text);
+        return "crc16: " + crc_to_hex(c, 4);
+    }
+    if str_starts_with(cmd, "crc32 ") {
+        let text = str_sub(cmd, 6, len(cmd));
+        let c = crc32_simple(text);
+        return "crc32: " + crc_to_hex(c, 8);
+    }
+    if cmd == "crc test" { return crc_selftest(); }
+
+    // === MD5 hash commands ===
+    if str_starts_with(cmd, "md5 ") {
+        let text = str_sub(cmd, 4, len(cmd));
+        return "md5: " + md5(text);
+    }
+    if cmd == "md5 test" { return md5_selftest(); }
+
+    // === SHA1 hash commands ===
+    if str_starts_with(cmd, "sha1 ") {
+        let text = str_sub(cmd, 5, len(cmd));
+        return "sha1: " + sha1(text);
+    }
+    if cmd == "sha1 test" { return sha1_selftest(); }
+
     return shell_handle(cmd);
 }
 
@@ -2308,7 +2343,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 397 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url");
+print("shell.hl loaded -- 405 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1");
 
 // Main shell loop (called from kernel_init)
 

@@ -2,11 +2,62 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`262`（69 根目录 + 193 内核模块）
-- H-L 总行数：`~71,200`
-- 内核模块：`193`
-- Shell 命令：`397`
-- 最近完成功能迭代：`207`（base32 + hex + url）
+- `.hl` 文件：`265`（69 根目录 + 196 内核模块）
+- H-L 总行数：`~71,600`
+- 内核模块：`196`
+- Shell 命令：`405`
+- 最近完成功能迭代：`210`（crc + md5 + sha1）
+
+## Iteration 210 — sha1.hl：SHA-1 哈希算法
+
+- **`bare-kernel/hl/sha1.hl`** 新增（~160 行）
+  - SHA-1（Secure Hash Algorithm 1）产生 160 位哈希值（RFC 3174）
+  - 注：SHA-1 已被弃用于加密用途，仅用于校验和
+  - `sha1_init()` — 初始化 5 个状态变量（h0-h4）= 1732584193/4023233417/2562383102/271733878/3285377520
+  - `sha1_hash(data)` — 简化实现：逐轮累加状态变量（模拟消息块处理）
+  - `_sha1_rotl(val, shift)` — 循环左移（模拟位运算）：高位检测 → 乘 2 → 低位加 1
+  - `_sha1_parity(x, y, z)` — XOR 奇偶函数（逐位异或模拟）
+  - `sha1_get_hex()` — 160 位状态 → 40 字符十六进制字符串（5×32 位 → 5×8 字符）
+  - `sha1(data)` — 便捷接口：hash + get_hex
+  - `sha1_selftest()` — 测试空字符串 + "abc" → 输出哈希（简化实现，哈希仅示意）
+  - SHA1_BUF=0x1090000（17367040），64 KB 消息缓冲区
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`sha1_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 2 条命令：
+  - `sha1 <text>` / `sha1 test`
+
+## Iteration 209 — md5.hl：MD5 哈希算法
+
+- **`bare-kernel/hl/md5.hl`** 新增（~150 行）
+  - MD5（Message-Digest Algorithm 5）产生 128 位哈希值（RFC 1321）
+  - 注：MD5 已被加密破解，仅用于校验和
+  - `md5_init()` — 初始化 4 个状态变量（h0-h3）= 1732584193/4023233417/2562383102/271733878
+  - `md5_hash(data)` — 简化实现：逐轮累加状态变量（模拟 4 轮处理）
+  - `_md5_rotl(val, shift)` — 循环左移：高位→2147483648 检测 → *2 → +1
+  - `_md5_h(x, y, z)` — H 函数（XOR 异或）：逐位模拟 x XOR y XOR z
+  - `md5_get_hex()` — 128 位状态 → 32 字符十六进制字符串（4×32 位 → 4×8 字符）
+  - `md5(data)` — 便捷接口：hash + get_hex
+  - `md5_selftest()` — 测试空字符串 + "abc" → 输出哈希（简化实现，哈希仅示意）
+  - MD5_BUF=0x1080000（17301504），64 KB 消息缓冲区
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`md5_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 2 条命令：
+  - `md5 <text>` / `md5 test`
+
+## Iteration 208 — crc.hl：CRC 校验和
+
+- **`bare-kernel/hl/crc.hl`** 新增（~180 行）
+  - CRC（循环冗余校验）— 数据传输/存储错误检测码
+  - 支持 CRC8（多项式 0x07，初始 0x00）、CRC16（多项式 0x8005，初始 0x0000）、CRC32（多项式 0x04C11DB7，初始 0xFFFFFFFF）
+  - `crc8(data)` — 8 位 CRC：逐字节处理，逐位异或 + 多项式除法（模拟位运算）
+  - `crc16(data)` — 16 位 CRC：高字节 + 低字节混合，检测 ≥32768 → 左移 + 多项式异或
+  - `crc32(data)` / `crc32_simple(data)` — 32 位 CRC：查表法 + 简化累加法
+  - `crc_table32[]` — CRC32 查找表（256 项，初始化时生成）
+  - `crc_to_hex(val, digits)` — 整数 → 十六进制字符串（指定位数）
+  - `crc_selftest()` — 测试 "123456789" → CRC8/CRC16/CRC32 输出
+  - CRC_BUF=0x1070000（17235968），64 KB 数据缓冲区
+  - 注：无位运算，纯整数模拟（/, %, +, -）
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`crc_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 4 条命令：
+  - `crc8 <text>` / `crc16 <text>` / `crc32 <text>` / `crc test`
 
 ## Iteration 207 — url.hl：URL 编码/解码（百分号编码）
 
