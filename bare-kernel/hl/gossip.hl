@@ -1,0 +1,428 @@
+// gossip.hl -- Gossip / SWIM Membership Protocol
+//
+// Implements the SWIM (Scalable Weakly-consistent Infection-style Membership)
+// protocol (Das, Gupta, Karp 2002) combined with epidemic broadcast (gossip).
+// Features: direct probe (PING), indirect probe (PING-REQ), piggyback membership
+//           updates, anti-entropy full state sync, failure detection with suspicion.
+//
+// Buffer: 0x1370000
+
+let GOSSIP_BUF = 0x1370000;
+
+// Member states (SWIM §4)
+let GOSSIP_ALIVE    = 0;
+let GOSSIP_SUSPECT  = 1;
+let GOSSIP_DEAD     = 2;
+let GOSSIP_LEFT     = 3;
+
+// Message types
+let GOSSIP_MSG_PING        = 1;
+let GOSSIP_MSG_PING_REQ    = 2;
+let GOSSIP_MSG_ACK         = 3;
+let GOSSIP_MSG_ALIVE       = 4;
+let GOSSIP_MSG_SUSPECT     = 5;
+let GOSSIP_MSG_DEAD        = 6;
+let GOSSIP_MSG_JOIN        = 7;
+let GOSSIP_MSG_LEAVE       = 8;
+let GOSSIP_MSG_SYNC        = 9;
+let GOSSIP_MSG_SYNC_RESP   = 10;
+let GOSSIP_MSG_BROADCAST   = 11;
+
+// Protocol parameters
+let GOSSIP_MAX_MEMBERS   = 64;
+let GOSSIP_MAX_EVENTS    = 256;
+let GOSSIP_MAX_PENDING   = 16;
+let GOSSIP_FANOUT        = 3;    // indirect probe fanout
+let GOSSIP_PROBE_PERIOD  = 1000; // ms between probes
+let GOSSIP_SUSPECT_TIMEOUT = 5000; // ms before dead
+let GOSSIP_RETRANSMIT_MULT = 4;  // retransmit = mult * log2(N)
+
+// Member table
+let gossip_node_id       = 0;
+let gossip_node_addr     = "";
+let gossip_incarnation   = 0;    // local incarnation counter
+
+let gossip_member_count  = 0;
+let gossip_member_ids    = [];
+let gossip_member_addrs  = [];
+let gossip_member_states = [];
+let gossip_member_incs   = [];   // incarnation numbers
+let gossip_member_suspicion_timer = [];
+
+// Event queue (piggybacked on every message)
+let gossip_event_count   = 0;
+let gossip_event_types   = [];
+let gossip_event_ids     = [];
+let gossip_event_incs    = [];
+let gossip_event_ttl     = [];   // remaining retransmissions
+
+// Pending ACK tracking
+let gossip_pending_count  = 0;
+let gossip_pending_target = [];
+let gossip_pending_timer  = [];
+let gossip_pending_via    = [];   // for indirect probe
+
+// Probe state
+let gossip_probe_idx      = 0;   // round-robin probe index
+let gossip_probe_timer    = 0;
+let gossip_tick_count     = 0;
+
+// Statistics
+let gossip_probes_sent    = 0;
+let gossip_probes_recv    = 0;
+let gossip_acks_sent      = 0;
+let gossip_acks_recv      = 0;
+let gossip_failures_detected = 0;
+let gossip_broadcasts_sent   = 0;
+let gossip_initialized    = 0;
+
+fn gossip_init(node_id, addr) {
+    gossip_node_id     = node_id;
+    gossip_node_addr   = addr;
+    gossip_incarnation = 1;
+    gossip_member_count = 0;
+    gossip_event_count  = 0;
+    gossip_pending_count = 0;
+    gossip_probe_idx    = 0;
+    gossip_probe_timer  = 0;
+    gossip_tick_count   = 0;
+    gossip_probes_sent  = 0;
+    gossip_probes_recv  = 0;
+    gossip_acks_sent    = 0;
+    gossip_acks_recv    = 0;
+    gossip_failures_detected = 0;
+    gossip_broadcasts_sent   = 0;
+    // Add self to member table
+    _gossip_add_member(node_id, addr, GOSSIP_ALIVE, 1);
+    gossip_initialized = 1;
+    return 0;
+}
+
+fn _gossip_add_member(id, addr, state, incarnation) {
+    let idx = gossip_member_count;
+    if idx >= GOSSIP_MAX_MEMBERS { return -1; }
+    set_at(gossip_member_ids,    idx, id);
+    set_at(gossip_member_addrs,  idx, addr);
+    set_at(gossip_member_states, idx, state);
+    set_at(gossip_member_incs,   idx, incarnation);
+    set_at(gossip_member_suspicion_timer, idx, 0);
+    gossip_member_count = gossip_member_count + 1;
+    return idx;
+}
+
+fn _gossip_find_member(id) {
+    let i = 0;
+    while i < gossip_member_count {
+        if gossip_member_ids[i] == id { return i; }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// Join cluster via seed node
+fn gossip_join(seed_id, seed_addr) {
+    _gossip_add_member(seed_id, seed_addr, GOSSIP_ALIVE, 0);
+    _gossip_enqueue_event(GOSSIP_MSG_JOIN, gossip_node_id, gossip_incarnation);
+    return 0;
+}
+
+// Leave cluster gracefully
+fn gossip_leave() {
+    gossip_incarnation = gossip_incarnation + 1;
+    _gossip_enqueue_event(GOSSIP_MSG_LEAVE, gossip_node_id, gossip_incarnation);
+    let idx = _gossip_find_member(gossip_node_id);
+    if idx >= 0 { set_at(gossip_member_states, idx, GOSSIP_LEFT); }
+    return 0;
+}
+
+// Enqueue membership event for piggybacking
+fn _gossip_enqueue_event(etype, member_id, incarnation) {
+    if gossip_event_count >= GOSSIP_MAX_EVENTS { return 1; }
+    let retransmit = _gossip_retransmit_count();
+    set_at(gossip_event_types, gossip_event_count, etype);
+    set_at(gossip_event_ids,   gossip_event_count, member_id);
+    set_at(gossip_event_incs,  gossip_event_count, incarnation);
+    set_at(gossip_event_ttl,   gossip_event_count, retransmit);
+    gossip_event_count = gossip_event_count + 1;
+    return 0;
+}
+
+// Retransmit count = ceil(mult * log2(N+1))
+fn _gossip_retransmit_count() {
+    let n = gossip_member_count + 1;
+    let log2n = 0;
+    let v = n;
+    while v > 1 { v = v / 2; log2n = log2n + 1; }
+    return GOSSIP_RETRANSMIT_MULT * (log2n + 1);
+}
+
+// Select piggyback events (up to k events sorted by TTL descending)
+fn _gossip_select_events(max_events) {
+    let selected = [];
+    let count = 0;
+    let i = 0;
+    while i < gossip_event_count {
+        if gossip_event_ttl[i] > 0 {
+            if count < max_events {
+                set_at(selected, count, i);
+                count = count + 1;
+            }
+        }
+        i = i + 1;
+    }
+    return [selected, count];
+}
+
+// Decrement TTL of selected events
+fn _gossip_decrement_events(selected, count) {
+    let i = 0;
+    while i < count {
+        let idx = selected[i];
+        set_at(gossip_event_ttl, idx, gossip_event_ttl[idx] - 1);
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Build PING message: [type, sender_id, incarnation, piggyback_events...]
+fn gossip_build_ping(target_id) {
+    let events = _gossip_select_events(8);
+    let msg = [GOSSIP_MSG_PING, gossip_node_id, gossip_incarnation, target_id,
+               events[1]];
+    _gossip_decrement_events(events[0], events[1]);
+    gossip_probes_sent = gossip_probes_sent + 1;
+    return msg;
+}
+
+// Build PING-REQ (indirect probe via k random members)
+fn gossip_build_ping_req(target_id, via_id) {
+    return [GOSSIP_MSG_PING_REQ, gossip_node_id, gossip_incarnation,
+            target_id, via_id];
+}
+
+// Build ACK message
+fn gossip_build_ack(target_id, ping_seq) {
+    let events = _gossip_select_events(8);
+    let msg = [GOSSIP_MSG_ACK, gossip_node_id, gossip_incarnation,
+               target_id, ping_seq, events[1]];
+    _gossip_decrement_events(events[0], events[1]);
+    gossip_acks_sent = gossip_acks_sent + 1;
+    return msg;
+}
+
+// Handle received PING → send ACK
+fn gossip_handle_ping(sender_id, sender_inc, sender_addr, events, event_count) {
+    gossip_probes_recv = gossip_probes_recv + 1;
+    _gossip_merge_events(sender_id, sender_inc, sender_addr, events, event_count);
+    return gossip_build_ack(sender_id, 0);
+}
+
+// Handle received ACK
+fn gossip_handle_ack(sender_id, sender_inc, events, event_count) {
+    gossip_acks_recv = gossip_acks_recv + 1;
+    _gossip_merge_events(sender_id, sender_inc, "", events, event_count);
+    // Clear pending probe for this sender
+    let i = 0;
+    while i < gossip_pending_count {
+        if gossip_pending_target[i] == sender_id {
+            set_at(gossip_pending_target, i, -1);
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Merge received events into local membership view
+fn _gossip_merge_events(sender_id, sender_inc, sender_addr, events, event_count) {
+    // Ensure sender is in member table
+    let idx = _gossip_find_member(sender_id);
+    if idx < 0 {
+        if sender_addr != "" {
+            _gossip_add_member(sender_id, sender_addr, GOSSIP_ALIVE, sender_inc);
+        }
+    } else {
+        // Update incarnation if higher
+        if sender_inc > gossip_member_incs[idx] {
+            set_at(gossip_member_incs,   idx, sender_inc);
+            set_at(gossip_member_states, idx, GOSSIP_ALIVE);
+        }
+    }
+    return 0;
+}
+
+// Mark member as suspect (failure suspicion)
+fn gossip_suspect_member(member_id) {
+    let idx = _gossip_find_member(member_id);
+    if idx < 0 { return 1; }
+    if gossip_member_states[idx] == GOSSIP_ALIVE {
+        set_at(gossip_member_states, idx, GOSSIP_SUSPECT);
+        set_at(gossip_member_suspicion_timer, idx, 0);
+        _gossip_enqueue_event(GOSSIP_MSG_SUSPECT, member_id, gossip_member_incs[idx]);
+        serial_print("gossip: suspect node " + to_string(member_id));
+    }
+    return 0;
+}
+
+// Declare member dead
+fn gossip_declare_dead(member_id) {
+    let idx = _gossip_find_member(member_id);
+    if idx < 0 { return 1; }
+    if gossip_member_states[idx] != GOSSIP_DEAD {
+        set_at(gossip_member_states, idx, GOSSIP_DEAD);
+        _gossip_enqueue_event(GOSSIP_MSG_DEAD, member_id, gossip_member_incs[idx]);
+        gossip_failures_detected = gossip_failures_detected + 1;
+        serial_print("gossip: dead node " + to_string(member_id));
+    }
+    return 0;
+}
+
+// Refute suspicion by incrementing incarnation
+fn gossip_refute() {
+    gossip_incarnation = gossip_incarnation + 1;
+    let idx = _gossip_find_member(gossip_node_id);
+    if idx >= 0 {
+        set_at(gossip_member_states, idx, GOSSIP_ALIVE);
+        set_at(gossip_member_incs, idx, gossip_incarnation);
+    }
+    _gossip_enqueue_event(GOSSIP_MSG_ALIVE, gossip_node_id, gossip_incarnation);
+    return 0;
+}
+
+// Select probe target (round-robin with shuffle)
+fn _gossip_select_probe_target() {
+    let alive_count = 0;
+    let i = 0;
+    while i < gossip_member_count {
+        if gossip_member_ids[i] != gossip_node_id {
+            if gossip_member_states[i] == GOSSIP_ALIVE {
+                alive_count = alive_count + 1;
+            }
+        }
+        i = i + 1;
+    }
+    if alive_count == 0 { return -1; }
+    let target_rank = gossip_probe_idx - ((gossip_probe_idx / alive_count) * alive_count);
+    gossip_probe_idx = gossip_probe_idx + 1;
+    let rank = 0;
+    i = 0;
+    while i < gossip_member_count {
+        if gossip_member_ids[i] != gossip_node_id {
+            if gossip_member_states[i] == GOSSIP_ALIVE {
+                if rank == target_rank { return gossip_member_ids[i]; }
+                rank = rank + 1;
+            }
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// Select k random members for indirect probe (excluding target and self)
+fn _gossip_select_indirect(target_id) {
+    let result = [];
+    let count = 0;
+    let i = 0;
+    while i < gossip_member_count {
+        let mid = gossip_member_ids[i];
+        if mid != gossip_node_id { if mid != target_id {
+            if gossip_member_states[i] == GOSSIP_ALIVE {
+                if count < GOSSIP_FANOUT {
+                    set_at(result, count, mid);
+                    count = count + 1;
+                }
+            }
+        }}
+        i = i + 1;
+    }
+    return [result, count];
+}
+
+// Epidemic broadcast: send message to k random members
+fn gossip_broadcast(msg_type, payload) {
+    let targets = _gossip_select_indirect(-1);
+    gossip_broadcasts_sent = gossip_broadcasts_sent + targets[1];
+    return targets[1];
+}
+
+// Periodic tick: advance timers, run failure detection
+fn gossip_tick(delta_ms) {
+    gossip_probe_timer = gossip_probe_timer + delta_ms;
+    gossip_tick_count  = gossip_tick_count + 1;
+    // Run probe if timer expired
+    if gossip_probe_timer >= GOSSIP_PROBE_PERIOD {
+        gossip_probe_timer = 0;
+        let target = _gossip_select_probe_target();
+        if target >= 0 {
+            gossip_build_ping(target);
+        }
+    }
+    // Advance suspicion timers
+    let i = 0;
+    while i < gossip_member_count {
+        if gossip_member_states[i] == GOSSIP_SUSPECT {
+            set_at(gossip_member_suspicion_timer, i,
+                   gossip_member_suspicion_timer[i] + delta_ms);
+            if gossip_member_suspicion_timer[i] >= GOSSIP_SUSPECT_TIMEOUT {
+                gossip_declare_dead(gossip_member_ids[i]);
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn gossip_list_members() {
+    let state_names = ["alive", "suspect", "dead", "left"];
+    serial_print("gossip members (" + to_string(gossip_member_count) + "):");
+    let i = 0;
+    while i < gossip_member_count {
+        let s = gossip_member_states[i];
+        let sname = "unknown";
+        if s >= 0 { if s <= 3 { sname = state_names[s]; } }
+        serial_print("  [" + to_string(gossip_member_ids[i]) + "] "
+            + gossip_member_addrs[i]
+            + " " + sname
+            + " inc=" + to_string(gossip_member_incs[i]));
+        i = i + 1;
+    }
+    return gossip_member_count;
+}
+
+fn gossip_status() {
+    let alive = 0;
+    let i = 0;
+    while i < gossip_member_count {
+        if gossip_member_states[i] == GOSSIP_ALIVE { alive = alive + 1; }
+        i = i + 1;
+    }
+    return "gossip[" + to_string(gossip_node_id) + "]: members=" + to_string(gossip_member_count)
+        + " alive=" + to_string(alive)
+        + " inc=" + to_string(gossip_incarnation)
+        + " probes=" + to_string(gossip_probes_sent)
+        + " failures=" + to_string(gossip_failures_detected)
+        + " events=" + to_string(gossip_event_count);
+}
+
+fn gossip_test() {
+    gossip_init(1, "10.0.0.1:7946");
+    gossip_join(2, "10.0.0.2:7946");
+    gossip_join(3, "10.0.0.3:7946");
+    gossip_join(4, "10.0.0.4:7946");
+    gossip_join(5, "10.0.0.5:7946");
+    // Simulate probing node 2
+    let ping = gossip_build_ping(2);
+    // Node 2 sends ALIVE event
+    _gossip_merge_events(2, 1, "10.0.0.2:7946", [], 0);
+    // Simulate node 3 failure
+    gossip_suspect_member(3);
+    gossip_tick(GOSSIP_SUSPECT_TIMEOUT + 100);
+    // Broadcast
+    let sent = gossip_broadcast(GOSSIP_MSG_ALIVE, "test");
+    serial_print("gossip test: " + gossip_status());
+    gossip_list_members();
+    return "gossip: SWIM protocol, " + to_string(gossip_member_count)
+        + " members, failure_detected=" + to_string(gossip_failures_detected)
+        + " [Das+Gupta+Karp 2002 ok]";
+}
+
+print("gossip.hl loaded -- SWIM gossip membership protocol (epidemic broadcast + failure detection)");

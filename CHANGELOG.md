@@ -2,11 +2,71 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`310`（69 根目录 + 241 内核模块）
-- H-L 总行数：`~88,500`
-- 内核模块：`241`
-- Shell 命令：`625`
-- 最近完成功能迭代：`255`（http2 + jpeg + raft）
+- `.hl` 文件：`313`（69 根目录 + 244 内核模块）
+- H-L 总行数：`~91,500`
+- 内核模块：`244`
+- Shell 命令：`640`
+- 最近完成功能迭代：`258`（gossip + matrix + neural）
+
+## Iteration 258 — neural.hl：神经网络推理引擎
+
+- **`bare-kernel/hl/neural.hl`** 新增（~410 行）
+  - 多层感知机（MLP）前馈神经网络推理引擎
+  - 固定点算术：NEURAL_SCALE=1000（3 位小数精度）
+  - 最大 8 层（NN_MAX_LAYERS），每层最大 256 神经元（NN_MAX_NEURONS）
+  - 权重存储：nn_weights[层 × NN_WEIGHT_SLAB]，nn_biases[层 × NN_MAX_NEURONS]
+  - 激活函数：Linear / ReLU / Leaky-ReLU / Sigmoid / Tanh / Softmax（6 种）
+  - `_nn_sigmoid(x)` — 分段线性近似：`0.5 + x/8`（|x| < 4 时）
+  - `_nn_tanh(x)` — 多项式近似：`x - x³/3`（饱和裁剪 ±SCALE）
+  - `_nn_softmax(values, count)` — 数值稳定版（减去 max，指数近似，归一化）
+  - 权重初始化：`nn_xavier_init(layer)` 均匀分布 Xavier，`nn_he_init(layer)` He 初始化（适合 ReLU）
+  - `nn_forward(input)` — 完整前向传播，激活值缓存于 nn_activations_cache
+  - 损失函数：`nn_loss_mse(pred, target, n)` MSE，`nn_loss_cross_entropy(pred, target, n)` 交叉熵
+  - `nn_argmax(output, n)` — 分类预测（最大激活值索引）
+  - `nn_backward_output(target, output_size)` — 输出层梯度下降（权重 + 偏置更新）
+  - Buffer: 0x1390000
+  - Shell 命令：`nn layer <size> <act>  nn init  nn forward <inputs>  nn loss  nn train  nn info  nn test`
+
+## Iteration 257 — matrix.hl：矩阵运算库
+
+- **`bare-kernel/hl/matrix.hl`** 新增（~465 行）
+  - 稠密矩阵运算库（类 BLAS），固定点算术（MATRIX_SCALE=1000）
+  - 矩阵池：8 个槽位（MATRIX_POOL_SIZE），最大 16×16（MATRIX_MAX_SIZE=256）
+  - `mat_alloc(rows, cols)` / `mat_free(m)` — 矩阵分配与释放
+  - `mat_from_array(rows, cols, values)` / `mat_identity(n)` / `mat_copy(src)` — 创建操作
+  - `mat_transpose(m)` — 转置（O(n²)）
+  - `mat_add(a, b)` / `mat_sub(a, b)` / `mat_scale(m, scalar)` — 逐元素运算
+  - `mat_mul(a, b)` — 标准 O(n³) 矩阵乘法（固定点除法）
+  - `mat_hadamard(a, b)` — 逐元素（Hadamard）乘积
+  - `mat_norm_frob(m)` — Frobenius 范数（整数开平方）
+  - `mat_trace(m)` — 对角元素之和
+  - `mat_lu_decompose(m)` — LU 分解，部分主元选取，原位运算
+  - `mat_inverse(m)` — Gauss-Jordan 增广矩阵法求逆（O(n³)）
+  - `mat_vecmul(m, x)` — 矩阵向量乘法 y = A × x
+  - `mat_print(m, label)` — 截断打印（最多 4×4）
+  - Buffer: 0x1380000
+  - Shell 命令：`mat new <rows> <cols>  mat identity <n>  mat mul <a> <b>  mat inv <m>  mat norm <m>  mat info <m>  mat test`
+
+## Iteration 256 — gossip.hl：SWIM Gossip 成员协议
+
+- **`bare-kernel/hl/gossip.hl`** 新增（~430 行）
+  - SWIM 协议（Das, Gupta, Karp 2002 / ICDCS）+ 流行病广播
+  - 成员状态：ALIVE / SUSPECT / DEAD / LEFT
+  - 11 种消息类型：PING / PING-REQ / ACK / ALIVE / SUSPECT / DEAD / JOIN / LEAVE / SYNC / SYNC_RESP / BROADCAST
+  - 最大 64 成员（GOSSIP_MAX_MEMBERS），直接探测扇出 3（GOSSIP_FANOUT）
+  - `gossip_init(node_id, addr)` — 初始化本节点，加入成员表
+  - `gossip_join(seed_id, seed_addr)` — 通过种子节点加入集群
+  - `_gossip_enqueue_event(type, id, inc)` — 事件入队，TTL = mult × log₂(N)（Retransmit 机制）
+  - `gossip_build_ping(target)` — 构建带事件捎带的 PING 消息
+  - `gossip_build_ping_req(target, via)` — 间接探测（PING-REQ）
+  - `gossip_handle_ping()` / `gossip_handle_ack()` — 接收处理 + 事件合并
+  - `gossip_suspect_member(id)` — 标记节点为 SUSPECT + 广播 SUSPECT 事件
+  - `gossip_declare_dead(id)` — 宣告节点为 DEAD + 故障计数
+  - `gossip_refute()` — 增加本节点 incarnation 以反驳误判
+  - `gossip_tick(delta_ms)` — 推进探测定时器 + 怀疑超时（5000ms 后宣告 DEAD）
+  - `gossip_broadcast(type, payload)` — 流行病广播至 k 个随机成员
+  - Buffer: 0x1370000
+  - Shell 命令：`gossip init <id> <addr>  gossip join <id> <addr>  gossip tick <ms>  gossip members  gossip status  gossip test`
 
 ## Iteration 255 — raft.hl：Raft 分布式共识
 

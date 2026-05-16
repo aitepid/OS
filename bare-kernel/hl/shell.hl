@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 625 commands + pipe operator (|):
+// 640 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -150,6 +150,9 @@ fn shell_handle(cmd) {
         serial_print("HTTP/2:   h2 connect  h2 get <path>  h2 post <path> <body>  h2 status  h2 stream <sid>  h2 ping  h2 goaway  h2 settings  h2 test");
         serial_print("JPEG:     jpeg load <path>  jpeg info  jpeg pixel <x> <y>  jpeg idct  jpeg test");
         serial_print("Raft:     raft init <id> <size>  raft peer <id>  raft propose <cmd>  raft tick <ms>  raft status  raft test");
+        serial_print("Gossip:   gossip init <id> <addr>  gossip join <id> <addr>  gossip tick <ms>  gossip members  gossip status  gossip test");
+        serial_print("Matrix:   mat new <rows> <cols>  mat identity <n>  mat mul <a> <b>  mat inv <m>  mat norm <m>  mat info <m>  mat test");
+        serial_print("Neural:   nn layer <size> <act>  nn init  nn forward <inputs>  nn loss  nn train  nn info  nn test");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -3540,6 +3543,85 @@ fn shell_handle_ext(cmd) {
     if cmd == "raft status" { return raft_status(); }
     if cmd == "raft test" { return raft_test(); }
 
+    // --- Gossip (SWIM membership protocol) ---
+    if str_starts_with(cmd, "gossip init ") {
+        let rest = str_slice(cmd, 12, len(cmd));
+        let parts = str_split(rest, " ");
+        let nid = to_int(parts[0]);
+        let addr = parts[1];
+        gossip_init(nid, addr);
+        return "gossip: initialized node=" + to_string(nid) + " addr=" + addr;
+    }
+    if str_starts_with(cmd, "gossip join ") {
+        let rest = str_slice(cmd, 12, len(cmd));
+        let parts = str_split(rest, " ");
+        let sid = to_int(parts[0]);
+        let saddr = parts[1];
+        gossip_join(sid, saddr);
+        return "gossip: joined via seed node " + to_string(sid) + " at " + saddr;
+    }
+    if str_starts_with(cmd, "gossip tick ") {
+        let ms2 = to_int(str_slice(cmd, 12, len(cmd)));
+        gossip_tick(ms2);
+        return "gossip: ticked " + to_string(ms2) + "ms -> " + gossip_status();
+    }
+    if cmd == "gossip members" { gossip_list_members(); return gossip_status(); }
+    if cmd == "gossip status" { return gossip_status(); }
+    if cmd == "gossip test" { return gossip_test(); }
+
+    // --- Matrix (BLAS-like matrix operations) ---
+    if str_starts_with(cmd, "mat new ") {
+        let rest2 = str_slice(cmd, 8, len(cmd));
+        let parts2 = str_split(rest2, " ");
+        let rows = to_int(parts2[0]);
+        let cols = to_int(parts2[1]);
+        let m = mat_alloc(rows, cols);
+        return "matrix: allocated slot " + to_string(m) + " [" + to_string(rows) + "x" + to_string(cols) + "]";
+    }
+    if str_starts_with(cmd, "mat identity ") {
+        let n2 = to_int(str_slice(cmd, 13, len(cmd)));
+        let mi = mat_identity(n2);
+        return mat_info(mi);
+    }
+    if str_starts_with(cmd, "mat mul ") {
+        let rest3 = str_slice(cmd, 8, len(cmd));
+        let parts3 = str_split(rest3, " ");
+        let ma = to_int(parts3[0]);
+        let mb = to_int(parts3[1]);
+        let mc = mat_mul(ma, mb);
+        if mc < 0 { return "matrix: mul failed (dimension mismatch)"; }
+        return mat_info(mc);
+    }
+    if str_starts_with(cmd, "mat inv ") {
+        let mi2 = to_int(str_slice(cmd, 8, len(cmd)));
+        let inv = mat_inverse(mi2);
+        if inv < 0 { return "matrix: singular (no inverse)"; }
+        return mat_info(inv);
+    }
+    if str_starts_with(cmd, "mat norm ") {
+        let mn = to_int(str_slice(cmd, 9, len(cmd)));
+        return "matrix: frob_norm=" + to_string(mat_norm_frob(mn) / MATRIX_SCALE);
+    }
+    if str_starts_with(cmd, "mat info ") {
+        let mi3 = to_int(str_slice(cmd, 9, len(cmd)));
+        return mat_info(mi3);
+    }
+    if cmd == "mat test" { return matrix_test(); }
+
+    // --- Neural (MLP inference engine) ---
+    if str_starts_with(cmd, "nn layer ") {
+        let rest4 = str_slice(cmd, 9, len(cmd));
+        let parts4 = str_split(rest4, " ");
+        let lsz = to_int(parts4[0]);
+        let act = to_int(parts4[1]);
+        let res = nn_add_layer(lsz, act);
+        if res != 0 { return "neural: layer add failed (limit reached)"; }
+        return "neural: added layer size=" + to_string(lsz) + " act=" + to_string(act) + " -> " + nn_info();
+    }
+    if cmd == "nn init" { neural_init(); return "neural: initialized -> " + nn_info(); }
+    if cmd == "nn info" { return nn_info(); }
+    if cmd == "nn test" { return neural_test(); }
+
     return shell_handle(cmd);
 }
 
@@ -3551,7 +3633,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 625 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft");
+print("shell.hl loaded -- 640 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural");
 
 // Main shell loop (called from kernel_init)
 
