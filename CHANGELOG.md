@@ -2,13 +2,57 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`223`（69 根目录 + 154 内核模块）
-- H-L 总行数：`~66,000`
-- 内核模块：`154`
-- Shell 命令：`210`
-- 最近完成功能迭代：`168`（irc + ui_calendar + compress）
+- `.hl` 文件：`226`（69 根目录 + 157 内核模块）
+- H-L 总行数：`~67,000`
+- 内核模块：`157`
+- Shell 命令：`223`
+- 最近完成功能迭代：`171`（sqlite + diff + ui_clock）
 
-## Iteration 168 — compress.hl：RLE + LZSS 无损压缩
+## Iteration 171 — ui_clock.hl：数字时钟小部件
+
+- **`bare-kernel/hl/ui_clock.hl`** 新增（~230 行）
+  - 浮动窗口 200×80，右上角定位（UICLOCK_X=984，UICLOCK_Y=40）
+  - 大字 HH:MM:SS 时间行（`ntp_get_time()` → `_uiclock_decode`）+ 日期行 YYYY-MM-DD
+  - 状态栏：`[h]24h` 切换 + 闹钟显示
+  - 'h' 键切换 12h/24h 模式；Esc 关闭
+  - `uiclock_tick()` 由 wm compositor 每帧调用，秒变化时自动 redraw
+  - `uiclock_set_alarm(h, m)`：整点触发 `notify_show` + klog
+  - `_uiclock_decode(unix)`：unix 时间戳 → [y,m,d,h,min,sec]，完整闰年支持
+- **`bare-kernel/hl/wm.hl`** 接入：draw+tick / key / click
+- **`bare-kernel/hl/ui_desktop.hl`** dock 第 12 号图标 `UIDSK_APP_CLOCK`，标签 "Clock"
+- **`bare-kernel/hl/shell.hl`** 新增 4 条命令：
+  - `clock` / `clock close` / `clock time` / `clock alarm <HH> <MM>`
+
+## Iteration 170 — diff.hl：LCS 统一差异算法
+
+- **`bare-kernel/hl/diff.hl`** 新增（~280 行）
+  - LCS 动态规划（128×128 表，16KB，展平 1-D HL 数组）
+  - 反向追踪生成编辑序列（" " context / "-" remove / "+" add）
+  - 分块输出：`@@ -A,B +C,D @@` hunk 格式，3 行上下文
+  - DIFF_BUF_A=0xDFA000（64 KB）+ DIFF_BUF_B=0xE0A000（64 KB）读文件缓冲
+  - 每文件最多 128 行（`DIFF_MAX_LINES`）
+  - `diff_files(path_a, path_b)` / `diff_strings(a, b)` / `diff_stat(a, b)`
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`diff_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 3 条命令：
+  - `diff <pathA> <pathB>` / `diffstat <pathA> <pathB>` / `diffstr <textA> <textB>`
+
+## Iteration 169 — sqlite.hl：嵌入式内存关系数据库
+
+- **`bare-kernel/hl/sqlite.hl`** 新增（~300 行）
+  - DB_MAX_TABLES=8；并行平坦数组（db_active/names/schemas/data/counts）
+  - 行格式：Tab 分隔字段；行间换行符分隔
+  - `_db_split(s, delim)` 通用字符串分割 → HL 数组
+  - `_db_col_idx(schema, col)` / `_db_row_val(row, idx)` 字段定位
+  - 完整 CRUD：`db_create` / `db_drop` / `db_insert` / `db_select_all`
+    / `db_select_where` / `db_delete_where` / `db_update_where`
+    / `db_count` / `db_schema` / `db_list`
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`db_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 9 条命令：
+  - `db list` / `db create <name> <schema>` / `db insert <name> <row>`
+  - `db select <name>` / `db where <name> <col> <val>`
+  - `db delete <name> <col> <val>` / `db drop <name>` / `db schema <name>` / `db count <name>`
+
+
 
 - **`bare-kernel/hl/compress.hl`** 新增（~260 行）
   - 双算法：RLE（逃逸字节 0xFF）+ LZSS（256 字节滑动窗口）

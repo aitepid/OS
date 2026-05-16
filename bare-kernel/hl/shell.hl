@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 210 commands + pipe operator (|):
+// 223 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -72,6 +72,9 @@ fn shell_handle(cmd) {
         serial_print("IRC:      irc connect <host> [port]  irc reg <id> <nick> <user>  irc join <id> <#chan>  irc say <id> <#chan> <msg>  irc part <id>  irc quit <id>");
         serial_print("Calendar: calendar  cal next  cal prev  cal today  cal add <day> <text>  cal goto <month> <year>");
         serial_print("Compress: compress <rle|lz> <src> <dst>  decompress <rle|lz> <src> <dst>  compstat <path>");
+        serial_print("SQLite:   db list  db create <name> <col1,col2>  db insert <name> <v1,v2>  db select <name>  db where <name> <col> <val>  db delete <name> <col> <val>  db drop <name>  db schema <name>");
+        serial_print("Diff:     diff <pathA> <pathB>  diffstat <pathA> <pathB>  diffstr <textA> <textB>");
+        serial_print("Clock:    clock  clock close  clock alarm <HH> <MM>  clock time");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -1445,6 +1448,133 @@ fn shell_handle_ext(cmd) {
         }
         return "File manager opened (window " + to_string(win_id) + ")";
     }
+
+    // === SQLite commands ===
+    if cmd == "db list" { return db_list(); }
+    if str_starts_with(cmd, "db create ") {
+        let args = str_sub(cmd, 10, len(cmd));
+        let sp = str_find(args, " ");
+        if sp < 0 { return "Usage: db create <name> <col1 col2 ...>"; }
+        let tname  = str_sub(args, 0, sp);
+        let schema = str_sub(args, sp + 1, len(args));
+        let id = db_create(tname, schema);
+        if id < 0 { return "Error: table exists or limit reached"; }
+        return "Created table '" + tname + "' id=" + to_string(id);
+    }
+    if str_starts_with(cmd, "db insert ") {
+        let args = str_sub(cmd, 10, len(cmd));
+        let sp = str_find(args, " ");
+        if sp < 0 { return "Usage: db insert <name> <val1 val2 ...>"; }
+        let tname = str_sub(args, 0, sp);
+        let row   = str_sub(args, sp + 1, len(args));
+        let id = _db_find(tname);
+        if id < 0 { return "Error: table '" + tname + "' not found"; }
+        let ri = db_insert(id, row);
+        return "Inserted row " + to_string(ri) + " into '" + tname + "'";
+    }
+    if str_starts_with(cmd, "db select ") {
+        let tname = str_sub(cmd, 10, len(cmd));
+        let id = _db_find(tname);
+        if id < 0 { return "Error: table '" + tname + "' not found"; }
+        return db_select_all(id);
+    }
+    if str_starts_with(cmd, "db where ") {
+        let args = str_sub(cmd, 9, len(cmd));
+        let sp1 = str_find(args, " ");
+        if sp1 < 0 { return "Usage: db where <name> <col> <val>"; }
+        let tname = str_sub(args, 0, sp1);
+        let rest  = str_sub(args, sp1 + 1, len(args));
+        let sp2   = str_find(rest, " ");
+        if sp2 < 0 { return "Usage: db where <name> <col> <val>"; }
+        let col = str_sub(rest, 0, sp2);
+        let val = str_sub(rest, sp2 + 1, len(rest));
+        let id = _db_find(tname);
+        if id < 0 { return "Error: table '" + tname + "' not found"; }
+        return db_select_where(id, col, val);
+    }
+    if str_starts_with(cmd, "db delete ") {
+        let args = str_sub(cmd, 10, len(cmd));
+        let sp1 = str_find(args, " ");
+        if sp1 < 0 { return "Usage: db delete <name> <col> <val>"; }
+        let tname = str_sub(args, 0, sp1);
+        let rest  = str_sub(args, sp1 + 1, len(args));
+        let sp2   = str_find(rest, " ");
+        if sp2 < 0 { return "Usage: db delete <name> <col> <val>"; }
+        let col = str_sub(rest, 0, sp2);
+        let val = str_sub(rest, sp2 + 1, len(rest));
+        let id = _db_find(tname);
+        if id < 0 { return "Error: table '" + tname + "' not found"; }
+        let n = db_delete_where(id, col, val);
+        return "Deleted " + to_string(n) + " row(s) from '" + tname + "'";
+    }
+    if str_starts_with(cmd, "db drop ") {
+        let tname = str_sub(cmd, 8, len(cmd));
+        let id = _db_find(tname);
+        if id < 0 { return "Error: table '" + tname + "' not found"; }
+        db_drop(id);
+        return "Dropped table '" + tname + "'";
+    }
+    if str_starts_with(cmd, "db schema ") {
+        let tname = str_sub(cmd, 10, len(cmd));
+        let id = _db_find(tname);
+        if id < 0 { return "Error: table '" + tname + "' not found"; }
+        return db_schema(id);
+    }
+    if str_starts_with(cmd, "db count ") {
+        let tname = str_sub(cmd, 9, len(cmd));
+        let id = _db_find(tname);
+        if id < 0 { return "Error: table '" + tname + "' not found"; }
+        return to_string(db_count(id)) + " rows";
+    }
+
+    // === Diff commands ===
+    if str_starts_with(cmd, "diff ") {
+        let args = str_sub(cmd, 5, len(cmd));
+        let sp = str_find(args, " ");
+        if sp < 0 { return "Usage: diff <pathA> <pathB>"; }
+        let pa = str_sub(args, 0, sp);
+        let pb = str_sub(args, sp + 1, len(args));
+        return diff_files(pa, pb);
+    }
+    if str_starts_with(cmd, "diffstat ") {
+        let args = str_sub(cmd, 9, len(cmd));
+        let sp = str_find(args, " ");
+        if sp < 0 { return "Usage: diffstat <pathA> <pathB>"; }
+        let pa = str_sub(args, 0, sp);
+        let pb = str_sub(args, sp + 1, len(args));
+        return diff_stat(pa, pb);
+    }
+    if str_starts_with(cmd, "diffstr ") {
+        let args = str_sub(cmd, 8, len(cmd));
+        let sp = str_find(args, " ");
+        if sp < 0 { return "Usage: diffstr <textA> <textB>"; }
+        let ta = str_sub(args, 0, sp);
+        let tb = str_sub(args, sp + 1, len(args));
+        return diff_strings(ta, tb);
+    }
+
+    // === Clock commands ===
+    if cmd == "clock" {
+        uiclock_open();
+        return "Clock opened";
+    }
+    if cmd == "clock close" {
+        uiclock_close();
+        return "Clock closed";
+    }
+    if cmd == "clock time" {
+        return uiclock_get_time_str();
+    }
+    if str_starts_with(cmd, "clock alarm ") {
+        let args = str_sub(cmd, 12, len(cmd));
+        let sp = str_find(args, " ");
+        if sp < 0 { return "Usage: clock alarm <HH> <MM>"; }
+        let h = parse_int(str_sub(args, 0, sp));
+        let m = parse_int(str_sub(args, sp + 1, len(args)));
+        uiclock_set_alarm(h, m);
+        return "Alarm set for " + to_string(h) + ":" + to_string(m);
+    }
+
     return shell_handle(cmd);
 }
 
@@ -1456,7 +1586,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 210 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress");
+print("shell.hl loaded -- 223 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock");
 
 // Main shell loop (called from kernel_init)
 

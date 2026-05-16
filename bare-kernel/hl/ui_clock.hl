@@ -1,0 +1,268 @@
+// ui_clock.hl -- Digital Clock Widget
+//
+// Iteration 171: Floating digital clock window showing HH:MM:SS.
+//
+// Features:
+//   - Small floating window (200 × 80 px) at top-right corner
+//   - Displays current time from ntp_get_time() each compositor tick
+//   - Date line below: YYYY-MM-DD
+//   - 12/24h toggle via 'h' key
+//   - Alarm: set via uiclock_set_alarm(h, m); fires shell bell + notify
+//   - Auto-refresh: uiclock_tick() called by wm compositor ~10 Hz
+//
+// Window layout:
+//   [  HH:MM:SS  ]    ← large digits row (y=20)
+//   [  YYYY-MM-DD ]   ← date row (y=48)
+//   [  24h  ALARM ]   ← status row (y=64)
+//
+// Public API:
+//   uiclock_init()
+//   uiclock_open()
+//   uiclock_close()
+//   uiclock_draw()
+//   uiclock_key(k)
+//   uiclock_click(mx, my)
+//   uiclock_tick()             — call from wm compositor
+//   uiclock_set_alarm(h, m)    — set alarm time (24h)
+//   uiclock_get_time_str()     → "HH:MM:SS"
+
+let UICLOCK_X     = 984;   // right side of 1200-wide desktop
+let UICLOCK_Y     = 40;    // below top bar
+let UICLOCK_W     = 200;
+let UICLOCK_H     = 80;
+let UICLOCK_BG    = 0x1A1A2E;   // dark navy
+let UICLOCK_FG    = 0x00FF88;   // green digits
+let UICLOCK_DATE_FG = 0xAAAAAA; // grey date text
+let UICLOCK_SEL   = 0x16213E;   // slightly lighter for status bar
+
+let mut uiclock_is_open   = 0;
+let mut uiclock_mode_24h  = 1;   // 1=24h, 0=12h
+let mut uiclock_alarm_h   = 0 - 1;   // disabled (-1)
+let mut uiclock_alarm_m   = 0 - 1;
+let mut uiclock_alarm_fired = 0;
+let mut uiclock_last_sec  = 0 - 1;   // last drawn second (to detect change)
+let mut uiclock_last_str  = "--:--:--";
+
+fn uiclock_init() {
+    uiclock_is_open    = 0;
+    uiclock_mode_24h   = 1;
+    uiclock_alarm_h    = 0 - 1;
+    uiclock_alarm_m    = 0 - 1;
+    uiclock_alarm_fired = 0;
+    uiclock_last_sec   = 0 - 1;
+    uiclock_last_str   = "--:--:--";
+    print("ui_clock: init");
+    return 0;
+}
+
+fn uiclock_open() {
+    uiclock_is_open = 1;
+    uiclock_last_sec = 0 - 1;   // force redraw
+    print("ui_clock: opened");
+    return 0;
+}
+
+fn uiclock_close() {
+    uiclock_is_open = 0;
+    return 0;
+}
+
+// ============================================================
+// Time formatting helpers
+// ============================================================
+
+fn _uiclock_pad2(n) {
+    if n < 10 { return "0" + to_string(n); }
+    return to_string(n);
+}
+
+// Decode unix timestamp → [y, m, d, h, min, sec]
+fn _uiclock_decode(unix) {
+    let sec  = unix % 60;
+    let tot_min = unix / 60;
+    let min  = tot_min % 60;
+    let tot_h = tot_min / 60;
+    let hour = tot_h % 24;
+    let days = tot_h / 24;
+
+    // Days since 1970-01-01 → date
+    let mut y = 1970;
+    let mut d = days;
+    let mut go = 1;
+    while go == 1 {
+        let leap = 0;
+        let yr4  = y % 4;
+        let yr100 = y % 100;
+        let yr400 = y % 400;
+        if yr4 == 0 {
+            if yr100 == 0 {
+                if yr400 == 0 { leap = 1; }
+            } else { leap = 1; }
+        }
+        let ydays = 365 + leap;
+        if d >= ydays { d = d - ydays; y = y + 1; }
+        else { go = 0; }
+    }
+    let leap2 = 0;
+    let yr4b  = y % 4;
+    let yr100b = y % 100;
+    let yr400b = y % 400;
+    if yr4b == 0 {
+        if yr100b == 0 {
+            if yr400b == 0 { leap2 = 1; }
+        } else { leap2 = 1; }
+    }
+    let mdays = [31, 28 + leap2, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let mut mo = 1;
+    let mut di = d;
+    let mut go2 = 1;
+    while go2 == 1 {
+        if mo > 12 { go2 = 0; }
+        else {
+            let md = mdays[mo - 1];
+            if di >= md { di = di - md; mo = mo + 1; }
+            else { go2 = 0; }
+        }
+    }
+    let day = di + 1;
+    return [y, mo, day, hour, min, sec];
+}
+
+fn uiclock_get_time_str() {
+    let unix = ntp_get_time();
+    if unix <= 0 { return "--:--:--"; }
+    let t = _uiclock_decode(unix);
+    let h = t[3];
+    let m = t[4];
+    let s = t[5];
+    if uiclock_mode_24h == 1 {
+        return _uiclock_pad2(h) + ":" + _uiclock_pad2(m) + ":" + _uiclock_pad2(s);
+    } else {
+        let h12 = h % 12;
+        if h12 == 0 { h12 = 12; }
+        let ampm = "AM";
+        if h >= 12 { ampm = "PM"; }
+        return _uiclock_pad2(h12) + ":" + _uiclock_pad2(m) + ":" + _uiclock_pad2(s) + " " + ampm;
+    }
+}
+
+fn _uiclock_date_str() {
+    let unix = ntp_get_time();
+    if unix <= 0 { return "----/--/--"; }
+    let t = _uiclock_decode(unix);
+    return to_string(t[0]) + "-" + _uiclock_pad2(t[1]) + "-" + _uiclock_pad2(t[2]);
+}
+
+// ============================================================
+// Draw
+// ============================================================
+
+fn uiclock_draw() {
+    if uiclock_is_open == 0 { return 0; }
+    let x = UICLOCK_X;
+    let y = UICLOCK_Y;
+    let w = UICLOCK_W;
+    let h = UICLOCK_H;
+
+    // Background
+    ui_fill_rect(x, y, w, h, UICLOCK_BG);
+    // Border
+    ui_draw_rect(x, y, w, h, UICLOCK_FG);
+
+    // Time string (large)
+    let tstr = uiclock_get_time_str();
+    uiclock_last_str = tstr;
+    ui_draw_text(x + 18, y + 16, tstr, UICLOCK_FG);
+
+    // Date string
+    let dstr = _uiclock_date_str();
+    ui_draw_text(x + 34, y + 44, dstr, UICLOCK_DATE_FG);
+
+    // Status bar
+    ui_fill_rect(x, y + 62, w, 18, UICLOCK_SEL);
+    let mode_lbl = "24h";
+    if uiclock_mode_24h == 0 { mode_lbl = "12h"; }
+    ui_draw_text(x + 6, y + 65, "[h]" + mode_lbl, UICLOCK_DATE_FG);
+    if uiclock_alarm_h >= 0 {
+        let alm = "ALM:" + _uiclock_pad2(uiclock_alarm_h) + ":" + _uiclock_pad2(uiclock_alarm_m);
+        ui_draw_text(x + 90, y + 65, alm, 0xFF8800);
+    } else {
+        ui_draw_text(x + 90, y + 65, "no alarm", UICLOCK_DATE_FG);
+    }
+    return 0;
+}
+
+// ============================================================
+// Input
+// ============================================================
+
+fn uiclock_key(k) {
+    if uiclock_is_open == 0 { return 0; }
+    if k == 104 {
+        // 'h' — toggle 12/24h
+        if uiclock_mode_24h == 1 { uiclock_mode_24h = 0; }
+        else { uiclock_mode_24h = 1; }
+        uiclock_last_sec = 0 - 1;
+    }
+    if k == 27 { uiclock_close(); }
+    return 0;
+}
+
+fn uiclock_click(mx, my) {
+    if uiclock_is_open == 0 { return 0; }
+    // Click title bar area to close
+    if mx >= UICLOCK_X {
+        if mx <= UICLOCK_X + UICLOCK_W {
+            if my >= UICLOCK_Y {
+                if my <= UICLOCK_Y + 14 {
+                    uiclock_close();
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+// ============================================================
+// Tick (called by wm compositor ~10 Hz)
+// ============================================================
+
+fn uiclock_tick() {
+    if uiclock_is_open == 0 { return 0; }
+    let unix = ntp_get_time();
+    if unix <= 0 { return 0; }
+    let cur_sec = unix % 60;
+    if cur_sec == uiclock_last_sec { return 0; }
+    uiclock_last_sec = cur_sec;
+    uiclock_draw();
+
+    // Alarm check
+    if uiclock_alarm_h >= 0 {
+        let t = _uiclock_decode(unix);
+        if t[3] == uiclock_alarm_h {
+            if t[4] == uiclock_alarm_m {
+                if t[5] == 0 {
+                    if uiclock_alarm_fired == 0 {
+                        uiclock_alarm_fired = 1;
+                        print("ui_clock: ALARM! " + _uiclock_pad2(uiclock_alarm_h) + ":" + _uiclock_pad2(uiclock_alarm_m));
+                        notify_show("Alarm", "Time: " + _uiclock_pad2(uiclock_alarm_h) + ":" + _uiclock_pad2(uiclock_alarm_m), 2);
+                    }
+                } else {
+                    uiclock_alarm_fired = 0;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+fn uiclock_set_alarm(h, m) {
+    uiclock_alarm_h = h;
+    uiclock_alarm_m = m;
+    uiclock_alarm_fired = 0;
+    print("ui_clock: alarm set " + _uiclock_pad2(h) + ":" + _uiclock_pad2(m));
+    return 0;
+}
+
+print("ui_clock.hl loaded");
+print("Clock: digital HH:MM:SS + date, 12/24h toggle, alarm, NTP-synced");

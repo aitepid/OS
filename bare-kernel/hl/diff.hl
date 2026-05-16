@@ -1,0 +1,387 @@
+// diff.hl -- Line-by-Line File Diff (Unified Format)
+//
+// Iteration 170: LCS-based diff for VFS text files.
+//
+// Algorithm: Myers / LCS dynamic programming on line arrays.
+//   LCS table is simulated via a flat 1-D array (DIFF_MAX_LINES^2 cells).
+//   After computing LCS lengths, the diff is reconstructed by backtracking.
+//
+// Output format (unified diff subset):
+//   --- path1
+//   +++ path2
+//   @@ -A,B +C,D @@
+//    <context line>
+//   -<removed line>
+//   +<added line>
+//
+// Limits:
+//   DIFF_MAX_LINES = 128  (per file; larger files are truncated)
+//   DIFF_BUF_SZ    = 65536 bytes for each file read buffer
+//   LCS table      = 128*128 = 16384 int cells (flat array)
+//
+// Scratch memory (contiguous block, above compress buffers):
+//   DIFF_BUF_A   = 0xDFA000 (14720000)  file A read buffer   64 KB
+//   DIFF_BUF_B   = 0xE0A000 (14786048)  file B read buffer   64 KB
+//
+// Public API:
+//   diff_init()
+//   diff_files(path_a, path_b)    → unified diff string
+//   diff_strings(text_a, text_b)  → unified diff string
+//   diff_stat(path_a, path_b)     → "N added, M removed" summary
+
+let DIFF_MAX_LINES = 128;
+let DIFF_BUF_SZ   = 65536;
+let DIFF_BUF_A    = 14720000;   // 0xDFA000
+let DIFF_BUF_B    = 14786048;   // 0xE0A000
+
+// LCS DP table stored as a flat HL int array (DIFF_MAX_LINES+1)^2
+let mut diff_lcs = [];
+
+// Scratch line arrays for most recent diff call
+let mut diff_lines_a = [];
+let mut diff_lines_b = [];
+
+fn diff_init() {
+    diff_lcs = [];
+    let total = (DIFF_MAX_LINES + 1) * (DIFF_MAX_LINES + 1);
+    let mut i = 0;
+    while i < total {
+        push(diff_lcs, 0);
+        i = i + 1;
+    }
+    diff_lines_a = [];
+    diff_lines_b = [];
+    print("diff: init — LCS table " + to_string(total) + " cells");
+    return 0;
+}
+
+// ============================================================
+// Line splitter (split on \n)
+// ============================================================
+
+fn _diff_split_lines(text) {
+    let mut lines = [];
+    let n = len(text);
+    let mut start = 0;
+    let mut i = 0;
+    while i < n {
+        let c = str_sub(text, i, i + 1);
+        if c == "\n" {
+            push(lines, str_sub(text, start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+        if len(lines) >= DIFF_MAX_LINES { i = n; }
+    }
+    if start < n {
+        let last = str_sub(text, start, n);
+        if len(last) > 0 { push(lines, last); }
+    }
+    return lines;
+}
+
+// ============================================================
+// LCS DP
+// ============================================================
+
+fn _diff_lcs_idx(i, j) {
+    return i * (DIFF_MAX_LINES + 1) + j;
+}
+
+fn _diff_build_lcs(la, lb) {
+    let na = len(la);
+    let nb = len(lb);
+    // Fill LCS table
+    let mut i = 1;
+    while i <= na {
+        let mut j = 1;
+        while j <= nb {
+            let idx = _diff_lcs_idx(i, j);
+            if la[i - 1] == lb[j - 1] {
+                let prev = diff_lcs[_diff_lcs_idx(i - 1, j - 1)];
+                set_at(diff_lcs, idx, prev + 1);
+            } else {
+                let up   = diff_lcs[_diff_lcs_idx(i - 1, j)];
+                let left = diff_lcs[_diff_lcs_idx(i, j - 1)];
+                if up >= left { set_at(diff_lcs, idx, up); }
+                else          { set_at(diff_lcs, idx, left); }
+            }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// ============================================================
+// Backtrack to produce edit script as array of op strings:
+//   " line"  → context (unchanged)
+//   "-line"  → removed from A
+//   "+line"  → added in B
+// ============================================================
+
+fn _diff_backtrack(la, lb, i, j) {
+    let mut edits = [];
+    while i > 0 {
+        if j > 0 {
+            if la[i - 1] == lb[j - 1] {
+                // Common line (prepend context)
+                let mut tmp = [];
+                push(tmp, " " + la[i - 1]);
+                let mut k = 0;
+                while k < len(edits) { push(tmp, edits[k]); k = k + 1; }
+                edits = tmp;
+                i = i - 1;
+                j = j - 1;
+            } else {
+                let up   = diff_lcs[_diff_lcs_idx(i - 1, j)];
+                let left = diff_lcs[_diff_lcs_idx(i, j - 1)];
+                if up >= left {
+                    let mut tmp = [];
+                    push(tmp, "-" + la[i - 1]);
+                    let mut k = 0;
+                    while k < len(edits) { push(tmp, edits[k]); k = k + 1; }
+                    edits = tmp;
+                    i = i - 1;
+                } else {
+                    let mut tmp = [];
+                    push(tmp, "+" + lb[j - 1]);
+                    let mut k = 0;
+                    while k < len(edits) { push(tmp, edits[k]); k = k + 1; }
+                    edits = tmp;
+                    j = j - 1;
+                }
+            }
+        } else {
+            // Only lines from A remain
+            let mut tmp = [];
+            push(tmp, "-" + la[i - 1]);
+            let mut k = 0;
+            while k < len(edits) { push(tmp, edits[k]); k = k + 1; }
+            edits = tmp;
+            i = i - 1;
+        }
+    }
+    while j > 0 {
+        let mut tmp = [];
+        push(tmp, "+" + lb[j - 1]);
+        let mut k = 0;
+        while k < len(edits) { push(tmp, edits[k]); k = k + 1; }
+        edits = tmp;
+        j = j - 1;
+    }
+    return edits;
+}
+
+// ============================================================
+// Hunk builder: group edits into @@ hunks (3-line context)
+// ============================================================
+
+fn _diff_format_hunks(edits, name_a, name_b, na, nb) {
+    let n = len(edits);
+    if n == 0 { return ""; }
+
+    // Check if any change exists
+    let mut has_change = 0;
+    let mut ei = 0;
+    while ei < n {
+        let first = str_sub(edits[ei], 0, 1);
+        if first == "-" { has_change = 1; }
+        if first == "+" { has_change = 1; }
+        ei = ei + 1;
+    }
+    if has_change == 0 { return ""; }
+
+    let mut out = "--- " + name_a + "\n+++ " + name_b + "\n";
+    let ctx = 3;
+
+    // Find hunk ranges
+    let mut i = 0;
+    while i < n {
+        let first = str_sub(edits[i], 0, 1);
+        if first == "-" {
+            // Start of hunk: back up ctx lines for context
+            let hunk_start = i - ctx;
+            let mut hs = hunk_start;
+            if hs < 0 { hs = 0; }
+
+            // Scan forward to find end of hunk (last change + ctx)
+            let mut hunk_end = i;
+            let mut j = i;
+            while j < n {
+                let fc = str_sub(edits[j], 0, 1);
+                if fc == "-" { hunk_end = j; }
+                if fc == "+" { hunk_end = j; }
+                j = j + 1;
+            }
+            let he = hunk_end + ctx;
+            let mut he2 = he;
+            if he2 >= n { he2 = n - 1; }
+
+            // Count A/B line numbers
+            let mut line_a = 1;
+            let mut line_b = 1;
+            let mut k = 0;
+            while k < hs {
+                let fc = str_sub(edits[k], 0, 1);
+                if fc == " " { line_a = line_a + 1; line_b = line_b + 1; }
+                if fc == "-" { line_a = line_a + 1; }
+                if fc == "+" { line_b = line_b + 1; }
+                k = k + 1;
+            }
+            let mut cnt_a = 0;
+            let mut cnt_b = 0;
+            k = hs;
+            while k <= he2 {
+                let fc = str_sub(edits[k], 0, 1);
+                if fc == " " { cnt_a = cnt_a + 1; cnt_b = cnt_b + 1; }
+                if fc == "-" { cnt_a = cnt_a + 1; }
+                if fc == "+" { cnt_b = cnt_b + 1; }
+                k = k + 1;
+            }
+
+            out = out + "@@ -" + to_string(line_a) + "," + to_string(cnt_a)
+                      + " +" + to_string(line_b) + "," + to_string(cnt_b) + " @@\n";
+            k = hs;
+            while k <= he2 {
+                out = out + edits[k] + "\n";
+                k = k + 1;
+            }
+            i = he2 + 1;
+        } else {
+            if first == "+" {
+                // Added-only hunk (no preceding "-")
+                let hunk_start = i - ctx;
+                let mut hs = hunk_start;
+                if hs < 0 { hs = 0; }
+                let mut hunk_end = i;
+                let mut j = i;
+                while j < n {
+                    let fc = str_sub(edits[j], 0, 1);
+                    if fc == "+" { hunk_end = j; }
+                    j = j + 1;
+                }
+                let he = hunk_end + ctx;
+                let mut he2 = he;
+                if he2 >= n { he2 = n - 1; }
+
+                let mut line_a = 1;
+                let mut line_b = 1;
+                let mut k = 0;
+                while k < hs {
+                    let fc = str_sub(edits[k], 0, 1);
+                    if fc == " " { line_a = line_a + 1; line_b = line_b + 1; }
+                    if fc == "-" { line_a = line_a + 1; }
+                    if fc == "+" { line_b = line_b + 1; }
+                    k = k + 1;
+                }
+                let mut cnt_a = 0;
+                let mut cnt_b = 0;
+                k = hs;
+                while k <= he2 {
+                    let fc = str_sub(edits[k], 0, 1);
+                    if fc == " " { cnt_a = cnt_a + 1; cnt_b = cnt_b + 1; }
+                    if fc == "-" { cnt_a = cnt_a + 1; }
+                    if fc == "+" { cnt_b = cnt_b + 1; }
+                    k = k + 1;
+                }
+                out = out + "@@ -" + to_string(line_a) + "," + to_string(cnt_a)
+                          + " +" + to_string(line_b) + "," + to_string(cnt_b) + " @@\n";
+                k = hs;
+                while k <= he2 {
+                    out = out + edits[k] + "\n";
+                    k = k + 1;
+                }
+                i = he2 + 1;
+            } else {
+                i = i + 1;
+            }
+        }
+    }
+    return out;
+}
+
+// ============================================================
+// Public API
+// ============================================================
+
+fn diff_strings(text_a, text_b) {
+    let la = _diff_split_lines(text_a);
+    let lb = _diff_split_lines(text_b);
+    diff_lines_a = la;
+    diff_lines_b = lb;
+
+    // Reset LCS table
+    let total = (DIFF_MAX_LINES + 1) * (DIFF_MAX_LINES + 1);
+    let mut i = 0;
+    while i < total { set_at(diff_lcs, i, 0); i = i + 1; }
+
+    _diff_build_lcs(la, lb);
+    let edits = _diff_backtrack(la, lb, len(la), len(lb));
+    return _diff_format_hunks(edits, "<a>", "<b>", len(la), len(lb));
+}
+
+fn diff_files(path_a, path_b) {
+    let fd_a = vfs_open(path_a, 0);
+    if fd_a < 0 { return "diff: cannot open " + path_a; }
+    let n_a = vfs_read(fd_a, DIFF_BUF_A, DIFF_BUF_SZ);
+    vfs_close(fd_a);
+
+    let fd_b = vfs_open(path_b, 0);
+    if fd_b < 0 { return "diff: cannot open " + path_b; }
+    let n_b = vfs_read(fd_b, DIFF_BUF_B, DIFF_BUF_SZ);
+    vfs_close(fd_b);
+
+    // Build strings from memory buffers
+    let mut text_a = "";
+    let mut i = 0;
+    while i < n_a {
+        text_a = text_a + str_from_byte(mem_read_u8(DIFF_BUF_A + i));
+        i = i + 1;
+    }
+    let mut text_b = "";
+    i = 0;
+    while i < n_b {
+        text_b = text_b + str_from_byte(mem_read_u8(DIFF_BUF_B + i));
+        i = i + 1;
+    }
+
+    let la = _diff_split_lines(text_a);
+    let lb = _diff_split_lines(text_b);
+    diff_lines_a = la;
+    diff_lines_b = lb;
+
+    let total = (DIFF_MAX_LINES + 1) * (DIFF_MAX_LINES + 1);
+    i = 0;
+    while i < total { set_at(diff_lcs, i, 0); i = i + 1; }
+
+    _diff_build_lcs(la, lb);
+    let edits = _diff_backtrack(la, lb, len(la), len(lb));
+    return _diff_format_hunks(edits, path_a, path_b, len(la), len(lb));
+}
+
+fn diff_stat(path_a, path_b) {
+    let result = diff_files(path_a, path_b);
+    let mut added = 0;
+    let mut removed = 0;
+    let lines = _diff_split_lines(result);
+    let mut i = 0;
+    while i < len(lines) {
+        let fc = str_sub(lines[i], 0, 1);
+        if fc == "+" {
+            let fc2 = str_sub(lines[i], 0, 3);
+            if fc2 == "+++" { i = i + 1; }
+            else { added = added + 1; i = i + 1; }
+        } else {
+            if fc == "-" {
+                let fc2 = str_sub(lines[i], 0, 3);
+                if fc2 == "---" { i = i + 1; }
+                else { removed = removed + 1; i = i + 1; }
+            } else { i = i + 1; }
+        }
+    }
+    return to_string(added) + " added, " + to_string(removed) + " removed";
+}
+
+print("diff.hl loaded");
+print("Diff: LCS unified diff (128-line limit, 3-line context), diff_files/diff_strings/diff_stat");
