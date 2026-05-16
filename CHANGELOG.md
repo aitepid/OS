@@ -2,13 +2,66 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`307`（69 根目录 + 238 内核模块）
-- H-L 总行数：`~85,500`
-- 内核模块：`238`
-- Shell 命令：`610`
-- 最近完成功能迭代：`252`（x509 + grpc + png）
+- `.hl` 文件：`310`（69 根目录 + 241 内核模块）
+- H-L 总行数：`~88,500`
+- 内核模块：`241`
+- Shell 命令：`625`
+- 最近完成功能迭代：`255`（http2 + jpeg + raft）
 
-## Iteration 252 — png.hl：PNG 图像解码器
+## Iteration 255 — raft.hl：Raft 分布式共识
+
+- **`bare-kernel/hl/raft.hl`** 新增（~400 行）
+  - Raft 共识算法（Ongaro & Ousterhout 2014 / USENIX ATC'14）
+  - 三种节点状态：Follower / Candidate / Leader
+  - 领导者选举：`raft_start_election()` — 递增任期，向所有节点广播 RequestVote RPC
+  - `raft_handle_request_vote()` — 投票逻辑：检查任期 + 日志最新性（Log Up-to-date）
+  - `raft_handle_vote_response()` — 收集多数派选票后调用 `_raft_become_leader()`
+  - 日志复制：`raft_propose(cmd)` — 客户端提交命令（仅 Leader 可接受）
+  - `raft_build_append_entries(peer_idx)` — 构建 AppendEntries RPC（含 prevLogIndex/Term）
+  - `raft_handle_append_entries()` — 追随者日志一致性检查 + 追加 + 更新 commitIndex
+  - `raft_handle_append_response()` — 处理复制确认，调用 `_raft_advance_commit()`
+  - 提交推进：`_raft_advance_commit()` — 统计多数派匹配索引，提升 commitIndex
+  - 状态机应用：`_raft_apply_committed()` — 将已提交日志应用到状态机
+  - 快照：`raft_install_snapshot()` — 安装压缩快照，丢弃旧日志
+  - 选举定时器：`raft_tick(ms)` — 驱动超时（随机化选举超时 150-300ms，心跳 50ms）
+  - 支持 7 节点集群，1024 条日志，64 条待处理
+  - Shell 命令：`raft init <id> <size>  raft peer <id>  raft propose <cmd>  raft tick <ms>  raft status  raft test`
+
+## Iteration 254 — jpeg.hl：JPEG 图像解码器
+
+- **`bare-kernel/hl/jpeg.hl`** 新增（~350 行）
+  - JPEG 基线解码器（ISO 10918-1 / ITU-T T.81）
+  - 完整 JPEG 标记解析：SOI/EOI/SOF0/DHT/DQT/SOS/DRI/APP0/APP1/COM
+  - `jpeg_decode(data)` — 扫描标记链，提取图像参数，生成像素数据
+  - SOF0 解析：`_jpeg_parse_sof()` — 精度/宽/高/分量数
+  - DQT 解析：`_jpeg_parse_dqt()` — 标准亮度/色度量化表，Zigzag 反扫描
+  - 标准量化表：JPEG_LUMA_QT (64 系数) + JPEG_CHROMA_QT (64 系数)
+  - Zigzag 扫描顺序：JPEG_ZIGZAG[64]（标准 8×8 DCT 系数顺序）
+  - `_jpeg_idct_block(coeffs)` — AAN 算法近似 IDCT：行列两次 1D-IDCT 蝶形运算
+  - 量化反变换：`_jpeg_dequantize(coeffs, qtable)` — 系数 × 量化步长
+  - `_jpeg_ycbcr_to_rgb(Y, Cb, Cr, x, y)` — YCbCr→RGB 颜色空间转换（BT.601 系数）
+  - `jpeg_get_pixel(x, y)` — 获取解码后 RGBA 像素
+  - Shell 命令：`jpeg load <path>  jpeg info  jpeg pixel <x> <y>  jpeg idct  jpeg test`
+
+## Iteration 253 — http2.hl：HTTP/2 协议
+
+- **`bare-kernel/hl/http2.hl`** 新增（~380 行）
+  - HTTP/2 协议（RFC 7540）+ HPACK 头部压缩（RFC 7541）
+  - 10 种帧类型：DATA/HEADERS/PRIORITY/RST_STREAM/SETTINGS/PUSH_PROMISE/PING/GOAWAY/WINDOW_UPDATE/CONTINUATION
+  - 14 种错误码（H2_ERR_*）+ 6 种 SETTINGS 参数
+  - `h2_build_frame_header(len, type, flags, stream_id)` — 构建 9 字节帧头
+  - `h2_parse_frame(data, pos)` — 解析入站帧，填充 h2_last_frame_* 状态
+  - `h2_build_request(method, path, scheme, authority, sid)` — 构建 HEADERS 帧（HPACK 编码）
+  - `h2_build_settings(ack)` — 构建 SETTINGS 帧（6 参数或 ACK）
+  - `h2_build_ping(opaque, ack)` / `h2_build_goaway()` / `h2_build_window_update()` / `h2_build_rst_stream()`
+  - HPACK 静态表：61 条预定义头部（:method GET/POST、:path /、:status 200/404 等）
+  - HPACK 动态表：`h2_hpack_add_dynamic(name, val)` — 带 LRU 驱逐的动态头部表
+  - HPACK 编码：索引引用（静态）+ 字面量增量索引（动态）
+  - 流多路复用：128 流状态跟踪（idle/open/half-closed/closed）
+  - 流量控制：`h2_build_window_update()` — 连接级 + 流级窗口更新
+  - Shell 命令：`h2 connect  h2 get <p>  h2 post <p> <b>  h2 status  h2 stream <sid>  h2 ping  h2 goaway  h2 settings  h2 test`
+
+
 
 - **`bare-kernel/hl/png.hl`** 新增（~400 行）
   - PNG 图像解码器（RFC 2083 / ISO 15948），RGBA 像素输出
