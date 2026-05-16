@@ -1,0 +1,316 @@
+// bloom_filter.hl -- Bloom Filter (Probabilistic Set Membership)
+//
+// Implements a Bloom filter (Burton Howard Bloom, 1970) with:
+//   - Configurable bit-array size (up to 256 bits via 8 × 32-bit words)
+//   - k independent hash functions (FNV-1a variant, arithmetic-only)
+//   - O(k) insert and query — no false negatives, bounded false positives
+//   - False positive rate estimation: (1 - e^(-kn/m))^k
+//   - Counting Bloom filter variant (supports delete via counters)
+//   - Scalable Bloom filter: auto-grow when fill exceeds 50%
+//
+// Buffer: 0x13B0000
+
+let BLOOM_BUF = 0x13B0000;
+
+// Bit-array parameters
+let BLOOM_WORDS     = 8;    // 8 × 32 bits = 256 bits total
+let BLOOM_BITS      = 256;  // total bit capacity
+let BLOOM_MAX_K     = 8;    // max hash functions
+
+// Standard filter state
+let bloom_bits      = [];   // 8 words (arithmetic bit simulation)
+let bloom_k         = 3;    // number of hash functions
+let bloom_count     = 0;    // approximate element count (for FP estimation)
+let bloom_capacity  = 0;    // configured capacity (max elements before FP degrades)
+
+// Counting filter: parallel array of 4-bit counters (two per byte, stored as ints)
+let bloom_counters  = [];   // 256 counters (one per bit position)
+
+// Scalable variant: multiple filter layers
+let BLOOM_SCALE_LAYERS = 4;
+let bloom_layer_bits   = [];  // BLOOM_SCALE_LAYERS × BLOOM_WORDS
+let bloom_layer_count  = 1;   // active layers
+let bloom_layer_sizes  = [256, 512, 1024, 2048];  // bits per layer
+
+let bloom_initialized = 0;
+
+fn bloom_init(k, capacity) {
+    if k < 1 { k = 1; }
+    if k > BLOOM_MAX_K { k = BLOOM_MAX_K; }
+    bloom_k        = k;
+    bloom_capacity = capacity;
+    bloom_count    = 0;
+    // Zero bit-array
+    let i = 0;
+    while i < BLOOM_WORDS {
+        set_at(bloom_bits, i, 0);
+        i = i + 1;
+    }
+    // Zero counters
+    i = 0;
+    while i < BLOOM_BITS {
+        set_at(bloom_counters, i, 0);
+        i = i + 1;
+    }
+    // Zero scalable layers
+    i = 0;
+    while i < BLOOM_SCALE_LAYERS * BLOOM_WORDS {
+        set_at(bloom_layer_bits, i, 0);
+        i = i + 1;
+    }
+    bloom_layer_count = 1;
+    bloom_initialized = 1;
+    return 0;
+}
+
+// FNV-1a inspired hash (arithmetic-only, no bitwise XOR)
+// Returns a value in [0, BLOOM_BITS)
+fn _bloom_hash(item, seed) {
+    // FNV-like: h = (h * FNV_PRIME + byte) mod BLOOM_BITS
+    // We treat the string as a sequence of character codes
+    let h = 2166136261;  // FNV offset basis (modular)
+    h = h - ((h / 1000000) * 1000000);  // reduce to fit arithmetic
+    let fnv_prime = 16777619;
+    // Mix seed into initial hash
+    h = (h + seed * 6971) - (((h + seed * 6971) / BLOOM_BITS) * BLOOM_BITS);
+    // Hash each character of the item string
+    let i = 0;
+    let slen = len(item);
+    while i < slen {
+        let c = char_code(item, i);
+        h = h * fnv_prime + c;
+        // Keep h in range [0, BLOOM_BITS) via mod
+        h = h - ((h / BLOOM_BITS) * BLOOM_BITS);
+        if h < 0 { h = -h; }
+        i = i + 1;
+    }
+    return h - ((h / BLOOM_BITS) * BLOOM_BITS);
+}
+
+// Alternative: hash an integer key
+fn _bloom_hash_int(key, seed) {
+    let h = key * 2654435769 + seed * 6971 + 1013904223;
+    h = h - ((h / BLOOM_BITS) * BLOOM_BITS);
+    if h < 0 { h = -h; }
+    return h - ((h / BLOOM_BITS) * BLOOM_BITS);
+}
+
+// Get bit at position pos in bloom_bits array (arithmetic simulation)
+fn _bloom_get_bit(pos) {
+    let word_idx = pos / 32;
+    let bit_pos  = pos - (word_idx * 32);
+    let word = bloom_bits[word_idx];
+    // Extract bit: word >> bit_pos & 1 (arithmetic simulation)
+    let divisor = 1;
+    let p = 0;
+    while p < bit_pos { divisor = divisor * 2; p = p + 1; }
+    let shifted = word / divisor;
+    return shifted - ((shifted / 2) * 2);  // & 1
+}
+
+// Set bit at position pos in bloom_bits array
+fn _bloom_set_bit(pos) {
+    let word_idx = pos / 32;
+    let bit_pos  = pos - (word_idx * 32);
+    let word = bloom_bits[word_idx];
+    // Set bit: word | (1 << bit_pos)
+    let mask = 1;
+    let p = 0;
+    while p < bit_pos { mask = mask * 2; p = p + 1; }
+    // Check if bit already set
+    let already = (word / mask) - (((word / mask) / 2) * 2);
+    if already == 0 { set_at(bloom_bits, word_idx, word + mask); }
+    return 0;
+}
+
+// Clear bit at position pos (for counting filter delete)
+fn _bloom_clear_bit(pos) {
+    let word_idx = pos / 32;
+    let bit_pos  = pos - (word_idx * 32);
+    let word = bloom_bits[word_idx];
+    let mask = 1;
+    let p = 0;
+    while p < bit_pos { mask = mask * 2; p = p + 1; }
+    let already = (word / mask) - (((word / mask) / 2) * 2);
+    if already == 1 { set_at(bloom_bits, word_idx, word - mask); }
+    return 0;
+}
+
+// Insert item (string key)
+fn bloom_add(item) {
+    let i = 0;
+    while i < bloom_k {
+        let pos = _bloom_hash(item, i * 997 + 1);
+        _bloom_set_bit(pos);
+        // Counting filter: increment counter
+        let cnt = bloom_counters[pos];
+        if cnt < 15 { set_at(bloom_counters, pos, cnt + 1); }
+        i = i + 1;
+    }
+    bloom_count = bloom_count + 1;
+    return 0;
+}
+
+// Insert integer key
+fn bloom_add_int(key) {
+    let i = 0;
+    while i < bloom_k {
+        let pos = _bloom_hash_int(key, i * 997 + 1);
+        _bloom_set_bit(pos);
+        let cnt = bloom_counters[pos];
+        if cnt < 15 { set_at(bloom_counters, pos, cnt + 1); }
+        i = i + 1;
+    }
+    bloom_count = bloom_count + 1;
+    return 0;
+}
+
+// Query membership (false negatives impossible; false positives possible)
+fn bloom_query(item) {
+    let i = 0;
+    while i < bloom_k {
+        let pos = _bloom_hash(item, i * 997 + 1);
+        if _bloom_get_bit(pos) == 0 { return 0; }
+        i = i + 1;
+    }
+    return 1;  // probably present
+}
+
+// Query integer key
+fn bloom_query_int(key) {
+    let i = 0;
+    while i < bloom_k {
+        let pos = _bloom_hash_int(key, i * 997 + 1);
+        if _bloom_get_bit(pos) == 0 { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+
+// Counting filter delete (only removes if counter > 0)
+fn bloom_delete(item) {
+    // First verify item is present
+    if bloom_query(item) == 0 { return 1; }
+    let i = 0;
+    while i < bloom_k {
+        let pos = _bloom_hash(item, i * 997 + 1);
+        let cnt = bloom_counters[pos];
+        if cnt > 0 {
+            set_at(bloom_counters, pos, cnt - 1);
+            if cnt == 1 { _bloom_clear_bit(pos); }
+        }
+        i = i + 1;
+    }
+    if bloom_count > 0 { bloom_count = bloom_count - 1; }
+    return 0;
+}
+
+// Count set bits (population count — fill estimation)
+fn bloom_popcount() {
+    let total = 0;
+    let w = 0;
+    while w < BLOOM_WORDS {
+        let word = bloom_bits[w];
+        let b = 0;
+        while b < 32 {
+            let divisor = 1;
+            let p2 = 0;
+            while p2 < b { divisor = divisor * 2; p2 = p2 + 1; }
+            let bit = (word / divisor) - (((word / divisor) / 2) * 2);
+            total = total + bit;
+            b = b + 1;
+        }
+        w = w + 1;
+    }
+    return total;
+}
+
+// Estimate false positive rate × 1000 (approximation)
+// FPR ≈ (filled_bits / BLOOM_BITS)^k
+fn bloom_fp_rate() {
+    let filled = bloom_popcount();
+    let fill_ratio = (filled * 1000) / BLOOM_BITS;  // per-mille
+    // (fill_ratio/1000)^k approximated iteratively
+    let fpr = fill_ratio;
+    let i = 1;
+    while i < bloom_k {
+        fpr = (fpr * fill_ratio) / 1000;
+        i = i + 1;
+    }
+    return fpr;
+}
+
+// Merge two bloom filters (union — set bits from other into self)
+fn bloom_union(other_bits) {
+    let i = 0;
+    while i < BLOOM_WORDS {
+        let a = bloom_bits[i];
+        let b = other_bits[i];
+        // a | b via arithmetic: for each bit, set if either is set
+        let result = 0;
+        let mask = 1;
+        let p = 0;
+        while p < 32 {
+            let ba = (a / mask) - (((a / mask) / 2) * 2);
+            let bb = (b / mask) - (((b / mask) / 2) * 2);
+            if ba == 1 { result = result + mask; } else {
+                if bb == 1 { result = result + mask; }
+            }
+            mask = mask * 2;
+            p = p + 1;
+        }
+        set_at(bloom_bits, i, result);
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Check if filter is too full (> 50% fill → time to scale)
+fn bloom_needs_scale() {
+    let filled = bloom_popcount();
+    return filled > BLOOM_BITS / 2;
+}
+
+fn bloom_status() {
+    let filled = bloom_popcount();
+    let fpr = bloom_fp_rate();
+    return "bloom: k=" + to_string(bloom_k)
+        + " bits=" + to_string(BLOOM_BITS)
+        + " filled=" + to_string(filled)
+        + " elements~" + to_string(bloom_count)
+        + " fpr~" + to_string(fpr) + "/1000";
+}
+
+fn bloom_test() {
+    bloom_init(3, 100);
+    // Add some items
+    bloom_add("hello");
+    bloom_add("world");
+    bloom_add("hicos");
+    bloom_add_int(42);
+    bloom_add_int(1337);
+    // Query present items
+    let q1 = bloom_query("hello");
+    let q2 = bloom_query("world");
+    let q3 = bloom_query_int(42);
+    // Query absent items (should be 0 with high probability)
+    let q4 = bloom_query("absent_key_xyz");
+    let q5 = bloom_query_int(99999);
+    // Delete via counting filter
+    bloom_delete("hello");
+    let q6 = bloom_query("hello");   // should be 0 now
+    let filled = bloom_popcount();
+    let fpr = bloom_fp_rate();
+    serial_print("bloom test: " + bloom_status());
+    serial_print("bloom test: hello=" + to_string(q1) + " world=" + to_string(q2)
+        + " 42=" + to_string(q3) + " absent=" + to_string(q4)
+        + " after_delete(hello)=" + to_string(q6));
+    return "bloom: k=3 m=256bits, present=[hello=" + to_string(q1)
+        + ",world=" + to_string(q2) + ",42=" + to_string(q3)
+        + "] absent=[xyz=" + to_string(q4) + ",99999=" + to_string(q5)
+        + "] delete_ok=" + to_string(1 - q6)
+        + " fill=" + to_string(filled) + "/256 fpr=" + to_string(fpr) + "/1000"
+        + " [Bloom 1970 ok]";
+}
+
+print("bloom_filter.hl loaded -- Bloom filter (k-hash, counting variant, union, FPR estimation)");

@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 640 commands + pipe operator (|):
+// 655 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -153,6 +153,9 @@ fn shell_handle(cmd) {
         serial_print("Gossip:   gossip init <id> <addr>  gossip join <id> <addr>  gossip tick <ms>  gossip members  gossip status  gossip test");
         serial_print("Matrix:   mat new <rows> <cols>  mat identity <n>  mat mul <a> <b>  mat inv <m>  mat norm <m>  mat info <m>  mat test");
         serial_print("Neural:   nn layer <size> <act>  nn init  nn forward <inputs>  nn loss  nn train  nn info  nn test");
+        serial_print("Attention: attn config <dm> <heads> <dff>  attn forward <seq>  attn ffn  attn info  attn test");
+        serial_print("Bloom:    bloom add <item>  bloom query <item>  bloom delete <item>  bloom status  bloom test");
+        serial_print("CRDT:     crdt gc inc  crdt pn inc  crdt pn dec  crdt gset add <e>  crdt lww add <e>  crdt orset add <e>  crdt status  crdt test");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -3622,6 +3625,60 @@ fn shell_handle_ext(cmd) {
     if cmd == "nn info" { return nn_info(); }
     if cmd == "nn test" { return neural_test(); }
 
+    // --- Attention (Transformer self-attention) ---
+    if str_starts_with(cmd, "attn config ") {
+        let rest5 = str_slice(cmd, 12, len(cmd));
+        let parts5 = str_split(rest5, " ");
+        let dm2 = to_int(parts5[0]);
+        let nh = to_int(parts5[1]);
+        let dff = to_int(parts5[2]);
+        attn_config(dm2, nh, dff);
+        return "attention: configured -> " + attn_info();
+    }
+    if cmd == "attn info" { return attn_info(); }
+    if cmd == "attn test" { return attention_test(); }
+
+    // --- Bloom Filter ---
+    if str_starts_with(cmd, "bloom add ") {
+        let bitem = str_slice(cmd, 10, len(cmd));
+        bloom_add(bitem);
+        return "bloom: added '" + bitem + "' -> " + bloom_status();
+    }
+    if str_starts_with(cmd, "bloom query ") {
+        let qitem = str_slice(cmd, 12, len(cmd));
+        let qres = bloom_query(qitem);
+        return "bloom: query '" + qitem + "' -> " + to_string(qres) + " (1=probably present, 0=absent)";
+    }
+    if str_starts_with(cmd, "bloom delete ") {
+        let ditem = str_slice(cmd, 13, len(cmd));
+        bloom_delete(ditem);
+        return "bloom: deleted '" + ditem + "' -> " + bloom_status();
+    }
+    if cmd == "bloom status" { return bloom_status(); }
+    if cmd == "bloom test" { return bloom_test(); }
+
+    // --- CRDT ---
+    if cmd == "crdt gc inc"  { gc_increment(); return gc_status(); }
+    if cmd == "crdt pn inc"  { pn_increment(); return pn_status(); }
+    if cmd == "crdt pn dec"  { pn_decrement(); return pn_status(); }
+    if str_starts_with(cmd, "crdt gset add ") {
+        let ge = to_int(str_slice(cmd, 14, len(cmd)));
+        gset_add(ge);
+        return gset_status();
+    }
+    if str_starts_with(cmd, "crdt lww add ") {
+        let le = to_int(str_slice(cmd, 13, len(cmd)));
+        lww_add(le);
+        return lww_status();
+    }
+    if str_starts_with(cmd, "crdt orset add ") {
+        let oe = to_int(str_slice(cmd, 15, len(cmd)));
+        orset_add(oe);
+        return orset_status();
+    }
+    if cmd == "crdt status" { return crdt_info(); }
+    if cmd == "crdt test"   { return crdt_test(); }
+
     return shell_handle(cmd);
 }
 
@@ -3633,7 +3690,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 640 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural");
+print("shell.hl loaded -- 655 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt");
 
 // Main shell loop (called from kernel_init)
 

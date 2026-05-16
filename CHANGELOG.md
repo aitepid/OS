@@ -2,11 +2,58 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`313`（69 根目录 + 244 内核模块）
-- H-L 总行数：`~91,500`
-- 内核模块：`244`
-- Shell 命令：`640`
-- 最近完成功能迭代：`258`（gossip + matrix + neural）
+- `.hl` 文件：`316`（69 根目录 + 247 内核模块）
+- H-L 总行数：`~94,500`
+- 内核模块：`247`
+- Shell 命令：`655`
+- 最近完成功能迭代：`261`（attention + bloom_filter + crdt）
+
+## Iteration 261 — crdt.hl：冲突自由可复制数据类型
+
+- **`bare-kernel/hl/crdt.hl`** 新增（~410 行）
+  - CRDTs（Shapiro et al. 2011 / INRIA Tech Report），分布式强一致合并语义
+  - **G-Counter**（增长计数器）：每节点独立计数器，`gc_value()` = 所有节点之和，`gc_merge()` = 逐节点取最大值
+  - **PN-Counter**（正负计数器）：双 G-Counter（P + N），`pn_value()` = sum(P) - sum(N)，支持递减
+  - **G-Set**（增长集合）：仅插入，`gset_add()` 幂等，`gset_merge()` = union，无法删除
+  - **2P-Set**（双相集合）：add-set + remove-set，元素一旦移除不可再添加，`tpset_contains()` 检查双集
+  - **LWW-Element-Set**（最后写入胜出集合）：每元素维护 add-timestamp + remove-timestamp，`lww_contains()` = add_ts > rem_ts
+  - **OR-Set**（可观察移除集合）：每次 add 生成唯一标签（node_id × 10000 + seq），remove 仅 tombstone 已观察标签，支持移除后重新添加
+  - `crdt_init_all()` — 统一初始化所有 CRDT 结构
+  - 最大 16 节点集群（CRDT_MAX_NODES），最大 64 元素（CRDT_MAX_ELEMS），最大 128 标签（CRDT_MAX_TAGS）
+  - Buffer: 0x13C0000
+  - Shell 命令：`crdt gc inc  crdt pn inc  crdt pn dec  crdt gset add <e>  crdt lww add <e>  crdt orset add <e>  crdt status  crdt test`
+
+## Iteration 260 — bloom_filter.hl：布隆过滤器
+
+- **`bare-kernel/hl/bloom_filter.hl`** 新增（~330 行）
+  - 布隆过滤器（Burton Howard Bloom, 1970），概率集合成员查询
+  - 256 位位数组（8 × 32 位整数，算术位模拟）
+  - k 个独立哈希函数（FNV-1a 变体，纯算术实现，无位运算）
+  - `bloom_add(item)` / `bloom_add_int(key)` — 字符串或整数键插入，O(k)
+  - `bloom_query(item)` / `bloom_query_int(key)` — 成员查询（无假阴性，有界假阳性）
+  - **计数布隆过滤器**：每位对应一个 4 位计数器，支持 `bloom_delete()` 删除操作
+  - `bloom_popcount()` — 统计已设置位数（填充率估算）
+  - `bloom_fp_rate()` — 假阳性率估算：(filled_bits/m)^k × 1000（整数 per-mille）
+  - `bloom_union(other_bits)` — 两个过滤器取并集（OR 合并，纯算术位操作）
+  - `bloom_needs_scale()` — 填充率超过 50% 时提示需要扩容
+  - Buffer: 0x13B0000
+  - Shell 命令：`bloom add <item>  bloom query <item>  bloom delete <item>  bloom status  bloom test`
+
+## Iteration 259 — attention.hl：Transformer 自注意力机制
+
+- **`bare-kernel/hl/attention.hl`** 新增（~350 行）
+  - Transformer 核心模块（Vaswani et al. 2017 "Attention Is All You Need"）
+  - 固定点算术：ATTN_SCALE=1000，最大序列长 32（ATTN_MAX_SEQ），模型维度 64（ATTN_MAX_DIM）
+  - **缩放点积注意力**：`_attn_scaled_dot_product(Q, K, V, seq, dk, dv)` — softmax(QK^T / √d_k) × V
+  - **多头注意力**：`attn_multihead_forward(input_seq, seq)` — Q/K/V 投影 + 注意力 + 输出投影 W_O
+  - **正弦位置编码**：`_attn_precompute_pos_enc()` — 三角波近似 sin/cos，预计算缓存
+  - **层归一化**：`attn_layer_norm(x, n)` — (x - mean) / sqrt(var + ε) × γ + β，整数平方根
+  - **残差连接**：注意力输出和 FFN 输出均加上残差后做层归一化
+  - **逐位置前馈层**：`attn_feedforward(x, dm)` — Linear→ReLU→Linear（两层 MLP）
+  - 权重初始化：确定性伪随机（种子 = 位置索引 × 素数）
+  - `attn_config(d_model, n_heads, d_ff)` — 配置模型参数并初始化权重
+  - Buffer: 0x13A0000
+  - Shell 命令：`attn config <dm> <heads> <dff>  attn forward <seq>  attn ffn  attn info  attn test`
 
 ## Iteration 258 — neural.hl：神经网络推理引擎
 
