@@ -2,11 +2,54 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`238`（69 根目录 + 169 内核模块）
-- H-L 总行数：`~62,300`
-- 内核模块：`169`
-- Shell 命令：`269`
-- 最近完成功能迭代：`183`（imap + mqtt + lz4）
+- `.hl` 文件：`241`（69 根目录 + 172 内核模块）
+- H-L 总行数：`~64,100`
+- 内核模块：`172`
+- Shell 命令：`288`
+- 最近完成功能迭代：`186`（ftp + cbor + syslog_srv）
+
+## Iteration 186 — syslog_srv.hl：UDP syslog 远端日志服务
+
+- **`bare-kernel/hl/syslog_srv.hl`** 新增（~230 行）
+  - RFC 3164 / RFC 5424 混合解析：`<PRI>` 提取 + facility/severity 解码
+  - SLSRV_MAX=64 槽环形缓冲（parallel arrays），SLSRV_BUF=0xF00000
+  - `_slsrv_parse(raw)` → [pri, ts, hostname, body]（body 截断 160 字符）
+  - `syslog_srv_on_recv(data)` — UDP 回调入槽 → klog 输出
+  - `syslog_srv_tick()` — 主循环轮询 UDP 514 缓冲区
+  - `syslog_srv_list(n)` — 从 head 反向输出最近 n 条（facility.severity 格式）
+  - `syslog_srv_clear/status` — 清空 + 状态信息
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`syslog_srv_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 6 条命令：
+  - `syslogd` / `syslogd start/stop/clear/status` / `syslogd last <n>`
+
+## Iteration 185 — cbor.hl：CBOR 紧凑二进制编码
+
+- **`bare-kernel/hl/cbor.hl`** 新增（~270 行）
+  - RFC 7049 CBOR；initial byte = major_type<<5 | addl_info
+  - `_cbor_encode_head(major, val)` — 内联值(0-23)/1B/2B/4B 分支（纯整数，无位运算）
+  - 支持：uint / negint / bstr / tstr / array_hdr / map_hdr / bool / null
+  - `cbor_get_result()` → 十六进制字符串；`cbor_encoded_len()` → 字节数
+  - `cbor_decode_hex(hexstr)` → 递归解析 → 人类可读描述字符串
+  - `cbor_selftest()` → 编码 uint(42)+"hi"+true+null → 验证十六进制
+  - CBOR_BUF=0xEF0000（4 KB），上半区 2048B 用于解码临时区
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`cbor_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 7 条命令：
+  - `cbor uint/neg/str/bool/null/hex/test`
+
+## Iteration 184 — ftp.hl：FTP 文件传输客户端
+
+- **`bare-kernel/hl/ftp.hl`** 新增（~270 行）
+  - RFC 959 FTP 客户端；被动模式（PASV）数据连接
+  - `_ftp_pasv_parse(resp)` — 解析 "227 (h1,h2,h3,h4,p1,p2)" → ip+port 数组
+  - `ftp_connect(host)` — TCP 连接端口 21，等待 "220" 问候
+  - `ftp_auth(id, user, pass)` — USER→331→PASS→230→TYPE I→200 序列
+  - `ftp_list(id, path)` — PASV + LIST，排水数据连接，等待 226
+  - `ftp_get(id, remote, local)` — PASV + RETR，写入 VFS；FTP_BUF=0xEE0000（64 KB）
+  - `ftp_put(id, local, remote)` — VFS 读 + PASV + STOR，逐字节发送
+  - `ftp_pwd/cwd/quit`；FTP_MAX=2 会话
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`ftp_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 8 条命令：
+  - `ftp connect/auth/ls/get/put/pwd/cd/quit`
 
 ## Iteration 183 — lz4.hl：LZ4 块压缩编解码
 

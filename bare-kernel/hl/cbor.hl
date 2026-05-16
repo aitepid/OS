@@ -1,0 +1,315 @@
+// cbor.hl -- CBOR Compact Binary Encoding (RFC 7049)
+//
+// Iteration 185: Encode/decode data in CBOR binary format.
+//
+// CBOR initial byte = (major_type << 5) | additional_info
+//
+// Major types:
+//   0 = unsigned int     5 = map
+//   1 = negative int     6 = tag (not implemented)
+//   2 = byte string      7 = float/simple
+//   3 = text string
+//   4 = array
+//
+// Additional info (low 5 bits):
+//   0-23  = inline value
+//   24    = 1-byte follows
+//   25    = 2-byte follows (big-endian)
+//   26    = 4-byte follows
+//   31    = indefinite length (not implemented)
+//
+// Simples (major type 7):
+//   20 = false (0xF4)
+//   21 = true  (0xF5)
+//   22 = null  (0xF6)
+//
+// Public API:
+//   cbor_init()
+//   cbor_begin()                    → reset encode buffer
+//   cbor_encode_uint(n)             → append bytes
+//   cbor_encode_negint(n)           → encode -1-n
+//   cbor_encode_str(s)              → major 3 + UTF-8 bytes
+//   cbor_encode_bytes(addr, len)    → major 2 + raw bytes
+//   cbor_encode_array_hdr(count)    → major 4 header
+//   cbor_encode_map_hdr(count)      → major 5 header
+//   cbor_encode_bool(b)             → 0xF4/0xF5
+//   cbor_encode_null()              → 0xF6
+//   cbor_get_result()               → hex string of encoded bytes
+//   cbor_encoded_len()              → byte count
+//   cbor_decode_hex(hexstr)         → human-readable description string
+//   cbor_selftest()                 → "ok" or error
+//
+// Shell:
+//   cbor uint <n>
+//   cbor neg <n>
+//   cbor str <text>
+//   cbor bool <0|1>
+//   cbor null
+//   cbor hex <hexstr>
+//   cbor test
+
+let CBOR_BUF    = 15663104;   // 0xEF0000  4 KB encode buffer
+let CBOR_BUF_SZ = 4096;
+
+let mut cbor_len = 0;   // current encoded byte count
+
+fn cbor_init() {
+    cbor_len = 0;
+    mem_zero(CBOR_BUF, CBOR_BUF_SZ);
+    print("cbor: init — RFC 7049 CBOR encoder/decoder, buf=0xEF0000");
+    return 0;
+}
+
+fn cbor_begin() {
+    cbor_len = 0;
+    return 0;
+}
+
+fn cbor_encoded_len() {
+    return cbor_len;
+}
+
+// ============================================================
+// Encode helpers
+// ============================================================
+
+fn _cbor_append(b) {
+    if cbor_len >= CBOR_BUF_SZ { return 0; }
+    mem_write_u8(CBOR_BUF + cbor_len, b);
+    cbor_len = cbor_len + 1;
+    return 0;
+}
+
+fn _cbor_encode_head(major, val) {
+    let prefix = major * 32;   // major_type << 5
+    if val < 24 {
+        _cbor_append(prefix + val);
+    } else {
+        if val < 256 {
+            _cbor_append(prefix + 24);
+            _cbor_append(val);
+        } else {
+            if val < 65536 {
+                _cbor_append(prefix + 25);
+                _cbor_append(val / 256);
+                _cbor_append(val % 256);
+            } else {
+                _cbor_append(prefix + 26);
+                _cbor_append((val / 16777216) % 256);
+                _cbor_append((val / 65536) % 256);
+                _cbor_append((val / 256) % 256);
+                _cbor_append(val % 256);
+            }
+        }
+    }
+    return 0;
+}
+
+fn cbor_encode_uint(n) {
+    _cbor_encode_head(0, n);
+    return 0;
+}
+
+fn cbor_encode_negint(n) {
+    _cbor_encode_head(1, n);   // encodes -1-n
+    return 0;
+}
+
+fn cbor_encode_str(s) {
+    let n = len(s);
+    _cbor_encode_head(3, n);
+    let mut i = 0;
+    while i < n {
+        _cbor_append(str_char_code(s, i));
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn cbor_encode_bytes(addr, blen) {
+    _cbor_encode_head(2, blen);
+    let mut i = 0;
+    while i < blen {
+        _cbor_append(mem_read_u8(addr + i));
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn cbor_encode_array_hdr(count) {
+    _cbor_encode_head(4, count);
+    return 0;
+}
+
+fn cbor_encode_map_hdr(count) {
+    _cbor_encode_head(5, count);
+    return 0;
+}
+
+fn cbor_encode_bool(b) {
+    if b == 0 { _cbor_append(244); }   // 0xF4 = false
+    else { _cbor_append(245); }        // 0xF5 = true
+    return 0;
+}
+
+fn cbor_encode_null() {
+    _cbor_append(246);   // 0xF6
+    return 0;
+}
+
+// ============================================================
+// Result formatting
+// ============================================================
+
+let CBOR_HEX = "0123456789abcdef";
+
+fn _cbor_byte_hex(b) {
+    let hi = b / 16;
+    let lo = b % 16;
+    return str_sub(CBOR_HEX, hi, hi + 1) + str_sub(CBOR_HEX, lo, lo + 1);
+}
+
+fn cbor_get_result() {
+    let mut out = "";
+    let mut i = 0;
+    while i < cbor_len {
+        out = out + _cbor_byte_hex(mem_read_u8(CBOR_BUF + i));
+        i = i + 1;
+    }
+    return out;
+}
+
+// ============================================================
+// Decode (hex string → human-readable description)
+// ============================================================
+
+fn _cbor_hex_nibble(c) {
+    if c >= 48 { if c <= 57 { return c - 48; } }   // '0'-'9'
+    if c >= 97 { if c <= 102 { return c - 87; } }  // 'a'-'f'
+    if c >= 65 { if c <= 70 { return c - 55; } }   // 'A'-'F'
+    return 0;
+}
+
+fn _cbor_hex_to_bytes(hexstr, dst_addr, max_bytes) {
+    let hlen = len(hexstr);
+    let n = hlen / 2;
+    let limit = n;
+    if max_bytes < n { let limit = max_bytes; }
+    let mut i = 0;
+    while i < limit {
+        let hi = _cbor_hex_nibble(str_char_code(hexstr, i * 2));
+        let lo = _cbor_hex_nibble(str_char_code(hexstr, i * 2 + 1));
+        mem_write_u8(dst_addr + i, hi * 16 + lo);
+        i = i + 1;
+    }
+    return limit;
+}
+
+// Decode CBOR bytes from a scratch region; returns (description, bytes_consumed)
+// Returns array [desc_string, bytes_consumed]
+fn _cbor_decode_one(addr, avail) {
+    if avail <= 0 { return ["<empty>", 0]; }
+    let initial = mem_read_u8(addr);
+    let major = initial / 32;
+    let addl  = initial % 32;
+
+    // Decode argument
+    let mut val = addl;
+    let mut consumed = 1;
+    if addl == 24 {
+        if avail < 2 { return ["<trunc>", avail]; }
+        val = mem_read_u8(addr + 1);
+        consumed = 2;
+    } else {
+        if addl == 25 {
+            if avail < 3 { return ["<trunc>", avail]; }
+            val = mem_read_u8(addr + 1) * 256 + mem_read_u8(addr + 2);
+            consumed = 3;
+        } else {
+            if addl == 26 {
+                if avail < 5 { return ["<trunc>", avail]; }
+                val = mem_read_u8(addr + 1) * 16777216 + mem_read_u8(addr + 2) * 65536
+                    + mem_read_u8(addr + 3) * 256 + mem_read_u8(addr + 4);
+                consumed = 5;
+            }
+        }
+    }
+
+    // Interpret by major type
+    if major == 0 { return ["uint(" + to_string(val) + ")", consumed]; }
+    if major == 1 { return ["negint(-" + to_string(val + 1) + ")", consumed]; }
+    if major == 2 {
+        let blen = val;
+        let end = consumed + blen;
+        if end > avail { return ["<trunc bstr>", avail]; }
+        let mut hex = "bstr(" + to_string(blen) + "):";
+        let mut k = 0;
+        while k < blen {
+            hex = hex + _cbor_byte_hex(mem_read_u8(addr + consumed + k));
+            k = k + 1;
+        }
+        return [hex, consumed + blen];
+    }
+    if major == 3 {
+        let slen = val;
+        let end = consumed + slen;
+        if end > avail { return ["<trunc tstr>", avail]; }
+        let mut s = "tstr:\"";
+        let mut k = 0;
+        while k < slen {
+            s = s + str_from_code(mem_read_u8(addr + consumed + k));
+            k = k + 1;
+        }
+        return [s + "\"", consumed + slen];
+    }
+    if major == 4 { return ["array[" + to_string(val) + "]", consumed]; }
+    if major == 5 { return ["map{" + to_string(val) + "}", consumed]; }
+    if major == 7 {
+        if val == 20 { return ["false", consumed]; }
+        if val == 21 { return ["true", consumed]; }
+        if val == 22 { return ["null", consumed]; }
+        return ["simple(" + to_string(val) + ")", consumed]; }
+    return ["unknown(major=" + to_string(major) + ")", consumed];
+}
+
+fn cbor_decode_hex(hexstr) {
+    let hlen = len(hexstr);
+    if hlen % 2 != 0 { return "cbor_decode_hex: odd hex length"; }
+    let nbytes = hlen / 2;
+    let scratch = CBOR_BUF + 2048;   // use upper half of buffer as scratch
+    _cbor_hex_to_bytes(hexstr, scratch, nbytes);
+
+    let mut out = "";
+    let mut pos = 0;
+    while pos < nbytes {
+        let res = _cbor_decode_one(scratch + pos, nbytes - pos);
+        let desc = res[0];
+        let used = res[1];
+        out = out + desc + " ";
+        if used <= 0 { pos = nbytes; }
+        else { pos = pos + used; }
+    }
+    return out;
+}
+
+// ============================================================
+// Self-test
+// ============================================================
+
+fn cbor_selftest() {
+    cbor_begin();
+    cbor_encode_uint(42);
+    cbor_encode_str("hi");
+    cbor_encode_bool(1);
+    cbor_encode_null();
+    let hex = cbor_get_result();
+    // uint(42)=0x182a, str("hi")=0x626869, true=0xf5, null=0xf6
+    let expected = "182a" + "626869" + "f5" + "f6";
+    if hex == expected {
+        return "cbor_selftest: ok — " + hex;
+    }
+    return "cbor_selftest: FAIL got=" + hex + " want=" + expected;
+}
+
+print("cbor.hl loaded");
+print("CBOR: RFC 7049 — uint/negint/bstr/tstr/array/map/bool/null encode + hex decode, buf=0xEF0000");

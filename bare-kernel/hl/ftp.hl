@@ -1,0 +1,371 @@
+// ftp.hl -- FTP Client (RFC 959)
+//
+// Iteration 184: Upload and download files via FTP.
+//
+// Protocol flow (PASV mode):
+//   CONNECT port 21 → recv "220 service ready"
+//   USER <name>     → recv "331 password required"
+//   PASS <pass>     → recv "230 logged in"
+//   TYPE I          → recv "200 ok"  (binary mode)
+//   PASV            → recv "227 Entering Passive Mode (h1,h2,h3,h4,p1,p2)"
+//   LIST [path]     → open data conn → recv directory listing → close data
+//   RETR <remote>   → open data conn → read file bytes → close data → 226
+//   STOR <remote>   → open data conn → write file bytes → close data → 226
+//   QUIT            → recv "221 goodbye"
+//
+// Data connection: new TCP connect to IP:port from PASV response.
+//   port = p1*256 + p2
+//
+// Up to FTP_MAX (2) concurrent sessions (one control TCB each).
+//
+// Public API:
+//   ftp_init()
+//   ftp_connect(host)              → session_id
+//   ftp_auth(id, user, pass)       → 0 ok / -1 fail
+//   ftp_list(id, path)             → directory listing string
+//   ftp_get(id, remote, localpath) → bytes downloaded / -1 fail
+//   ftp_put(id, localpath, remote) → bytes uploaded / -1 fail
+//   ftp_pwd(id)                    → current directory string
+//   ftp_cwd(id, path)              → 0 ok / -1 fail
+//   ftp_quit(id)
+//   ftp_status(id) / ftp_list_sessions()
+//
+// Shell:
+//   ftp connect <host>
+//   ftp auth <id> <user> <pass>
+//   ftp ls <id> [path]
+//   ftp get <id> <remote> <local>
+//   ftp put <id> <local> <remote>
+//   ftp pwd <id>
+//   ftp cd <id> <path>
+//   ftp quit <id>
+//   ftp
+
+let FTP_MAX     = 2;
+let FTP_BUF     = 15597568;   // 0xEE0000  64 KB data buffer
+let FTP_BUF_SZ  = 65536;
+let FTP_CTRL_SZ = 1024;
+
+let FTP_ST_FREE  = 0;
+let FTP_ST_CONN  = 1;   // control connected
+let FTP_ST_AUTH  = 2;   // authenticated
+let FTP_ST_IDLE  = 3;   // ready for commands
+let FTP_ST_ERR   = 4;
+
+let mut ftp_active = [];
+let mut ftp_tcb    = [];   // control connection TCB
+let mut ftp_state  = [];
+let mut ftp_host   = [];
+let mut ftp_cwd_s  = [];   // current working directory
+let mut ftp_count  = 0;
+
+fn ftp_init() {
+    ftp_active = [];
+    ftp_tcb    = [];
+    ftp_state  = [];
+    ftp_host   = [];
+    ftp_cwd_s  = [];
+    ftp_count  = 0;
+    let mut i = 0;
+    while i < FTP_MAX {
+        push(ftp_active, 0);
+        push(ftp_tcb,    0 - 1);
+        push(ftp_state,  FTP_ST_FREE);
+        push(ftp_host,   "");
+        push(ftp_cwd_s,  "/");
+        i = i + 1;
+    }
+    print("ftp: init — max " + to_string(FTP_MAX) + " sessions, PASV mode, binary+ASCII");
+    return 0;
+}
+
+fn _ftp_alloc() {
+    let mut i = 0;
+    while i < FTP_MAX {
+        if ftp_active[i] == 0 { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+// ============================================================
+// Control channel I/O
+// ============================================================
+
+fn _ftp_send(id, line) {
+    tcp_send(ftp_tcb[id], line + "\r\n");
+    return 0;
+}
+
+fn _ftp_read_ctrl(id) {
+    let addr = TCP_TABLE + ftp_tcb[id] * TCB_SIZE;
+    let rx_buf = mem_read_u64(addr + 64);
+    if rx_buf == 0 { return ""; }
+    let mut s = "";
+    let mut j = 0;
+    while j < FTP_CTRL_SZ {
+        let b = mem_read_u8(rx_buf + j);
+        if b == 0 { j = FTP_CTRL_SZ + 1; }
+        else { s = s + str_from_code(b); j = j + 1; }
+    }
+    mem_zero(rx_buf, FTP_CTRL_SZ);
+    return s;
+}
+
+fn _ftp_read_data_tcb(dtcb) {
+    let addr = TCP_TABLE + dtcb * TCB_SIZE;
+    let rx_buf = mem_read_u64(addr + 64);
+    if rx_buf == 0 { return ""; }
+    let mut s = "";
+    let mut j = 0;
+    while j < FTP_BUF_SZ {
+        let b = mem_read_u8(rx_buf + j);
+        if b == 0 { j = FTP_BUF_SZ + 1; }
+        else { s = s + str_from_code(b); j = j + 1; }
+    }
+    mem_zero(rx_buf, FTP_BUF_SZ);
+    return s;
+}
+
+// Wait up to timeout_ticks for a response containing code_str
+fn _ftp_wait_code(id, code_str, timeout_ticks) {
+    let deadline = get_ticks() + timeout_ticks;
+    while get_ticks() < deadline {
+        let resp = _ftp_read_ctrl(id);
+        if len(resp) >= 3 {
+            if str_find(resp, code_str) >= 0 { return resp; }
+        }
+    }
+    return "";
+}
+
+// ============================================================
+// PASV: parse "227 Entering Passive Mode (h1,h2,h3,h4,p1,p2)"
+// Returns 2-element array: [[h1,h2,h3,h4], port]
+// ============================================================
+
+fn _ftp_pasv_parse(resp) {
+    let lp = str_find(resp, "(");
+    let rp = str_find(resp, ")");
+    if lp < 0 { return []; }
+    if rp < 0 { return []; }
+    let inner = str_sub(resp, lp + 1, rp);
+    let mut nums = [];
+    let mut cur = "";
+    let mut k = 0;
+    while k < len(inner) {
+        let c = str_char_code(inner, k);
+        if c == 44 {   // ','
+            push(nums, parse_int(cur));
+            cur = "";
+        } else {
+            cur = cur + str_sub(inner, k, k + 1);
+        }
+        k = k + 1;
+    }
+    push(nums, parse_int(cur));
+    if len(nums) < 6 { return []; }
+    let ip   = [nums[0], nums[1], nums[2], nums[3]];
+    let port = nums[4] * 256 + nums[5];
+    return [ip, port];
+}
+
+// Open PASV data connection; returns data TCB or -1
+fn _ftp_open_data(id) {
+    _ftp_send(id, "PASV");
+    let resp = _ftp_wait_code(id, "227", 200);
+    if len(resp) == 0 { return 0 - 1; }
+    let parsed = _ftp_pasv_parse(resp);
+    if len(parsed) < 2 { return 0 - 1; }
+    let ip   = parsed[0];
+    let port = parsed[1];
+    return tcp_connect(ip, port);
+}
+
+// ============================================================
+// Lifecycle
+// ============================================================
+
+fn ftp_connect(host) {
+    let id = _ftp_alloc();
+    if id < 0 { print("ftp: no free slots"); return 0 - 1; }
+    let ip = dns_resolve(host);
+    let tcb = tcp_connect(ip, 21);
+    if tcb < 0 { print("ftp: tcp_connect failed to " + host); return 0 - 1; }
+    set_at(ftp_active, id, 1);
+    set_at(ftp_tcb,    id, tcb);
+    set_at(ftp_state,  id, FTP_ST_CONN);
+    set_at(ftp_host,   id, host);
+    set_at(ftp_cwd_s,  id, "/");
+    ftp_count = ftp_count + 1;
+    let greeting = _ftp_wait_code(id, "220", 300);
+    if len(greeting) == 0 {
+        print("ftp: no greeting from " + host);
+    }
+    print("ftp[" + to_string(id) + "]: connected to " + host);
+    return id;
+}
+
+fn ftp_auth(id, user, pass) {
+    if id < 0 { return 0 - 1; }
+    if ftp_active[id] == 0 { return 0 - 1; }
+    _ftp_send(id, "USER " + user);
+    let r1 = _ftp_wait_code(id, "331", 200);
+    if len(r1) == 0 { set_at(ftp_state, id, FTP_ST_ERR); return 0 - 1; }
+    _ftp_send(id, "PASS " + pass);
+    let r2 = _ftp_wait_code(id, "230", 300);
+    if len(r2) == 0 { set_at(ftp_state, id, FTP_ST_ERR); return 0 - 1; }
+    _ftp_send(id, "TYPE I");
+    _ftp_wait_code(id, "200", 100);
+    set_at(ftp_state, id, FTP_ST_IDLE);
+    print("ftp[" + to_string(id) + "]: authenticated as " + user);
+    return 0;
+}
+
+fn ftp_pwd(id) {
+    if id < 0 { return ""; }
+    if ftp_active[id] == 0 { return ""; }
+    _ftp_send(id, "PWD");
+    return _ftp_wait_code(id, "257", 200);
+}
+
+fn ftp_cwd(id, path) {
+    if id < 0 { return 0 - 1; }
+    if ftp_active[id] == 0 { return 0 - 1; }
+    _ftp_send(id, "CWD " + path);
+    let resp = _ftp_wait_code(id, "250", 200);
+    if len(resp) > 0 { set_at(ftp_cwd_s, id, path); return 0; }
+    return 0 - 1;
+}
+
+fn ftp_list(id, path) {
+    if id < 0 { return "ftp: invalid id"; }
+    if ftp_active[id] == 0 { return "ftp: not active"; }
+    let dtcb = _ftp_open_data(id);
+    if dtcb < 0 { return "ftp: PASV failed"; }
+    if len(path) > 0 { _ftp_send(id, "LIST " + path); }
+    else { _ftp_send(id, "LIST"); }
+    let r = _ftp_wait_code(id, "150", 200);
+    if len(r) == 0 { tcp_close(dtcb); return "ftp: LIST timeout"; }
+    let mut out = "";
+    let deadline = get_ticks() + 400;
+    while get_ticks() < deadline {
+        let chunk = _ftp_read_data_tcb(dtcb);
+        if len(chunk) > 0 { out = out + chunk; }
+        let ctrl = _ftp_read_ctrl(id);
+        if str_find(ctrl, "226") >= 0 {
+            tcp_close(dtcb);
+            return out;
+        }
+    }
+    tcp_close(dtcb);
+    return out;
+}
+
+fn ftp_get(id, remote, localpath) {
+    if id < 0 { return 0 - 1; }
+    if ftp_active[id] == 0 { return 0 - 1; }
+    let dtcb = _ftp_open_data(id);
+    if dtcb < 0 { return 0 - 1; }
+    _ftp_send(id, "RETR " + remote);
+    let r = _ftp_wait_code(id, "150", 200);
+    if len(r) == 0 { tcp_close(dtcb); return 0 - 1; }
+    let mut total = 0;
+    let deadline = get_ticks() + 1000;
+    let mut done = 0;
+    while done == 0 {
+        if get_ticks() >= deadline { done = 1; }
+        let addr = TCP_TABLE + dtcb * TCB_SIZE;
+        let rx_buf = mem_read_u64(addr + 64);
+        if rx_buf != 0 {
+            let mut j = 0;
+            while j < FTP_BUF_SZ - total {
+                let b = mem_read_u8(rx_buf + j);
+                if b == 0 { j = FTP_BUF_SZ; }
+                else { mem_write_u8(FTP_BUF + total, b); total = total + 1; j = j + 1; }
+            }
+            mem_zero(rx_buf, FTP_BUF_SZ);
+        }
+        let ctrl = _ftp_read_ctrl(id);
+        if str_find(ctrl, "226") >= 0 { done = 1; }
+    }
+    tcp_close(dtcb);
+    if total > 0 {
+        let fd = vfs_open(localpath, 1);
+        if fd < 0 { return 0 - 1; }
+        vfs_write(fd, FTP_BUF, total);
+        vfs_close(fd);
+        print("ftp: " + remote + " → " + localpath + " (" + to_string(total) + " bytes)");
+    }
+    return total;
+}
+
+fn ftp_put(id, localpath, remote) {
+    if id < 0 { return 0 - 1; }
+    if ftp_active[id] == 0 { return 0 - 1; }
+    let fd = vfs_open(localpath, 0);
+    if fd < 0 { print("ftp: cannot open " + localpath); return 0 - 1; }
+    let n = vfs_read(fd, FTP_BUF, FTP_BUF_SZ);
+    vfs_close(fd);
+    if n <= 0 { return 0 - 1; }
+    let dtcb = _ftp_open_data(id);
+    if dtcb < 0 { return 0 - 1; }
+    _ftp_send(id, "STOR " + remote);
+    let r = _ftp_wait_code(id, "150", 200);
+    if len(r) == 0 { tcp_close(dtcb); return 0 - 1; }
+    let mut pkt = "";
+    let mut i = 0;
+    while i < n {
+        pkt = pkt + str_from_code(mem_read_u8(FTP_BUF + i));
+        i = i + 1;
+    }
+    tcp_send(dtcb, pkt);
+    tcp_close(dtcb);
+    _ftp_wait_code(id, "226", 300);
+    print("ftp: " + localpath + " → " + remote + " (" + to_string(n) + " bytes)");
+    return n;
+}
+
+fn ftp_quit(id) {
+    if id < 0 { return 0; }
+    if ftp_active[id] == 0 { return 0; }
+    _ftp_send(id, "QUIT");
+    _ftp_wait_code(id, "221", 100);
+    tcp_close(ftp_tcb[id]);
+    set_at(ftp_active, id, 0);
+    ftp_count = ftp_count - 1;
+    print("ftp[" + to_string(id) + "]: disconnected");
+    return 0;
+}
+
+// ============================================================
+// Status
+// ============================================================
+
+fn ftp_status(id) {
+    if id < 0 { return "ftp: invalid"; }
+    if id >= FTP_MAX { return "ftp: invalid"; }
+    if ftp_active[id] == 0 { return "ftp[" + to_string(id) + "] free"; }
+    let st_names = ["free", "connected", "authing", "idle", "error"];
+    let st = ftp_state[id];
+    let st_s = "?";
+    if st >= 0 { if st <= 4 { st_s = st_names[st]; } }
+    return "ftp[" + to_string(id) + "] " + st_s
+        + " host=" + ftp_host[id]
+        + " cwd=" + ftp_cwd_s[id];
+}
+
+fn ftp_list_sessions() {
+    let mut out = "FTP sessions (" + to_string(ftp_count) + "/" + to_string(FTP_MAX) + "):\n";
+    let mut i = 0;
+    while i < FTP_MAX {
+        if ftp_active[i] == 1 { out = out + "  " + ftp_status(i) + "\n"; }
+        i = i + 1;
+    }
+    if ftp_count == 0 { out = out + "  (no sessions)\n"; }
+    return out;
+}
+
+print("ftp.hl loaded");
+print("FTP: RFC 959 client — PASV mode, TYPE I, LIST/RETR/STOR/PWD/CWD/QUIT — "
+    + to_string(FTP_MAX) + " sessions, FTP_BUF=0xEE0000");

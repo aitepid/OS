@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 269 commands + pipe operator (|):
+// 288 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -87,6 +87,9 @@ fn shell_handle(cmd) {
         serial_print("IMAP:     imap  imap connect <host> <port>  imap login <id> <user> <pass>  imap select <id> <mbox>  imap list <id>  imap fetch <id> <from> <to>  imap logout <id>");
         serial_print("MQTT:     mqtt  mqtt connect <host> <port> <cid>  mqtt pub <id> <topic> <payload>  mqtt sub <id> <topic>  mqtt unsub <id> <topic>  mqtt ping <id>  mqtt quit <id>");
         serial_print("LZ4:      lz4c <in> <out>  lz4d <in> <out>  lz4test");
+        serial_print("FTP:      ftp  ftp connect <host>  ftp auth <id> <user> <pass>  ftp ls <id> [path]  ftp get <id> <rem> <loc>  ftp put <id> <loc> <rem>  ftp pwd <id>  ftp cd <id> <path>  ftp quit <id>");
+        serial_print("CBOR:     cbor uint <n>  cbor neg <n>  cbor str <s>  cbor bool <0|1>  cbor null  cbor hex <hexstr>  cbor test");
+        serial_print("Syslogd:  syslogd  syslogd start  syslogd stop  syslogd clear  syslogd status  syslogd last <n>");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -1940,6 +1943,131 @@ fn shell_handle_ext(cmd) {
         return "lz4d: decompressed " + to_string(n) + " bytes → " + outpath;
     }
 
+    // === FTP commands ===
+    if cmd == "ftp" { return ftp_list_sessions(); }
+    if str_starts_with(cmd, "ftp connect ") {
+        let host = str_sub(cmd, 12, len(cmd));
+        let id = ftp_connect(host);
+        if id < 0 { return "Error: ftp connect failed"; }
+        return "ftp[" + to_string(id) + "] connected to " + host;
+    }
+    if str_starts_with(cmd, "ftp auth ") {
+        let rest = str_sub(cmd, 9, len(cmd));
+        let sp1 = str_find(rest, " ");
+        if sp1 < 0 { return "Usage: ftp auth <id> <user> <pass>"; }
+        let id = parse_int(str_sub(rest, 0, sp1));
+        let rest2 = str_sub(rest, sp1 + 1, len(rest));
+        let sp2 = str_find(rest2, " ");
+        if sp2 < 0 { return "Usage: ftp auth <id> <user> <pass>"; }
+        let user = str_sub(rest2, 0, sp2);
+        let pass = str_sub(rest2, sp2 + 1, len(rest2));
+        let r = ftp_auth(id, user, pass);
+        if r < 0 { return "Error: ftp auth failed"; }
+        return "ftp[" + to_string(id) + "] authenticated as " + user;
+    }
+    if str_starts_with(cmd, "ftp ls ") {
+        let rest = str_sub(cmd, 7, len(cmd));
+        let sp = str_find(rest, " ");
+        let mut id = parse_int(rest);
+        let mut path = "";
+        if sp >= 0 { id = parse_int(str_sub(rest, 0, sp)); path = str_sub(rest, sp + 1, len(rest)); }
+        return ftp_list(id, path);
+    }
+    if str_starts_with(cmd, "ftp get ") {
+        let rest = str_sub(cmd, 8, len(cmd));
+        let sp1 = str_find(rest, " ");
+        if sp1 < 0 { return "Usage: ftp get <id> <remote> <local>"; }
+        let id = parse_int(str_sub(rest, 0, sp1));
+        let rest2 = str_sub(rest, sp1 + 1, len(rest));
+        let sp2 = str_find(rest2, " ");
+        if sp2 < 0 { return "Usage: ftp get <id> <remote> <local>"; }
+        let remote = str_sub(rest2, 0, sp2);
+        let local = str_sub(rest2, sp2 + 1, len(rest2));
+        let n = ftp_get(id, remote, local);
+        if n < 0 { return "Error: ftp get failed"; }
+        return "ftp: got " + to_string(n) + " bytes → " + local;
+    }
+    if str_starts_with(cmd, "ftp put ") {
+        let rest = str_sub(cmd, 8, len(cmd));
+        let sp1 = str_find(rest, " ");
+        if sp1 < 0 { return "Usage: ftp put <id> <local> <remote>"; }
+        let id = parse_int(str_sub(rest, 0, sp1));
+        let rest2 = str_sub(rest, sp1 + 1, len(rest));
+        let sp2 = str_find(rest2, " ");
+        if sp2 < 0 { return "Usage: ftp put <id> <local> <remote>"; }
+        let local = str_sub(rest2, 0, sp2);
+        let remote = str_sub(rest2, sp2 + 1, len(rest2));
+        let n = ftp_put(id, local, remote);
+        if n < 0 { return "Error: ftp put failed"; }
+        return "ftp: put " + to_string(n) + " bytes → " + remote;
+    }
+    if str_starts_with(cmd, "ftp pwd ") {
+        let id = parse_int(str_sub(cmd, 8, len(cmd)));
+        return ftp_pwd(id);
+    }
+    if str_starts_with(cmd, "ftp cd ") {
+        let rest = str_sub(cmd, 7, len(cmd));
+        let sp = str_find(rest, " ");
+        if sp < 0 { return "Usage: ftp cd <id> <path>"; }
+        let id = parse_int(str_sub(rest, 0, sp));
+        let path = str_sub(rest, sp + 1, len(rest));
+        let r = ftp_cwd(id, path);
+        if r < 0 { return "Error: ftp cd failed"; }
+        return "ftp[" + to_string(id) + "] cd " + path;
+    }
+    if str_starts_with(cmd, "ftp quit ") {
+        let id = parse_int(str_sub(cmd, 9, len(cmd)));
+        ftp_quit(id);
+        return "ftp[" + to_string(id) + "] disconnected";
+    }
+
+    // === CBOR commands ===
+    if str_starts_with(cmd, "cbor uint ") {
+        let n = parse_int(str_sub(cmd, 10, len(cmd)));
+        cbor_begin();
+        cbor_encode_uint(n);
+        return "cbor: " + cbor_get_result();
+    }
+    if str_starts_with(cmd, "cbor neg ") {
+        let n = parse_int(str_sub(cmd, 9, len(cmd)));
+        cbor_begin();
+        cbor_encode_negint(n);
+        return "cbor: " + cbor_get_result();
+    }
+    if str_starts_with(cmd, "cbor str ") {
+        let s = str_sub(cmd, 9, len(cmd));
+        cbor_begin();
+        cbor_encode_str(s);
+        return "cbor: " + cbor_get_result();
+    }
+    if str_starts_with(cmd, "cbor bool ") {
+        let b = parse_int(str_sub(cmd, 10, len(cmd)));
+        cbor_begin();
+        cbor_encode_bool(b);
+        return "cbor: " + cbor_get_result();
+    }
+    if cmd == "cbor null" {
+        cbor_begin();
+        cbor_encode_null();
+        return "cbor: " + cbor_get_result();
+    }
+    if str_starts_with(cmd, "cbor hex ") {
+        let hexstr = str_sub(cmd, 9, len(cmd));
+        return cbor_decode_hex(hexstr);
+    }
+    if cmd == "cbor test" { return cbor_selftest(); }
+
+    // === Syslog server commands ===
+    if cmd == "syslogd" { return syslog_srv_list(10); }
+    if cmd == "syslogd start" { syslog_srv_start(); return "syslogd: started on UDP 514"; }
+    if cmd == "syslogd stop" { syslog_srv_stop(); return "syslogd: stopped"; }
+    if cmd == "syslogd clear" { syslog_srv_clear(); return "syslogd: buffer cleared"; }
+    if cmd == "syslogd status" { return syslog_srv_status(); }
+    if str_starts_with(cmd, "syslogd last ") {
+        let n = parse_int(str_sub(cmd, 13, len(cmd)));
+        return syslog_srv_list(n);
+    }
+
     return shell_handle(cmd);
 }
 
@@ -1951,7 +2079,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 269 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4");
+print("shell.hl loaded -- 288 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd");
 
 // Main shell loop (called from kernel_init)
 

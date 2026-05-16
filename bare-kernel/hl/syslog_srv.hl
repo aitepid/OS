@@ -1,0 +1,265 @@
+// syslog_srv.hl -- UDP Syslog Server (RFC 5424 / RFC 3164)
+//
+// Iteration 186: Receive and store syslog messages from remote hosts.
+//
+// Protocol: UDP port 514, text-based.
+//
+// RFC 3164 message format:
+//   <PRIORITY>TIMESTAMP HOSTNAME TAG: CONTENT
+//   Priority = facility * 8 + severity (0-191)
+//   Facility: 0=kern 1=user 2=mail 3=daemon 4=auth 16-23=local0-7
+//   Severity: 0=emerg 1=alert 2=crit 3=err 4=warn 5=notice 6=info 7=debug
+//
+// RFC 5424 structured format detected by "<nn>1 " prefix (version field).
+//
+// Storage: SLSRV_MAX (64) ring buffer slots.
+//   Each slot: priority(int) + src_ip(string) + timestamp(string) + message(string)
+//
+// Public API:
+//   syslog_srv_init()
+//   syslog_srv_start()          → bind UDP 514 + enable
+//   syslog_srv_stop()           → disable (still holds buffer)
+//   syslog_srv_tick()           → drain UDP recv, called from main loop
+//   syslog_srv_list(n)          → last n messages as string
+//   syslog_srv_clear()
+//   syslog_srv_count()          → total messages received
+//   syslog_srv_status()         → status string
+//
+// Shell:
+//   syslogd                     → list last 10 messages
+//   syslogd start               → bind + enable
+//   syslogd stop
+//   syslogd last <n>
+//   syslogd clear
+//   syslogd status
+
+let SLSRV_PORT    = 514;
+let SLSRV_MAX     = 64;
+let SLSRV_BUF     = 15728640;   // 0xF00000  4 KB UDP recv scratch
+let SLSRV_BUF_SZ  = 4096;
+let SLSRV_LPORT   = 514;
+
+let mut slsrv_enabled    = 0;
+let mut slsrv_total      = 0;   // total messages ever received
+let mut slsrv_head       = 0;   // ring buffer write head (0..SLSRV_MAX-1)
+
+// Ring buffer: parallel arrays of SLSRV_MAX slots
+let mut slsrv_pri  = [];   // raw priority integer
+let mut slsrv_src  = [];   // source IP as string
+let mut slsrv_ts   = [];   // timestamp string
+let mut slsrv_msg  = [];   // message body (truncated to 160 chars)
+let mut slsrv_cnt  = 0;    // messages currently in ring (0..SLSRV_MAX)
+
+fn syslog_srv_init() {
+    slsrv_enabled = 0;
+    slsrv_total   = 0;
+    slsrv_head    = 0;
+    slsrv_cnt     = 0;
+    slsrv_pri  = [];
+    slsrv_src  = [];
+    slsrv_ts   = [];
+    slsrv_msg  = [];
+    let mut i = 0;
+    while i < SLSRV_MAX {
+        push(slsrv_pri, 0);
+        push(slsrv_src, "");
+        push(slsrv_ts,  "");
+        push(slsrv_msg, "");
+        i = i + 1;
+    }
+    print("syslog_srv: init — port 514, ring=" + to_string(SLSRV_MAX) + " slots, RFC 3164/5424");
+    return 0;
+}
+
+fn syslog_srv_start() {
+    udp_bind(SLSRV_LPORT, "syslog_srv_on_recv");
+    slsrv_enabled = 1;
+    print("syslog_srv: listening on UDP port " + to_string(SLSRV_PORT));
+    return 0;
+}
+
+fn syslog_srv_stop() {
+    slsrv_enabled = 0;
+    print("syslog_srv: stopped (buffer retained, " + to_string(slsrv_cnt) + " messages)");
+    return 0;
+}
+
+fn syslog_srv_count() { return slsrv_total; }
+
+// ============================================================
+// Priority decoding
+// ============================================================
+
+fn _slsrv_facility(pri) { return pri / 8; }
+fn _slsrv_severity(pri) { return pri % 8; }
+
+fn _slsrv_sev_name(sev) {
+    if sev == 0 { return "EMERG"; }
+    if sev == 1 { return "ALERT"; }
+    if sev == 2 { return "CRIT"; }
+    if sev == 3 { return "ERR"; }
+    if sev == 4 { return "WARN"; }
+    if sev == 5 { return "NOTICE"; }
+    if sev == 6 { return "INFO"; }
+    return "DEBUG";
+}
+
+fn _slsrv_fac_name(fac) {
+    if fac == 0  { return "kern"; }
+    if fac == 1  { return "user"; }
+    if fac == 2  { return "mail"; }
+    if fac == 3  { return "daemon"; }
+    if fac == 4  { return "auth"; }
+    if fac == 16 { return "local0"; }
+    if fac == 17 { return "local1"; }
+    if fac == 18 { return "local2"; }
+    if fac == 19 { return "local3"; }
+    if fac == 20 { return "local4"; }
+    if fac == 21 { return "local5"; }
+    if fac == 22 { return "local6"; }
+    if fac == 23 { return "local7"; }
+    return "fac" + to_string(fac);
+}
+
+// ============================================================
+// Parser: RFC 3164 / RFC 5424 message
+// Returns array [priority, timestamp, hostname, message]
+// ============================================================
+
+fn _slsrv_parse(raw) {
+    let n = len(raw);
+    if n == 0 { return [13, "", "", ""]; }   // default pri=13 (user/notice)
+
+    // Check for <PRI> header
+    let mut pri = 13;
+    let mut pos = 0;
+    if str_char_code(raw, 0) == 60 {   // '<'
+        let gt = str_find(raw, ">");
+        if gt > 0 {
+            pri = parse_int(str_sub(raw, 1, gt));
+            pos = gt + 1;
+        }
+    }
+
+    // Detect RFC 5424: version digit after '>'
+    let mut is5424 = 0;
+    if pos < n {
+        let vc = str_char_code(raw, pos);
+        if vc == 49 { is5424 = 1; pos = pos + 2; }   // '1' + space
+    }
+
+    // Timestamp: next token up to next space
+    let rest = str_sub(raw, pos, n);
+    let sp1 = str_find(rest, " ");
+    let mut ts = "";
+    let mut msg_start = rest;
+    if sp1 >= 0 {
+        ts = str_sub(rest, 0, sp1);
+        msg_start = str_sub(rest, sp1 + 1, len(rest));
+    }
+
+    // Hostname: next token
+    let sp2 = str_find(msg_start, " ");
+    let mut hostname = "";
+    let mut body = msg_start;
+    if sp2 >= 0 {
+        hostname = str_sub(msg_start, 0, sp2);
+        body = str_sub(msg_start, sp2 + 1, len(msg_start));
+    }
+
+    // Truncate body to 160 chars
+    if len(body) > 160 { body = str_sub(body, 0, 160) + "..."; }
+
+    return [pri, ts, hostname, body];
+}
+
+// ============================================================
+// UDP receive callback
+// ============================================================
+
+fn syslog_srv_on_recv(data) {
+    if slsrv_enabled == 0 { return 0; }
+    let parsed = _slsrv_parse(data);
+    let pri  = parsed[0];
+    let ts   = parsed[1];
+    let host = parsed[2];
+    let body = parsed[3];
+    let slot = slsrv_head;
+    set_at(slsrv_pri, slot, pri);
+    set_at(slsrv_src, slot, host);
+    set_at(slsrv_ts,  slot, ts);
+    set_at(slsrv_msg, slot, body);
+    slsrv_head = (slsrv_head + 1) % SLSRV_MAX;
+    if slsrv_cnt < SLSRV_MAX { slsrv_cnt = slsrv_cnt + 1; }
+    slsrv_total = slsrv_total + 1;
+    klog(1, "syslogd", "[" + _slsrv_fac_name(_slsrv_facility(pri))
+        + "." + _slsrv_sev_name(_slsrv_severity(pri)) + "] " + host + ": " + body);
+    return 0;
+}
+
+// ============================================================
+// Tick: poll UDP buffer for incoming messages
+// ============================================================
+
+fn syslog_srv_tick() {
+    if slsrv_enabled == 0 { return 0; }
+    let data = udp_recv(SLSRV_LPORT, SLSRV_BUF, SLSRV_BUF_SZ);
+    if len(data) > 0 { syslog_srv_on_recv(data); }
+    return 0;
+}
+
+// ============================================================
+// Display
+// ============================================================
+
+fn syslog_srv_list(n) {
+    if n <= 0 { n = 10; }
+    if n > SLSRV_MAX { n = SLSRV_MAX; }
+    if slsrv_cnt == 0 { return "(no syslog messages received)\n"; }
+    let mut out = "Syslog messages (last " + to_string(n) + " of "
+        + to_string(slsrv_total) + "):\n";
+    // Walk ring backwards from head-1
+    let mut k = 0;
+    while k < n {
+        if k >= slsrv_cnt { k = n; }
+        else {
+            let idx = (slsrv_head - 1 - k + SLSRV_MAX * 2) % SLSRV_MAX;
+            let pri = slsrv_pri[idx];
+            let fac = _slsrv_fac_name(_slsrv_facility(pri));
+            let sev = _slsrv_sev_name(_slsrv_severity(pri));
+            out = out + "  [" + fac + "." + sev + "] "
+                + slsrv_ts[idx] + " " + slsrv_src[idx]
+                + ": " + slsrv_msg[idx] + "\n";
+            k = k + 1;
+        }
+    }
+    return out;
+}
+
+fn syslog_srv_clear() {
+    slsrv_cnt  = 0;
+    slsrv_head = 0;
+    slsrv_total = 0;
+    let mut i = 0;
+    while i < SLSRV_MAX {
+        set_at(slsrv_msg, i, "");
+        set_at(slsrv_src, i, "");
+        set_at(slsrv_ts,  i, "");
+        i = i + 1;
+    }
+    print("syslog_srv: buffer cleared");
+    return 0;
+}
+
+fn syslog_srv_status() {
+    let state = "stopped";
+    if slsrv_enabled == 1 { let state = "running"; }
+    return "syslogd: " + state
+        + " port=" + to_string(SLSRV_PORT)
+        + " received=" + to_string(slsrv_total)
+        + " buffered=" + to_string(slsrv_cnt) + "/" + to_string(SLSRV_MAX);
+}
+
+print("syslog_srv.hl loaded");
+print("Syslog: RFC 3164/5424 UDP server port 514, " + to_string(SLSRV_MAX)
+    + "-slot ring, facility+severity decode");
