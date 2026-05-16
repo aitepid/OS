@@ -2,11 +2,69 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`253`（69 根目录 + 184 内核模块）
-- H-L 总行数：`~69,100`
-- 内核模块：`184`
-- Shell 命令：`357`
-- 最近完成功能迭代：`198`（cpio + quoted_printable + uuencode）
+- `.hl` 文件：`256`（69 根目录 + 187 内核模块）
+- H-L 总行数：`~70,000`
+- 内核模块：`187`
+- Shell 命令：`374`
+- 最近完成功能迭代：`201`（asn1 + pem + jwt）
+
+## Iteration 201 — jwt.hl：JSON Web Token 解析/验证
+
+- **`bare-kernel/hl/jwt.hl`** 新增（~270 行）
+  - JWT（JSON Web Token）认证令牌格式：header.payload.signature（Base64url 编码）
+  - `jwt_parse(token)` — 按 `.` 分割三部分，Base64url 解码 header + payload
+  - `_jwt_base64url_decode(data)` — Base64url 变体（`-` 代替 `+`，`_` 代替 `/`，无填充）
+  - `_jwt_extract_claim(payload, name)` — JSON 字段提取（简单字符串匹配）
+  - `jwt_get_sub/iss/aud()` — 标准声明提取（subject/issuer/audience）
+  - `jwt_get_exp/iat()` — 时间戳声明（expiry/issued at）→ parse_int
+  - `jwt_is_expired()` — 验证 exp 声明是否过期（vs rtc_read_timestamp）
+  - `jwt_display()` — 格式化输出 header + payload + 声明列表 + 过期状态
+  - `jwt_selftest()` — 解析标准测试 JWT（sub="1234567890", name="John Doe", iat=1516239022）
+  - JWT_BUF=0x1000000（16777216），64 KB 解码缓冲区
+  - 注：未实现签名验证（需要 HMAC-SHA256）
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`jwt_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 7 条命令：
+  - `jwt parse <token>` / `jwt header` / `jwt payload` / `jwt sub` / `jwt iss` / `jwt exp` / `jwt test`
+
+## Iteration 200 — pem.hl：PEM 格式解析器
+
+- **`bare-kernel/hl/pem.hl`** 新增（~290 行）
+  - PEM（Privacy Enhanced Mail）格式：Base64 编码 + BEGIN/END 标记（X.509 证书、私钥）
+  - 格式结构：`-----BEGIN <LABEL>-----` / Base64 数据（多行）/ `-----END <LABEL>-----`
+  - `pem_parse(data)` — 提取 label + Base64 内容，过滤空白字符（空格/制表符/换行）
+  - `_pem_base64_decode_char(c)` — A-Z/a-z/0-9/+/ 映射到 0-63
+  - Base64 解码：4 字符 → 3 字节（c1*4 + c2/16, c2%16*16 + c3/4, c3%4*64 + c4）
+  - `pem_encode(data, label)` — 二进制数据 → PEM（3 字节 → 4 Base64 字符，64 字符/行）
+  - `_pem_base64_encode_char(n)` — 0-63 → A-Z/a-z/0-9/+/=
+  - `pem_get_label()` — 返回解析的 label（CERTIFICATE / RSA PRIVATE KEY 等）
+  - `pem_load(path)` — VFS 读取文件 → pem_parse
+  - `pem_selftest()` — "-----BEGIN TEST-----\nSGVsbG8=\n-----END TEST-----\n" → 解码 "Hello"
+  - PEM_BUF=0xFF0000（16711680），64 KB 解码缓冲区
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`pem_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 5 条命令：
+  - `pem parse <data>` / `pem load <path>` / `pem show` / `pem label` / `pem test`
+
+## Iteration 199 — asn1.hl：ASN.1 DER 编码/解码
+
+- **`bare-kernel/hl/asn1.hl`** 新增（~290 行）
+  - ASN.1（Abstract Syntax Notation One）+ DER（Distinguished Encoding Rules）
+  - 用途：X.509 证书、SNMP、LDAP、PKCS 标准
+  - TLV 结构：Tag（类型）+ Length（长度）+ Value（值）
+  - 长度编码：短形式（0-127 直接）、长形式（128+字节数，后跟多字节长度）
+  - `asn1_encode_integer(val)` — INTEGER 标签（0x02）+ 字节序列（大端序）
+  - `asn1_encode_octet_string(data)` — OCTET STRING 标签（0x04）+ 字节数据
+  - `asn1_encode_null()` — NULL 标签（0x05）+ 长度 0
+  - `asn1_encode_boolean(val)` — BOOLEAN 标签（0x01）+ 0x00/0xFF
+  - `asn1_encode_sequence_start/end(pos)` — SEQUENCE 标签（0x30）+ 内容，延迟长度填充
+  - `asn1_parse_tag/length/integer/octet_string` — 解析 TLV 结构
+  - `asn1_decode(data)` — 遍历 DER 编码数据，输出类型 + 值描述
+  - `asn1_get_hex()` — 编码结果转十六进制字符串
+  - `asn1_selftest()` — 编码 int(42) + str("hi") + null → "02012a04026869" + "0500"
+  - ASN1_BUF=0xFE0000（16646144），64 KB 编码/解码缓冲区
+  - 标签常量：BOOLEAN=1, INTEGER=2, BIT_STRING=3, OCTET_STRING=4, NULL=5, OID=6, SEQUENCE=48
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`asn1_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 5 条命令：
+  - `asn1 int <n>` / `asn1 str <text>` / `asn1 null` / `asn1 decode <hex>` / `asn1 test`
 
 ## Iteration 198 — uuencode.hl：UUencode/UUdecode 二进制-文本编码
 

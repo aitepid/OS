@@ -1,0 +1,237 @@
+// jwt.hl -- JSON Web Token (JWT) Parser/Validator
+//
+// JWT (JSON Web Token) is a compact token format for authentication/authorization.
+// Structure: <header>.<payload>.<signature> (Base64url encoded)
+//
+// Features:
+//   - Parse JWT structure (split by '.')
+//   - Base64url decode header and payload
+//   - Extract claims (sub, iss, exp, iat, aud)
+//   - Validate expiry (exp claim vs current time)
+//   - Display decoded token
+//
+// Note: Signature verification not implemented (requires HMAC-SHA256)
+//
+// Memory:
+//   - JWT_BUF: 0x1000000 (16777216), 64 KB decode buffer
+
+let JWT_BUF = 16777216;          // 0x1000000
+let JWT_BUF_SZ = 65536;          // 64 KB
+let jwt_header = "";
+let jwt_payload = "";
+let jwt_signature = "";
+
+fn jwt_init() {
+    jwt_header = "";
+    jwt_payload = "";
+    jwt_signature = "";
+    return 0;
+}
+
+fn jwt_clear() {
+    jwt_header = "";
+    jwt_payload = "";
+    jwt_signature = "";
+    return 0;
+}
+
+fn _jwt_base64url_decode_char(c) {
+    if c >= 65 { if c <= 90 { return c - 65; } }             // A-Z: 0-25
+    if c >= 97 { if c <= 122 { return c - 97 + 26; } }       // a-z: 26-51
+    if c >= 48 { if c <= 57 { return c - 48 + 52; } }        // 0-9: 52-61
+    if c == 45 { return 62; }                                // -: 62 (Base64url uses - instead of +)
+    if c == 95 { return 63; }                                // _: 63 (Base64url uses _ instead of /)
+    return 0 - 1;
+}
+
+fn _jwt_base64url_decode(data) {
+    let mut result = "";
+    let mut i = 0;
+
+    while i < len(data) {
+        if i + 4 > len(data) { i = len(data); }
+
+        let c1 = _jwt_base64url_decode_char(str_char_code(data, i));
+        let c2 = _jwt_base64url_decode_char(str_char_code(data, i + 1));
+        let c3 = _jwt_base64url_decode_char(str_char_code(data, i + 2));
+        let c4 = _jwt_base64url_decode_char(str_char_code(data, i + 3));
+
+        if c1 >= 0 { if c2 >= 0 {
+            let b1 = c1 * 4 + (c2 / 16);
+            result = result + str_from_code(b1);
+
+            if c3 >= 0 {
+                let b2 = (c2 % 16) * 16 + (c3 / 4);
+                result = result + str_from_code(b2);
+
+                if c4 >= 0 {
+                    let b3 = (c3 % 4) * 64 + c4;
+                    result = result + str_from_code(b3);
+                }
+            }
+        }}
+
+        i = i + 4;
+    }
+
+    return result;
+}
+
+fn jwt_parse(token) {
+    jwt_clear();
+
+    let dot1 = str_index_of(token, ".");
+    if dot1 < 0 { return 0 - 1; }
+
+    let dot2 = str_index_of(str_sub(token, dot1 + 1, len(token)), ".");
+    if dot2 < 0 { return 0 - 2; }
+    dot2 = dot1 + 1 + dot2;
+
+    let header_part = str_sub(token, 0, dot1);
+    let payload_part = str_sub(token, dot1 + 1, dot2);
+    let signature_part = str_sub(token, dot2 + 1, len(token));
+
+    jwt_header = _jwt_base64url_decode(header_part);
+    jwt_payload = _jwt_base64url_decode(payload_part);
+    jwt_signature = signature_part;
+
+    return 0;
+}
+
+fn jwt_get_header() {
+    return jwt_header;
+}
+
+fn jwt_get_payload() {
+    return jwt_payload;
+}
+
+fn jwt_get_signature() {
+    return jwt_signature;
+}
+
+fn _jwt_extract_claim(payload, claim_name) {
+    let pattern = "\"" + claim_name + "\":";
+    let pos = str_index_of(payload, pattern);
+    if pos < 0 { return ""; }
+
+    let value_start = pos + len(pattern);
+    while value_start < len(payload) {
+        let c = str_char_code(payload, value_start);
+        if c == 32 { value_start = value_start + 1; }
+        if c != 32 { value_start = len(payload) + 1; }
+    }
+
+    if value_start >= len(payload) { return ""; }
+
+    let mut value_end = value_start;
+    let is_string = 0;
+    let first_char = str_char_code(payload, value_start);
+    if first_char == 34 {
+        is_string = 1;
+        value_start = value_start + 1;
+        value_end = value_start;
+        while value_end < len(payload) {
+            let c = str_char_code(payload, value_end);
+            if c == 34 { value_end = len(payload) + 1; }
+            if c != 34 { value_end = value_end + 1; }
+        }
+        if value_end >= len(payload) + 1 { value_end = value_end - 1; }
+    } else {
+        while value_end < len(payload) {
+            let c = str_char_code(payload, value_end);
+            if c == 44 { value_end = len(payload) + 1; }
+            if c == 125 { value_end = len(payload) + 1; }
+            if c != 44 { if c != 125 { value_end = value_end + 1; } }
+        }
+        if value_end >= len(payload) + 1 { value_end = value_end - 1; }
+    }
+
+    return str_sub(payload, value_start, value_end);
+}
+
+fn jwt_get_claim(claim_name) {
+    return _jwt_extract_claim(jwt_payload, claim_name);
+}
+
+fn jwt_get_sub() {
+    return jwt_get_claim("sub");
+}
+
+fn jwt_get_iss() {
+    return jwt_get_claim("iss");
+}
+
+fn jwt_get_aud() {
+    return jwt_get_claim("aud");
+}
+
+fn jwt_get_exp() {
+    let exp_str = jwt_get_claim("exp");
+    if exp_str == "" { return 0; }
+    return parse_int(exp_str);
+}
+
+fn jwt_get_iat() {
+    let iat_str = jwt_get_claim("iat");
+    if iat_str == "" { return 0; }
+    return parse_int(iat_str);
+}
+
+fn jwt_is_expired() {
+    let exp = jwt_get_exp();
+    if exp == 0 { return 0; }
+
+    let now = rtc_read_timestamp();
+    if now > exp { return 1; }
+    return 0;
+}
+
+fn jwt_display() {
+    let mut out = "JWT Token:\n";
+    out = out + "Header:  " + jwt_header + "\n";
+    out = out + "Payload: " + jwt_payload + "\n";
+    out = out + "\nClaims:\n";
+
+    let sub = jwt_get_sub();
+    if sub != "" { out = out + "  sub: " + sub + "\n"; }
+
+    let iss = jwt_get_iss();
+    if iss != "" { out = out + "  iss: " + iss + "\n"; }
+
+    let aud = jwt_get_aud();
+    if aud != "" { out = out + "  aud: " + aud + "\n"; }
+
+    let exp = jwt_get_exp();
+    if exp > 0 { out = out + "  exp: " + to_string(exp); }
+    if jwt_is_expired() == 1 {
+        out = out + " (EXPIRED)\n";
+    } else {
+        if exp > 0 { out = out + " (valid)\n"; }
+    }
+
+    let iat = jwt_get_iat();
+    if iat > 0 { out = out + "  iat: " + to_string(iat) + "\n"; }
+
+    return out;
+}
+
+fn jwt_selftest() {
+    let test_jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
+
+    let res = jwt_parse(test_jwt);
+    if res < 0 { return "jwt selftest: parse failed"; }
+
+    let sub = jwt_get_sub();
+    if sub != "1234567890" { return "jwt selftest: sub mismatch (got=" + sub + ")"; }
+
+    let name = jwt_get_claim("name");
+    if name != "John Doe" { return "jwt selftest: name mismatch (got=" + name + ")"; }
+
+    let iat = jwt_get_iat();
+    if iat != 1516239022 { return "jwt selftest: iat mismatch (got=" + to_string(iat) + ")"; }
+
+    return "jwt selftest: pass";
+}
+
+print("jwt.hl loaded");

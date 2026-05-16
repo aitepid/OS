@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 357 commands + pipe operator (|):
+// 374 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -93,6 +93,9 @@ fn shell_handle(cmd) {
         serial_print("CPIO:     cpio load <path>  cpio list  cpio extract <idx> <dest>  cpio clear  cpio test");
         serial_print("QP:       qp encode <text>  qp decode <text>  qp show  qp test");
         serial_print("UU:       uu encode <text> <fname>  uu decode <text>  uu show  uu test");
+        serial_print("ASN1:     asn1 int <n>  asn1 str <text>  asn1 null  asn1 test");
+        serial_print("PEM:      pem parse <data>  pem load <path>  pem show  pem label  pem test");
+        serial_print("JWT:      jwt parse <token>  jwt header  jwt payload  jwt sub  jwt iss  jwt exp  jwt test");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -2128,6 +2131,67 @@ fn shell_handle_ext(cmd) {
     if cmd == "uu show" { return uu_get_result(); }
     if cmd == "uu test" { return uu_selftest(); }
 
+    // === ASN.1 DER commands ===
+    if str_starts_with(cmd, "asn1 int ") {
+        asn1_clear();
+        let val = parse_int(str_sub(cmd, 9, len(cmd)));
+        asn1_encode_integer(val);
+        return asn1_get_hex();
+    }
+    if str_starts_with(cmd, "asn1 str ") {
+        asn1_clear();
+        let text = str_sub(cmd, 9, len(cmd));
+        asn1_encode_octet_string(text);
+        return asn1_get_hex();
+    }
+    if cmd == "asn1 null" {
+        asn1_clear();
+        asn1_encode_null();
+        return asn1_get_hex();
+    }
+    if str_starts_with(cmd, "asn1 decode ") {
+        let hex = str_sub(cmd, 12, len(cmd));
+        return "asn1 decode: not yet implemented";
+    }
+    if cmd == "asn1 test" { return asn1_selftest(); }
+
+    // === PEM format commands ===
+    if str_starts_with(cmd, "pem parse ") {
+        let data = str_sub(cmd, 10, len(cmd));
+        let n = pem_parse(data);
+        if n < 0 { return "pem: parse failed"; }
+        return "pem: label=" + pem_get_label() + ", decoded " + to_string(n) + " bytes";
+    }
+    if str_starts_with(cmd, "pem load ") {
+        let path = str_sub(cmd, 9, len(cmd));
+        let n = pem_load(path);
+        if n < 0 { return "pem: load failed"; }
+        return "pem: label=" + pem_get_label() + ", decoded " + to_string(n) + " bytes";
+    }
+    if cmd == "pem show" { return pem_get_data(); }
+    if cmd == "pem label" { return "pem: label=" + pem_get_label(); }
+    if cmd == "pem test" { return pem_selftest(); }
+
+    // === JWT commands ===
+    if str_starts_with(cmd, "jwt parse ") {
+        let token = str_sub(cmd, 10, len(cmd));
+        let res = jwt_parse(token);
+        if res < 0 { return "jwt: parse failed"; }
+        return jwt_display();
+    }
+    if cmd == "jwt header" { return jwt_get_header(); }
+    if cmd == "jwt payload" { return jwt_get_payload(); }
+    if cmd == "jwt sub" { return "sub: " + jwt_get_sub(); }
+    if cmd == "jwt iss" { return "iss: " + jwt_get_iss(); }
+    if cmd == "jwt exp" {
+        let exp = jwt_get_exp();
+        if jwt_is_expired() == 1 {
+            return "exp: " + to_string(exp) + " (EXPIRED)";
+        }
+        return "exp: " + to_string(exp) + " (valid)";
+    }
+    if cmd == "jwt test" { return jwt_selftest(); }
+
     return shell_handle(cmd);
 }
 
@@ -2139,7 +2203,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 357 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu");
+print("shell.hl loaded -- 374 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt");
 
 // Main shell loop (called from kernel_init)
 

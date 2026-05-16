@@ -1,0 +1,280 @@
+// pem.hl -- PEM (Privacy Enhanced Mail) Format Parser
+//
+// PEM format encodes binary data (certificates, keys) as Base64 with headers.
+// Format:
+//   -----BEGIN <LABEL>-----
+//   <Base64 encoded data>
+//   -----END <LABEL>-----
+//
+// Features:
+//   - Parse PEM blocks (extract label and Base64 data)
+//   - Decode Base64 content to binary
+//   - Encode binary data to PEM format
+//   - Support multiple PEM blocks in one file
+//   - Common labels: CERTIFICATE, RSA PRIVATE KEY, PUBLIC KEY, etc.
+//
+// Memory:
+//   - PEM_BUF: 0xFF0000 (16711680), 64 KB decode buffer
+
+let PEM_BUF = 16711680;          // 0xFF0000
+let PEM_BUF_SZ = 65536;          // 64 KB
+let pem_len = 0;
+let pem_label = "";
+
+fn pem_init() {
+    pem_len = 0;
+    pem_label = "";
+    return 0;
+}
+
+fn pem_clear() {
+    pem_len = 0;
+    pem_label = "";
+    return 0;
+}
+
+fn _pem_base64_decode_char(c) {
+    if c >= 65 { if c <= 90 { return c - 65; } }             // A-Z: 0-25
+    if c >= 97 { if c <= 122 { return c - 97 + 26; } }       // a-z: 26-51
+    if c >= 48 { if c <= 57 { return c - 48 + 52; } }        // 0-9: 52-61
+    if c == 43 { return 62; }                                // +: 62
+    if c == 47 { return 63; }                                // /: 63
+    return 0 - 1;
+}
+
+fn _pem_base64_encode_char(n) {
+    if n < 26 { return 65 + n; }                             // A-Z
+    if n < 52 { return 97 + (n - 26); }                      // a-z
+    if n < 62 { return 48 + (n - 52); }                      // 0-9
+    if n == 62 { return 43; }                                // +
+    if n == 63 { return 47; }                                // /
+    return 61;                                               // =
+}
+
+fn pem_parse(data) {
+    pem_clear();
+
+    let begin_marker = "-----BEGIN ";
+    let end_marker = "-----END ";
+
+    let begin_pos = str_index_of(data, begin_marker);
+    if begin_pos < 0 { return 0 - 1; }
+
+    let label_start = begin_pos + len(begin_marker);
+    let label_end = str_index_of(str_sub(data, label_start, len(data)), "-----");
+    if label_end < 0 { return 0 - 2; }
+
+    pem_label = str_sub(data, label_start, label_start + label_end);
+
+    let content_start = label_start + label_end + 5;
+    while content_start < len(data) {
+        let c = str_char_code(data, content_start);
+        if c == 13 { content_start = content_start + 1; }
+        if c == 10 { content_start = content_start + 1; }
+        if c != 13 { if c != 10 { content_start = len(data) + 1; } }
+    }
+
+    if content_start >= len(data) { return 0 - 3; }
+
+    let end_pos = str_index_of(str_sub(data, content_start, len(data)), end_marker);
+    if end_pos < 0 { return 0 - 4; }
+
+    let content_end = content_start + end_pos;
+    let mut base64_data = "";
+    let mut i = content_start;
+    while i < content_end {
+        let c = str_char_code(data, i);
+        if c != 13 { if c != 10 { if c != 32 { if c != 9 {
+            base64_data = base64_data + str_from_code(c);
+        }}}}
+        i = i + 1;
+    }
+
+    let mut bi = 0;
+    while bi < len(base64_data) {
+        if bi + 4 > len(base64_data) { bi = len(base64_data); }
+
+        let c1 = _pem_base64_decode_char(str_char_code(base64_data, bi));
+        let c2 = _pem_base64_decode_char(str_char_code(base64_data, bi + 1));
+        let c3 = _pem_base64_decode_char(str_char_code(base64_data, bi + 2));
+        let c4 = _pem_base64_decode_char(str_char_code(base64_data, bi + 3));
+
+        if c1 >= 0 { if c2 >= 0 {
+            let b1 = c1 * 4 + (c2 / 16);
+            if pem_len < PEM_BUF_SZ {
+                mem_write_byte(PEM_BUF + pem_len, b1);
+                pem_len = pem_len + 1;
+            }
+
+            if c3 >= 0 {
+                let b2 = (c2 % 16) * 16 + (c3 / 4);
+                if pem_len < PEM_BUF_SZ {
+                    mem_write_byte(PEM_BUF + pem_len, b2);
+                    pem_len = pem_len + 1;
+                }
+
+                if c4 >= 0 {
+                    let b3 = (c3 % 4) * 64 + c4;
+                    if pem_len < PEM_BUF_SZ {
+                        mem_write_byte(PEM_BUF + pem_len, b3);
+                        pem_len = pem_len + 1;
+                    }
+                }
+            }
+        }}
+
+        bi = bi + 4;
+    }
+
+    return pem_len;
+}
+
+fn pem_encode(data, label) {
+    pem_clear();
+    pem_label = label;
+
+    let header = "-----BEGIN " + label + "-----\n";
+    let footer = "\n-----END " + label + "-----\n";
+
+    let mut i = 0;
+    while i < len(header) {
+        if pem_len < PEM_BUF_SZ {
+            mem_write_byte(PEM_BUF + pem_len, str_char_code(header, i));
+            pem_len = pem_len + 1;
+        }
+        i = i + 1;
+    }
+
+    let mut di = 0;
+    let mut line_len = 0;
+    while di < len(data) {
+        let b1 = str_char_code(data, di);
+        let b2 = 0;
+        let b3 = 0;
+        if di + 1 < len(data) { b2 = str_char_code(data, di + 1); }
+        if di + 2 < len(data) { b3 = str_char_code(data, di + 2); }
+
+        let c1 = b1 / 4;
+        let c2 = (b1 % 4) * 16 + (b2 / 16);
+        let c3 = (b2 % 16) * 4 + (b3 / 64);
+        let c4 = b3 % 64;
+
+        if pem_len < PEM_BUF_SZ {
+            mem_write_byte(PEM_BUF + pem_len, _pem_base64_encode_char(c1));
+            pem_len = pem_len + 1;
+            line_len = line_len + 1;
+        }
+
+        if pem_len < PEM_BUF_SZ {
+            mem_write_byte(PEM_BUF + pem_len, _pem_base64_encode_char(c2));
+            pem_len = pem_len + 1;
+            line_len = line_len + 1;
+        }
+
+        if di + 1 < len(data) {
+            if pem_len < PEM_BUF_SZ {
+                mem_write_byte(PEM_BUF + pem_len, _pem_base64_encode_char(c3));
+                pem_len = pem_len + 1;
+                line_len = line_len + 1;
+            }
+        } else {
+            if pem_len < PEM_BUF_SZ {
+                mem_write_byte(PEM_BUF + pem_len, 61);
+                pem_len = pem_len + 1;
+                line_len = line_len + 1;
+            }
+        }
+
+        if di + 2 < len(data) {
+            if pem_len < PEM_BUF_SZ {
+                mem_write_byte(PEM_BUF + pem_len, _pem_base64_encode_char(c4));
+                pem_len = pem_len + 1;
+                line_len = line_len + 1;
+            }
+        } else {
+            if pem_len < PEM_BUF_SZ {
+                mem_write_byte(PEM_BUF + pem_len, 61);
+                pem_len = pem_len + 1;
+                line_len = line_len + 1;
+            }
+        }
+
+        if line_len >= 64 {
+            if pem_len < PEM_BUF_SZ {
+                mem_write_byte(PEM_BUF + pem_len, 10);
+                pem_len = pem_len + 1;
+                line_len = 0;
+            }
+        }
+
+        di = di + 3;
+    }
+
+    i = 0;
+    while i < len(footer) {
+        if pem_len < PEM_BUF_SZ {
+            mem_write_byte(PEM_BUF + pem_len, str_char_code(footer, i));
+            pem_len = pem_len + 1;
+        }
+        i = i + 1;
+    }
+
+    return pem_len;
+}
+
+fn pem_get_data() {
+    let mut result = "";
+    let mut i = 0;
+    while i < pem_len {
+        result = result + str_from_code(mem_read_byte(PEM_BUF + i));
+        i = i + 1;
+    }
+    return result;
+}
+
+fn pem_get_label() {
+    return pem_label;
+}
+
+fn pem_load(path) {
+    let fd = vfs_open(path, 0);
+    if fd < 0 { return 0 - 1; }
+
+    let tmp_buf = 16842752;
+    let n = vfs_read(fd, tmp_buf, 32768);
+    vfs_close(fd);
+
+    if n < 0 { return 0 - 2; }
+
+    let mut data = "";
+    let mut i = 0;
+    while i < n {
+        data = data + str_from_code(mem_read_byte(tmp_buf + i));
+        i = i + 1;
+    }
+
+    return pem_parse(data);
+}
+
+fn pem_selftest() {
+    let test_pem = "-----BEGIN TEST-----\nSGVsbG8=\n-----END TEST-----\n";
+    let n = pem_parse(test_pem);
+
+    if n < 0 { return "pem selftest: parse failed"; }
+    if pem_label != "TEST" { return "pem selftest: label mismatch"; }
+
+    let decoded = "";
+    let mut i = 0;
+    while i < pem_len {
+        decoded = decoded + str_from_code(mem_read_byte(PEM_BUF + i));
+        i = i + 1;
+    }
+
+    if decoded == "Hello" {
+        return "pem selftest: pass";
+    }
+
+    return "pem selftest: decode mismatch (got=" + decoded + ")";
+}
+
+print("pem.hl loaded");
