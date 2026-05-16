@@ -1,0 +1,320 @@
+// ldap.hl -- LDAP Client Protocol
+//
+// Provides Lightweight Directory Access Protocol client functionality.
+// Supports basic LDAP operations: bind, search, unbind.
+// Uses ASN.1 BER encoding for LDAP messages over TCP port 389.
+// Buffer at 0x10F0000 (64 KB message buffer).
+
+let LDAP_BUF = 0x10F0000;
+let LDAP_BUF_SZ = 65536;
+let ldap_len = 0;
+
+let LDAP_PORT = 389;
+let LDAP_VERSION = 3;
+
+let LDAP_OP_BIND = 0;
+let LDAP_OP_UNBIND = 2;
+let LDAP_OP_SEARCH = 3;
+let LDAP_OP_MODIFY = 6;
+let LDAP_OP_ADD = 8;
+let LDAP_OP_DELETE = 10;
+
+let ldap_sock = 0 - 1;
+let ldap_message_id = 1;
+let ldap_bound = 0;
+
+let mut ldap_result_count = 0;
+let mut ldap_results = [];
+let LDAP_MAX_RESULTS = 32;
+
+fn ldap_init() {
+    ldap_clear();
+    let mut i = 0;
+    while i < LDAP_MAX_RESULTS {
+        push(ldap_results, "");
+        i = i + 1;
+    }
+    print("ldap: LDAP v3 client initialized (port " + to_string(LDAP_PORT) + ")");
+    return 0;
+}
+
+fn ldap_clear() {
+    ldap_len = 0;
+    ldap_message_id = 1;
+    ldap_bound = 0;
+    ldap_result_count = 0;
+    let mut i = 0;
+    while i < 1024 {
+        mem_write_byte(LDAP_BUF + i, 0);
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn _ldap_put(byte) {
+    if ldap_len >= LDAP_BUF_SZ {
+        return 0;
+    }
+    mem_write_byte(LDAP_BUF + ldap_len, byte);
+    ldap_len = ldap_len + 1;
+    return 0;
+}
+
+fn _ldap_encode_length(len) {
+    if len < 128 {
+        _ldap_put(len);
+        return 1;
+    }
+
+    let mut octets = 0;
+    let mut temp = len;
+    while temp > 0 {
+        octets = octets + 1;
+        temp = temp / 256;
+    }
+
+    _ldap_put(128 + octets);
+
+    let mut i = octets - 1;
+    while i >= 0 {
+        let shift = i * 8;
+        let byte = (len / (1 * (256 * i))) % 256;
+        _ldap_put(byte);
+        if i == 0 {
+            break;
+        }
+        i = i - 1;
+    }
+
+    return octets + 1;
+}
+
+fn _ldap_encode_int(value) {
+    _ldap_put(2);
+
+    if value == 0 {
+        _ldap_put(1);
+        _ldap_put(0);
+        return 3;
+    }
+
+    let mut bytes = [];
+    let mut v = value;
+    while v > 0 {
+        push(bytes, v % 256);
+        v = v / 256;
+    }
+
+    _ldap_put(len(bytes));
+
+    let mut i = len(bytes) - 1;
+    while i >= 0 {
+        _ldap_put(bytes[i]);
+        if i == 0 {
+            break;
+        }
+        i = i - 1;
+    }
+
+    return 2 + len(bytes);
+}
+
+fn _ldap_encode_string(str) {
+    _ldap_put(4);
+    _ldap_encode_length(len(str));
+
+    let mut i = 0;
+    while i < len(str) {
+        _ldap_put(str_char_code(str, i));
+        i = i + 1;
+    }
+
+    return 2 + len(str);
+}
+
+fn ldap_connect(host) {
+    ldap_sock = socket_create(2, 1, 0);
+    if ldap_sock < 0 {
+        print("ldap: socket creation failed");
+        return 0 - 1;
+    }
+
+    let result = tcp_connect(ldap_sock, host, LDAP_PORT);
+    if result < 0 {
+        print("ldap: connection to " + host + ":" + to_string(LDAP_PORT) + " failed");
+        return 0 - 1;
+    }
+
+    print("ldap: connected to " + host);
+    return 0;
+}
+
+fn ldap_bind(dn, password) {
+    ldap_len = 0;
+
+    _ldap_put(48);
+    let length_pos = ldap_len;
+    _ldap_put(0);
+
+    _ldap_encode_int(ldap_message_id);
+    ldap_message_id = ldap_message_id + 1;
+
+    _ldap_put(96);
+    let bind_length_pos = ldap_len;
+    _ldap_put(0);
+
+    _ldap_encode_int(LDAP_VERSION);
+    _ldap_encode_string(dn);
+
+    _ldap_put(128);
+    _ldap_encode_length(len(password));
+    let mut i = 0;
+    while i < len(password) {
+        _ldap_put(str_char_code(password, i));
+        i = i + 1;
+    }
+
+    let bind_len = ldap_len - bind_length_pos - 1;
+    mem_write_byte(LDAP_BUF + bind_length_pos, bind_len);
+
+    let total_len = ldap_len - length_pos - 1;
+    mem_write_byte(LDAP_BUF + length_pos, total_len);
+
+    if ldap_sock >= 0 {
+        let sent = socket_send(ldap_sock, LDAP_BUF, ldap_len);
+        if sent > 0 {
+            ldap_bound = 1;
+            print("ldap: bind request sent for DN: " + dn);
+            return 0;
+        }
+    }
+
+    print("ldap: bind request failed");
+    return 0 - 1;
+}
+
+fn ldap_search(base_dn, filter, scope) {
+    if ldap_bound == 0 {
+        print("ldap: not bound, call ldap_bind first");
+        return 0 - 1;
+    }
+
+    ldap_len = 0;
+    ldap_result_count = 0;
+
+    _ldap_put(48);
+    let length_pos = ldap_len;
+    _ldap_put(0);
+
+    _ldap_encode_int(ldap_message_id);
+    ldap_message_id = ldap_message_id + 1;
+
+    _ldap_put(99);
+    let search_length_pos = ldap_len;
+    _ldap_put(0);
+
+    _ldap_encode_string(base_dn);
+    _ldap_encode_int(scope);
+    _ldap_encode_int(0);
+    _ldap_encode_int(0);
+    _ldap_encode_int(0);
+    _ldap_encode_int(0);
+
+    _ldap_put(163);
+    _ldap_encode_length(len(filter) + 2);
+    _ldap_encode_string(filter);
+
+    _ldap_put(48);
+    _ldap_put(0);
+
+    let search_len = ldap_len - search_length_pos - 1;
+    mem_write_byte(LDAP_BUF + search_length_pos, search_len);
+
+    let total_len = ldap_len - length_pos - 1;
+    mem_write_byte(LDAP_BUF + length_pos, total_len);
+
+    if ldap_sock >= 0 {
+        let sent = socket_send(ldap_sock, LDAP_BUF, ldap_len);
+        if sent > 0 {
+            print("ldap: search request sent for base DN: " + base_dn);
+            return 0;
+        }
+    }
+
+    print("ldap: search request failed");
+    return 0 - 1;
+}
+
+fn ldap_unbind() {
+    ldap_len = 0;
+
+    _ldap_put(48);
+    _ldap_put(5);
+
+    _ldap_encode_int(ldap_message_id);
+    ldap_message_id = ldap_message_id + 1;
+
+    _ldap_put(66);
+    _ldap_put(0);
+
+    if ldap_sock >= 0 {
+        socket_send(ldap_sock, LDAP_BUF, ldap_len);
+        socket_close(ldap_sock);
+        ldap_sock = 0 - 1;
+    }
+
+    ldap_bound = 0;
+    print("ldap: unbound and disconnected");
+    return 0;
+}
+
+fn ldap_disconnect() {
+    if ldap_sock >= 0 {
+        socket_close(ldap_sock);
+        ldap_sock = 0 - 1;
+    }
+    ldap_bound = 0;
+    return 0;
+}
+
+fn ldap_get_result_count() {
+    return ldap_result_count;
+}
+
+fn ldap_test() {
+    print("ldap: running self-test");
+
+    ldap_clear();
+
+    ldap_len = 0;
+    _ldap_encode_int(12345);
+    if ldap_len >= 3 {
+        print("  [ok] LDAP encode integer: " + to_string(ldap_len) + " bytes");
+    } else {
+        print("  [fail] LDAP encode integer failed");
+        return 0 - 1;
+    }
+
+    ldap_len = 0;
+    _ldap_encode_string("cn=admin,dc=example,dc=com");
+    if ldap_len > 25 {
+        print("  [ok] LDAP encode string: " + to_string(ldap_len) + " bytes");
+    } else {
+        print("  [fail] LDAP encode string failed");
+        return 0 - 1;
+    }
+
+    ldap_len = 0;
+    _ldap_encode_length(127);
+    if mem_read_byte(LDAP_BUF) == 127 {
+        print("  [ok] LDAP encode short length: 127");
+    } else {
+        print("  [fail] LDAP encode short length failed");
+        return 0 - 1;
+    }
+
+    print("ldap: self-test passed");
+    return 0;
+}
+
+print("ldap.hl loaded");

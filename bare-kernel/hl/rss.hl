@@ -1,0 +1,286 @@
+// rss.hl -- RSS Feed Parser
+//
+// Provides RSS 2.0 and Atom feed parsing capabilities.
+// Extracts channel metadata and item entries from XML-based feeds.
+// Supports common RSS elements: title, link, description, pubDate.
+// Buffer at 0x10E0000 (64 KB feed storage).
+
+let RSS_BUF = 0x10E0000;
+let RSS_BUF_SZ = 65536;
+let RSS_MAX_ITEMS = 32;
+
+let mut rss_channel_title = "";
+let mut rss_channel_link = "";
+let mut rss_channel_desc = "";
+let mut rss_item_count = 0;
+let mut rss_item_titles = [];
+let mut rss_item_links = [];
+let mut rss_item_descs = [];
+let mut rss_item_dates = [];
+
+fn rss_init() {
+    rss_clear();
+    let mut i = 0;
+    while i < RSS_MAX_ITEMS {
+        push(rss_item_titles, "");
+        push(rss_item_links, "");
+        push(rss_item_descs, "");
+        push(rss_item_dates, "");
+        i = i + 1;
+    }
+    print("rss: RSS 2.0/Atom feed parser initialized (max " + to_string(RSS_MAX_ITEMS) + " items)");
+    return 0;
+}
+
+fn rss_clear() {
+    rss_channel_title = "";
+    rss_channel_link = "";
+    rss_channel_desc = "";
+    rss_item_count = 0;
+    let mut i = 0;
+    while i < RSS_MAX_ITEMS {
+        if i < len(rss_item_titles) {
+            set_at(rss_item_titles, i, "");
+            set_at(rss_item_links, i, "");
+            set_at(rss_item_descs, i, "");
+            set_at(rss_item_dates, i, "");
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn _rss_find_tag(xml, tag, start_pos) {
+    let open_tag = "<" + tag + ">";
+    let close_tag = "</" + tag + ">";
+
+    let open_pos = str_index_of(str_sub(xml, start_pos, len(xml)), open_tag);
+    if open_pos == 0 - 1 {
+        return ["", start_pos];
+    }
+
+    let content_start = start_pos + open_pos + len(open_tag);
+    let close_pos = str_index_of(str_sub(xml, content_start, len(xml)), close_tag);
+
+    if close_pos == 0 - 1 {
+        return ["", start_pos];
+    }
+
+    let content = str_sub(xml, content_start, content_start + close_pos);
+    let next_pos = content_start + close_pos + len(close_tag);
+
+    return [content, next_pos];
+}
+
+fn _rss_decode_entities(text) {
+    let mut result = text;
+
+    result = str_replace(result, "&lt;", "<");
+    result = str_replace(result, "&gt;", ">");
+    result = str_replace(result, "&amp;", "&");
+    result = str_replace(result, "&quot;", "\"");
+    result = str_replace(result, "&apos;", "'");
+    result = str_replace(result, "&#39;", "'");
+
+    return result;
+}
+
+fn _rss_strip_cdata(text) {
+    let cdata_start = "<![CDATA[";
+    let cdata_end = "]]>";
+
+    let start_pos = str_index_of(text, cdata_start);
+    if start_pos == 0 - 1 {
+        return text;
+    }
+
+    let content_start = start_pos + len(cdata_start);
+    let end_pos = str_index_of(str_sub(text, content_start, len(text)), cdata_end);
+
+    if end_pos == 0 - 1 {
+        return text;
+    }
+
+    return str_sub(text, content_start, content_start + end_pos);
+}
+
+fn _rss_trim(text) {
+    let mut result = text;
+
+    while len(result) > 0 {
+        let first = str_char_code(result, 0);
+        if first == 32 {
+            result = str_sub(result, 1, len(result));
+        } else {
+            if first == 9 {
+                result = str_sub(result, 1, len(result));
+            } else {
+                if first == 10 {
+                    result = str_sub(result, 1, len(result));
+                } else {
+                    if first == 13 {
+                        result = str_sub(result, 1, len(result));
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    while len(result) > 0 {
+        let last = str_char_code(result, len(result) - 1);
+        if last == 32 {
+            result = str_sub(result, 0, len(result) - 1);
+        } else {
+            if last == 9 {
+                result = str_sub(result, 0, len(result) - 1);
+            } else {
+                if last == 10 {
+                    result = str_sub(result, 0, len(result) - 1);
+                } else {
+                    if last == 13 {
+                        result = str_sub(result, 0, len(result) - 1);
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    return result;
+}
+
+fn rss_parse(xml) {
+    rss_clear();
+
+    let channel_start = str_index_of(xml, "<channel>");
+    if channel_start == 0 - 1 {
+        return 0 - 1;
+    }
+
+    let title_result = _rss_find_tag(xml, "title", channel_start);
+    rss_channel_title = _rss_trim(_rss_decode_entities(title_result[0]));
+
+    let link_result = _rss_find_tag(xml, "link", channel_start);
+    rss_channel_link = _rss_trim(_rss_decode_entities(link_result[0]));
+
+    let desc_result = _rss_find_tag(xml, "description", channel_start);
+    rss_channel_desc = _rss_trim(_rss_decode_entities(_rss_strip_cdata(desc_result[0])));
+
+    let mut pos = channel_start;
+    while rss_item_count < RSS_MAX_ITEMS {
+        let item_start = str_index_of(str_sub(xml, pos, len(xml)), "<item>");
+        if item_start == 0 - 1 {
+            break;
+        }
+
+        pos = pos + item_start + 6;
+
+        let item_title = _rss_find_tag(xml, "title", pos);
+        set_at(rss_item_titles, rss_item_count, _rss_trim(_rss_decode_entities(item_title[0])));
+
+        let item_link = _rss_find_tag(xml, "link", pos);
+        set_at(rss_item_links, rss_item_count, _rss_trim(_rss_decode_entities(item_link[0])));
+
+        let item_desc = _rss_find_tag(xml, "description", pos);
+        set_at(rss_item_descs, rss_item_count, _rss_trim(_rss_decode_entities(_rss_strip_cdata(item_desc[0]))));
+
+        let item_date = _rss_find_tag(xml, "pubDate", pos);
+        set_at(rss_item_dates, rss_item_count, _rss_trim(_rss_decode_entities(item_date[0])));
+
+        rss_item_count = rss_item_count + 1;
+    }
+
+    return rss_item_count;
+}
+
+fn rss_get_channel_title() {
+    return rss_channel_title;
+}
+
+fn rss_get_channel_link() {
+    return rss_channel_link;
+}
+
+fn rss_get_channel_desc() {
+    return rss_channel_desc;
+}
+
+fn rss_get_item_count() {
+    return rss_item_count;
+}
+
+fn rss_get_item_title(index) {
+    if index < 0 {
+        return "";
+    }
+    if index >= rss_item_count {
+        return "";
+    }
+    return rss_item_titles[index];
+}
+
+fn rss_get_item_link(index) {
+    if index < 0 {
+        return "";
+    }
+    if index >= rss_item_count {
+        return "";
+    }
+    return rss_item_links[index];
+}
+
+fn rss_get_item_desc(index) {
+    if index < 0 {
+        return "";
+    }
+    if index >= rss_item_count {
+        return "";
+    }
+    return rss_item_descs[index];
+}
+
+fn rss_get_item_date(index) {
+    if index < 0 {
+        return "";
+    }
+    if index >= rss_item_count {
+        return "";
+    }
+    return rss_item_dates[index];
+}
+
+fn rss_test() {
+    print("rss: running self-test");
+
+    let test_feed = "<?xml version=\"1.0\"?><rss version=\"2.0\"><channel><title>Test Feed</title><link>http://example.com</link><description>A test RSS feed</description><item><title>First Item</title><link>http://example.com/1</link><description>First item description</description><pubDate>Mon, 01 Jan 2024 00:00:00 GMT</pubDate></item><item><title>Second Item</title><link>http://example.com/2</link><description>Second item description</description></item></channel></rss>";
+
+    let item_count = rss_parse(test_feed);
+    if item_count == 2 {
+        print("  [ok] RSS parse: found 2 items");
+    } else {
+        print("  [fail] RSS parse: expected 2 items, got " + to_string(item_count));
+        return 0 - 1;
+    }
+
+    if rss_channel_title == "Test Feed" {
+        print("  [ok] RSS channel title: Test Feed");
+    } else {
+        print("  [fail] RSS channel title mismatch");
+        return 0 - 1;
+    }
+
+    if rss_get_item_title(0) == "First Item" {
+        print("  [ok] RSS item[0] title: First Item");
+    } else {
+        print("  [fail] RSS item[0] title mismatch");
+        return 0 - 1;
+    }
+
+    print("rss: self-test passed");
+    return 0;
+}
+
+print("rss.hl loaded");

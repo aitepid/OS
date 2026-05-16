@@ -1,0 +1,205 @@
+// rle.hl -- Run-Length Encoding Compression
+//
+// Provides RLE compression and decompression for data streams.
+// RLE encodes consecutive repeated bytes as (count, byte) pairs.
+// Efficient for data with many consecutive repeated values.
+// Buffer at 0x10D0000 (64 KB output buffer).
+
+let RLE_BUF = 0x10D0000;
+let RLE_BUF_SZ = 65536;
+let rle_len = 0;
+
+fn rle_init() {
+    rle_clear();
+    print("rle: Run-Length Encoding initialized");
+    return 0;
+}
+
+fn rle_clear() {
+    rle_len = 0;
+    let mut i = 0;
+    while i < 1024 {
+        mem_write_byte(RLE_BUF + i, 0);
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn _rle_put(byte) {
+    if rle_len >= RLE_BUF_SZ {
+        return 0;
+    }
+    mem_write_byte(RLE_BUF + rle_len, byte);
+    rle_len = rle_len + 1;
+    return 0;
+}
+
+fn rle_encode(data) {
+    rle_clear();
+    if len(data) == 0 {
+        return 0;
+    }
+
+    let mut i = 0;
+    while i < len(data) {
+        let current = str_char_code(data, i);
+        let mut count = 1;
+        let mut j = i + 1;
+
+        while j < len(data) {
+            if count >= 255 {
+                break;
+            }
+            if str_char_code(data, j) == current {
+                count = count + 1;
+                j = j + 1;
+            } else {
+                break;
+            }
+        }
+
+        if count >= 3 {
+            _rle_put(0);
+            _rle_put(count);
+            _rle_put(current);
+        } else {
+            let mut k = 0;
+            while k < count {
+                if current == 0 {
+                    _rle_put(0);
+                    _rle_put(1);
+                    _rle_put(0);
+                } else {
+                    _rle_put(current);
+                }
+                k = k + 1;
+            }
+        }
+
+        i = j;
+    }
+
+    return rle_len;
+}
+
+fn rle_decode(data) {
+    rle_clear();
+    let mut i = 0;
+
+    while i < len(data) {
+        let byte = str_char_code(data, i);
+
+        if byte == 0 {
+            if i + 2 < len(data) {
+                let count = str_char_code(data, i + 1);
+                let value = str_char_code(data, i + 2);
+
+                let mut j = 0;
+                while j < count {
+                    _rle_put(value);
+                    j = j + 1;
+                }
+
+                i = i + 3;
+            } else {
+                _rle_put(byte);
+                i = i + 1;
+            }
+        } else {
+            _rle_put(byte);
+            i = i + 1;
+        }
+    }
+
+    return rle_len;
+}
+
+fn rle_get_result() {
+    let mut result = "";
+    let mut i = 0;
+    while i < rle_len {
+        let c = mem_read_byte(RLE_BUF + i);
+        result = result + chr(c);
+        i = i + 1;
+    }
+    return result;
+}
+
+fn rle_encode_to_hex(data) {
+    let encoded_len = rle_encode(data);
+    let mut hex = "";
+    let mut i = 0;
+    while i < encoded_len {
+        let byte = mem_read_byte(RLE_BUF + i);
+        let high = byte / 16;
+        let low = byte % 16;
+
+        if high < 10 {
+            hex = hex + chr(48 + high);
+        } else {
+            hex = hex + chr(87 + high);
+        }
+
+        if low < 10 {
+            hex = hex + chr(48 + low);
+        } else {
+            hex = hex + chr(87 + low);
+        }
+
+        i = i + 1;
+    }
+    return hex;
+}
+
+fn rle_ratio(original_len, compressed_len) {
+    if original_len == 0 {
+        return "0.00";
+    }
+    let ratio = (compressed_len * 100) / original_len;
+    return to_string(ratio);
+}
+
+fn rle_test() {
+    print("rle: running self-test");
+
+    let test1 = "AAAAAABBBBBCCCCCDDDDD";
+    let len1 = rle_encode(test1);
+    if len1 > 0 {
+        print("  [ok] RLE encode test1: " + to_string(len(test1)) + " → " + to_string(len1) + " bytes");
+    } else {
+        print("  [fail] RLE encode test1 failed");
+        return 0 - 1;
+    }
+
+    let compressed = rle_get_result();
+    let len2 = rle_decode(compressed);
+    let decoded = rle_get_result();
+
+    if len2 == len(test1) {
+        print("  [ok] RLE decode test1: " + to_string(len1) + " → " + to_string(len2) + " bytes");
+    } else {
+        print("  [fail] RLE decode test1: expected " + to_string(len(test1)) + ", got " + to_string(len2));
+        return 0 - 1;
+    }
+
+    if decoded == test1 {
+        print("  [ok] RLE round-trip: original == decoded");
+    } else {
+        print("  [fail] RLE round-trip: data mismatch");
+        return 0 - 1;
+    }
+
+    let test2 = "Hello World!";
+    let len3 = rle_encode(test2);
+    if len3 > 0 {
+        print("  [ok] RLE encode test2: " + to_string(len(test2)) + " → " + to_string(len3) + " bytes");
+    } else {
+        print("  [fail] RLE encode test2 failed");
+        return 0 - 1;
+    }
+
+    print("rle: self-test passed");
+    return 0;
+}
+
+print("rle.hl loaded");

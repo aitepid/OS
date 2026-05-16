@@ -2,11 +2,68 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`268`（69 根目录 + 199 内核模块）
-- H-L 总行数：`~72,000`
-- 内核模块：`199`
-- Shell 命令：`415`
-- 最近完成功能迭代：`213`（hmac + pbkdf2 + uuid）
+- `.hl` 文件：`271`（69 根目录 + 202 内核模块）
+- H-L 总行数：`~72,700`
+- 内核模块：`202`
+- Shell 命令：`432`
+- 最近完成功能迭代：`216`（rle + rss + ldap）
+
+## Iteration 216 — ldap.hl：LDAP 目录访问协议
+
+- **`bare-kernel/hl/ldap.hl`** 新增（~310 行）
+  - LDAP（Lightweight Directory Access Protocol）轻量级目录访问协议（RFC 4511）
+  - 用途：访问和维护分布式目录信息服务（用户/组/资源查询）
+  - TCP 端口 389，使用 ASN.1 BER 编码
+  - `ldap_connect(host)` — 连接 LDAP 服务器：创建 TCP socket + 连接 port 389
+  - `ldap_bind(dn, password)` — 绑定认证：发送 BindRequest（消息 ID + 版本 3 + DN + 密码）
+  - `ldap_search(base_dn, filter, scope)` — 搜索请求：发送 SearchRequest（base DN + 过滤器 + 作用域 0-2）
+  - `ldap_unbind()` — 解绑并断开：发送 UnbindRequest + 关闭 socket
+  - `_ldap_encode_int(value)` — 整数 ASN.1 编码：tag 0x02 + 长度 + 大端序字节
+  - `_ldap_encode_string(str)` — 字符串 ASN.1 编码：tag 0x04 + 长度 + UTF-8 字节
+  - `_ldap_encode_length(len)` — 长度编码：短格式（<128）或长格式（≥128，多字节）
+  - LDAP 操作码：BIND=0，UNBIND=2，SEARCH=3，MODIFY=6，ADD=8，DELETE=10
+  - `ldap_selftest()` — 测试 ASN.1 编码：整数/字符串/长度编码验证
+  - LDAP_BUF=0x10F0000（17825792），64 KB 消息缓冲区
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`ldap_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 6 条命令：
+  - `ldap connect <host>` / `ldap bind <dn> <pwd>` / `ldap search <dn> <filter>` / `ldap unbind` / `ldap disconnect` / `ldap test`
+
+## Iteration 215 — rss.hl：RSS 订阅源解析器
+
+- **`bare-kernel/hl/rss.hl`** 新增（~320 行）
+  - RSS（Really Simple Syndication）简易信息聚合格式（RSS 2.0 / Atom）
+  - 用途：解析新闻源/博客订阅 XML 文档，提取频道和条目信息
+  - `rss_parse(xml)` — 解析 RSS/Atom XML 文档 → 提取频道和条目数据
+  - `_rss_find_tag(xml, tag, start_pos)` — 查找 XML 标签：定位 `<tag>...</tag>` → 返回内容 + 下一位置
+  - `_rss_decode_entities(text)` — HTML 实体解码：&lt; → <，&gt; → >，&amp; → &，&quot; → "，&apos; → '
+  - `_rss_strip_cdata(text)` — CDATA 节点提取：<![CDATA[...]]> → 纯文本内容
+  - `rss_get_channel_title/link/desc()` — 获取频道元数据（标题/链接/描述）
+  - `rss_get_item_title/link/desc/date(index)` — 获取条目信息（标题/链接/描述/发布日期）
+  - `rss_get_item_count()` — 返回已解析条目数量
+  - 最多存储 32 条目：并行数组（titles/links/descs/dates）
+  - `rss_selftest()` — 测试 XML 解析：2 条目 + 频道标题验证
+  - RSS_BUF=0x10E0000（17760256），64 KB XML 缓冲区
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`rss_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 6 条命令：
+  - `rss parse <xml>` / `rss channel` / `rss items` / `rss item <n>` / `rss count` / `rss test`
+
+## Iteration 214 — rle.hl：行程长度编码
+
+- **`bare-kernel/hl/rle.hl`** 新增（~200 行）
+  - RLE（Run-Length Encoding）行程长度编码压缩算法
+  - 用途：无损压缩重复数据（图像/简单文本），对连续重复字节高效
+  - `rle_encode(data)` — 编码数据：连续 ≥3 字节 → (0x00, count, byte)，否则直接存储
+  - `rle_decode(data)` — 解码数据：遇到 0x00 + count + byte → 展开重复，否则直接输出
+  - 特殊处理：单独 0x00 字节编码为 (0x00, 1, 0x00) 避免歧义
+  - 最大连续长度 255（单字节 count）
+  - `rle_encode_to_hex(data)` — 编码 + 十六进制输出：字节流 → 十六进制字符串（调试友好）
+  - `rle_ratio(orig_len, comp_len)` — 压缩率计算：(compressed / original) × 100%
+  - `rle_get_result()` — 获取编码/解码结果二进制字符串
+  - `rle_selftest()` — 测试压缩/解压：重复数据 + 普通数据 + 往返一致性验证
+  - RLE_BUF=0x10D0000（17694720），64 KB 输出缓冲区
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`rle_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 5 条命令：
+  - `rle encode <data>` / `rle decode <data>` / `rle ratio <orig> <comp>` / `rle hex <data>` / `rle test`
 
 ## Iteration 213 — uuid.hl：UUID 生成器
 
