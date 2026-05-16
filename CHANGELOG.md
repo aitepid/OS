@@ -2,11 +2,58 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`220`（69 根目录 + 151 内核模块）
-- H-L 总行数：`~62,500`
-- 内核模块：`151`
-- Shell 命令：`195`
-- 最近完成功能迭代：`165`（ntp + tar + ui_hexedit + pop3）
+- `.hl` 文件：`223`（69 根目录 + 154 内核模块）
+- H-L 总行数：`~66,000`
+- 内核模块：`154`
+- Shell 命令：`210`
+- 最近完成功能迭代：`168`（irc + ui_calendar + compress）
+
+## Iteration 168 — compress.hl：RLE + LZSS 无损压缩
+
+- **`bare-kernel/hl/compress.hl`** 新增（~260 行）
+  - 双算法：RLE（逃逸字节 0xFF）+ LZSS（256 字节滑动窗口）
+  - 缓冲区：COMP_IN_BUF=0xDE8000（64 KB）+ COMP_OUT_BUF=0xDF8000（64 KB）
+  - RLE：run ≥ 3 时编码为 `0xFF count byte`；0xFF 字面量编码为 `0xFF 0xFF`
+  - LZSS：每 8 个 token 一个 flag 字节；bit=0=literal，bit=1=back-ref（offset u8 + length u8）
+  - `compress_stat(path)`：统计原始大小 + RLE 估计压缩率
+  - `_comp_read_file/write_file`：VFS I/O 封装
+- **`bare-kernel/hl/shell.hl`** 新增 3 条命令：
+  - `compress <rle|lz> <src> <dst>` / `decompress <rle|lz> <src> <dst>` / `compstat <path>`
+
+## Iteration 167 — ui_calendar.hl：月历应用
+
+- **`bare-kernel/hl/ui_calendar.hl`** 新增（~310 行）
+  - 440×380 窗口，7 列 × 6 行网格（Zeller 公式计算首日星期）
+  - 工具栏：← Prev | 月名年份 | Next →
+  - 今日高亮（accent 色，由 `ntp_get_time()` 获取）
+  - 事件存储：最多 32 条（day/month/year/text），有事件日期显示小圆点
+  - 点击日期格 → 选中；底部面板显示当天事件列表
+  - 键盘：Esc=关闭，←/→=换月，'t'=跳回今日
+  - 闰年支持（4/100/400 规则）；`_uical_dow_first` 用 Zeller 变换
+- **`bare-kernel/hl/wm.hl`** 接入：draw / key / click
+- **`bare-kernel/hl/ui_desktop.hl`** dock 第 11 号图标 `UIDSK_APP_CALENDAR`，标签 "Cal"
+- **`bare-kernel/hl/shell.hl`** 新增 7 条命令：
+  - `calendar` / `cal` / `cal next` / `cal prev` / `cal today`
+  - `cal add <day> <text>` / `cal goto <month> <year>`
+
+## Iteration 166 — irc.hl：IRC 客户端（RFC 1459）
+
+- **`bare-kernel/hl/irc.hl`** 新增（~230 行）
+  - IRC_MAX=4 并发会话，默认端口 6667
+  - 5 个会话状态：FREE → CONN → REGISTERED → JOINED → ERR
+  - IRC 消息解析器：`_irc_get_command/trailing/params` + `_irc_prefix_nick`
+  - 自动响应 PING：检测到 `PING` 立即发送 `PONG :<server>`
+  - 001 响应 → 状态升级至 REGISTERED
+  - PRIVMSG 接收 → 格式化 `<nick> text` 并写入 `irc_last_msg[id]` + klog
+  - JOIN 确认 → 状态升级至 JOINED，记录频道名
+  - `_irc_process_resp` 按 `\r\n` 分割多行批量处理
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`irc_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 7 条命令：
+  - `irc` / `irc connect <host> [port]` / `irc reg <id> <nick> <user>`
+  - `irc join <id> <#chan>` / `irc say <id> <target> <msg>` / `irc recv <id>`
+  - `irc part <id>` / `irc quit <id>` / `irc status <id>`
+
+
 
 ## Iteration 165 — pop3.hl：POP3 邮件接收客户端（RFC 1939）
 

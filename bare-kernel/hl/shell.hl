@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 195 commands + pipe operator (|):
+// 210 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -69,6 +69,9 @@ fn shell_handle(cmd) {
         serial_print("TAR:      tar list <path>  tar cat <path> <file>  tar extract <path> <dest>  tar info <path>");
         serial_print("HexEdit:  hexedit [path]  (open hex editor; Tab=toggle edit, Ctrl+S=save)");
         serial_print("POP3:     pop3 connect <host> <port>  pop3 auth <id> <user> <pass>  pop3 list <id>  pop3 get <id> <n>  pop3 quit <id>");
+        serial_print("IRC:      irc connect <host> [port]  irc reg <id> <nick> <user>  irc join <id> <#chan>  irc say <id> <#chan> <msg>  irc part <id>  irc quit <id>");
+        serial_print("Calendar: calendar  cal next  cal prev  cal today  cal add <day> <text>  cal goto <month> <year>");
+        serial_print("Compress: compress <rle|lz> <src> <dst>  decompress <rle|lz> <src> <dst>  compstat <path>");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -1014,6 +1017,150 @@ fn shell_handle_ext(cmd) {
         return "pop3[" + to_string(id) + "] disconnected";
     }
 
+    // --- IRC ---
+    if cmd == "irc" { return irc_list_sessions(); }
+    if str_starts_with(cmd, "irc connect ") {
+        let args = str_sub(cmd, 12, len(cmd));
+        let sp = str_find(args, " ");
+        let host = args;
+        let port = IRC_PORT;
+        if sp >= 0 { host = str_sub(args, 0, sp); port = parse_int(str_sub(args, sp + 1, len(args))); }
+        let id = irc_connect(host, port);
+        if id < 0 { return "Error: irc connect failed"; }
+        return "irc[" + to_string(id) + "] connected to " + host;
+    }
+    if str_starts_with(cmd, "irc reg ") {
+        let args = str_sub(cmd, 8, len(cmd));
+        let sp1 = str_find(args, " ");
+        if sp1 < 0 { return "Usage: irc reg <id> <nick> <user>"; }
+        let id = parse_int(str_sub(args, 0, sp1));
+        let rest = str_sub(args, sp1 + 1, len(args));
+        let sp2 = str_find(rest, " ");
+        if sp2 < 0 { return "Usage: irc reg <id> <nick> <user>"; }
+        let nick = str_sub(rest, 0, sp2);
+        let user = str_sub(rest, sp2 + 1, len(rest));
+        irc_register(id, nick, user);
+        return "irc[" + to_string(id) + "] NICK=" + nick;
+    }
+    if str_starts_with(cmd, "irc join ") {
+        let args = str_sub(cmd, 9, len(cmd));
+        let sp = str_find(args, " ");
+        if sp < 0 { return "Usage: irc join <id> <#channel>"; }
+        let id = parse_int(str_sub(args, 0, sp));
+        let chan = str_sub(args, sp + 1, len(args));
+        irc_join(id, chan);
+        return "irc[" + to_string(id) + "] JOIN " + chan;
+    }
+    if str_starts_with(cmd, "irc say ") {
+        let args = str_sub(cmd, 8, len(args));
+        let sp1 = str_find(args, " ");
+        if sp1 < 0 { return "Usage: irc say <id> <target> <msg>"; }
+        let id = parse_int(str_sub(args, 0, sp1));
+        let rest = str_sub(args, sp1 + 1, len(args));
+        let sp2 = str_find(rest, " ");
+        if sp2 < 0 { return "Usage: irc say <id> <target> <msg>"; }
+        let target = str_sub(rest, 0, sp2);
+        let msg    = str_sub(rest, sp2 + 1, len(rest));
+        irc_say(id, target, msg);
+        return "irc[" + to_string(id) + "] → " + target + ": " + msg;
+    }
+    if str_starts_with(cmd, "irc recv ") {
+        let id = parse_int(str_sub(cmd, 9, len(cmd)));
+        let m = irc_recv(id);
+        if len(m) == 0 { return "(no messages)"; }
+        return m;
+    }
+    if str_starts_with(cmd, "irc part ") {
+        let id = parse_int(str_sub(cmd, 9, len(cmd)));
+        irc_part(id);
+        return "irc[" + to_string(id) + "] parted";
+    }
+    if str_starts_with(cmd, "irc quit ") {
+        let id = parse_int(str_sub(cmd, 9, len(cmd)));
+        irc_quit(id, "");
+        return "irc[" + to_string(id) + "] quit";
+    }
+    if str_starts_with(cmd, "irc status ") {
+        let id = parse_int(str_sub(cmd, 11, len(cmd)));
+        return irc_status(id);
+    }
+
+    // --- Calendar ---
+    if cmd == "calendar" { uical_open(); return "Calendar opened"; }
+    if cmd == "cal" { uical_open(); return "Calendar opened"; }
+    if cmd == "cal next"  { if uical_is_open() == 0 { uical_open(); }
+        uical_goto(uical_month % 12 + 1, uical_year + uical_month / 12);
+        return "Calendar: next month"; }
+    if cmd == "cal prev"  { if uical_is_open() == 0 { uical_open(); }
+        let pm = uical_month - 1;
+        let py = uical_year;
+        if pm < 1 { let pm = 12; let py = py - 1; }
+        uical_goto(pm, py);
+        return "Calendar: prev month"; }
+    if cmd == "cal today" { if uical_is_open() == 0 { uical_open(); }
+        uical_open();   // re-opens and syncs to today
+        return "Calendar: today"; }
+    if str_starts_with(cmd, "cal add ") {
+        let args = str_sub(cmd, 8, len(cmd));
+        let sp = str_find(args, " ");
+        if sp < 0 { return "Usage: cal add <day> <text>"; }
+        let day  = parse_int(str_sub(args, 0, sp));
+        let text = str_sub(args, sp + 1, len(args));
+        let r = uical_add_event(day, uical_month, uical_year, text);
+        if r < 0 { return "Error: event table full"; }
+        return "Event added: day " + to_string(day) + " — " + text;
+    }
+    if str_starts_with(cmd, "cal goto ") {
+        let args = str_sub(cmd, 9, len(cmd));
+        let sp = str_find(args, " ");
+        if sp < 0 { return "Usage: cal goto <month> <year>"; }
+        let mo = parse_int(str_sub(args, 0, sp));
+        let yr = parse_int(str_sub(args, sp + 1, len(args)));
+        if uical_is_open() == 0 { uical_open(); }
+        uical_goto(mo, yr);
+        return "Calendar: " + to_string(mo) + "/" + to_string(yr);
+    }
+
+    // --- Compress ---
+    if str_starts_with(cmd, "compress ") {
+        let args = str_sub(cmd, 9, len(cmd));
+        let sp1 = str_find(args, " ");
+        if sp1 < 0 { return "Usage: compress <rle|lz> <src> <dst>"; }
+        let algo = str_sub(args, 0, sp1);
+        let rest = str_sub(args, sp1 + 1, len(args));
+        let sp2 = str_find(rest, " ");
+        if sp2 < 0 { return "Usage: compress <rle|lz> <src> <dst>"; }
+        let src = str_sub(rest, 0, sp2);
+        let dst = str_sub(rest, sp2 + 1, len(rest));
+        let n = 0 - 1;
+        if algo == "rle" { let n = compress_rle(src, dst); }
+        else { if algo == "lz" { let n = compress_lzss(src, dst); }
+               else { return "Error: unknown algo (use rle or lz)"; } }
+        if n < 0 { return "Error: compress failed"; }
+        return "Compressed to " + dst + "  " + to_string(n) + " bytes";
+    }
+    if str_starts_with(cmd, "decompress ") {
+        let args = str_sub(cmd, 11, len(cmd));
+        let sp1 = str_find(args, " ");
+        if sp1 < 0 { return "Usage: decompress <rle|lz> <src> <dst>"; }
+        let algo = str_sub(args, 0, sp1);
+        let rest = str_sub(args, sp1 + 1, len(args));
+        let sp2 = str_find(rest, " ");
+        if sp2 < 0 { return "Usage: decompress <rle|lz> <src> <dst>"; }
+        let src = str_sub(rest, 0, sp2);
+        let dst = str_sub(rest, sp2 + 1, len(rest));
+        let n = 0 - 1;
+        if algo == "rle" { let n = decompress_rle(src, dst); }
+        else { if algo == "lz" { let n = decompress_lzss(src, dst); }
+               else { return "Error: unknown algo (use rle or lz)"; } }
+        if n < 0 { return "Error: decompress failed"; }
+        return "Decompressed to " + dst + "  " + to_string(n) + " bytes";
+    }
+    if str_starts_with(cmd, "compstat ") {
+        let path = str_sub(cmd, 9, len(cmd));
+        return compress_stat(path);
+    }
+
     if cmd == "ctr" {
         return ctr_list();
     }
@@ -1309,7 +1456,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 195 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3");
+print("shell.hl loaded -- 210 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress");
 
 // Main shell loop (called from kernel_init)
 

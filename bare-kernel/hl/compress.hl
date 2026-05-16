@@ -1,0 +1,342 @@
+// compress.hl -- Lossless Data Compression
+//
+// Iteration 168: RLE and LZSS compression for VFS files.
+//
+// Algorithm 1 — RLE (Run-Length Encoding):
+//   Escape byte 0xFF.  Format:
+//     0xFF 0x01..0xFE <byte>   → repeat <byte> N times (2..254)
+//     0xFF 0xFF                → literal 0xFF
+//     any other byte           → literal copy
+//   Useful for data with long runs of identical bytes (bitmaps, zeroed pages).
+//
+// Algorithm 2 — LZSS (Lempel-Ziv-Storer-Szymanski):
+//   256-byte sliding window (8-bit back-reference offset).
+//   Flag-byte groups of 8 tokens:  bit 0 = first token, bit 7 = last.
+//     bit=0 → literal byte follows
+//     bit=1 → 2-byte back-reference: [offset u8][length u8, min 3]
+//   Min match: 3 bytes (otherwise copying is not beneficial).
+//   Compression ratio: best on repetitive data; roughly 40-60% on text.
+//
+// I/O: reads from VFS into COMP_IN_BUF (64 KB), writes to COMP_OUT_BUF,
+//      then writes output to destination VFS path.
+//
+// Scratch buffers:
+//   COMP_IN_BUF  = 0xDE8000 (14581760)  64 KB
+//   COMP_OUT_BUF = 0xDF8000 (14647296)  64 KB
+//
+// Public API:
+//   compress_rle(src, dst)       → compressed size (-1 on fail)
+//   decompress_rle(src, dst)     → decompressed size (-1 on fail)
+//   compress_lzss(src, dst)      → compressed size (-1 on fail)
+//   decompress_lzss(src, dst)    → decompressed size (-1 on fail)
+//   compress_stat(path)          → info string
+
+let COMP_IN_BUF  = 14581760;   // 0xDE8000
+let COMP_OUT_BUF = 14647296;   // 0xDF8000
+let COMP_BUF_SZ  = 65536;      // 64 KB
+
+// ============================================================
+// I/O helpers
+// ============================================================
+
+fn _comp_read_file(path) {
+    let fd = vfs_open(path, O_RDONLY);
+    if fd < 0 { return 0; }
+    let n = vfs_read(fd, COMP_IN_BUF, COMP_BUF_SZ);
+    vfs_close(fd);
+    return n;
+}
+
+fn _comp_write_file(path, sz) {
+    let fd = vfs_open(path, O_WRONLY);
+    if fd < 0 { return 0 - 1; }
+    vfs_write(fd, COMP_OUT_BUF, sz);
+    vfs_close(fd);
+    return sz;
+}
+
+fn _comp_rb(off) {  return mem_read_u8(COMP_IN_BUF + off);  }
+fn _comp_wb(off, v) { mem_write_u8(COMP_OUT_BUF + off, v); return 0; }
+
+// ============================================================
+// RLE encode
+// ============================================================
+
+fn compress_rle(src, dst) {
+    let in_sz = _comp_read_file(src);
+    if in_sz <= 0 { return 0 - 1; }
+
+    let mut out = 0;
+    let mut i   = 0;
+    while i < in_sz {
+        let b = _comp_rb(i);
+
+        if b == 255 {
+            // Escape literal 0xFF → 0xFF 0xFF
+            _comp_wb(out, 255); out = out + 1;
+            _comp_wb(out, 255); out = out + 1;
+            i = i + 1;
+        } else {
+            // Count run length (max 254)
+            let mut run = 1;
+            while i + run < in_sz {
+                if run >= 254 { run = 255; }   // break
+                else {
+                    if _comp_rb(i + run) == b { run = run + 1; }
+                    else { run = 255; }        // break by overflow
+                }
+            }
+            // Fix: if run hit 255 it means it broke out
+            let mut real_run = 0;
+            let mut j = i;
+            while j < in_sz {
+                if real_run >= 254 { j = in_sz; }
+                else { if _comp_rb(j) == b { real_run = real_run + 1; j = j + 1; } else { j = in_sz; } }
+            }
+
+            if real_run >= 3 {
+                // Emit RLE token: 0xFF <count> <byte>
+                _comp_wb(out, 255); out = out + 1;
+                _comp_wb(out, real_run); out = out + 1;
+                _comp_wb(out, b); out = out + 1;
+                i = i + real_run;
+            } else {
+                // Emit literal
+                _comp_wb(out, b); out = out + 1;
+                i = i + 1;
+            }
+        }
+        if out >= COMP_BUF_SZ - 4 { i = in_sz; }   // output full
+    }
+
+    let r = _comp_write_file(dst, out);
+    if r < 0 { return 0 - 1; }
+    print("compress: RLE " + src + " → " + dst + "  " + to_string(in_sz) + " → " + to_string(out) + " bytes");
+    return out;
+}
+
+// ============================================================
+// RLE decode
+// ============================================================
+
+fn decompress_rle(src, dst) {
+    let in_sz = _comp_read_file(src);
+    if in_sz <= 0 { return 0 - 1; }
+
+    let mut out = 0;
+    let mut i   = 0;
+    while i < in_sz {
+        let b = _comp_rb(i);
+        if b == 255 {
+            if i + 1 >= in_sz { i = in_sz; }
+            else {
+                let next = _comp_rb(i + 1);
+                if next == 255 {
+                    // Literal 0xFF
+                    _comp_wb(out, 255); out = out + 1;
+                    i = i + 2;
+                } else {
+                    // Run: next = count, i+2 = byte
+                    if i + 2 < in_sz {
+                        let val = _comp_rb(i + 2);
+                        let mut k = 0;
+                        while k < next {
+                            _comp_wb(out, val); out = out + 1;
+                            k = k + 1;
+                        }
+                    }
+                    i = i + 3;
+                }
+            }
+        } else {
+            _comp_wb(out, b); out = out + 1;
+            i = i + 1;
+        }
+        if out >= COMP_BUF_SZ - 4 { i = in_sz; }
+    }
+
+    let r = _comp_write_file(dst, out);
+    if r < 0 { return 0 - 1; }
+    print("decompress: RLE " + src + " → " + dst + "  " + to_string(in_sz) + " → " + to_string(out) + " bytes");
+    return out;
+}
+
+// ============================================================
+// LZSS encode
+// ============================================================
+
+// Find best match in sliding window [0 .. win_end-1] for text starting at pos.
+// Returns [offset, length] or [0, 0] if no match >= 3.
+fn _lzss_find_match(pos, in_sz) {
+    let min_len = 3;
+    let max_len = 16;   // keep small for speed
+    let win_start = pos - 256;
+    let mut ws = win_start;
+    if ws < 0 { ws = 0; }
+
+    let mut best_len = 0;
+    let mut best_off = 0;
+
+    let mut j = ws;
+    while j < pos {
+        let mut ml = 0;
+        while ml < max_len {
+            if pos + ml >= in_sz { ml = max_len + 1; }
+            else {
+                if _comp_rb(j + ml) == _comp_rb(pos + ml) { ml = ml + 1; }
+                else { ml = max_len + 1; }
+            }
+        }
+        // Real ml: count actual matches
+        let mut real_ml = 0;
+        let mut k = 0;
+        while k < max_len {
+            if pos + k < in_sz {
+                if _comp_rb(j + k) == _comp_rb(pos + k) { real_ml = real_ml + 1; k = k + 1; }
+                else { k = max_len + 1; }
+            } else { k = max_len + 1; }
+        }
+
+        if real_ml > best_len {
+            best_len = real_ml;
+            best_off = pos - j - 1;   // offset from current pos back
+        }
+        j = j + 1;
+    }
+
+    if best_len < min_len { return [0, 0]; }
+    return [best_off, best_len];
+}
+
+fn compress_lzss(src, dst) {
+    let in_sz = _comp_read_file(src);
+    if in_sz <= 0 { return 0 - 1; }
+
+    let mut out   = 0;
+    let mut i     = 0;
+
+    while i < in_sz {
+        // Process 8 tokens per flag byte
+        let flag_pos = out;
+        _comp_wb(out, 0); out = out + 1;   // flag byte written back at flag_pos
+        let mut flag = 0;
+        let mut tok  = 0;
+
+        while tok < 8 {
+            if i >= in_sz {
+                tok = 8;   // done
+            } else {
+                let m = _lzss_find_match(i, in_sz);
+                let mlen = m[1];
+                if mlen >= 3 {
+                    // Back-reference token
+                    flag = flag + (1 * (1 + tok + tok + tok + tok + tok + tok + tok));  // 2^tok
+                    _comp_wb(out, m[0]); out = out + 1;
+                    _comp_wb(out, mlen); out = out + 1;
+                    i = i + mlen;
+                } else {
+                    // Literal token (flag bit stays 0)
+                    _comp_wb(out, _comp_rb(i)); out = out + 1;
+                    i = i + 1;
+                }
+                tok = tok + 1;
+            }
+            if out >= COMP_BUF_SZ - 4 { tok = 8; i = in_sz; }
+        }
+        mem_write_u8(COMP_OUT_BUF + flag_pos, flag);
+    }
+
+    let r = _comp_write_file(dst, out);
+    if r < 0 { return 0 - 1; }
+    print("compress: LZSS " + src + " → " + dst + "  " + to_string(in_sz) + " → " + to_string(out) + " bytes");
+    return out;
+}
+
+// ============================================================
+// LZSS decode
+// ============================================================
+
+fn decompress_lzss(src, dst) {
+    let in_sz = _comp_read_file(src);
+    if in_sz <= 0 { return 0 - 1; }
+
+    let mut out = 0;
+    let mut i   = 0;
+
+    while i < in_sz {
+        let flag = _comp_rb(i); i = i + 1;
+        let mut tok = 0;
+        while tok < 8 {
+            if i >= in_sz { tok = 8; }
+            else {
+                let bit = (flag / (1 + tok + tok + tok + tok + tok + tok + tok)) % 2;
+                if bit == 1 {
+                    // Back-reference
+                    if i + 1 < in_sz {
+                        let off = _comp_rb(i); i = i + 1;
+                        let mlen = _comp_rb(i); i = i + 1;
+                        let src_pos = out - off - 1;
+                        let mut k = 0;
+                        while k < mlen {
+                            let bv = mem_read_u8(COMP_OUT_BUF + src_pos + k);
+                            _comp_wb(out, bv); out = out + 1;
+                            k = k + 1;
+                        }
+                    }
+                } else {
+                    // Literal
+                    _comp_wb(out, _comp_rb(i)); out = out + 1;
+                    i = i + 1;
+                }
+                tok = tok + 1;
+            }
+            if out >= COMP_BUF_SZ - 4 { tok = 8; i = in_sz; }
+        }
+    }
+
+    let r = _comp_write_file(dst, out);
+    if r < 0 { return 0 - 1; }
+    print("decompress: LZSS " + src + " → " + dst + "  " + to_string(in_sz) + " → " + to_string(out) + " bytes");
+    return out;
+}
+
+// ============================================================
+// Stats
+// ============================================================
+
+fn compress_stat(path) {
+    let fd = vfs_open(path, O_RDONLY);
+    if fd < 0 { return "Error: cannot open " + path; }
+    let n = vfs_read(fd, COMP_IN_BUF, COMP_BUF_SZ);
+    vfs_close(fd);
+
+    // Count run distribution for RLE estimate
+    let mut runs = 0;
+    let mut singletons = 0;
+    let mut i = 0;
+    while i < n {
+        let b = _comp_rb(i);
+        let mut run = 1;
+        while i + run < n {
+            if _comp_rb(i + run) == b { run = run + 1; }
+            else { run = n + 1; }   // break
+        }
+        let mut real_run = 0;
+        let mut j = i;
+        while j < n {
+            if _comp_rb(j) == b { real_run = real_run + 1; j = j + 1; }
+            else { j = n + 1; }
+        }
+        if real_run >= 3 { runs = runs + 1; }
+        else { singletons = singletons + real_run; }
+        i = i + real_run;
+    }
+    let rle_est = runs * 3 + singletons;
+
+    return path + ": " + to_string(n) + " bytes"
+        + "  RLE_est=" + to_string(rle_est) + " bytes"
+        + " (" + to_string(rle_est * 100 / n) + "%)";
+}
+
+print("compress.hl loaded");
+print("Compress: RLE (escape 0xFF, run≥3) + LZSS (256-byte window, 8 tokens/flag), 64KB I/O buffers");

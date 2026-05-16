@@ -1,0 +1,353 @@
+// irc.hl -- IRC Client (RFC 1459)
+//
+// Iteration 166: Connect to IRC servers, join channels, send/receive messages.
+//
+// Protocol flow (plain IRC, port 6667):
+//   CONNECT → NICK <nick>\r\n → USER <user> 0 * :<realname>\r\n
+//   Receive :server 001 ... (welcome) → state = REGISTERED
+//   JOIN #<channel>\r\n → receive :nick JOIN :channel
+//   PRIVMSG <target> :<text>\r\n  — send message
+//   PING :server → PONG :<server>  — must respond to keep-alive
+//   PART #<channel>\r\n / QUIT [:<reason>]\r\n
+//
+// IRC message format:  [':' prefix SP] command [SP params...] [SP ':' trailing] CRLF
+//
+// Up to IRC_MAX (4) concurrent sessions.
+// Per-session inbound buffer: read directly from TCP RX (same pattern as smtp/pop3).
+//
+// Public API:
+//   irc_init()
+//   irc_connect(host, port)               → session_id
+//   irc_register(id, nick, user)          → 0 ok / -1 fail
+//   irc_join(id, channel)
+//   irc_say(id, target, msg)
+//   irc_part(id)
+//   irc_quit(id, reason)
+//   irc_tick()                            — poll + handle PING, log PRIVMSGs
+//   irc_recv(id)                          → last received text (cleared after read)
+//   irc_status(id) / irc_list_sessions()
+
+let IRC_MAX    = 4;
+let IRC_PORT   = 6667;
+
+// Session states
+let IRC_ST_FREE       = 0;
+let IRC_ST_CONN       = 1;   // TCP connected, not registered
+let IRC_ST_REGISTERED = 2;   // NICK+USER accepted, 001 received
+let IRC_ST_JOINED     = 3;   // in a channel
+let IRC_ST_ERR        = 4;
+
+let mut irc_active   = [];
+let mut irc_tcb      = [];
+let mut irc_state    = [];
+let mut irc_host     = [];
+let mut irc_nick     = [];
+let mut irc_channel  = [];
+let mut irc_last_msg = [];   // last received PRIVMSG text
+let mut irc_count    = 0;
+
+fn irc_init() {
+    irc_active   = [];
+    irc_tcb      = [];
+    irc_state    = [];
+    irc_host     = [];
+    irc_nick     = [];
+    irc_channel  = [];
+    irc_last_msg = [];
+    irc_count    = 0;
+    let mut i = 0;
+    while i < IRC_MAX {
+        push(irc_active,   0);
+        push(irc_tcb,      0 - 1);
+        push(irc_state,    IRC_ST_FREE);
+        push(irc_host,     "");
+        push(irc_nick,     "");
+        push(irc_channel,  "");
+        push(irc_last_msg, "");
+        i = i + 1;
+    }
+    print("irc: init — max " + to_string(IRC_MAX) + " sessions");
+    return 0;
+}
+
+fn _irc_alloc() {
+    let mut i = 0;
+    while i < IRC_MAX {
+        if irc_active[i] == 0 { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+// ============================================================
+// Response reader (same TCB RX pattern as smtp/pop3)
+// ============================================================
+
+fn _irc_read_resp(id) {
+    let tcb  = irc_tcb[id];
+    let addr = TCP_TABLE + tcb * TCB_SIZE;
+    let rx_buf = mem_read_u64(addr + 64);
+    if rx_buf == 0 { return ""; }
+    let mut s = "";
+    let mut j = 0;
+    while j < 4096 {
+        let b = mem_read_u8(rx_buf + j);
+        if b == 0 { j = 4097; }
+        else { s = s + str_from_code(b); j = j + 1; }
+    }
+    mem_zero(rx_buf, 4096);
+    return s;
+}
+
+// ============================================================
+// IRC message parser
+// ============================================================
+
+// Extract command from a raw IRC line (may have ":prefix " prefix)
+fn _irc_get_command(line) {
+    if len(line) == 0 { return ""; }
+    let mut start = 0;
+    if str_sub(line, 0, 1) == ":" {
+        // skip prefix
+        let sp = str_find(line, " ");
+        if sp < 0 { return ""; }
+        start = sp + 1;
+    }
+    let rest = str_sub(line, start, len(line));
+    let sp = str_find(rest, " ");
+    if sp < 0 { return rest; }
+    return str_sub(rest, 0, sp);
+}
+
+// Extract trailing parameter (after " :") from IRC line
+fn _irc_get_trailing(line) {
+    let pos = str_find(line, " :");
+    if pos < 0 { return ""; }
+    return str_sub(line, pos + 2, len(line));
+}
+
+// Extract params string (between command and trailing)
+fn _irc_get_params(line) {
+    let mut start = 0;
+    if str_sub(line, 0, 1) == ":" {
+        let sp = str_find(line, " ");
+        if sp < 0 { return ""; }
+        start = sp + 1;
+    }
+    let rest = str_sub(line, start, len(line));
+    let sp = str_find(rest, " ");
+    if sp < 0 { return ""; }
+    let after_cmd = str_sub(rest, sp + 1, len(rest));
+    // Strip trailing ":..." part
+    let tc = str_find(after_cmd, " :");
+    if tc < 0 { return after_cmd; }
+    return str_sub(after_cmd, 0, tc);
+}
+
+// Extract nick from ":nick!user@host" prefix
+fn _irc_prefix_nick(line) {
+    if len(line) == 0 { return ""; }
+    if str_sub(line, 0, 1) != ":" { return ""; }
+    let end = str_find(line, "!");
+    if end < 0 {
+        let sp = str_find(line, " ");
+        if sp < 0 { return str_sub(line, 1, len(line)); }
+        return str_sub(line, 1, sp);
+    }
+    return str_sub(line, 1, end);
+}
+
+// Process one IRC line for session id
+fn _irc_process_line(id, line) {
+    if len(line) == 0 { return 0; }
+    let cmd = _irc_get_command(line);
+
+    // PING → PONG
+    if cmd == "PING" {
+        let server = _irc_get_trailing(line);
+        tcp_send(irc_tcb[id], "PONG :" + server + "\r\n");
+        return 0;
+    }
+
+    // 001 Welcome → registered
+    if cmd == "001" {
+        set_at(irc_state, id, IRC_ST_REGISTERED);
+        klog(1, "irc", "[" + to_string(id) + "] registered on " + irc_host[id]);
+        return 0;
+    }
+
+    // PRIVMSG — store as last_msg
+    if cmd == "PRIVMSG" {
+        let from    = _irc_prefix_nick(line);
+        let target  = _irc_get_params(line);
+        let text    = _irc_get_trailing(line);
+        let msg_str = "<" + from + "> " + text;
+        set_at(irc_last_msg, id, msg_str);
+        klog(1, "irc", "[" + to_string(id) + "] " + target + " " + msg_str);
+        return 0;
+    }
+
+    // JOIN confirmation
+    if cmd == "JOIN" {
+        let who = _irc_prefix_nick(line);
+        if who == irc_nick[id] {
+            let ch = _irc_get_trailing(line);
+            set_at(irc_channel, id, ch);
+            set_at(irc_state,   id, IRC_ST_JOINED);
+            print("irc[" + to_string(id) + "]: joined " + ch);
+        }
+        return 0;
+    }
+
+    // ERROR / KILL → mark error
+    if cmd == "ERROR" {
+        klog(2, "irc", "server error on session " + to_string(id));
+        set_at(irc_state, id, IRC_ST_ERR);
+        return 0;
+    }
+    return 0;
+}
+
+// Split raw response by CRLF and process each line
+fn _irc_process_resp(id, resp) {
+    if len(resp) == 0 { return 0; }
+    let mut start = 0;
+    let mut go = 1;
+    while go == 1 {
+        let cr = str_find_from(resp, "\r\n", start);
+        if cr < 0 {
+            if start < len(resp) { _irc_process_line(id, str_sub(resp, start, len(resp))); }
+            go = 0;
+        } else {
+            _irc_process_line(id, str_sub(resp, start, cr));
+            start = cr + 2;
+        }
+    }
+    return 0;
+}
+
+// ============================================================
+// Session lifecycle
+// ============================================================
+
+fn irc_connect(host, port) {
+    let id = _irc_alloc();
+    if id < 0 { print("irc: no free slots"); return 0 - 1; }
+
+    let ip = dns_resolve(host);
+    if ip == 0 { print("irc: dns_resolve failed for " + host); return 0 - 1; }
+
+    let tcb = tcp_connect(ip, port);
+    if tcb < 0 { print("irc: tcp_connect failed to " + host); return 0 - 1; }
+
+    set_at(irc_active,  id, 1);
+    set_at(irc_tcb,     id, tcb);
+    set_at(irc_state,   id, IRC_ST_CONN);
+    set_at(irc_host,    id, host);
+    irc_count = irc_count + 1;
+    print("irc[" + to_string(id) + "]: connected to " + host + ":" + to_string(port));
+    return id;
+}
+
+fn irc_register(id, nick, user) {
+    if id < 0 { return 0 - 1; }
+    if irc_active[id] == 0 { return 0 - 1; }
+    set_at(irc_nick, id, nick);
+    tcp_send(irc_tcb[id], "NICK " + nick + "\r\n");
+    tcp_send(irc_tcb[id], "USER " + user + " 0 * :HicOS IRC\r\n");
+    print("irc[" + to_string(id) + "]: NICK=" + nick + " USER=" + user);
+    return 0;
+}
+
+fn irc_join(id, channel) {
+    if id < 0 { return 0; }
+    if irc_active[id] == 0 { return 0; }
+    tcp_send(irc_tcb[id], "JOIN " + channel + "\r\n");
+    return 0;
+}
+
+fn irc_say(id, target, msg) {
+    if id < 0 { return 0; }
+    if irc_active[id] == 0 { return 0; }
+    tcp_send(irc_tcb[id], "PRIVMSG " + target + " :" + msg + "\r\n");
+    return 0;
+}
+
+fn irc_part(id) {
+    if id < 0 { return 0; }
+    if irc_active[id] == 0 { return 0; }
+    let ch = irc_channel[id];
+    if len(ch) > 0 { tcp_send(irc_tcb[id], "PART " + ch + "\r\n"); }
+    set_at(irc_state,   id, IRC_ST_REGISTERED);
+    set_at(irc_channel, id, "");
+    return 0;
+}
+
+fn irc_quit(id, reason) {
+    if id < 0 { return 0; }
+    if id >= IRC_MAX { return 0; }
+    if irc_active[id] == 0 { return 0; }
+    let msg = reason;
+    if len(msg) == 0 { msg = "HicOS"; }
+    tcp_send(irc_tcb[id], "QUIT :" + msg + "\r\n");
+    tcp_close(irc_tcb[id]);
+    set_at(irc_active, id, 0);
+    irc_count = irc_count - 1;
+    print("irc[" + to_string(id) + "]: quit");
+    return 0;
+}
+
+// ============================================================
+// Tick
+// ============================================================
+
+fn irc_tick() {
+    let mut i = 0;
+    while i < IRC_MAX {
+        if irc_active[i] == 1 {
+            let resp = _irc_read_resp(i);
+            if len(resp) > 0 { _irc_process_resp(i, resp); }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn irc_recv(id) {
+    if id < 0 { return ""; }
+    if id >= IRC_MAX { return ""; }
+    let msg = irc_last_msg[id];
+    set_at(irc_last_msg, id, "");
+    return msg;
+}
+
+// ============================================================
+// Status
+// ============================================================
+
+fn irc_status(id) {
+    if id < 0 { return "irc: invalid"; }
+    if id >= IRC_MAX { return "irc: invalid"; }
+    if irc_active[id] == 0 { return "irc[" + to_string(id) + "] free"; }
+    let st_names = ["free", "connecting", "registered", "joined", "error"];
+    let st = irc_state[id];
+    let mut st_s = "?";
+    if st >= 0 { if st <= 4 { st_s = st_names[st]; } }
+    return "irc[" + to_string(id) + "] " + st_s
+        + " host=" + irc_host[id]
+        + " nick=" + irc_nick[id]
+        + " chan=" + irc_channel[id];
+}
+
+fn irc_list_sessions() {
+    let mut out = "IRC sessions (" + to_string(irc_count) + "/" + to_string(IRC_MAX) + "):\n";
+    let mut i = 0;
+    while i < IRC_MAX {
+        if irc_active[i] == 1 { out = out + "  " + irc_status(i) + "\n"; }
+        i = i + 1;
+    }
+    return out;
+}
+
+print("irc.hl loaded");
+print("IRC: RFC 1459 client, NICK/USER/JOIN/PRIVMSG/PING-PONG/PART/QUIT, " + to_string(IRC_MAX) + " sessions");
