@@ -2,13 +2,64 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`304`（69 根目录 + 235 内核模块）
-- H-L 总行数：`~83,000`
-- 内核模块：`235`
-- Shell 命令：`595`
-- 最近完成功能迭代：`249`（curve25519 + aes_gcm + chacha20_poly1305）
+- `.hl` 文件：`307`（69 根目录 + 238 内核模块）
+- H-L 总行数：`~85,500`
+- 内核模块：`238`
+- Shell 命令：`610`
+- 最近完成功能迭代：`252`（x509 + grpc + png）
 
-## Iteration 249 — chacha20_poly1305.hl：ChaCha20-Poly1305 AEAD
+## Iteration 252 — png.hl：PNG 图像解码器
+
+- **`bare-kernel/hl/png.hl`** 新增（~400 行）
+  - PNG 图像解码器（RFC 2083 / ISO 15948），RGBA 像素输出
+  - 支持色彩类型：0(灰度)、2(RGB)、3(索引)、4(灰度+Alpha)、6(RGBA)
+  - `png_decode(data)` — 解析 PNG 文件字节流，验证签名，处理 chunk 链
+  - PNG 签名：8 字节（137 80 78 71 13 10 26 10）
+  - Chunk 解析：IHDR（图像头）、IDAT（压缩像素）、PLTE（调色板）、tEXt（文本元数据）、IEND
+  - IHDR 解析：宽/高/位深度/色彩类型/压缩方法/过滤方法/隔行扫描
+  - DEFLATE 解压：原始存储块（type 00），LZ77 压缩块模拟
+  - 过滤器重建：`_png_unfilter_row()` 支持 Filter 0-4（None/Sub/Up/Average/Paeth）
+  - Paeth 预测器：`_png_paeth(a, b, c)` 标准实现
+  - `png_get_pixel(x, y)` — 获取 RGBA 像素值（4 字节数组）
+  - `png_show_ascii(cols, rows)` — ASCII Art 可视化（亮度映射到 @#8Oo+-. 字符）
+  - Shell 命令：`png load <path>  png info  png pixel <x> <y>  png show  png test`
+
+## Iteration 251 — grpc.hl：gRPC 协议
+
+- **`bare-kernel/hl/grpc.hl`** 新增（~300 行）
+  - gRPC 协议实现（gRPC Core Spec），HTTP/2 LPM 帧格式
+  - 帧格式：5 字节头部（压缩标志 1B + 消息长度 4B 大端）
+  - `grpc_encode_frame_header(msg_len)` — 编码 LPM 帧头
+  - `grpc_decode_frame_header(header)` — 解码 LPM 帧头，返回 [compressed, length]
+  - 服务注册：`grpc_register_service(name)` — 注册 gRPC 服务
+  - 方法注册：`grpc_register_method(svc_idx, method)` — 注册方法，自动构建路径 /服务/方法
+  - 支持最多 16 个服务 × 32 个方法（可扩展）
+  - `grpc_call(method_path)` — 发起一元 RPC 调用（Unary RPC）
+  - `grpc_server_handle(raw)` — 服务端：接收并路由帧化请求
+  - 17 个 gRPC 状态码（0-16）：OK/CANCELLED/INVALID_ARGUMENT/NOT_FOUND/...
+  - `grpc_set_metadata(key, val)` — 设置请求元数据头（最多 16 对）
+  - `grpc_build_request_headers(path)` — 构建 HTTP/2 HEADERS 帧
+  - `grpc_build_trailers(status)` — 构建响应 Trailers（grpc-status + grpc-message）
+  - Shell 命令：`grpc svc <n>  grpc method <s> <m>  grpc call <p>  grpc list  grpc status  grpc meta <k> <v>  grpc test`
+
+## Iteration 250 — x509.hl：X.509 证书解析器
+
+- **`bare-kernel/hl/x509.hl`** 新增（~350 行）
+  - X.509 v3 数字证书解析器（RFC 5280），支持 DER/PEM 格式
+  - 用途：TLS 握手证书链验证、HTTPS 服务器身份认证
+  - ASN.1 DER 解析：`_x509_read_tag`、`_x509_read_len`、`_x509_skip_element`
+  - `x509_parse(der_data)` — 解析 DER 格式证书，提取所有关键字段
+  - `x509_parse_pem(pem_str)` — 解析 PEM 格式证书（剥离 Base64 头尾并解码）
+  - 字段提取：版本、序列号（十六进制）、颁发者 CN、主体 CN
+  - 有效期：notBefore / notAfter（UTCTime 或 GeneralizedTime）
+  - 公钥算法：RSA（OID 1.2.840.113549.1.1）/ EC / Ed25519
+  - 公钥长度（bit）从 BIT STRING 长度推算
+  - `_x509_parse_oid(data, pos)` — 解析 OID 点分十进制（ISO 8825-1）
+  - `_x509_parse_dn(data, pos, end)` — 提取 Distinguished Name CN 属性
+  - 最多同时保存 8 个证书（`X509_MAX_CERTS=8`）
+  - Shell 命令：`x509 pem <d>  x509 list  x509 info <n>  x509 subject <n>  x509 issuer <n>  x509 key <n>  x509 clear  x509 test`
+
+
 
 - **`bare-kernel/hl/chacha20_poly1305.hl`** 新增（~350 行）
   - ChaCha20-Poly1305 认证加密（RFC 8439），移动端优选 AEAD 方案

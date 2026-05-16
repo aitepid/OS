@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 595 commands + pipe operator (|):
+// 610 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -144,6 +144,9 @@ fn shell_handle(cmd) {
         serial_print("X25519:   curve25519 scalar <key>  curve25519 pubkey  curve25519 shared <peer_pub>  curve25519 pubhex  curve25519 test");
         serial_print("AES-GCM:  aesgcm key <key>  aesgcm nonce <nonce>  aesgcm aad <data>  aesgcm encrypt <data>  aesgcm tag  aesgcm test");
         serial_print("CP1305:   cp1305 key <key>  cp1305 nonce <nonce>  cp1305 encrypt <data>  cp1305 tag  cp1305 test");
+        serial_print("X.509:    x509 parse <der>  x509 pem <data>  x509 list  x509 info <n>  x509 subject <n>  x509 issuer <n>  x509 key <n>  x509 clear  x509 test");
+        serial_print("gRPC:     grpc svc <name>  grpc method <svc> <name>  grpc call <path>  grpc list  grpc status  grpc meta <k> <v>  grpc test");
+        serial_print("PNG:      png load <path>  png info  png pixel <x> <y>  png show  png test");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -3347,6 +3350,96 @@ fn shell_handle_ext(cmd) {
     if cmd == "cp1305 tag" { return "cp1305: tag=" + chacha20_poly1305_get_tag(); }
     if cmd == "cp1305 test" { return chacha20_poly1305_test(); }
 
+    // === X.509 Certificate Parser ===
+    if str_starts_with(cmd, "x509 pem ") {
+        let pem_str = substr(cmd, 9, len(cmd) - 9);
+        let result = x509_parse_pem(pem_str);
+        if result == 0 { return "x509: certificate parsed, count=" + to_string(x509_cert_count); }
+        return "x509: parse failed (code=" + to_string(result) + ")";
+    }
+    if cmd == "x509 list" {
+        let count = x509_list();
+        return "x509: " + to_string(count) + " certificate(s) listed";
+    }
+    if str_starts_with(cmd, "x509 info ") {
+        let idx = to_int(substr(cmd, 10, len(cmd) - 10));
+        return x509_info(idx);
+    }
+    if str_starts_with(cmd, "x509 subject ") {
+        let idx = to_int(substr(cmd, 13, len(cmd) - 13));
+        return "x509: subject=" + x509_get_subject(idx);
+    }
+    if str_starts_with(cmd, "x509 issuer ") {
+        let idx = to_int(substr(cmd, 12, len(cmd) - 12));
+        return "x509: issuer=" + x509_get_issuer(idx);
+    }
+    if str_starts_with(cmd, "x509 key ") {
+        let idx = to_int(substr(cmd, 9, len(cmd) - 9));
+        return "x509: key=" + x509_get_key_info(idx);
+    }
+    if cmd == "x509 clear" { x509_clear(); return "x509: cleared"; }
+    if cmd == "x509 test" { return x509_test(); }
+
+    // === gRPC Protocol ===
+    if str_starts_with(cmd, "grpc svc ") {
+        let name = substr(cmd, 9, len(cmd) - 9);
+        let idx = grpc_register_service(name);
+        return "grpc: service registered [" + to_string(idx) + "] " + name;
+    }
+    if str_starts_with(cmd, "grpc method ") {
+        let args = substr(cmd, 12, len(cmd) - 12);
+        let sp = 0;
+        let i = 0;
+        while i < len(args) { if args[i] == 32 { sp = i; i = len(args); } i = i + 1; }
+        let svc_idx = to_int(substr(args, 0, sp));
+        let method  = substr(args, sp + 1, len(args) - sp - 1);
+        let idx = grpc_register_method(svc_idx, method);
+        return "grpc: method registered [" + to_string(idx) + "] " + method;
+    }
+    if str_starts_with(cmd, "grpc call ") {
+        let path = substr(cmd, 10, len(cmd) - 10);
+        let status = grpc_call(path);
+        return "grpc: call " + path + " -> " + grpc_status_to_string(status);
+    }
+    if cmd == "grpc list" { grpc_list_services(); return ""; }
+    if cmd == "grpc status" { return grpc_status(); }
+    if str_starts_with(cmd, "grpc meta ") {
+        let args = substr(cmd, 10, len(cmd) - 10);
+        let sp = 0;
+        let i = 0;
+        while i < len(args) { if args[i] == 32 { sp = i; i = len(args); } i = i + 1; }
+        let key = substr(args, 0, sp);
+        let val = substr(args, sp + 1, len(args) - sp - 1);
+        grpc_set_metadata(key, val);
+        return "grpc: metadata set " + key + "=" + val;
+    }
+    if cmd == "grpc test" { return grpc_test(); }
+
+    // === PNG Image Decoder ===
+    if str_starts_with(cmd, "png load ") {
+        let path = substr(cmd, 9, len(cmd) - 9);
+        let data = vfs_read_file(path);
+        if len(data) == 0 { return "png: file not found: " + path; }
+        let result = png_decode(data);
+        if result == 0 { return "png: loaded " + png_info(); }
+        return "png: decode failed (code=" + to_string(result) + ")";
+    }
+    if cmd == "png info" { return png_info(); }
+    if str_starts_with(cmd, "png pixel ") {
+        let args = substr(cmd, 10, len(cmd) - 10);
+        let sp = 0;
+        let i = 0;
+        while i < len(args) { if args[i] == 32 { sp = i; i = len(args); } i = i + 1; }
+        let x = to_int(substr(args, 0, sp));
+        let y = to_int(substr(args, sp + 1, len(args) - sp - 1));
+        let px = png_get_pixel(x, y);
+        return "png: pixel(" + to_string(x) + "," + to_string(y) + ")=RGBA("
+            + to_string(px[0]) + "," + to_string(px[1]) + ","
+            + to_string(px[2]) + "," + to_string(px[3]) + ")";
+    }
+    if cmd == "png show" { png_show_ascii(40, 20); return ""; }
+    if cmd == "png test" { return png_test(); }
+
     return shell_handle(cmd);
 }
 
@@ -3358,7 +3451,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 595 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305");
+print("shell.hl loaded -- 610 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png");
 
 // Main shell loop (called from kernel_init)
 
