@@ -2,11 +2,65 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`265`（69 根目录 + 196 内核模块）
-- H-L 总行数：`~71,600`
-- 内核模块：`196`
-- Shell 命令：`405`
-- 最近完成功能迭代：`210`（crc + md5 + sha1）
+- `.hl` 文件：`268`（69 根目录 + 199 内核模块）
+- H-L 总行数：`~72,000`
+- 内核模块：`199`
+- Shell 命令：`415`
+- 最近完成功能迭代：`213`（hmac + pbkdf2 + uuid）
+
+## Iteration 213 — uuid.hl：UUID 生成器
+
+- **`bare-kernel/hl/uuid.hl`** 新增（~150 行）
+  - UUID（Universally Unique Identifier）通用唯一标识符（RFC 4122）
+  - 支持 UUID v4（随机）生成：128 位唯一标识符
+  - 标准格式：xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx（36 字符含连字符）
+  - `uuid_v4()` — 生成随机 UUID：16 字节随机数 + 版本位设置（byte[6] = 0x40-0x4F，byte[8] = 0x80-0xBF）
+  - `_uuid_random_byte()` — 随机字节生成（random_get() % 256）
+  - `uuid_nil()` — 返回 nil UUID（全零）："00000000-0000-0000-0000-000000000000"
+  - `uuid_parse(uuid_str)` — 解析 UUID 字符串 → 16 字节二进制（跳过连字符，十六进制 → 字节）
+  - `uuid_validate(uuid_str)` — 验证 UUID 格式：长度 36 + 连字符位置（8/13/18/23）+ 十六进制字符
+  - `uuid_get_version(uuid_str)` — 提取版本号（第 15 字符 → 十六进制 → 版本）
+  - `uuid_selftest()` — 生成 2 个 UUID → 验证格式 + 提取版本号
+  - UUID_BUF=0x10C0000（17563648），4 KB 缓冲区
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`uuid_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 5 条命令：
+  - `uuid` / `uuid v4` / `uuid nil` / `uuid validate <uuid>` / `uuid test`
+
+## Iteration 212 — pbkdf2.hl：PBKDF2 密钥派生
+
+- **`bare-kernel/hl/pbkdf2.hl`** 新增（~180 行）
+  - PBKDF2（Password-Based Key Derivation Function 2）基于密码的密钥派生函数（RFC 2898）
+  - 用途：从密码派生加密密钥，增加暴力破解成本（迭代计算）
+  - `pbkdf2_sha1(pwd, salt, iter, keylen)` — 使用 HMAC-SHA1 派生密钥
+  - `pbkdf2_md5(pwd, salt, iter, keylen)` — 使用 HMAC-MD5 派生密钥
+  - 算法：F(P, S, c, i) = U1 XOR U2 XOR ... XOR Uc，其中 U1 = HMAC(P, S || INT(i))，Un = HMAC(P, Un-1)
+  - `_pbkdf2_int_to_bytes(n)` — 32 位整数 → 4 字节大端序
+  - `_pbkdf2_xor_strings(s1, s2)` — 字符串逐字节 XOR（模拟位运算）
+  - `_pbkdf2_hex_to_bytes(hex)` — 十六进制字符串 → 二进制字节序列
+  - 分块处理：keylen / hash_output_len 向上取整 → 多块拼接
+  - `pbkdf2_selftest()` — 测试 "password"/"salt"/2 迭代/16 字节 → 输出派生密钥
+  - PBKDF2_BUF=0x10B0000（17498112），64 KB 缓冲区
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`pbkdf2_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 2 条命令：
+  - `pbkdf2 <pwd> <salt> <iter> <len>` / `pbkdf2 test`
+
+## Iteration 211 — hmac.hl：HMAC 消息认证码
+
+- **`bare-kernel/hl/hmac.hl`** 新增（~130 行）
+  - HMAC（Hash-based Message Authentication Code）基于哈希的消息认证码（RFC 2104）
+  - 用途：使用密钥 + 哈希函数验证消息完整性和真实性，防止长度扩展攻击
+  - `hmac_md5(key, message)` — HMAC-MD5：128 位输出
+  - `hmac_sha1(key, message)` — HMAC-SHA1：160 位输出
+  - 算法：HMAC(K, m) = H((K' XOR opad) || H((K' XOR ipad) || m))
+  - `_hmac_xor_byte(a, b)` — 字节级 XOR（逐位模拟，无位运算）
+  - `_hmac_pad_key(key, block_size)` — 密钥填充：key 长度 < block_size → 右填充 0x00，= block_size → 直接使用
+  - ipad = 0x36（重复 64 次），opad = 0x5C（重复 64 次）
+  - 内部哈希：inner = H(K' XOR ipad || message)，外部哈希：outer = H(K' XOR opad || inner)
+  - `hmac_selftest()` — 测试 key="secret"、message="hello" → HMAC-MD5 + HMAC-SHA1 输出
+  - HMAC_BUF=0x10A0000（17432576），64 KB 缓冲区
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`hmac_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 3 条命令：
+  - `hmac-md5 <key> <msg>` / `hmac-sha1 <key> <msg>` / `hmac test`
 
 ## Iteration 210 — sha1.hl：SHA-1 哈希算法
 

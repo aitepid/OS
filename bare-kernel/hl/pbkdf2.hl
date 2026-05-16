@@ -1,0 +1,202 @@
+// pbkdf2.hl -- PBKDF2 (Password-Based Key Derivation Function 2)
+//
+// PBKDF2 derives cryptographic keys from passwords using a pseudorandom function.
+// RFC 2898. Applies HMAC repeatedly to increase computation cost.
+//
+// Features:
+//   - Key derivation from passwords
+//   - Configurable iteration count
+//   - Salt support for uniqueness
+//   - Uses HMAC-SHA1 or HMAC-MD5
+//
+// Memory:
+//   - PBKDF2_BUF: 0x10B0000 (17498112), 64 KB buffer
+
+let PBKDF2_BUF = 17498112;       // 0x10B0000
+let PBKDF2_BUF_SZ = 65536;       // 64 KB
+let pbkdf2_result = "";
+
+fn pbkdf2_init() {
+    pbkdf2_result = "";
+    return 0;
+}
+
+fn _pbkdf2_int_to_bytes(n) {
+    let b3 = n % 256;
+    n = n / 256;
+    let b2 = n % 256;
+    n = n / 256;
+    let b1 = n % 256;
+    n = n / 256;
+    let b0 = n % 256;
+    return str_from_code(b0) + str_from_code(b1) + str_from_code(b2) + str_from_code(b3);
+}
+
+fn _pbkdf2_xor_strings(s1, s2) {
+    let mut result = "";
+    let max_len = len(s1);
+    if len(s2) > max_len { max_len = len(s2); }
+
+    let mut i = 0;
+    while i < max_len {
+        let c1 = 0;
+        let c2 = 0;
+        if i < len(s1) { c1 = str_char_code(s1, i); }
+        if i < len(s2) { c2 = str_char_code(s2, i); }
+
+        let mut xor = 0;
+        let mut bit = 0;
+        while bit < 8 {
+            let b1 = c1 % 2;
+            let b2 = c2 % 2;
+            if b1 == b2 {
+                xor = xor + 0;
+            } else {
+                xor = xor + 1;
+            }
+            xor = xor * 2;
+            c1 = c1 / 2;
+            c2 = c2 / 2;
+            bit = bit + 1;
+        }
+
+        result = result + str_from_code(xor / 2);
+        i = i + 1;
+    }
+
+    return result;
+}
+
+fn _pbkdf2_hex_to_bytes(hex) {
+    let mut result = "";
+    let mut i = 0;
+    while i < len(hex) {
+        if i + 1 < len(hex) {
+            let hi = str_char_code(hex, i);
+            let lo = str_char_code(hex, i + 1);
+
+            let mut h = 0;
+            if hi >= 48 { if hi <= 57 { h = hi - 48; } }
+            if hi >= 97 { if hi <= 102 { h = hi - 97 + 10; } }
+
+            let mut l = 0;
+            if lo >= 48 { if lo <= 57 { l = lo - 48; } }
+            if lo >= 97 { if lo <= 102 { l = lo - 97 + 10; } }
+
+            result = result + str_from_code(h * 16 + l);
+        }
+        i = i + 2;
+    }
+    return result;
+}
+
+fn pbkdf2_sha1(password, salt, iterations, key_length) {
+    let block_count = (key_length + 19) / 20;
+
+    let mut derived_key = "";
+    let mut block = 1;
+
+    while block <= block_count {
+        let salt_block = salt + _pbkdf2_int_to_bytes(block);
+
+        let u = hmac_sha1(password, salt_block);
+        let mut u_bytes = _pbkdf2_hex_to_bytes(u);
+        let mut result = u_bytes;
+
+        let mut iter = 1;
+        while iter < iterations {
+            u = hmac_sha1(password, u_bytes);
+            u_bytes = _pbkdf2_hex_to_bytes(u);
+            result = _pbkdf2_xor_strings(result, u_bytes);
+            iter = iter + 1;
+        }
+
+        derived_key = derived_key + result;
+        block = block + 1;
+    }
+
+    let mut hex = "";
+    let mut i = 0;
+    while i < key_length {
+        if i < len(derived_key) {
+            let b = str_char_code(derived_key, i);
+            let hi = b / 16;
+            let lo = b % 16;
+            if hi < 10 { hex = hex + str_from_code(48 + hi); }
+            else { hex = hex + str_from_code(97 + hi - 10); }
+            if lo < 10 { hex = hex + str_from_code(48 + lo); }
+            else { hex = hex + str_from_code(97 + lo - 10); }
+        }
+        i = i + 1;
+    }
+
+    pbkdf2_result = hex;
+    return pbkdf2_result;
+}
+
+fn pbkdf2_md5(password, salt, iterations, key_length) {
+    let block_count = (key_length + 15) / 16;
+
+    let mut derived_key = "";
+    let mut block = 1;
+
+    while block <= block_count {
+        let salt_block = salt + _pbkdf2_int_to_bytes(block);
+
+        let u = hmac_md5(password, salt_block);
+        let mut u_bytes = _pbkdf2_hex_to_bytes(u);
+        let mut result = u_bytes;
+
+        let mut iter = 1;
+        while iter < iterations {
+            u = hmac_md5(password, u_bytes);
+            u_bytes = _pbkdf2_hex_to_bytes(u);
+            result = _pbkdf2_xor_strings(result, u_bytes);
+            iter = iter + 1;
+        }
+
+        derived_key = derived_key + result;
+        block = block + 1;
+    }
+
+    let mut hex = "";
+    let mut i = 0;
+    while i < key_length {
+        if i < len(derived_key) {
+            let b = str_char_code(derived_key, i);
+            let hi = b / 16;
+            let lo = b % 16;
+            if hi < 10 { hex = hex + str_from_code(48 + hi); }
+            else { hex = hex + str_from_code(97 + hi - 10); }
+            if lo < 10 { hex = hex + str_from_code(48 + lo); }
+            else { hex = hex + str_from_code(97 + lo - 10); }
+        }
+        i = i + 1;
+    }
+
+    pbkdf2_result = hex;
+    return pbkdf2_result;
+}
+
+fn pbkdf2_get_result() {
+    return pbkdf2_result;
+}
+
+fn pbkdf2_selftest() {
+    let password = "password";
+    let salt = "salt";
+    let iterations = 2;
+    let key_len = 16;
+
+    let k1 = pbkdf2_sha1(password, salt, iterations, key_len);
+    let k2 = pbkdf2_md5(password, salt, iterations, key_len);
+
+    let mut out = "pbkdf2 selftest:\n";
+    out = out + "  PBKDF2-SHA1(\"password\", \"salt\", 2, 16) = " + k1 + "\n";
+    out = out + "  PBKDF2-MD5(\"password\", \"salt\", 2, 16) = " + k2 + "\n";
+    out = out + "  (simplified implementation, keys are illustrative)\n";
+
+    return out;
+}
+
+print("pbkdf2.hl loaded");

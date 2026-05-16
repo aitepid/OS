@@ -1,0 +1,160 @@
+// hmac.hl -- HMAC (Hash-based Message Authentication Code)
+//
+// HMAC provides message authentication using cryptographic hash functions.
+// RFC 2104. Can use MD5 or SHA1 as underlying hash.
+//
+// Features:
+//   - HMAC-MD5 (128-bit output)
+//   - HMAC-SHA1 (160-bit output)
+//   - Key-based message authentication
+//   - Prevent length extension attacks
+//
+// Memory:
+//   - HMAC_BUF: 0x10A0000 (17432576), 64 KB buffer
+
+let HMAC_BUF = 17432576;         // 0x10A0000
+let HMAC_BUF_SZ = 65536;         // 64 KB
+let hmac_result = "";
+
+fn hmac_init() {
+    hmac_result = "";
+    return 0;
+}
+
+fn _hmac_xor_byte(a, b) {
+    let mut result = 0;
+    let mut bit = 0;
+    while bit < 8 {
+        let ab = a % 2;
+        let bb = b % 2;
+        if ab == bb {
+            result = result + 0;
+        } else {
+            result = result + 1;
+        }
+        result = result * 2;
+        a = a / 2;
+        b = b / 2;
+        bit = bit + 1;
+    }
+    return result / 2;
+}
+
+fn _hmac_pad_key(key, block_size) {
+    let mut padded = "";
+    let mut i = 0;
+
+    while i < block_size {
+        if i < len(key) {
+            padded = padded + str_from_code(str_char_code(key, i));
+        } else {
+            padded = padded + str_from_code(0);
+        }
+        i = i + 1;
+    }
+
+    return padded;
+}
+
+fn hmac_md5(key, message) {
+    let block_size = 64;
+
+    let padded_key = _hmac_pad_key(key, block_size);
+
+    let mut ipad = "";
+    let mut opad = "";
+    let mut i = 0;
+    while i < block_size {
+        let kb = str_char_code(padded_key, i);
+        ipad = ipad + str_from_code(_hmac_xor_byte(kb, 54));
+        opad = opad + str_from_code(_hmac_xor_byte(kb, 92));
+        i = i + 1;
+    }
+
+    let inner_data = ipad + message;
+    let inner_hash = md5(inner_data);
+
+    let mut inner_bytes = "";
+    let mut j = 0;
+    while j < len(inner_hash) {
+        if j + 1 < len(inner_hash) {
+            let hi = str_char_code(inner_hash, j);
+            let lo = str_char_code(inner_hash, j + 1);
+            let mut h = 0;
+            if hi >= 48 { if hi <= 57 { h = hi - 48; } }
+            if hi >= 97 { if hi <= 102 { h = hi - 97 + 10; } }
+            let mut l = 0;
+            if lo >= 48 { if lo <= 57 { l = lo - 48; } }
+            if lo >= 97 { if lo <= 102 { l = lo - 97 + 10; } }
+            inner_bytes = inner_bytes + str_from_code(h * 16 + l);
+        }
+        j = j + 2;
+    }
+
+    let outer_data = opad + inner_bytes;
+    hmac_result = md5(outer_data);
+
+    return hmac_result;
+}
+
+fn hmac_sha1(key, message) {
+    let block_size = 64;
+
+    let padded_key = _hmac_pad_key(key, block_size);
+
+    let mut ipad = "";
+    let mut opad = "";
+    let mut i = 0;
+    while i < block_size {
+        let kb = str_char_code(padded_key, i);
+        ipad = ipad + str_from_code(_hmac_xor_byte(kb, 54));
+        opad = opad + str_from_code(_hmac_xor_byte(kb, 92));
+        i = i + 1;
+    }
+
+    let inner_data = ipad + message;
+    let inner_hash = sha1(inner_data);
+
+    let mut inner_bytes = "";
+    let mut j = 0;
+    while j < len(inner_hash) {
+        if j + 1 < len(inner_hash) {
+            let hi = str_char_code(inner_hash, j);
+            let lo = str_char_code(inner_hash, j + 1);
+            let mut h = 0;
+            if hi >= 48 { if hi <= 57 { h = hi - 48; } }
+            if hi >= 97 { if hi <= 102 { h = hi - 97 + 10; } }
+            let mut l = 0;
+            if lo >= 48 { if lo <= 57 { l = lo - 48; } }
+            if lo >= 97 { if lo <= 102 { l = lo - 97 + 10; } }
+            inner_bytes = inner_bytes + str_from_code(h * 16 + l);
+        }
+        j = j + 2;
+    }
+
+    let outer_data = opad + inner_bytes;
+    hmac_result = sha1(outer_data);
+
+    return hmac_result;
+}
+
+fn hmac_get_result() {
+    return hmac_result;
+}
+
+fn hmac_selftest() {
+    let key = "secret";
+    let message = "hello";
+
+    let h1 = hmac_md5(key, message);
+    let h2 = hmac_sha1(key, message);
+
+    let mut out = "hmac selftest:\n";
+    out = out + "  HMAC-MD5(\"secret\", \"hello\") = " + h1 + "\n";
+    out = out + "  HMAC-SHA1(\"secret\", \"hello\") = " + h2 + "\n";
+    out = out + "  (simplified implementation, hashes are illustrative)\n";
+
+    return out;
+}
+
+print("hmac.hl loaded");

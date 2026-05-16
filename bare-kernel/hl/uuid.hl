@@ -1,0 +1,166 @@
+// uuid.hl -- UUID (Universally Unique Identifier) Generation
+//
+// UUID generates unique identifiers according to RFC 4122.
+// Supports UUID v4 (random) generation.
+//
+// Features:
+//   - UUID v4 (random) generation
+//   - Standard format: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
+//   - 128-bit unique identifiers
+//   - Uses random number generator
+//
+// Memory:
+//   - UUID_BUF: 0x10C0000 (17563648), 4 KB buffer
+
+let UUID_BUF = 17563648;         // 0x10C0000
+let UUID_BUF_SZ = 4096;          // 4 KB
+let uuid_last = "";
+
+fn uuid_init() {
+    uuid_last = "";
+    return 0;
+}
+
+fn _uuid_hex_char(n) {
+    if n < 10 { return 48 + n; }                    // 0-9
+    return 97 + (n - 10);                           // a-f
+}
+
+fn _uuid_random_byte() {
+    let r = random_get();
+    return r % 256;
+}
+
+fn uuid_v4() {
+    let mut bytes = [];
+    let mut i = 0;
+    while i < 16 {
+        push(bytes, _uuid_random_byte());
+        i = i + 1;
+    }
+
+    set_at(bytes, 6, (bytes[6] % 16) + 64);
+    set_at(bytes, 8, (bytes[8] % 64) + 128);
+
+    let mut uuid = "";
+    let mut idx = 0;
+    while idx < 16 {
+        let b = bytes[idx];
+        let hi = b / 16;
+        let lo = b % 16;
+        uuid = uuid + str_from_code(_uuid_hex_char(hi));
+        uuid = uuid + str_from_code(_uuid_hex_char(lo));
+
+        if idx == 3 { uuid = uuid + "-"; }
+        if idx == 5 { uuid = uuid + "-"; }
+        if idx == 7 { uuid = uuid + "-"; }
+        if idx == 9 { uuid = uuid + "-"; }
+
+        idx = idx + 1;
+    }
+
+    uuid_last = uuid;
+    return uuid;
+}
+
+fn uuid_nil() {
+    return "00000000-0000-0000-0000-000000000000";
+}
+
+fn uuid_parse(uuid_str) {
+    if len(uuid_str) != 36 { return 0 - 1; }
+
+    let mut pos = 0;
+    let mut byte_count = 0;
+
+    while pos < len(uuid_str) {
+        let c = str_char_code(uuid_str, pos);
+
+        if c == 45 {
+            pos = pos + 1;
+        } else {
+            if pos + 1 < len(uuid_str) {
+                let c1 = c;
+                let c2 = str_char_code(uuid_str, pos + 1);
+
+                let mut h1 = 0;
+                if c1 >= 48 { if c1 <= 57 { h1 = c1 - 48; } }
+                if c1 >= 97 { if c1 <= 102 { h1 = c1 - 97 + 10; } }
+                if c1 >= 65 { if c1 <= 70 { h1 = c1 - 65 + 10; } }
+
+                let mut h2 = 0;
+                if c2 >= 48 { if c2 <= 57 { h2 = c2 - 48; } }
+                if c2 >= 97 { if c2 <= 102 { h2 = c2 - 97 + 10; } }
+                if c2 >= 65 { if c2 <= 70 { h2 = c2 - 65 + 10; } }
+
+                let b = h1 * 16 + h2;
+                if byte_count < UUID_BUF_SZ {
+                    mem_write_byte(UUID_BUF + byte_count, b);
+                    byte_count = byte_count + 1;
+                }
+
+                pos = pos + 2;
+            } else {
+                pos = pos + 1;
+            }
+        }
+    }
+
+    return byte_count;
+}
+
+fn uuid_validate(uuid_str) {
+    if len(uuid_str) != 36 { return 0; }
+
+    if str_char_code(uuid_str, 8) != 45 { return 0; }
+    if str_char_code(uuid_str, 13) != 45 { return 0; }
+    if str_char_code(uuid_str, 18) != 45 { return 0; }
+    if str_char_code(uuid_str, 23) != 45 { return 0; }
+
+    let mut pos = 0;
+    while pos < len(uuid_str) {
+        let c = str_char_code(uuid_str, pos);
+        if c == 45 {
+            pos = pos + 1;
+        } else {
+            let valid = 0;
+            if c >= 48 { if c <= 57 { valid = 1; } }
+            if c >= 97 { if c <= 102 { valid = 1; } }
+            if c >= 65 { if c <= 70 { valid = 1; } }
+            if valid == 0 { return 0; }
+            pos = pos + 1;
+        }
+    }
+
+    return 1;
+}
+
+fn uuid_get_version(uuid_str) {
+    if len(uuid_str) < 15 { return 0 - 1; }
+
+    let c = str_char_code(uuid_str, 14);
+    let mut v = 0;
+    if c >= 48 { if c <= 57 { v = c - 48; } }
+    if c >= 97 { if c <= 102 { v = c - 97 + 10; } }
+    if c >= 65 { if c <= 70 { v = c - 65 + 10; } }
+
+    return v;
+}
+
+fn uuid_selftest() {
+    let u1 = uuid_v4();
+    let u2 = uuid_v4();
+
+    let is_valid = uuid_validate(u1);
+    let version = uuid_get_version(u1);
+
+    let mut out = "uuid selftest:\n";
+    out = out + "  UUID v4 #1: " + u1 + "\n";
+    out = out + "  UUID v4 #2: " + u2 + "\n";
+    out = out + "  Valid: " + to_string(is_valid) + "\n";
+    out = out + "  Version: " + to_string(version) + "\n";
+
+    return out;
+}
+
+print("uuid.hl loaded");

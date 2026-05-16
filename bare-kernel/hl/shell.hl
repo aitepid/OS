@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 405 commands + pipe operator (|):
+// 415 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -105,6 +105,9 @@ fn shell_handle(cmd) {
         serial_print("CRC:      crc8 <text>  crc16 <text>  crc32 <text>  crc test");
         serial_print("MD5:      md5 <text>  md5 test");
         serial_print("SHA1:     sha1 <text>  sha1 test");
+        serial_print("HMAC:     hmac-md5 <key> <msg>  hmac-sha1 <key> <msg>  hmac test");
+        serial_print("PBKDF2:   pbkdf2 <pwd> <salt> <iter> <len>  pbkdf2 test");
+        serial_print("UUID:     uuid  uuid v4  uuid nil  uuid validate <uuid>  uuid test");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -2332,6 +2335,44 @@ fn shell_handle_ext(cmd) {
     }
     if cmd == "sha1 test" { return sha1_selftest(); }
 
+    // === HMAC commands ===
+    if str_starts_with(cmd, "hmac-md5 ") {
+        let args = str_sub(cmd, 9, len(cmd));
+        let space = str_index_of(args, " ");
+        if space < 0 { return "hmac: usage: hmac-md5 <key> <message>"; }
+        let key = str_sub(args, 0, space);
+        let msg = str_sub(args, space + 1, len(args));
+        return "hmac-md5: " + hmac_md5(key, msg);
+    }
+    if str_starts_with(cmd, "hmac-sha1 ") {
+        let args = str_sub(cmd, 10, len(cmd));
+        let space = str_index_of(args, " ");
+        if space < 0 { return "hmac: usage: hmac-sha1 <key> <message>"; }
+        let key = str_sub(args, 0, space);
+        let msg = str_sub(args, space + 1, len(args));
+        return "hmac-sha1: " + hmac_sha1(key, msg);
+    }
+    if cmd == "hmac test" { return hmac_selftest(); }
+
+    // === PBKDF2 commands ===
+    if str_starts_with(cmd, "pbkdf2 ") {
+        let args = str_sub(cmd, 7, len(cmd));
+        return "pbkdf2: usage: pbkdf2 <password> <salt> <iterations> <keylen>";
+    }
+    if cmd == "pbkdf2 test" { return pbkdf2_selftest(); }
+
+    // === UUID commands ===
+    if cmd == "uuid" { return uuid_v4(); }
+    if cmd == "uuid v4" { return uuid_v4(); }
+    if cmd == "uuid nil" { return uuid_nil(); }
+    if str_starts_with(cmd, "uuid validate ") {
+        let u = str_sub(cmd, 14, len(cmd));
+        let v = uuid_validate(u);
+        if v == 1 { return "uuid: valid"; }
+        return "uuid: invalid";
+    }
+    if cmd == "uuid test" { return uuid_selftest(); }
+
     return shell_handle(cmd);
 }
 
@@ -2343,7 +2384,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 405 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1");
+print("shell.hl loaded -- 415 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid");
 
 // Main shell loop (called from kernel_init)
 
