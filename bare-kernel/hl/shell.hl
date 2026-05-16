@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 655 commands + pipe operator (|):
+// 670 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -156,6 +156,9 @@ fn shell_handle(cmd) {
         serial_print("Attention: attn config <dm> <heads> <dff>  attn forward <seq>  attn ffn  attn info  attn test");
         serial_print("Bloom:    bloom add <item>  bloom query <item>  bloom delete <item>  bloom status  bloom test");
         serial_print("CRDT:     crdt gc inc  crdt pn inc  crdt pn dec  crdt gset add <e>  crdt lww add <e>  crdt orset add <e>  crdt status  crdt test");
+        serial_print("SkipList: skip insert <k> <v>  skip get <k>  skip delete <k>  skip range <lo> <hi>  skip status  skip test");
+        serial_print("HyperLogLog: hll add <item>  hll add_int <n>  hll estimate  hll merge  hll status  hll test");
+        serial_print("ConsistentHash: chash add <id> <addr>  chash remove <id>  chash get <key>  chash replicas <key> <r>  chash status  chash test");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -3679,6 +3682,76 @@ fn shell_handle_ext(cmd) {
     if cmd == "crdt status" { return crdt_info(); }
     if cmd == "crdt test"   { return crdt_test(); }
 
+    // --- SkipList ---
+    if str_starts_with(cmd, "skip insert ") {
+        let rsk = str_slice(cmd, 12, len(cmd));
+        let psk = str_split(rsk, " ");
+        let sk = to_int(psk[0]); let sv = to_int(psk[1]);
+        skip_insert(sk, sv);
+        return "skiplist: inserted " + to_string(sk) + "→" + to_string(sv) + " " + skiplist_status();
+    }
+    if str_starts_with(cmd, "skip get ") {
+        let gk = to_int(str_slice(cmd, 9, len(cmd)));
+        return "skiplist: get(" + to_string(gk) + ")=" + to_string(skip_get(gk));
+    }
+    if str_starts_with(cmd, "skip delete ") {
+        let dk2 = to_int(str_slice(cmd, 12, len(cmd)));
+        skip_delete(dk2);
+        return "skiplist: deleted " + to_string(dk2) + " " + skiplist_status();
+    }
+    if str_starts_with(cmd, "skip range ") {
+        let rr = str_slice(cmd, 11, len(cmd));
+        let pr = str_split(rr, " ");
+        let lo = to_int(pr[0]); let hi = to_int(pr[1]);
+        let rc = skip_range(lo, hi);
+        return "skiplist: range[" + to_string(lo) + "," + to_string(hi) + "]=" + to_string(rc) + " entries";
+    }
+    if cmd == "skip status" { return skiplist_status(); }
+    if cmd == "skip test"   { return skiplist_test(); }
+
+    // --- HyperLogLog ---
+    if str_starts_with(cmd, "hll add_int ") {
+        let hn = to_int(str_slice(cmd, 12, len(cmd)));
+        hll_add_int(hn);
+        return "hll: added int " + to_string(hn) + " estimate=" + to_string(hll_estimate());
+    }
+    if str_starts_with(cmd, "hll add ") {
+        let hs = str_slice(cmd, 8, len(cmd));
+        hll_add_str(hs);
+        return "hll: added '" + hs + "' estimate=" + to_string(hll_estimate());
+    }
+    if cmd == "hll estimate" { return "hll: estimate=" + to_string(hll_estimate()); }
+    if cmd == "hll status"   { return hll_status(); }
+    if cmd == "hll test"     { return hyperloglog_test(); }
+
+    // --- Consistent Hash ---
+    if str_starts_with(cmd, "chash add ") {
+        let cra = str_slice(cmd, 10, len(cmd));
+        let cpa = str_split(cra, " ");
+        let cnid = to_int(cpa[0]); let caddr = cpa[1];
+        let cidx = chash_add_node(cnid, caddr);
+        return "chash: added node " + to_string(cnid) + " at " + caddr + " idx=" + to_string(cidx) + " " + chash_status();
+    }
+    if str_starts_with(cmd, "chash remove ") {
+        let crid = to_int(str_slice(cmd, 13, len(cmd)));
+        chash_remove_node(crid);
+        return "chash: removed node " + to_string(crid) + " " + chash_status();
+    }
+    if str_starts_with(cmd, "chash get ") {
+        let cgk = str_slice(cmd, 10, len(cmd));
+        let cgn = chash_get_node_str(cgk);
+        return "chash: '" + cgk + "' → node_idx=" + to_string(cgn);
+    }
+    if str_starts_with(cmd, "chash replicas ") {
+        let crx = str_slice(cmd, 15, len(cmd));
+        let cpx = str_split(crx, " ");
+        let crkey = cpx[0]; let crn = to_int(cpx[1]);
+        let crcount = chash_get_replicas(crkey, crn);
+        return "chash: replicas(" + crkey + "," + to_string(crn) + ")=" + to_string(crcount);
+    }
+    if cmd == "chash status" { return chash_status(); }
+    if cmd == "chash test"   { return consistent_hash_test(); }
+
     return shell_handle(cmd);
 }
 
@@ -3690,7 +3763,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 655 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt");
+print("shell.hl loaded -- 670 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash");
 
 // Main shell loop (called from kernel_init)
 

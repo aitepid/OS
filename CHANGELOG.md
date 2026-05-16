@@ -2,11 +2,61 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`316`（69 根目录 + 247 内核模块）
-- H-L 总行数：`~94,500`
-- 内核模块：`247`
-- Shell 命令：`655`
-- 最近完成功能迭代：`261`（attention + bloom_filter + crdt）
+- `.hl` 文件：`319`（69 根目录 + 250 内核模块）
+- H-L 总行数：`~97,500`
+- 内核模块：`250`
+- Shell 命令：`670`
+- 最近完成功能迭代：`264`（skiplist + hyperloglog + consistent_hash）
+
+## Iteration 264 — consistent_hash.hl：一致性哈希环
+
+- **`bare-kernel/hl/consistent_hash.hl`** 新增（~310 行）
+  - 一致性哈希（Karger et al. 1997 / STOC），分布式负载均衡与最小重映射
+  - 256 槽虚拟环（CHASH_RING_SIZE=256），最大 32 个物理节点（CHASH_MAX_NODES）
+  - 每节点 3 个虚拟节点（CHASH_VNODES_PER_NODE），共 96 个虚拟节点（CHASH_MAX_VNODES）
+  - 虚拟节点插入：`_chash_insert_vnode(pos, owner)` — 插入排序维护环有序
+  - 键路由：`_chash_find_successor(h)` — 线性扫描找第一个 pos >= h 的活跃虚拟节点（环绕）
+  - `chash_add_node(id, addr)` — 添加物理节点，自动分配 3 个虚拟节点到环
+  - `chash_remove_node(id)` — 删除节点（标记虚拟节点为 inactive），键自动迁移至后继
+  - `chash_get_node_str(key)` / `chash_get_node_int(key)` — 字符串/整数键路由，O(k)
+  - `chash_get_replicas(key, r)` — 获取 r 个不同物理节点（副本路由）
+  - 负载统计：`chash_load_counts` 记录每个物理节点处理的键数量
+  - Hash 函数：djb2（字符串）/ 乘法散列（整数），无位运算，纯算术实现
+  - Buffer: 0x13F0000
+  - Shell 命令：`chash add <id> <addr>  chash remove <id>  chash get <key>  chash replicas <key> <r>  chash status  chash test`
+
+## Iteration 263 — hyperloglog.hl：HyperLogLog 基数估计
+
+- **`bare-kernel/hl/hyperloglog.hl`** 新增（~270 行）
+  - HyperLogLog（Flajolet, Fusy, Gandouet, Meunier 2007），概率基数估计算法
+  - m=64 寄存器（b=6 位索引），每寄存器存储最大前导零计数，误差率 ≈ 1.04/√64 ≈ 13%
+  - `_hll_hash_int(key)` / `_hll_hash_str(s)` — FNV-1a 变体哈希，纯算术实现
+  - `_hll_leading_zeros(w)` — 计算 26 位值的前导零数（逐位检测，无位运算）
+  - `hll_add_int(key)` / `hll_add_str(s)` — 添加元素：低 b 位 → 寄存器索引，高位 → 前导零
+  - `hll_estimate()` — 估算基数：α_m × m² × (Σ 2^(-M[j]))^(-1)
+    - 小范围校正：零寄存器 > 0 时使用线性计数（linear counting）
+    - α_64 = 0.7096（per-mille 整数 709）
+  - `hll_merge(other_M)` — 合并另一个 HLL（逐寄存器取最大值）→ 联合基数估计
+  - `hll_snapshot()` — 寄存器快照到 merge buffer
+  - Buffer: 0x13E0000
+  - Shell 命令：`hll add <item>  hll add_int <n>  hll estimate  hll merge  hll status  hll test`
+
+## Iteration 262 — skiplist.hl：跳表有序映射
+
+- **`bare-kernel/hl/skiplist.hl`** 新增（~280 行）
+  - 跳表（William Pugh, 1990 / CACM），概率平衡有序链表结构
+  - O(log n) 平均复杂度的插入、查找、删除，O(n) 顺序遍历
+  - 最大 8 层（SKIP_MAX_LEVEL），最大 128 个节点（SKIP_MAX_NODES）
+  - 整数键值对存储（key → value，支持更新）
+  - 节点池（flat 数组）：skip_key / skip_val / skip_level / skip_forward（N × LEVEL）/ skip_free
+  - `_skip_random_level()` — LCG 伪随机生成层高（p=0.5 逐层硬币翻转）
+  - `skip_insert(key, val)` — 记录 update 路径，分配新节点并拼接各层前向指针
+  - `skip_search(key)` — 从顶层逐层降落定位目标节点
+  - `skip_delete(key)` — 摘除各层前向指针，自动收缩当前最大层
+  - `skip_range(lo, hi)` — 范围扫描，返回区间内条目数
+  - `skip_min()` / `skip_max()` — O(1) 最小值，O(k log n) 最大值
+  - Buffer: 0x13D0000
+  - Shell 命令：`skip insert <k> <v>  skip get <k>  skip delete <k>  skip range <lo> <hi>  skip status  skip test`
 
 ## Iteration 261 — crdt.hl：冲突自由可复制数据类型
 

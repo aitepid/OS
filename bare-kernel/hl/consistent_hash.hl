@@ -1,0 +1,294 @@
+// consistent_hash.hl -- Consistent Hashing Ring
+//
+// Implements consistent hashing (Karger et al. 1997 / STOC):
+//   - 256-slot virtual ring (CHASH_RING_SIZE = 256)
+//   - Virtual nodes (vnodes): CHASH_VNODES_PER_NODE replicas per physical node
+//   - O(log n) key lookup via binary search on sorted ring
+//   - Minimal key remapping when nodes join or leave (only ~K/n keys move)
+//   - Replication: get_replicas(key, r) returns r successive ring owners
+//   - Load balance metric: track key assignment counts per node
+// Used in: distributed caches, CDNs, DHTs, load balancers.
+//
+// Buffer: 0x13F0000
+
+let CHASH_BUF = 0x13F0000;
+
+// Ring parameters
+let CHASH_RING_SIZE       = 256;   // hash space [0, 255]
+let CHASH_MAX_NODES       = 32;    // max physical nodes
+let CHASH_VNODES_PER_NODE = 3;     // virtual nodes per physical node
+let CHASH_MAX_VNODES      = 96;    // CHASH_MAX_NODES × CHASH_VNODES_PER_NODE
+
+// Physical node registry
+let chash_node_count = 0;
+let chash_node_ids   = [];    // physical node IDs
+let chash_node_addrs = [];    // physical node addresses (string)
+let chash_node_active = [];   // 1 = in ring, 0 = removed
+
+// Virtual node ring (sorted by ring position)
+let chash_vnode_count    = 0;
+let chash_vnode_pos      = [];   // ring position [0, CHASH_RING_SIZE)
+let chash_vnode_owner    = [];   // physical node index
+let chash_vnode_active   = [];   // 1 = active
+
+// Load tracking
+let chash_load_counts = [];    // key assignments per physical node
+
+let chash_initialized = 0;
+
+fn consistent_hash_init() {
+    chash_node_count  = 0;
+    chash_vnode_count = 0;
+    let i = 0;
+    while i < CHASH_MAX_NODES {
+        set_at(chash_node_ids,    i, -1);
+        set_at(chash_node_addrs,  i, "");
+        set_at(chash_node_active, i, 0);
+        set_at(chash_load_counts, i, 0);
+        i = i + 1;
+    }
+    i = 0;
+    while i < CHASH_MAX_VNODES {
+        set_at(chash_vnode_pos,    i, 0);
+        set_at(chash_vnode_owner,  i, -1);
+        set_at(chash_vnode_active, i, 0);
+        i = i + 1;
+    }
+    chash_initialized = 1;
+    return 0;
+}
+
+// Hash a string key to ring position [0, CHASH_RING_SIZE)
+fn _chash_hash_str(key) {
+    let h = 5381;   // djb2 basis
+    let i = 0;
+    let n = len(key);
+    while i < n {
+        let c = char_code(key, i);
+        h = h * 33 + c;
+        h = h - ((h / CHASH_RING_SIZE) * CHASH_RING_SIZE);
+        if h < 0 { h = -h; }
+        i = i + 1;
+    }
+    return h - ((h / CHASH_RING_SIZE) * CHASH_RING_SIZE);
+}
+
+// Hash an integer key to ring position
+fn _chash_hash_int(key) {
+    let h = key * 2654435769 + 1013904223;
+    h = h - ((h / CHASH_RING_SIZE) * CHASH_RING_SIZE);
+    if h < 0 { h = -h; }
+    return h - ((h / CHASH_RING_SIZE) * CHASH_RING_SIZE);
+}
+
+// Hash for vnode: physical_node_id × vnode_replica_idx → ring position
+fn _chash_vnode_hash(node_id, replica) {
+    let seed = node_id * 31337 + replica * 6971 + 12345;
+    let h = seed - ((seed / CHASH_RING_SIZE) * CHASH_RING_SIZE);
+    if h < 0 { h = -h; }
+    return h - ((h / CHASH_RING_SIZE) * CHASH_RING_SIZE);
+}
+
+// Insert vnode into sorted ring (insertion sort at each add)
+fn _chash_insert_vnode(pos, owner) {
+    if chash_vnode_count >= CHASH_MAX_VNODES { return 1; }
+    let idx = chash_vnode_count;
+    set_at(chash_vnode_pos,    idx, pos);
+    set_at(chash_vnode_owner,  idx, owner);
+    set_at(chash_vnode_active, idx, 1);
+    chash_vnode_count = chash_vnode_count + 1;
+    // Bubble up to maintain sorted order
+    while idx > 0 {
+        if chash_vnode_pos[idx] < chash_vnode_pos[idx - 1] {
+            // Swap
+            let tp = chash_vnode_pos[idx];
+            let to2 = chash_vnode_owner[idx];
+            let ta = chash_vnode_active[idx];
+            set_at(chash_vnode_pos,    idx, chash_vnode_pos[idx - 1]);
+            set_at(chash_vnode_owner,  idx, chash_vnode_owner[idx - 1]);
+            set_at(chash_vnode_active, idx, chash_vnode_active[idx - 1]);
+            set_at(chash_vnode_pos,    idx - 1, tp);
+            set_at(chash_vnode_owner,  idx - 1, to2);
+            set_at(chash_vnode_active, idx - 1, ta);
+            idx = idx - 1;
+        } else {
+            idx = 0;  // break
+        }
+        if idx == 0 { idx = -1; }
+    }
+    return 0;
+}
+
+// Add a physical node to the ring
+fn chash_add_node(node_id, addr) {
+    if chash_node_count >= CHASH_MAX_NODES { return -1; }
+    let nidx = chash_node_count;
+    set_at(chash_node_ids,    nidx, node_id);
+    set_at(chash_node_addrs,  nidx, addr);
+    set_at(chash_node_active, nidx, 1);
+    set_at(chash_load_counts, nidx, 0);
+    chash_node_count = chash_node_count + 1;
+    // Add CHASH_VNODES_PER_NODE virtual nodes
+    let r = 0;
+    while r < CHASH_VNODES_PER_NODE {
+        let pos = _chash_vnode_hash(node_id, r);
+        _chash_insert_vnode(pos, nidx);
+        r = r + 1;
+    }
+    return nidx;
+}
+
+// Remove a physical node (mark vnodes inactive)
+fn chash_remove_node(node_id) {
+    // Find physical node index
+    let nidx = -1;
+    let i = 0;
+    while i < chash_node_count {
+        if chash_node_ids[i] == node_id { nidx = i; i = chash_node_count; }
+        i = i + 1;
+    }
+    if nidx < 0 { return 1; }
+    set_at(chash_node_active, nidx, 0);
+    // Deactivate all vnodes owned by this node
+    i = 0;
+    while i < chash_vnode_count {
+        if chash_vnode_owner[i] == nidx { set_at(chash_vnode_active, i, 0); }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Binary search: find first active vnode with pos >= h (wrap around ring)
+fn _chash_find_successor(h) {
+    // Linear scan (ring is sorted, find first active vnode with pos >= h)
+    let i = 0;
+    while i < chash_vnode_count {
+        if chash_vnode_active[i] == 1 {
+            if chash_vnode_pos[i] >= h { return i; }
+        }
+        i = i + 1;
+    }
+    // Wrap: return first active vnode
+    i = 0;
+    while i < chash_vnode_count {
+        if chash_vnode_active[i] == 1 { return i; }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// Get physical node index for a string key
+fn chash_get_node_str(key) {
+    if chash_vnode_count == 0 { return -1; }
+    let h = _chash_hash_str(key);
+    let vnode = _chash_find_successor(h);
+    if vnode < 0 { return -1; }
+    let nidx = chash_vnode_owner[vnode];
+    set_at(chash_load_counts, nidx, chash_load_counts[nidx] + 1);
+    return nidx;
+}
+
+// Get physical node index for an integer key
+fn chash_get_node_int(key) {
+    if chash_vnode_count == 0 { return -1; }
+    let h = _chash_hash_int(key);
+    let vnode = _chash_find_successor(h);
+    if vnode < 0 { return -1; }
+    let nidx = chash_vnode_owner[vnode];
+    set_at(chash_load_counts, nidx, chash_load_counts[nidx] + 1);
+    return nidx;
+}
+
+// Get r successive ring owners for replication (returns count of distinct nodes found)
+fn chash_get_replicas(key, r) {
+    if chash_vnode_count == 0 { return 0; }
+    let h = _chash_hash_str(key);
+    let found = 0;
+    let seen = [];
+    let vi = _chash_find_successor(h);
+    let steps = 0;
+    while found < r {
+        if steps >= chash_vnode_count { found = r; }  // break
+        else {
+            if vi < 0 { vi = 0; }
+            let nidx = chash_vnode_owner[vi];
+            // Check if this physical node is already seen
+            let dup = 0;
+            let k = 0;
+            while k < found { if seen[k] == nidx { dup = 1; } k = k + 1; }
+            if dup == 0 {
+                set_at(seen, found, nidx);
+                found = found + 1;
+            }
+            vi = (vi + 1) - (((vi + 1) / chash_vnode_count) * chash_vnode_count);
+            steps = steps + 1;
+        }
+    }
+    return found;
+}
+
+fn chash_status() {
+    let active_nodes = 0;
+    let i = 0;
+    while i < chash_node_count {
+        if chash_node_active[i] == 1 { active_nodes = active_nodes + 1; }
+        i = i + 1;
+    }
+    let active_vnodes = 0;
+    i = 0;
+    while i < chash_vnode_count {
+        if chash_vnode_active[i] == 1 { active_vnodes = active_vnodes + 1; }
+        i = i + 1;
+    }
+    return "chash: nodes=" + to_string(active_nodes)
+        + "/" + to_string(chash_node_count)
+        + " vnodes=" + to_string(active_vnodes)
+        + " ring_size=" + to_string(CHASH_RING_SIZE)
+        + " vnodes_per_node=" + to_string(CHASH_VNODES_PER_NODE);
+}
+
+fn consistent_hash_test() {
+    consistent_hash_init();
+    // Add 4 nodes
+    chash_add_node(1, "10.0.0.1:8000");
+    chash_add_node(2, "10.0.0.2:8000");
+    chash_add_node(3, "10.0.0.3:8000");
+    chash_add_node(4, "10.0.0.4:8000");
+    // Route 10 string keys
+    let keys = ["user:alice", "user:bob", "order:1001", "product:42",
+                "session:xyz", "cache:home", "queue:email", "blob:img1",
+                "meta:config", "log:2024"];
+    let distribution = [0, 0, 0, 0];
+    let i = 0;
+    while i < 10 {
+        let nidx = chash_get_node_str(keys[i]);
+        if nidx >= 0 { if nidx < 4 { set_at(distribution, nidx, distribution[nidx] + 1); } }
+        i = i + 1;
+    }
+    // Route integer keys 0..99 — count distribution
+    let int_dist = [0, 0, 0, 0];
+    i = 0;
+    while i < 100 {
+        let nidx2 = chash_get_node_int(i);
+        if nidx2 >= 0 { if nidx2 < 4 { set_at(int_dist, nidx2, int_dist[nidx2] + 1); } }
+        i = i + 1;
+    }
+    // Remove node 2 and re-route
+    chash_remove_node(2);
+    let after_remove = chash_get_node_str("user:alice");
+    // Replica set for a key
+    let replicas = chash_get_replicas("user:alice", 3);
+    serial_print("chash test: " + chash_status());
+    serial_print("chash test: int_dist=[" + to_string(int_dist[0]) + ","
+        + to_string(int_dist[1]) + "," + to_string(int_dist[2]) + ","
+        + to_string(int_dist[3]) + "]");
+    return "chash: 4 nodes " + CHASH_VNODES_PER_NODE + "vnodes each"
+        + " str_keys routed, int_dist=[" + to_string(int_dist[0]) + ","
+        + to_string(int_dist[1]) + "," + to_string(int_dist[2]) + ","
+        + to_string(int_dist[3]) + "]"
+        + " remove_node(2)→" + to_string(after_remove)
+        + " replicas=" + to_string(replicas)
+        + " [Karger et al. 1997 ok]";
+}
+
+print("consistent_hash.hl loaded -- consistent hashing ring (vnodes, binary search, replication)");

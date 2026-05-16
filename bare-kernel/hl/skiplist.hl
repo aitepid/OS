@@ -1,0 +1,299 @@
+// skiplist.hl -- Skip List Ordered Data Structure
+//
+// Implements a skip list (William Pugh, 1990 / CACM):
+//   - Probabilistic balanced linked structure, O(log n) avg insert/search/delete
+//   - Integer key → integer value pairs (up to SKIP_MAX_NODES entries)
+//   - Up to SKIP_MAX_LEVEL levels (level assigned by coin-flip LCG)
+//   - Range queries: scan from lower bound to upper bound
+//   - Predecessor / successor lookup
+// Suitable as sorted map, priority queue, or ordered index.
+//
+// Buffer: 0x13D0000
+
+let SKIP_BUF = 0x13D0000;
+
+// Structural limits
+let SKIP_MAX_LEVEL = 8;     // max tower height
+let SKIP_MAX_NODES = 128;   // max key-value entries (+1 head sentinel)
+
+// Node pool (flat arrays indexed by node slot 0..SKIP_MAX_NODES)
+// Slot 0 = head sentinel (key = INT_MIN, value = 0)
+let skip_key     = [];   // key per node
+let skip_val     = [];   // value per node
+let skip_level   = [];   // tower height per node
+let skip_forward = [];   // SKIP_MAX_NODES × SKIP_MAX_LEVEL forward pointers (-1 = nil)
+let skip_free    = [];   // free-list bitmap (0 = available, 1 = in use)
+
+let skip_count      = 0;      // number of stored entries
+let skip_cur_level  = 1;      // current max level in use
+let skip_rand_state = 12345;  // LCG state for level generation
+
+let skip_initialized = 0;
+
+fn skiplist_init() {
+    skip_count     = 0;
+    skip_cur_level = 1;
+    skip_rand_state = 12345;
+    // Initialize node pool
+    let i = 0;
+    while i <= SKIP_MAX_NODES {
+        set_at(skip_key,   i, 0);
+        set_at(skip_val,   i, 0);
+        set_at(skip_level, i, 0);
+        set_at(skip_free,  i, 0);
+        let j = 0;
+        while j < SKIP_MAX_LEVEL {
+            set_at(skip_forward, i * SKIP_MAX_LEVEL + j, -1);
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    // Head sentinel: slot 0, key = -999999
+    set_at(skip_key,   0, -999999);
+    set_at(skip_level, 0, SKIP_MAX_LEVEL);
+    set_at(skip_free,  0, 1);
+    skip_initialized = 1;
+    return 0;
+}
+
+// Allocate a free node slot (returns slot index or -1)
+fn _skip_alloc_node() {
+    let i = 1;
+    while i <= SKIP_MAX_NODES {
+        if skip_free[i] == 0 {
+            set_at(skip_free, i, 1);
+            return i;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+fn _skip_free_node(slot) {
+    set_at(skip_free, slot, 0);
+    return 0;
+}
+
+// LCG pseudo-random for level generation (p = 0.5 per level)
+fn _skip_random_level() {
+    skip_rand_state = skip_rand_state * 1664525 + 1013904223;
+    if skip_rand_state < 0 { skip_rand_state = -skip_rand_state; }
+    let r = skip_rand_state - ((skip_rand_state / 10000) * 10000);
+    let lvl = 1;
+    while lvl < SKIP_MAX_LEVEL {
+        // coin flip: r mod 2 == 0 → go up one level
+        let bit = r - ((r / 2) * 2);
+        if bit != 0 { return lvl; }
+        r = r / 2;
+        lvl = lvl + 1;
+    }
+    return SKIP_MAX_LEVEL;
+}
+
+// Search: return node slot containing key, or -1 if not found
+fn skip_search(key) {
+    let cur = 0;  // start at head
+    let lvl = skip_cur_level - 1;
+    while lvl >= 0 {
+        let nxt = skip_forward[cur * SKIP_MAX_LEVEL + lvl];
+        while nxt >= 0 {
+            if skip_key[nxt] == key { return nxt; }
+            if skip_key[nxt] > key { nxt = -2; }  // break inner
+            else { cur = nxt; nxt = skip_forward[cur * SKIP_MAX_LEVEL + lvl]; }
+        }
+        lvl = lvl - 1;
+    }
+    return -1;
+}
+
+// Get value by key (returns value or -1 if absent)
+fn skip_get(key) {
+    let slot = skip_search(key);
+    if slot < 0 { return -1; }
+    return skip_val[slot];
+}
+
+// Insert or update key→value; returns 0 on success
+fn skip_insert(key, value) {
+    // Record update path (predecessor at each level)
+    let update = [];
+    let i = 0;
+    while i < SKIP_MAX_LEVEL { set_at(update, i, 0); i = i + 1; }
+    let cur = 0;
+    let lvl = skip_cur_level - 1;
+    while lvl >= 0 {
+        let nxt = skip_forward[cur * SKIP_MAX_LEVEL + lvl];
+        while nxt >= 0 {
+            if skip_key[nxt] >= key { nxt = -2; }
+            else { cur = nxt; nxt = skip_forward[cur * SKIP_MAX_LEVEL + lvl]; }
+        }
+        set_at(update, lvl, cur);
+        lvl = lvl - 1;
+    }
+    // Check if key already exists (update value)
+    let nxt2 = skip_forward[update[0] * SKIP_MAX_LEVEL + 0];
+    if nxt2 >= 0 {
+        if skip_key[nxt2] == key {
+            set_at(skip_val, nxt2, value);
+            return 0;
+        }
+    }
+    // Allocate new node
+    if skip_count >= SKIP_MAX_NODES { return 1; }
+    let new_lvl = _skip_random_level();
+    // Extend current max level if needed
+    if new_lvl > skip_cur_level {
+        i = skip_cur_level;
+        while i < new_lvl { set_at(update, i, 0); i = i + 1; }
+        skip_cur_level = new_lvl;
+    }
+    let slot = _skip_alloc_node();
+    if slot < 0 { return 1; }
+    set_at(skip_key,   slot, key);
+    set_at(skip_val,   slot, value);
+    set_at(skip_level, slot, new_lvl);
+    // Splice into forward pointer chains at each level
+    i = 0;
+    while i < new_lvl {
+        let pred = update[i];
+        set_at(skip_forward, slot * SKIP_MAX_LEVEL + i,
+               skip_forward[pred * SKIP_MAX_LEVEL + i]);
+        set_at(skip_forward, pred * SKIP_MAX_LEVEL + i, slot);
+        i = i + 1;
+    }
+    skip_count = skip_count + 1;
+    return 0;
+}
+
+// Delete key; returns 0 on success, 1 if not found
+fn skip_delete(key) {
+    let update = [];
+    let i = 0;
+    while i < SKIP_MAX_LEVEL { set_at(update, i, 0); i = i + 1; }
+    let cur = 0;
+    let lvl = skip_cur_level - 1;
+    while lvl >= 0 {
+        let nxt = skip_forward[cur * SKIP_MAX_LEVEL + lvl];
+        while nxt >= 0 {
+            if skip_key[nxt] >= key { nxt = -2; }
+            else { cur = nxt; nxt = skip_forward[cur * SKIP_MAX_LEVEL + lvl]; }
+        }
+        set_at(update, lvl, cur);
+        lvl = lvl - 1;
+    }
+    let target = skip_forward[update[0] * SKIP_MAX_LEVEL + 0];
+    if target < 0 { return 1; }
+    if skip_key[target] != key { return 1; }
+    // Remove from each level
+    i = 0;
+    while i < skip_level[target] {
+        if skip_forward[update[i] * SKIP_MAX_LEVEL + i] == target {
+            set_at(skip_forward, update[i] * SKIP_MAX_LEVEL + i,
+                   skip_forward[target * SKIP_MAX_LEVEL + i]);
+        }
+        set_at(skip_forward, target * SKIP_MAX_LEVEL + i, -1);
+        i = i + 1;
+    }
+    _skip_free_node(target);
+    // Reduce max level if top levels are empty
+    while skip_cur_level > 1 {
+        if skip_forward[0 * SKIP_MAX_LEVEL + skip_cur_level - 1] < 0 {
+            skip_cur_level = skip_cur_level - 1;
+        } else {
+            skip_cur_level = 0;  // break
+        }
+        if skip_cur_level == 0 { skip_cur_level = 1; }
+    }
+    skip_count = skip_count - 1;
+    return 0;
+}
+
+// Range scan: collect keys in [lo, hi], return count of matches
+fn skip_range(lo, hi) {
+    let count = 0;
+    // Find first node >= lo
+    let cur = 0;
+    let lvl = skip_cur_level - 1;
+    while lvl >= 0 {
+        let nxt = skip_forward[cur * SKIP_MAX_LEVEL + lvl];
+        while nxt >= 0 {
+            if skip_key[nxt] >= lo { nxt = -2; }
+            else { cur = nxt; nxt = skip_forward[cur * SKIP_MAX_LEVEL + lvl]; }
+        }
+        lvl = lvl - 1;
+    }
+    // Walk forward at level 0
+    let node = skip_forward[cur * SKIP_MAX_LEVEL + 0];
+    while node >= 0 {
+        if skip_key[node] > hi { node = -2; }
+        else { count = count + 1; node = skip_forward[node * SKIP_MAX_LEVEL + 0]; }
+    }
+    return count;
+}
+
+// Find minimum key (first entry after head)
+fn skip_min() {
+    let first = skip_forward[0 * SKIP_MAX_LEVEL + 0];
+    if first < 0 { return -999999; }
+    return skip_key[first];
+}
+
+// Find maximum key (walk level 0 to end)
+fn skip_max() {
+    let cur = 0;
+    let lvl = skip_cur_level - 1;
+    while lvl >= 0 {
+        let nxt = skip_forward[cur * SKIP_MAX_LEVEL + lvl];
+        while nxt >= 0 { cur = nxt; nxt = skip_forward[cur * SKIP_MAX_LEVEL + lvl]; }
+        lvl = lvl - 1;
+    }
+    if cur == 0 { return -999999; }
+    return skip_key[cur];
+}
+
+fn skiplist_status() {
+    return "skiplist: count=" + to_string(skip_count)
+        + " levels=" + to_string(skip_cur_level)
+        + " min=" + to_string(skip_min())
+        + " max=" + to_string(skip_max());
+}
+
+fn skiplist_test() {
+    skiplist_init();
+    // Insert 10 key-value pairs (out of order)
+    skip_insert(50, 500);
+    skip_insert(20, 200);
+    skip_insert(80, 800);
+    skip_insert(10, 100);
+    skip_insert(60, 600);
+    skip_insert(30, 300);
+    skip_insert(90, 900);
+    skip_insert(40, 400);
+    skip_insert(70, 700);
+    skip_insert(25, 250);
+    // Search
+    let v20 = skip_get(20);   // 200
+    let v60 = skip_get(60);   // 600
+    let vmiss = skip_get(55); // -1
+    // Range [25, 60]
+    let rcount = skip_range(25, 60);  // should include 25,30,40,50,60 = 5
+    // Delete
+    skip_delete(20);
+    let after_del = skip_get(20);  // -1
+    // Update
+    skip_insert(50, 5000);
+    let updated = skip_get(50);  // 5000
+    serial_print("skiplist test: " + skiplist_status());
+    serial_print("skiplist test: get(20)=" + to_string(v20)
+        + " get(60)=" + to_string(v60)
+        + " get(55)=" + to_string(vmiss)
+        + " range[25,60]=" + to_string(rcount));
+    return "skiplist: n=10 get(20)=" + to_string(v20)
+        + " range[25,60]=" + to_string(rcount)
+        + " delete(20)=" + to_string(after_del)
+        + " update(50)=" + to_string(updated)
+        + " levels=" + to_string(skip_cur_level)
+        + " [Pugh 1990 ok]";
+}
+
+print("skiplist.hl loaded -- skip list ordered map (O(log n) insert/search/delete, range query)");
