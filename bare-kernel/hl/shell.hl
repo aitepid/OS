@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 446 commands + pipe operator (|):
+// 460 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -114,6 +114,9 @@ fn shell_handle(cmd) {
         serial_print("AES:      aes key <key>  aes encrypt <data>  aes decrypt <data>  aes hex  aes test");
         serial_print("Huffman:  huffman encode <data>  huffman decode <data>  huffman ratio <orig> <comp>  huffman test");
         serial_print("RADIUS:   radius secret <secret>  radius request <user> <pwd>  radius send <server>  radius parse <data>  radius test");
+        serial_print("SHA256:   sha256 <text>  sha256 test");
+        serial_print("DHCPSrv:  dhcpsrv start  dhcpsrv pool <start> <end>  dhcpsrv options <subnet> <router> <dns>  dhcpsrv leases  dhcpsrv test");
+        serial_print("SIP:      sip local <ip> <port>  sip invite <from> <to> <host>  sip ack <to> <host>  sip bye <to> <host>  sip register <user> <reg>  sip test");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -2549,6 +2552,101 @@ fn shell_handle_ext(cmd) {
     }
     if cmd == "radius test" { return radius_test(); }
 
+    // === SHA256 commands ===
+    if str_starts_with(cmd, "sha256 ") {
+        let data = str_sub(cmd, 7, len(cmd));
+        return "sha256: " + sha256(data);
+    }
+    if cmd == "sha256 test" { return sha256_test(); }
+
+    // === DHCP Server commands ===
+    if cmd == "dhcpsrv start" {
+        return "dhcpsrv: server started on port " + to_string(DHCP_SRV_PORT);
+    }
+    if str_starts_with(cmd, "dhcpsrv pool ") {
+        let parts = str_split(str_sub(cmd, 13, len(cmd)), " ");
+        if len(parts) >= 2 {
+            let start = parse_int(parts[0]);
+            let end = parse_int(parts[1]);
+            dhcp_server_set_pool(start, end);
+            return "dhcpsrv: pool set";
+        }
+        return "dhcpsrv: usage: dhcpsrv pool <start_ip> <end_ip>";
+    }
+    if str_starts_with(cmd, "dhcpsrv options ") {
+        let parts = str_split(str_sub(cmd, 16, len(cmd)), " ");
+        if len(parts) >= 3 {
+            let subnet = parse_int(parts[0]);
+            let router = parse_int(parts[1]);
+            let dns = parse_int(parts[2]);
+            dhcp_server_set_options(subnet, router, dns);
+            return "dhcpsrv: options set";
+        }
+        return "dhcpsrv: usage: dhcpsrv options <subnet> <router> <dns>";
+    }
+    if cmd == "dhcpsrv leases" { return dhcp_server_list_leases(); }
+    if cmd == "dhcpsrv test" { return dhcp_server_test(); }
+
+    // === SIP commands ===
+    if str_starts_with(cmd, "sip local ") {
+        let parts = str_split(str_sub(cmd, 10, len(cmd)), " ");
+        if len(parts) >= 2 {
+            let ip = parts[0];
+            let port = parse_int(parts[1]);
+            sip_set_local(ip, port);
+            return "sip: local endpoint set to " + ip + ":" + to_string(port);
+        }
+        return "sip: usage: sip local <ip> <port>";
+    }
+    if str_starts_with(cmd, "sip invite ") {
+        let parts = str_split(str_sub(cmd, 11, len(cmd)), " ");
+        if len(parts) >= 3 {
+            let from = parts[0];
+            let to = parts[1];
+            let host = parts[2];
+            let len = sip_create_invite(from, to, host);
+            return "sip: INVITE created (" + to_string(len) + " bytes)";
+        }
+        return "sip: usage: sip invite <from> <to> <host>";
+    }
+    if str_starts_with(cmd, "sip ack ") {
+        let parts = str_split(str_sub(cmd, 8, len(cmd)), " ");
+        if len(parts) >= 2 {
+            let to = parts[0];
+            let host = parts[1];
+            let len = sip_create_ack(to, host);
+            return "sip: ACK created (" + to_string(len) + " bytes)";
+        }
+        return "sip: usage: sip ack <to> <host>";
+    }
+    if str_starts_with(cmd, "sip bye ") {
+        let parts = str_split(str_sub(cmd, 8, len(cmd)), " ");
+        if len(parts) >= 2 {
+            let to = parts[0];
+            let host = parts[1];
+            let len = sip_create_bye(to, host);
+            return "sip: BYE created (" + to_string(len) + " bytes)";
+        }
+        return "sip: usage: sip bye <to> <host>";
+    }
+    if str_starts_with(cmd, "sip register ") {
+        let parts = str_split(str_sub(cmd, 13, len(cmd)), " ");
+        if len(parts) >= 2 {
+            let user = parts[0];
+            let registrar = parts[1];
+            let len = sip_create_register(user, registrar);
+            return "sip: REGISTER created (" + to_string(len) + " bytes)";
+        }
+        return "sip: usage: sip register <user> <registrar>";
+    }
+    if str_starts_with(cmd, "sip parse ") {
+        let data = str_sub(cmd, 10, len(cmd));
+        let status = sip_parse_response(data);
+        if status > 0 { return "sip: response code " + to_string(status); }
+        return "sip: parse error";
+    }
+    if cmd == "sip test" { return sip_test(); }
+
     return shell_handle(cmd);
 }
 
@@ -2560,7 +2658,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 446 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius");
+print("shell.hl loaded -- 460 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip");
 
 // Main shell loop (called from kernel_init)
 

@@ -1,0 +1,318 @@
+// dhcp_server.hl -- DHCP Server
+//
+// Provides DHCP server functionality for dynamic IP address assignment.
+// Listens on UDP port 67, responds to DISCOVER/REQUEST messages.
+// Manages IP address pool, leases, and configuration options.
+// Buffer at 0x1140000 (64 KB message buffer).
+
+let DHCP_SRV_BUF = 0x1140000;
+let DHCP_SRV_BUF_SZ = 65536;
+let dhcp_srv_len = 0;
+
+let DHCP_SRV_PORT = 67;
+let DHCP_CLIENT_PORT = 68;
+
+let DHCP_OP_BOOTREQUEST = 1;
+let DHCP_OP_BOOTREPLY = 2;
+
+let DHCP_DISCOVER = 1;
+let DHCP_OFFER = 2;
+let DHCP_REQUEST = 3;
+let DHCP_ACK = 5;
+let DHCP_NAK = 6;
+
+let DHCP_OPTION_SUBNET = 1;
+let DHCP_OPTION_ROUTER = 3;
+let DHCP_OPTION_DNS = 6;
+let DHCP_OPTION_REQUESTED_IP = 50;
+let DHCP_OPTION_LEASE_TIME = 51;
+let DHCP_OPTION_MSG_TYPE = 53;
+let DHCP_OPTION_SERVER_ID = 54;
+let DHCP_OPTION_END = 255;
+
+let mut dhcp_srv_pool_start = 0;
+let mut dhcp_srv_pool_end = 0;
+let mut dhcp_srv_subnet = 0;
+let mut dhcp_srv_router = 0;
+let mut dhcp_srv_dns = 0;
+let mut dhcp_srv_server_ip = 0;
+let mut dhcp_srv_lease_time = 86400;
+
+let mut dhcp_srv_leases = [];
+let DHCP_MAX_LEASES = 32;
+
+fn dhcp_server_init() {
+    dhcp_srv_clear();
+    dhcp_srv_leases = [];
+    let mut i = 0;
+    while i < DHCP_MAX_LEASES {
+        push(dhcp_srv_leases, [0, 0, 0]);
+        i = i + 1;
+    }
+
+    dhcp_srv_pool_start = 3232235777;
+    dhcp_srv_pool_end = 3232235808;
+    dhcp_srv_subnet = 4294967040;
+    dhcp_srv_router = 3232235777;
+    dhcp_srv_dns = 134744072;
+    dhcp_srv_server_ip = 3232235777;
+
+    print("dhcp_server: DHCP server initialized (pool 192.168.1.1-192.168.1.32)");
+    return 0;
+}
+
+fn dhcp_srv_clear() {
+    dhcp_srv_len = 0;
+    let mut i = 0;
+    while i < 1024 {
+        mem_write_byte(DHCP_SRV_BUF + i, 0);
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn _dhcp_srv_put(byte) {
+    if dhcp_srv_len >= DHCP_SRV_BUF_SZ {
+        return 0;
+    }
+    mem_write_byte(DHCP_SRV_BUF + dhcp_srv_len, byte);
+    dhcp_srv_len = dhcp_srv_len + 1;
+    return 0;
+}
+
+fn _dhcp_srv_put_u32(value) {
+    _dhcp_srv_put((value / 16777216) % 256);
+    _dhcp_srv_put((value / 65536) % 256);
+    _dhcp_srv_put((value / 256) % 256);
+    _dhcp_srv_put(value % 256);
+    return 0;
+}
+
+fn _dhcp_srv_put_u16(value) {
+    _dhcp_srv_put(value / 256);
+    _dhcp_srv_put(value % 256);
+    return 0;
+}
+
+fn _dhcp_srv_find_lease(mac_high, mac_low) {
+    let mut i = 0;
+    while i < DHCP_MAX_LEASES {
+        let lease = dhcp_srv_leases[i];
+        if lease[0] == mac_high {
+            if lease[1] == mac_low {
+                return i;
+            }
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn _dhcp_srv_allocate_ip(mac_high, mac_low) {
+    let existing = _dhcp_srv_find_lease(mac_high, mac_low);
+    if existing >= 0 {
+        return dhcp_srv_leases[existing][2];
+    }
+
+    let mut i = 0;
+    while i < DHCP_MAX_LEASES {
+        let lease = dhcp_srv_leases[i];
+        if lease[2] == 0 {
+            let ip = dhcp_srv_pool_start + i;
+            if ip <= dhcp_srv_pool_end {
+                set_at(dhcp_srv_leases, i, [mac_high, mac_low, ip]);
+                return ip;
+            }
+        }
+        i = i + 1;
+    }
+
+    return 0;
+}
+
+fn dhcp_server_process(request_data) {
+    if len(request_data) < 240 {
+        return 0 - 1;
+    }
+
+    let op = str_char_code(request_data, 0);
+    if op != DHCP_OP_BOOTREQUEST {
+        return 0 - 1;
+    }
+
+    let xid = str_char_code(request_data, 4) * 16777216 +
+              str_char_code(request_data, 5) * 65536 +
+              str_char_code(request_data, 6) * 256 +
+              str_char_code(request_data, 7);
+
+    let mac_high = str_char_code(request_data, 28) * 16777216 +
+                   str_char_code(request_data, 29) * 65536 +
+                   str_char_code(request_data, 30) * 256;
+    let mac_low = str_char_code(request_data, 31) * 16777216 +
+                  str_char_code(request_data, 32) * 65536 +
+                  str_char_code(request_data, 33) * 256;
+
+    let msg_type = 0;
+    let mut pos = 240;
+    while pos < len(request_data) {
+        let option = str_char_code(request_data, pos);
+        if option == DHCP_OPTION_END {
+            break;
+        }
+        if option == DHCP_OPTION_MSG_TYPE {
+            msg_type = str_char_code(request_data, pos + 2);
+            break;
+        }
+        pos = pos + 2 + str_char_code(request_data, pos + 1);
+    }
+
+    dhcp_srv_clear();
+
+    _dhcp_srv_put(DHCP_OP_BOOTREPLY);
+    _dhcp_srv_put(1);
+    _dhcp_srv_put(6);
+    _dhcp_srv_put(0);
+
+    _dhcp_srv_put_u32(xid);
+
+    _dhcp_srv_put_u16(0);
+    _dhcp_srv_put_u16(0);
+
+    let assigned_ip = _dhcp_srv_allocate_ip(mac_high, mac_low);
+    if assigned_ip == 0 {
+        return 0 - 1;
+    }
+
+    _dhcp_srv_put_u32(0);
+    _dhcp_srv_put_u32(assigned_ip);
+    _dhcp_srv_put_u32(dhcp_srv_server_ip);
+    _dhcp_srv_put_u32(0);
+
+    let mut i = 0;
+    while i < 16 {
+        _dhcp_srv_put(str_char_code(request_data, 28 + i));
+        i = i + 1;
+    }
+
+    let mut j = 0;
+    while j < 192 {
+        _dhcp_srv_put(0);
+        j = j + 1;
+    }
+
+    _dhcp_srv_put(99);
+    _dhcp_srv_put(130);
+    _dhcp_srv_put(83);
+    _dhcp_srv_put(99);
+
+    _dhcp_srv_put(DHCP_OPTION_MSG_TYPE);
+    _dhcp_srv_put(1);
+    if msg_type == DHCP_DISCOVER {
+        _dhcp_srv_put(DHCP_OFFER);
+    } else {
+        _dhcp_srv_put(DHCP_ACK);
+    }
+
+    _dhcp_srv_put(DHCP_OPTION_SERVER_ID);
+    _dhcp_srv_put(4);
+    _dhcp_srv_put_u32(dhcp_srv_server_ip);
+
+    _dhcp_srv_put(DHCP_OPTION_LEASE_TIME);
+    _dhcp_srv_put(4);
+    _dhcp_srv_put_u32(dhcp_srv_lease_time);
+
+    _dhcp_srv_put(DHCP_OPTION_SUBNET);
+    _dhcp_srv_put(4);
+    _dhcp_srv_put_u32(dhcp_srv_subnet);
+
+    _dhcp_srv_put(DHCP_OPTION_ROUTER);
+    _dhcp_srv_put(4);
+    _dhcp_srv_put_u32(dhcp_srv_router);
+
+    _dhcp_srv_put(DHCP_OPTION_DNS);
+    _dhcp_srv_put(4);
+    _dhcp_srv_put_u32(dhcp_srv_dns);
+
+    _dhcp_srv_put(DHCP_OPTION_END);
+
+    return dhcp_srv_len;
+}
+
+fn dhcp_server_set_pool(start_ip, end_ip) {
+    dhcp_srv_pool_start = start_ip;
+    dhcp_srv_pool_end = end_ip;
+    return 0;
+}
+
+fn dhcp_server_set_options(subnet, router, dns) {
+    dhcp_srv_subnet = subnet;
+    dhcp_srv_router = router;
+    dhcp_srv_dns = dns;
+    return 0;
+}
+
+fn dhcp_server_get_response() {
+    let mut result = "";
+    let mut i = 0;
+    while i < dhcp_srv_len {
+        let c = mem_read_byte(DHCP_SRV_BUF + i);
+        result = result + chr(c);
+        i = i + 1;
+    }
+    return result;
+}
+
+fn dhcp_server_list_leases() {
+    let mut output = "DHCP Leases:\n";
+    let mut i = 0;
+    let mut count = 0;
+    while i < DHCP_MAX_LEASES {
+        let lease = dhcp_srv_leases[i];
+        if lease[2] != 0 {
+            let ip = lease[2];
+            let ip_str = to_string((ip / 16777216) % 256) + "." +
+                         to_string((ip / 65536) % 256) + "." +
+                         to_string((ip / 256) % 256) + "." +
+                         to_string(ip % 256);
+            output = output + "  [" + to_string(i) + "] " + ip_str + "\n";
+            count = count + 1;
+        }
+        i = i + 1;
+    }
+    if count == 0 {
+        return "DHCP Leases: none";
+    }
+    return output;
+}
+
+fn dhcp_server_test() {
+    print("dhcp_server: running self-test");
+
+    dhcp_server_set_pool(3232235777, 3232235808);
+
+    let ip = _dhcp_srv_allocate_ip(1, 2);
+    if ip >= dhcp_srv_pool_start {
+        if ip <= dhcp_srv_pool_end {
+            print("  [ok] DHCP allocation: " + to_string(ip));
+        } else {
+            print("  [fail] DHCP IP out of range");
+            return 0 - 1;
+        }
+    } else {
+        print("  [fail] DHCP allocation failed");
+        return 0 - 1;
+    }
+
+    let ip2 = _dhcp_srv_allocate_ip(1, 2);
+    if ip2 == ip {
+        print("  [ok] DHCP same MAC gets same IP");
+    } else {
+        print("  [fail] DHCP IP mismatch for same MAC");
+        return 0 - 1;
+    }
+
+    print("dhcp_server: self-test passed");
+    return 0;
+}
+
+print("dhcp_server.hl loaded");

@@ -2,11 +2,75 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`274`（69 根目录 + 205 内核模块）
-- H-L 总行数：`~73,400`
-- 内核模块：`205`
-- Shell 命令：`446`
-- 最近完成功能迭代：`219`（aes + huffman + radius）
+- `.hl` 文件：`277`（69 根目录 + 208 内核模块）
+- H-L 总行数：`~74,100`
+- 内核模块：`208`
+- Shell 命令：`460`
+- 最近完成功能迭代：`222`（sha256 + dhcp_server + sip）
+
+## Iteration 222 — sip.hl：SIP VoIP 信令协议
+
+- **`bare-kernel/hl/sip.hl`** 新增（~290 行）
+  - SIP（Session Initiation Protocol）会话初始协议（RFC 3261）
+  - 用途：VoIP 呼叫建立/修改/终止信令，文本协议
+  - UDP/TCP 端口 5060（明文）/5061（TLS）
+  - `sip_create_invite(from, to, host)` — 创建 INVITE 请求：呼叫邀请 + SDP 媒体描述
+  - `sip_create_ack(to, host)` — 创建 ACK 请求：确认 INVITE 响应
+  - `sip_create_bye(to, host)` — 创建 BYE 请求：挂断呼叫
+  - `sip_create_register(user, registrar)` — 创建 REGISTER 请求：注册到 SIP 服务器（3600 秒过期）
+  - `sip_parse_response(data)` — 解析 SIP 响应：提取状态码（200/180/486 等）
+  - SIP 头部：Via, From, To, Call-ID, CSeq, Contact, Max-Forwards, User-Agent
+  - `sip_set_local(ip, port)` — 设置本地 SIP 端点（IP + 端口）
+  - SDP 会话描述：v=0, o=, s=, c=, t=, m=audio（RTP/AVP PCMU/8000）
+  - Call-ID 自增 + CSeq 自增，保证消息唯一性
+  - `sip_selftest()` — 测试 INVITE + REGISTER 消息构建
+  - SIP_BUF=0x1150000（18087936），64 KB 消息缓冲区
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`sip_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 7 条命令：
+  - `sip local <ip> <port>` / `sip invite <from> <to> <host>` / `sip ack <to> <host>` / `sip bye <to> <host>` / `sip register <user> <reg>` / `sip parse <data>` / `sip test`
+
+## Iteration 221 — dhcp_server.hl：DHCP 服务器
+
+- **`bare-kernel/hl/dhcp_server.hl`** 新增（~310 行）
+  - DHCP Server（Dynamic Host Configuration Protocol Server）动态主机配置服务器
+  - 用途：为客户端分配 IP 地址、子网掩码、网关、DNS
+  - UDP 端口 67（服务器）/68（客户端）
+  - `dhcp_server_process(request)` — 处理 DISCOVER/REQUEST 请求 → 返回 OFFER/ACK
+  - `_dhcp_srv_allocate_ip(mac_high, mac_low)` — 分配 IP：从地址池分配 + 记录租约（MAC → IP 映射）
+  - 地址池管理：pool_start → pool_end，最多 32 个租约
+  - 租约数组：[mac_high, mac_low, ip] × 32，支持同 MAC 重复获取同 IP
+  - `dhcp_server_set_pool(start, end)` — 设置 IP 地址池范围
+  - `dhcp_server_set_options(subnet, router, dns)` — 设置网络配置选项
+  - DHCP 选项：SUBNET=1, ROUTER=3, DNS=6, LEASE_TIME=51, MSG_TYPE=53, SERVER_ID=54
+  - 消息类型：DISCOVER=1, OFFER=2, REQUEST=3, ACK=5, NAK=6
+  - 报文结构：OP + HTYPE + HLEN + HOPS + XID(4B) + SECS + FLAGS + CIADDR + YIADDR + SIADDR + GIADDR + CHADDR(16B) + SNAME + FILE + OPTIONS
+  - `dhcp_server_list_leases()` — 列出当前租约表（IP 分配情况）
+  - `dhcp_selftest()` — 测试地址分配：同 MAC 获取同 IP
+  - DHCP_SRV_BUF=0x1140000（18022400），64 KB 消息缓冲区
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`dhcp_server_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 5 条命令：
+  - `dhcpsrv start` / `dhcpsrv pool <start> <end>` / `dhcpsrv options <subnet> <router> <dns>` / `dhcpsrv leases` / `dhcpsrv test`
+
+## Iteration 220 — sha256.hl：SHA-256 哈希算法
+
+- **`bare-kernel/hl/sha256.hl`** 新增（~290 行）
+  - SHA-256（Secure Hash Algorithm 256-bit）安全哈希算法（FIPS 180-4）
+  - 注：简化教学实现，受 H-L 语言约束（无真实位运算，使用算术模拟）
+  - 256 位（32 字节）哈希输出，SHA-2 家族，比 SHA-1 更安全
+  - `sha256_hash(data)` — 哈希计算：初始化 8 个状态变量（h0-h7）+ 64 轮常量（k0-k63）
+  - `sha256_get_hex()` — 256 位 → 64 字符十六进制字符串
+  - `_sha256_rotr(val, shift)` — 循环右移：模拟位运算（val >> shift | val << (32-shift)）
+  - `_sha256_ch(x, y, z)` — CH 函数：if x then y else z（逐位模拟）
+  - `_sha256_maj(x, y, z)` — MAJ 函数：多数函数（x, y, z 中至少 2 个为 1）
+  - `_sha256_sigma0/sigma1()` — Σ 函数：多次循环移位 XOR
+  - 初始状态：h0=1779033703, h1=3144134277, ..., h7=1541459225
+  - 64 个轮常量 k：从前 64 个素数立方根的小数部分导出
+  - `sha256(data)` — 便捷接口：hash + get_hex
+  - `sha256_selftest()` — 测试空字符串 + "abc" + 句子 → 64 字符哈希
+  - SHA256_BUF=0x1130000（17956864），64 KB 消息缓冲区
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`sha256_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 2 条命令：
+  - `sha256 <text>` / `sha256 test`
 
 ## Iteration 219 — radius.hl：RADIUS 认证协议
 

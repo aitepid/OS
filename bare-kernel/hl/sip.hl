@@ -1,0 +1,295 @@
+// sip.hl -- SIP (Session Initiation Protocol)
+//
+// Provides SIP client for VoIP signaling (RFC 3261).
+// Handles INVITE, ACK, BYE, REGISTER, OPTIONS requests.
+// Text-based protocol over UDP/TCP port 5060.
+// Buffer at 0x1150000 (64 KB message buffer).
+
+let SIP_BUF = 0x1150000;
+let SIP_BUF_SZ = 65536;
+let sip_len = 0;
+
+let SIP_PORT = 5060;
+let SIP_TLS_PORT = 5061;
+
+let mut sip_call_id = 1;
+let mut sip_cseq = 1;
+let mut sip_local_ip = "192.168.1.100";
+let mut sip_local_port = 5060;
+let mut sip_user_agent = "HicOS-SIP/1.0";
+
+fn sip_init() {
+    sip_clear();
+    sip_call_id = 1;
+    sip_cseq = 1;
+    print("sip: SIP client initialized (port " + to_string(SIP_PORT) + ")");
+    return 0;
+}
+
+fn sip_clear() {
+    sip_len = 0;
+    let mut i = 0;
+    while i < 1024 {
+        mem_write_byte(SIP_BUF + i, 0);
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn _sip_puts(str) {
+    let mut i = 0;
+    while i < len(str) {
+        if sip_len >= SIP_BUF_SZ {
+            return 0;
+        }
+        mem_write_byte(SIP_BUF + sip_len, str_char_code(str, i));
+        sip_len = sip_len + 1;
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn _sip_crlf() {
+    _sip_puts("\r\n");
+    return 0;
+}
+
+fn sip_set_local(ip, port) {
+    sip_local_ip = ip;
+    sip_local_port = port;
+    return 0;
+}
+
+fn sip_create_invite(from_user, to_user, to_host) {
+    sip_clear();
+
+    let request_uri = "sip:" + to_user + "@" + to_host;
+    _sip_puts("INVITE " + request_uri + " SIP/2.0");
+    _sip_crlf();
+
+    _sip_puts("Via: SIP/2.0/UDP " + sip_local_ip + ":" + to_string(sip_local_port) + ";branch=z9hG4bK" + to_string(sip_call_id));
+    _sip_crlf();
+
+    _sip_puts("From: <sip:" + from_user + "@" + sip_local_ip + ">;tag=from" + to_string(sip_call_id));
+    _sip_crlf();
+
+    _sip_puts("To: <" + request_uri + ">");
+    _sip_crlf();
+
+    _sip_puts("Call-ID: " + to_string(sip_call_id) + "@" + sip_local_ip);
+    _sip_crlf();
+
+    _sip_puts("CSeq: " + to_string(sip_cseq) + " INVITE");
+    _sip_crlf();
+
+    _sip_puts("Contact: <sip:" + from_user + "@" + sip_local_ip + ":" + to_string(sip_local_port) + ">");
+    _sip_crlf();
+
+    _sip_puts("Max-Forwards: 70");
+    _sip_crlf();
+
+    _sip_puts("User-Agent: " + sip_user_agent);
+    _sip_crlf();
+
+    _sip_puts("Content-Type: application/sdp");
+    _sip_crlf();
+
+    let sdp = "v=0\r\no=" + from_user + " 0 0 IN IP4 " + sip_local_ip + "\r\ns=HicOS Call\r\nc=IN IP4 " + sip_local_ip + "\r\nt=0 0\r\nm=audio 8000 RTP/AVP 0\r\na=rtpmap:0 PCMU/8000\r\n";
+
+    _sip_puts("Content-Length: " + to_string(len(sdp)));
+    _sip_crlf();
+    _sip_crlf();
+
+    _sip_puts(sdp);
+
+    sip_call_id = sip_call_id + 1;
+    sip_cseq = sip_cseq + 1;
+
+    return sip_len;
+}
+
+fn sip_create_ack(to_user, to_host) {
+    sip_clear();
+
+    let request_uri = "sip:" + to_user + "@" + to_host;
+    _sip_puts("ACK " + request_uri + " SIP/2.0");
+    _sip_crlf();
+
+    _sip_puts("Via: SIP/2.0/UDP " + sip_local_ip + ":" + to_string(sip_local_port) + ";branch=z9hG4bK" + to_string(sip_call_id));
+    _sip_crlf();
+
+    _sip_puts("From: <sip:caller@" + sip_local_ip + ">;tag=from" + to_string(sip_call_id));
+    _sip_crlf();
+
+    _sip_puts("To: <" + request_uri + ">");
+    _sip_crlf();
+
+    _sip_puts("Call-ID: " + to_string(sip_call_id) + "@" + sip_local_ip);
+    _sip_crlf();
+
+    _sip_puts("CSeq: " + to_string(sip_cseq) + " ACK");
+    _sip_crlf();
+
+    _sip_puts("Max-Forwards: 70");
+    _sip_crlf();
+
+    _sip_puts("Content-Length: 0");
+    _sip_crlf();
+    _sip_crlf();
+
+    return sip_len;
+}
+
+fn sip_create_bye(to_user, to_host) {
+    sip_clear();
+
+    let request_uri = "sip:" + to_user + "@" + to_host;
+    _sip_puts("BYE " + request_uri + " SIP/2.0");
+    _sip_crlf();
+
+    _sip_puts("Via: SIP/2.0/UDP " + sip_local_ip + ":" + to_string(sip_local_port) + ";branch=z9hG4bK" + to_string(sip_call_id));
+    _sip_crlf();
+
+    _sip_puts("From: <sip:caller@" + sip_local_ip + ">;tag=from" + to_string(sip_call_id));
+    _sip_crlf();
+
+    _sip_puts("To: <" + request_uri + ">");
+    _sip_crlf();
+
+    _sip_puts("Call-ID: " + to_string(sip_call_id) + "@" + sip_local_ip);
+    _sip_crlf();
+
+    _sip_puts("CSeq: " + to_string(sip_cseq) + " BYE");
+    _sip_crlf();
+
+    _sip_puts("Max-Forwards: 70");
+    _sip_crlf();
+
+    _sip_puts("User-Agent: " + sip_user_agent);
+    _sip_crlf();
+
+    _sip_puts("Content-Length: 0");
+    _sip_crlf();
+    _sip_crlf();
+
+    sip_cseq = sip_cseq + 1;
+
+    return sip_len;
+}
+
+fn sip_create_register(user, registrar) {
+    sip_clear();
+
+    let request_uri = "sip:" + registrar;
+    _sip_puts("REGISTER " + request_uri + " SIP/2.0");
+    _sip_crlf();
+
+    _sip_puts("Via: SIP/2.0/UDP " + sip_local_ip + ":" + to_string(sip_local_port) + ";branch=z9hG4bK" + to_string(sip_call_id));
+    _sip_crlf();
+
+    _sip_puts("From: <sip:" + user + "@" + registrar + ">;tag=from" + to_string(sip_call_id));
+    _sip_crlf();
+
+    _sip_puts("To: <sip:" + user + "@" + registrar + ">");
+    _sip_crlf();
+
+    _sip_puts("Call-ID: " + to_string(sip_call_id) + "@" + sip_local_ip);
+    _sip_crlf();
+
+    _sip_puts("CSeq: " + to_string(sip_cseq) + " REGISTER");
+    _sip_crlf();
+
+    _sip_puts("Contact: <sip:" + user + "@" + sip_local_ip + ":" + to_string(sip_local_port) + ">");
+    _sip_crlf();
+
+    _sip_puts("Expires: 3600");
+    _sip_crlf();
+
+    _sip_puts("Max-Forwards: 70");
+    _sip_crlf();
+
+    _sip_puts("User-Agent: " + sip_user_agent);
+    _sip_crlf();
+
+    _sip_puts("Content-Length: 0");
+    _sip_crlf();
+    _sip_crlf();
+
+    sip_call_id = sip_call_id + 1;
+    sip_cseq = sip_cseq + 1;
+
+    return sip_len;
+}
+
+fn sip_parse_response(data) {
+    if len(data) < 12 {
+        return 0 - 1;
+    }
+
+    let status_line = str_sub(data, 0, 12);
+    if str_index_of(status_line, "SIP/2.0") != 0 {
+        return 0 - 1;
+    }
+
+    let space1 = str_index_of(status_line, " ");
+    if space1 < 0 {
+        return 0 - 1;
+    }
+
+    let status_start = space1 + 1;
+    let space2 = str_index_of(str_sub(data, status_start, len(data)), " ");
+    if space2 < 0 {
+        return 0 - 1;
+    }
+
+    let status_code_str = str_sub(data, status_start, status_start + space2);
+    let status_code = parse_int(status_code_str);
+
+    return status_code;
+}
+
+fn sip_get_message() {
+    let mut result = "";
+    let mut i = 0;
+    while i < sip_len {
+        let c = mem_read_byte(SIP_BUF + i);
+        result = result + chr(c);
+        i = i + 1;
+    }
+    return result;
+}
+
+fn sip_test() {
+    print("sip: running self-test");
+
+    sip_set_local("192.168.1.100", 5060);
+
+    let invite_len = sip_create_invite("alice", "bob", "192.168.1.200");
+    if invite_len > 100 {
+        print("  [ok] SIP INVITE created: " + to_string(invite_len) + " bytes");
+    } else {
+        print("  [fail] SIP INVITE creation failed");
+        return 0 - 1;
+    }
+
+    let msg = sip_get_message();
+    if str_index_of(msg, "INVITE") == 0 {
+        print("  [ok] SIP message starts with INVITE");
+    } else {
+        print("  [fail] SIP message format incorrect");
+        return 0 - 1;
+    }
+
+    let register_len = sip_create_register("alice", "192.168.1.1");
+    if register_len > 100 {
+        print("  [ok] SIP REGISTER created: " + to_string(register_len) + " bytes");
+    } else {
+        print("  [fail] SIP REGISTER creation failed");
+        return 0 - 1;
+    }
+
+    print("sip: self-test passed");
+    return 0;
+}
+
+print("sip.hl loaded");
