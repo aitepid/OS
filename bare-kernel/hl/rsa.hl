@@ -1,0 +1,273 @@
+# rsa.hl - RSA Asymmetric Encryption (simplified)
+# Implements basic RSA encryption and decryption
+
+# Memory layout
+global RSA_BUF = 0x11F0000
+global RSA_KEY_SIZE = 512  # bits (simplified, normally 2048+)
+global RSA_BLOCK_SIZE = 64  # bytes
+
+# RSA key components
+global rsa_n = 0      # Modulus (public)
+global rsa_e = 0      # Public exponent
+global rsa_d = 0      # Private exponent
+global rsa_p = 0      # Prime p
+global rsa_q = 0      # Prime q
+global rsa_output = 0
+
+fn rsa_init() {
+    rsa_n = 0
+    rsa_e = 65537  # Common public exponent (F4)
+    rsa_d = 0
+    rsa_p = 0
+    rsa_q = 0
+    rsa_output = RSA_BUF + 8192
+    serial_print("RSA encryption ready")
+}
+
+# Generate RSA key pair (simplified with small primes)
+fn rsa_generate_keys() {
+    # Use small primes for demonstration (not secure)
+    rsa_p = 61
+    rsa_q = 53
+
+    # Calculate n = p * q
+    rsa_n = rsa_p * rsa_q  # 3233
+
+    # Calculate φ(n) = (p-1)(q-1)
+    var phi = (rsa_p - 1) * (rsa_q - 1)  # 3120
+
+    # e is already set to 65537, but we'll use smaller value for demo
+    rsa_e = 17  # Must be coprime with phi
+
+    # Calculate d = e^(-1) mod φ(n) using extended Euclidean algorithm
+    rsa_d = _rsa_mod_inverse(rsa_e, phi)
+
+    if (rsa_d == 0) {
+        serial_print("RSA: key generation failed")
+        return -1
+    }
+
+    return 0
+}
+
+# Set public key manually
+fn rsa_set_public_key(n, e) {
+    rsa_n = n
+    rsa_e = e
+    return 0
+}
+
+# Set private key manually
+fn rsa_set_private_key(n, d) {
+    rsa_n = n
+    rsa_d = d
+    return 0
+}
+
+# Encrypt message with public key
+fn rsa_encrypt(message) {
+    if (rsa_n == 0 || rsa_e == 0) {
+        serial_print("RSA: public key not set")
+        return -1
+    }
+
+    # Convert message to number (simplified - single byte)
+    var m = 0
+    if (strlen(message) > 0) {
+        m = get_at(message, 0)
+    }
+
+    # Encrypt: c = m^e mod n
+    var c = _rsa_mod_exp(m, rsa_e, rsa_n)
+
+    return c
+}
+
+# Decrypt ciphertext with private key
+fn rsa_decrypt(ciphertext) {
+    if (rsa_n == 0 || rsa_d == 0) {
+        serial_print("RSA: private key not set")
+        return -1
+    }
+
+    # Decrypt: m = c^d mod n
+    var m = _rsa_mod_exp(ciphertext, rsa_d, rsa_n)
+
+    return m
+}
+
+# Modular exponentiation: base^exp mod mod
+fn _rsa_mod_exp(base, exp, mod) {
+    var result = 1
+    base = base % mod
+
+    while (exp > 0) {
+        # If exp is odd, multiply base with result
+        if (exp % 2 == 1) {
+            result = (result * base) % mod
+        }
+
+        # exp must be even now
+        exp = exp / 2
+        base = (base * base) % mod
+    }
+
+    return result
+}
+
+# Modular multiplicative inverse using extended Euclidean algorithm
+fn _rsa_mod_inverse(a, m) {
+    var m0 = m
+    var x0 = 0
+    var x1 = 1
+
+    if (m == 1) {
+        return 0
+    }
+
+    while (a > 1) {
+        # q is quotient
+        var q = a / m
+        var t = m
+
+        # m is remainder now, process same as Euclid's algorithm
+        m = a % m
+        a = t
+        t = x0
+
+        x0 = x1 - q * x0
+        x1 = t
+    }
+
+    # Make x1 positive
+    if (x1 < 0) {
+        x1 = x1 + m0
+    }
+
+    return x1
+}
+
+# Get public key info
+fn rsa_get_public_key() {
+    var buf = RSA_BUF + 16384
+    var pos = 0
+
+    pos = _rsa_append_str(buf, pos, "n=")
+    pos = _rsa_append_num(buf, pos, rsa_n)
+    pos = _rsa_append_str(buf, pos, ", e=")
+    pos = _rsa_append_num(buf, pos, rsa_e)
+
+    set_at(buf, pos, 0)
+    return buf
+}
+
+# Get private key info
+fn rsa_get_private_key() {
+    var buf = RSA_BUF + 32768
+    var pos = 0
+
+    pos = _rsa_append_str(buf, pos, "n=")
+    pos = _rsa_append_num(buf, pos, rsa_n)
+    pos = _rsa_append_str(buf, pos, ", d=")
+    pos = _rsa_append_num(buf, pos, rsa_d)
+
+    set_at(buf, pos, 0)
+    return buf
+}
+
+# Helper: append string
+fn _rsa_append_str(buf, pos, str) {
+    var i = 0
+    var len = strlen(str)
+    while (i < len) {
+        set_at(buf, pos, get_at(str, i))
+        pos = pos + 1
+        i = i + 1
+    }
+    return pos
+}
+
+# Helper: append number
+fn _rsa_append_num(buf, pos, num) {
+    if (num == 0) {
+        set_at(buf, pos, 48)
+        return pos + 1
+    }
+
+    var digits = RSA_BUF + 49152
+    var d_pos = 0
+
+    var is_negative = 0
+    if (num < 0) {
+        is_negative = 1
+        num = 0 - num
+    }
+
+    while (num > 0) {
+        set_at(digits, d_pos, 48 + (num % 10))
+        num = num / 10
+        d_pos = d_pos + 1
+    }
+
+    if (is_negative == 1) {
+        set_at(buf, pos, 45)  # '-'
+        pos = pos + 1
+    }
+
+    while (d_pos > 0) {
+        d_pos = d_pos - 1
+        set_at(buf, pos, get_at(digits, d_pos))
+        pos = pos + 1
+    }
+
+    return pos
+}
+
+# Test RSA encryption/decryption
+fn rsa_test() {
+    # Generate keys
+    var result = rsa_generate_keys()
+    if (result < 0) {
+        return -1
+    }
+
+    # Test message
+    var plaintext = 42
+
+    # Encrypt
+    var ciphertext = rsa_encrypt("*")  # ASCII 42 = '*'
+    if (ciphertext < 0) {
+        serial_print("RSA test: encryption failed")
+        return -2
+    }
+
+    # Decrypt
+    var decrypted = rsa_decrypt(ciphertext)
+    if (decrypted < 0) {
+        serial_print("RSA test: decryption failed")
+        return -3
+    }
+
+    if (decrypted != plaintext) {
+        serial_print("RSA test: plaintext mismatch")
+        return -4
+    }
+
+    serial_print("RSA test: passed")
+    return 0
+}
+
+# Get modulus n
+fn rsa_get_n() {
+    return rsa_n
+}
+
+# Get public exponent e
+fn rsa_get_e() {
+    return rsa_e
+}
+
+# Get private exponent d
+fn rsa_get_d() {
+    return rsa_d
+}

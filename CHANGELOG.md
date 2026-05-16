@@ -2,11 +2,82 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`286`（69 根目录 + 217 内核模块）
-- H-L 总行数：`~76,200`
-- 内核模块：`217`
-- Shell 命令：`505`
-- 最近完成功能迭代：`231`（lzma + protobuf + chacha20）
+- `.hl` 文件：`289`（69 根目录 + 220 内核模块）
+- H-L 总行数：`~76,900`
+- 内核模块：`220`
+- Shell 命令：`520`
+- 最近完成功能迭代：`234`（rsa + ed25519 + avro）
+
+## Iteration 234 — avro.hl：Apache Avro 序列化
+
+- **`bare-kernel/hl/avro.hl`** 新增（~270 行）
+  - Apache Avro 二进制编码格式（Hadoop 生态）
+  - 用途：紧凑的结构化数据序列化，带模式演化支持
+  - `avro_start()` — 开始新消息
+  - `avro_add_boolean(value)` — 添加布尔值：0 或 1
+  - `avro_add_int(value)` — 添加整数：ZigZag + varint 编码
+  - `avro_add_long(value)` — 添加长整数（同 int）
+  - `avro_add_string(str)` — 添加字符串：长度（varint）+ UTF-8 字节
+  - `avro_add_bytes(data, len)` — 添加字节数组
+  - `avro_add_int_array(array, count)` — 添加整数数组：块计数 + 元素 + 结束标记
+  - ZigZag 编码：映射有符号整数到无符号（0→0, -1→1, 1→2, -2→3）
+  - `_avro_zigzag_encode(n)` — 编码：n≥0 → n*2，n<0 → |n|*2-1
+  - `_avro_zigzag_decode(n)` — 解码：n%2==0 → n/2，否则 → -(n+1)/2
+  - `avro_decode_int(data)` — 解码整数
+  - `avro_decode_string(data)` — 解码字符串
+  - `avro_create_person(name, age)` — 创建简单记录：字符串 + 整数
+  - `avro_decode_person(data)` — 解码记录 → "Person{name=..., age=...}"
+  - AVRO_BUF=0x1210000（18874368），512 KB 工作缓冲区
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`avro_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 5 条命令：
+  - `avro start` / `avro addint <val>` / `avro addstr <str>` / `avro person <name> <age>` / `avro test`
+
+## Iteration 233 — ed25519.hl：Ed25519 数字签名
+
+- **`bare-kernel/hl/ed25519.hl`** 新增（~260 行）
+  - Ed25519 数字签名算法（Edwards 曲线）
+  - 注：简化实现，不包含真实椭圆曲线运算（受 H-L 语言限制）
+  - 用途：现代公钥签名，速度快，安全性高（SSH/TLS 使用）
+  - `ed25519_generate_keys()` — 生成密钥对：随机私钥 → 推导公钥
+  - `ed25519_sign(message)` — 签名消息：生成 64 字节签名
+  - `ed25519_verify(message, signature)` — 验证签名：检查签名有效性
+  - 密钥大小：32 字节（256 位）
+  - 签名大小：64 字节（512 位）
+  - `_ed25519_hash(data, len)` — 简化哈希（真实算法使用 SHA-512）
+  - 私钥生成：基于时间戳和计数器的伪随机
+  - 公钥推导：简化线性变换（真实算法使用标量乘法）
+  - 签名生成：私钥 + 消息哈希 → 64 字节签名（简化模式）
+  - 验证：重构签名并比对（真实算法使用点加法）
+  - `ed25519_get_public_key()` — 获取公钥的十六进制表示（前 16 字节 + ...）
+  - `ed25519_get_signature()` — 获取签名的十六进制表示
+  - ED25519_BUF=0x1200000（18874368），64 KB 工作缓冲区
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`ed25519_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 5 条命令：
+  - `ed25519 genkey` / `ed25519 sign <msg>` / `ed25519 verify <msg> <sig>` / `ed25519 pubkey` / `ed25519 test`
+
+## Iteration 232 — rsa.hl：RSA 非对称加密
+
+- **`bare-kernel/hl/rsa.hl`** 新增（~250 行）
+  - RSA 非对称加密算法（简化版本）
+  - 注：使用小素数演示（61, 53），不具备实际安全性
+  - 用途：公钥加密，数字签名基础
+  - `rsa_generate_keys()` — 生成密钥对：选择素数 p, q → 计算 n, φ(n), d
+  - RSA 参数：p=61, q=53, n=3233, φ(n)=3120, e=17
+  - `rsa_encrypt(message)` — 公钥加密：c = m^e mod n
+  - `rsa_decrypt(ciphertext)` — 私钥解密：m = c^d mod n
+  - `_rsa_mod_exp(base, exp, mod)` — 模幂运算：快速幂算法
+  - `_rsa_mod_inverse(a, m)` — 模逆运算：扩展欧几里得算法
+  - 公钥：(n, e)，私钥：(n, d)
+  - d = e^(-1) mod φ(n) — 私钥指数计算
+  - `rsa_set_public_key(n, e)` — 手动设置公钥
+  - `rsa_set_private_key(n, d)` — 手动设置私钥
+  - 消息限制：单字节（简化，真实 RSA 处理大块数据）
+  - `rsa_get_public_key()` — 获取公钥信息字符串
+  - `rsa_get_private_key()` — 获取私钥信息字符串
+  - RSA_BUF=0x11F0000（18808832），64 KB 工作缓冲区
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`rsa_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 5 条命令：
+  - `rsa genkey` / `rsa encrypt <msg>` / `rsa decrypt <cipher>` / `rsa pubkey` / `rsa test`
 
 ## Iteration 231 — chacha20.hl：ChaCha20 流密码
 

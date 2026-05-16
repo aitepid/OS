@@ -1,0 +1,358 @@
+# avro.hl - Apache Avro Binary Encoding
+# Implements simplified Avro binary serialization format
+
+# Memory layout
+global AVRO_BUF = 0x1210000
+
+# Avro type tags (simplified)
+global AVRO_NULL = 0
+global AVRO_BOOLEAN = 1
+global AVRO_INT = 2
+global AVRO_LONG = 3
+global AVRO_FLOAT = 4
+global AVRO_DOUBLE = 5
+global AVRO_BYTES = 6
+global AVRO_STRING = 7
+
+# Encoding state
+global avro_output = 0
+global avro_output_len = 0
+global avro_decode_pos = 0
+
+fn avro_init() {
+    avro_output = AVRO_BUF
+    avro_output_len = 0
+    avro_decode_pos = 0
+    serial_print("Apache Avro ready")
+}
+
+# Start new Avro message
+fn avro_start() {
+    avro_output_len = 0
+    return avro_output
+}
+
+# Encode null value
+fn avro_add_null() {
+    # Null has no representation in binary (schema-defined)
+    return avro_output_len
+}
+
+# Encode boolean value
+fn avro_add_boolean(value) {
+    if (value == 0) {
+        set_at(avro_output, avro_output_len, 0)
+    } else {
+        set_at(avro_output, avro_output_len, 1)
+    }
+    avro_output_len = avro_output_len + 1
+    return avro_output_len
+}
+
+# Encode int (variable-length zigzag encoding)
+fn avro_add_int(value) {
+    # ZigZag encoding: maps signed to unsigned
+    var zigzag = _avro_zigzag_encode(value)
+    avro_output_len = _avro_encode_varint(avro_output, avro_output_len, zigzag)
+    return avro_output_len
+}
+
+# Encode long (same as int in simplified version)
+fn avro_add_long(value) {
+    return avro_add_int(value)
+}
+
+# Encode string
+fn avro_add_string(str) {
+    var len = strlen(str)
+
+    # Encode length as varint
+    avro_output_len = _avro_encode_varint(avro_output, avro_output_len, len)
+
+    # Copy string bytes
+    var i = 0
+    while (i < len) {
+        set_at(avro_output, avro_output_len, get_at(str, i))
+        avro_output_len = avro_output_len + 1
+        i = i + 1
+    }
+
+    return avro_output_len
+}
+
+# Encode bytes
+fn avro_add_bytes(data, len) {
+    # Encode length as varint
+    avro_output_len = _avro_encode_varint(avro_output, avro_output_len, len)
+
+    # Copy bytes
+    var i = 0
+    while (i < len) {
+        set_at(avro_output, avro_output_len, get_at(data, i))
+        avro_output_len = avro_output_len + 1
+        i = i + 1
+    }
+
+    return avro_output_len
+}
+
+# Encode array of integers (simplified)
+fn avro_add_int_array(array, count) {
+    # Encode block count
+    avro_output_len = _avro_encode_varint(avro_output, avro_output_len, count)
+
+    # Encode elements
+    var i = 0
+    while (i < count) {
+        var value = get_at(array, i)
+        avro_add_int(value)
+        i = i + 1
+    }
+
+    # End of array (count = 0)
+    avro_output_len = _avro_encode_varint(avro_output, avro_output_len, 0)
+
+    return avro_output_len
+}
+
+# ZigZag encoding (maps signed integers to unsigned)
+fn _avro_zigzag_encode(n) {
+    if (n >= 0) {
+        return n * 2
+    } else {
+        return (0 - n) * 2 - 1
+    }
+}
+
+# ZigZag decoding
+fn _avro_zigzag_decode(n) {
+    if (n % 2 == 0) {
+        return n / 2
+    } else {
+        return 0 - ((n + 1) / 2)
+    }
+}
+
+# Variable-length integer encoding (similar to protobuf varint)
+fn _avro_encode_varint(buf, pos, value) {
+    while (value >= 128) {
+        set_at(buf, pos, (value % 128) + 128)  # Set MSB
+        pos = pos + 1
+        value = value / 128
+    }
+    set_at(buf, pos, value)
+    pos = pos + 1
+    return pos
+}
+
+# Decode varint from buffer
+fn _avro_decode_varint(buf, start_pos) {
+    var result = AVRO_BUF + 65536
+    var value = 0
+    var shift = 0
+    var pos = start_pos
+
+    while (1 == 1) {
+        var byte = get_at(buf, pos)
+        pos = pos + 1
+
+        value = value + ((byte % 128) * _avro_pow2(shift))
+        shift = shift + 7
+
+        if (byte < 128) {
+            break
+        }
+    }
+
+    set_at(result, 0, value)
+    set_at(result, 1, pos - start_pos)  # Bytes consumed
+    return result
+}
+
+# Power of 2
+fn _avro_pow2(exp) {
+    var result = 1
+    var i = 0
+    while (i < exp) {
+        result = result * 2
+        i = i + 1
+    }
+    return result
+}
+
+# Start decoding
+fn avro_decode_start(data) {
+    avro_decode_pos = 0
+    return 0
+}
+
+# Decode boolean
+fn avro_decode_boolean(data) {
+    var value = get_at(data, avro_decode_pos)
+    avro_decode_pos = avro_decode_pos + 1
+    return value
+}
+
+# Decode int
+fn avro_decode_int(data) {
+    var result = _avro_decode_varint(data, avro_decode_pos)
+    var zigzag = get_at(result, 0)
+    var bytes = get_at(result, 1)
+    avro_decode_pos = avro_decode_pos + bytes
+    return _avro_zigzag_decode(zigzag)
+}
+
+# Decode long (same as int)
+fn avro_decode_long(data) {
+    return avro_decode_int(data)
+}
+
+# Decode string
+fn avro_decode_string(data) {
+    var len_result = _avro_decode_varint(data, avro_decode_pos)
+    var len = get_at(len_result, 0)
+    var len_bytes = get_at(len_result, 1)
+    avro_decode_pos = avro_decode_pos + len_bytes
+
+    var buf = AVRO_BUF + 131072
+    var i = 0
+    while (i < len) {
+        set_at(buf, i, get_at(data, avro_decode_pos + i))
+        i = i + 1
+    }
+    set_at(buf, len, 0)  # Null terminator
+
+    avro_decode_pos = avro_decode_pos + len
+    return buf
+}
+
+# Get encoded message
+fn avro_get_message() {
+    return avro_output
+}
+
+# Get message length
+fn avro_get_length() {
+    return avro_output_len
+}
+
+# Format Avro data info
+fn avro_format_info(data, len) {
+    var buf = AVRO_BUF + 196608
+    var pos = 0
+
+    pos = _avro_append_str(buf, pos, "Avro binary: ")
+    pos = _avro_append_num(buf, pos, len)
+    pos = _avro_append_str(buf, pos, " bytes")
+
+    set_at(buf, pos, 0)
+    return buf
+}
+
+# Helper: append string
+fn _avro_append_str(buf, pos, str) {
+    var i = 0
+    var len = strlen(str)
+    while (i < len) {
+        set_at(buf, pos, get_at(str, i))
+        pos = pos + 1
+        i = i + 1
+    }
+    return pos
+}
+
+# Helper: append number
+fn _avro_append_num(buf, pos, num) {
+    if (num == 0) {
+        set_at(buf, pos, 48)
+        return pos + 1
+    }
+
+    var digits = AVRO_BUF + 262144
+    var d_pos = 0
+
+    var is_negative = 0
+    if (num < 0) {
+        is_negative = 1
+        num = 0 - num
+    }
+
+    while (num > 0) {
+        set_at(digits, d_pos, 48 + (num % 10))
+        num = num / 10
+        d_pos = d_pos + 1
+    }
+
+    if (is_negative == 1) {
+        set_at(buf, pos, 45)  # '-'
+        pos = pos + 1
+    }
+
+    while (d_pos > 0) {
+        d_pos = d_pos - 1
+        set_at(buf, pos, get_at(digits, d_pos))
+        pos = pos + 1
+    }
+
+    return pos
+}
+
+# Create simple Avro record (name, age)
+fn avro_create_person(name, age) {
+    avro_start()
+    avro_add_string(name)
+    avro_add_int(age)
+    return avro_get_length()
+}
+
+# Decode simple Avro record
+fn avro_decode_person(data) {
+    avro_decode_start(data)
+    var name = avro_decode_string(data)
+    var age = avro_decode_int(data)
+
+    var buf = AVRO_BUF + 327680
+    var pos = 0
+
+    pos = _avro_append_str(buf, pos, "Person{name=")
+    pos = _avro_append_str(buf, pos, name)
+    pos = _avro_append_str(buf, pos, ", age=")
+    pos = _avro_append_num(buf, pos, age)
+    pos = _avro_append_str(buf, pos, "}")
+
+    set_at(buf, pos, 0)
+    return buf
+}
+
+# Test Avro encoding/decoding
+fn avro_test() {
+    # Encode person record
+    var len = avro_create_person("Alice", 30)
+    if (len == 0) {
+        serial_print("Avro test: encoding failed")
+        return -1
+    }
+
+    var encoded = avro_get_message()
+
+    # Decode person record
+    var person_str = avro_decode_person(encoded)
+
+    # Encode and decode integer
+    avro_start()
+    avro_add_int(42)
+    avro_add_int(-17)
+
+    var msg = avro_get_message()
+    avro_decode_start(msg)
+    var val1 = avro_decode_int(msg)
+    var val2 = avro_decode_int(msg)
+
+    if (val1 != 42 || val2 != -17) {
+        serial_print("Avro test: integer decode mismatch")
+        return -2
+    }
+
+    serial_print("Avro test: passed")
+    return 0
+}
