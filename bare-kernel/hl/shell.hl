@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 535 commands + pipe operator (|):
+// 550 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -132,6 +132,9 @@ fn shell_handle(cmd) {
         serial_print("Bzip2:    bzip2 compress <data>  bzip2 decompress <data>  bzip2 output  bzip2 ratio  bzip2 test");
         serial_print("Scrypt:   scrypt derive <pwd> <salt>  scrypt cost <n>  scrypt key  scrypt hex  scrypt test");
         serial_print("BLAKE2:   blake2 hash <data>  blake2 hex  blake2 digest  blake2 size  blake2 test");
+        serial_print("Snappy:   snappy compress <data>  snappy decompress <data>  snappy output  snappy len  snappy test");
+        serial_print("Argon2:   argon2 hash <pwd> <salt>  argon2 variant <id>  argon2 cost <n>  argon2 hex  argon2 test");
+        serial_print("Poly1305: poly1305 key <key>  poly1305 update <msg>  poly1305 tag  poly1305 verify <tag>  poly1305 test");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -3058,6 +3061,82 @@ fn shell_handle_ext(cmd) {
     }
     if cmd == "blake2 test" { return blake2_test(); }
 
+    // === Snappy commands ===
+    if str_starts_with(cmd, "snappy compress ") {
+        let data = str_sub(cmd, 16, len(cmd));
+        let comp_len = snappy_compress(data, len(data));
+        if comp_len > 0 { return "snappy: compressed " + to_string(len(data)) + " -> " + to_string(comp_len) + " bytes"; }
+        return "snappy: compression failed";
+    }
+    if str_starts_with(cmd, "snappy decompress ") {
+        let data = str_sub(cmd, 18, len(cmd));
+        let decomp_len = snappy_decompress(data, len(data));
+        if decomp_len > 0 { return "snappy: decompressed " + to_string(len(data)) + " -> " + to_string(decomp_len) + " bytes"; }
+        return "snappy: decompression failed";
+    }
+    if cmd == "snappy output" {
+        let out = snappy_get_output();
+        return "snappy: output buffer ready at " + to_string(out);
+    }
+    if cmd == "snappy len" {
+        let len = snappy_get_output_len();
+        return "snappy: output length = " + to_string(len) + " bytes";
+    }
+    if cmd == "snappy test" { return snappy_test(); }
+
+    // === Argon2 commands ===
+    if str_starts_with(cmd, "argon2 hash ") {
+        let parts = str_split(str_sub(cmd, 12, len(cmd)), " ");
+        if len(parts) >= 2 {
+            let pwd = parts[0];
+            let salt = parts[1];
+            argon2_hash(pwd, salt);
+            return "argon2: hash computed - " + argon2_get_hex();
+        }
+        return "argon2: usage: argon2 hash <password> <salt>";
+    }
+    if str_starts_with(cmd, "argon2 variant ") {
+        let v = parse_int(str_sub(cmd, 15, len(cmd)));
+        let result = argon2_set_variant(v);
+        if result == 0 { return "argon2: variant set to " + argon2_get_variant_name(); }
+        return "argon2: invalid variant (0=Argon2d, 1=Argon2i, 2=Argon2id)";
+    }
+    if str_starts_with(cmd, "argon2 cost ") {
+        let t = parse_int(str_sub(cmd, 12, len(cmd)));
+        let result = argon2_set_time_cost(t);
+        if result == 0 { return "argon2: time cost set to " + to_string(t); }
+        return "argon2: invalid cost (must be 1-10)";
+    }
+    if cmd == "argon2 hex" {
+        return "argon2: " + argon2_get_hex();
+    }
+    if cmd == "argon2 test" { return argon2_test(); }
+
+    // === Poly1305 commands ===
+    if str_starts_with(cmd, "poly1305 key ") {
+        let key = str_sub(cmd, 13, len(cmd));
+        let result = poly1305_set_key(key);
+        if result == 0 { return "poly1305: key set (32 bytes)"; }
+        return "poly1305: key too short (need 32 bytes)";
+    }
+    if str_starts_with(cmd, "poly1305 update ") {
+        let msg = str_sub(cmd, 16, len(cmd));
+        let result = poly1305_update(msg, len(msg));
+        if result == 0 { return "poly1305: message updated"; }
+        return "poly1305: update failed (error " + to_string(result) + ")";
+    }
+    if cmd == "poly1305 tag" {
+        poly1305_finalize();
+        return "poly1305: tag = " + poly1305_get_hex();
+    }
+    if str_starts_with(cmd, "poly1305 verify ") {
+        let tag = str_sub(cmd, 16, len(cmd));
+        let match = poly1305_verify(tag);
+        if match == 1 { return "poly1305: tag verified OK"; }
+        return "poly1305: tag verification FAILED";
+    }
+    if cmd == "poly1305 test" { return poly1305_test(); }
+
     return shell_handle(cmd);
 }
 
@@ -3069,7 +3148,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 535 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2");
+print("shell.hl loaded -- 550 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305");
 
 // Main shell loop (called from kernel_init)
 

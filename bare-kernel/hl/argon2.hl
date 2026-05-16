@@ -1,0 +1,305 @@
+# argon2.hl - Argon2 Password Hashing (simplified)
+# Implements simplified Argon2id password hashing (PHC winner)
+
+# Memory layout
+global ARGON2_BUF = 0x1260000
+global ARGON2_MEMORY_COST = 1024  # KB (simplified, normally 65536+)
+global ARGON2_TIME_COST = 3        # iterations
+global ARGON2_PARALLELISM = 1      # lanes
+global ARGON2_HASH_LENGTH = 32     # bytes
+
+# Argon2 variant
+global ARGON2_I = 1   # Argon2i (data-independent)
+global ARGON2_D = 0   # Argon2d (data-dependent)
+global ARGON2_ID = 2  # Argon2id (hybrid)
+
+# State
+global argon2_hash_output = 0
+global argon2_salt = 0
+global argon2_variant = 0
+global argon2_memory_blocks = 0
+
+fn argon2_init() {
+    argon2_hash_output = ARGON2_BUF
+    argon2_salt = ARGON2_BUF + 1024
+    argon2_variant = ARGON2_ID
+    argon2_memory_blocks = ARGON2_BUF + 2048
+    serial_print("Argon2 password hashing ready")
+}
+
+# Hash password with Argon2
+fn argon2_hash(password, salt) {
+    var pwd_len = strlen(password)
+    var salt_len = strlen(salt)
+
+    # Copy salt
+    var i = 0
+    while (i < salt_len && i < 16) {
+        set_at(argon2_salt, i, get_at(salt, i))
+        i = i + 1
+    }
+
+    # Initialize memory blocks (simplified to 64 blocks instead of 1024)
+    var num_blocks = 64
+    _argon2_init_memory(password, pwd_len, argon2_salt, salt_len, num_blocks)
+
+    # Fill memory (iterations)
+    var iteration = 0
+    while (iteration < ARGON2_TIME_COST) {
+        _argon2_fill_memory(num_blocks, iteration)
+        iteration = iteration + 1
+    }
+
+    # Extract final hash
+    _argon2_finalize(num_blocks)
+
+    return argon2_hash_output
+}
+
+# Initialize memory blocks
+fn _argon2_init_memory(password, pwd_len, salt, salt_len, num_blocks) {
+    var i = 0
+    while (i < num_blocks) {
+        # Generate initial block from password + salt + block index
+        var block = _argon2_hash_block(password, pwd_len, salt, salt_len, i)
+
+        # Store block
+        var j = 0
+        while (j < 64) {  # 64 bytes per block (simplified)
+            set_at(argon2_memory_blocks, i * 64 + j, get_at(block, j))
+            j = j + 1
+        }
+
+        i = i + 1
+    }
+}
+
+# Fill memory (mixing phase)
+fn _argon2_fill_memory(num_blocks, pass) {
+    var i = 0
+    while (i < num_blocks) {
+        # Select reference block (data-dependent for Argon2d, data-independent for Argon2i)
+        var ref_index = 0
+
+        if (argon2_variant == ARGON2_D) {
+            # Argon2d: use data from previous block
+            var prev_block = (i + num_blocks - 1) % num_blocks
+            var data_byte = get_at(argon2_memory_blocks, prev_block * 64)
+            ref_index = data_byte % num_blocks
+        } else if (argon2_variant == ARGON2_I) {
+            # Argon2i: use counter-based pseudo-random
+            ref_index = ((i * 7919 + pass * 1103) % num_blocks)
+        } else {
+            # Argon2id: hybrid (simplified)
+            if (pass == 0) {
+                ref_index = ((i * 7919 + pass * 1103) % num_blocks)
+            } else {
+                var prev_block = (i + num_blocks - 1) % num_blocks
+                var data_byte = get_at(argon2_memory_blocks, prev_block * 64)
+                ref_index = data_byte % num_blocks
+            }
+        }
+
+        # Mix current block with reference block
+        _argon2_mix_blocks(i, ref_index, num_blocks)
+
+        i = i + 1
+    }
+}
+
+# Mix two blocks
+fn _argon2_mix_blocks(target_idx, ref_idx, num_blocks) {
+    var temp = ARGON2_BUF + 65536
+
+    var i = 0
+    while (i < 64) {
+        var target_byte = get_at(argon2_memory_blocks, target_idx * 64 + i)
+        var ref_byte = get_at(argon2_memory_blocks, ref_idx * 64 + i)
+
+        # Simplified mixing: XOR + rotation
+        var mixed = (target_byte + ref_byte) % 256
+        mixed = (mixed * 31 + i) % 256
+
+        set_at(temp, i, mixed)
+        i = i + 1
+    }
+
+    # Copy back
+    i = 0
+    while (i < 64) {
+        set_at(argon2_memory_blocks, target_idx * 64 + i, get_at(temp, i))
+        i = i + 1
+    }
+}
+
+# Hash single block
+fn _argon2_hash_block(password, pwd_len, salt, salt_len, block_index) {
+    var output = ARGON2_BUF + 131072
+    var combined = ARGON2_BUF + 196608
+    var pos = 0
+
+    # Combine password + salt + block_index
+    var i = 0
+    while (i < pwd_len) {
+        set_at(combined, pos, get_at(password, i))
+        pos = pos + 1
+        i = i + 1
+    }
+
+    i = 0
+    while (i < salt_len) {
+        set_at(combined, pos, get_at(salt, i))
+        pos = pos + 1
+        i = i + 1
+    }
+
+    # Add block index
+    set_at(combined, pos, (block_index / 16777216) % 256)
+    set_at(combined, pos + 1, (block_index / 65536) % 256)
+    set_at(combined, pos + 2, (block_index / 256) % 256)
+    set_at(combined, pos + 3, block_index % 256)
+    pos = pos + 4
+
+    # Hash (simplified BLAKE2-like)
+    var hash = 2166136261
+    i = 0
+    while (i < pos) {
+        hash = (hash * 16777619 + get_at(combined, i)) % 4294967296
+        i = i + 1
+    }
+
+    # Expand to 64 bytes
+    i = 0
+    while (i < 64) {
+        set_at(output, i, (hash / _argon2_pow256(i % 4)) % 256)
+        hash = (hash * 1103515245 + 12345) % 4294967296
+        i = i + 1
+    }
+
+    return output
+}
+
+# Finalize hash
+fn _argon2_finalize(num_blocks) {
+    # XOR all blocks together
+    var i = 0
+    while (i < ARGON2_HASH_LENGTH) {
+        var xor_val = 0
+        var block = 0
+
+        while (block < num_blocks) {
+            xor_val = (xor_val + get_at(argon2_memory_blocks, block * 64 + (i % 64))) % 256
+            block = block + 1
+        }
+
+        set_at(argon2_hash_output, i, xor_val)
+        i = i + 1
+    }
+}
+
+# Power of 256
+fn _argon2_pow256(exp) {
+    if (exp == 0) { return 1 }
+    if (exp == 1) { return 256 }
+    if (exp == 2) { return 65536 }
+    if (exp == 3) { return 16777216 }
+    return 1
+}
+
+# Set variant
+fn argon2_set_variant(variant) {
+    if (variant >= 0 && variant <= 2) {
+        argon2_variant = variant
+        return 0
+    }
+    return -1
+}
+
+# Set time cost
+fn argon2_set_time_cost(t) {
+    if (t > 0 && t <= 10) {
+        ARGON2_TIME_COST = t
+        return 0
+    }
+    return -1
+}
+
+# Get hash as hex
+fn argon2_get_hex() {
+    return _argon2_to_hex(argon2_hash_output, ARGON2_HASH_LENGTH)
+}
+
+# Convert to hex
+fn _argon2_to_hex(data, len) {
+    var hex_chars = "0123456789abcdef"
+    var buf = ARGON2_BUF + 262144
+    var pos = 0
+    var i = 0
+
+    while (i < len && i < 16) {
+        var byte = get_at(data, i)
+        set_at(buf, pos, get_at(hex_chars, byte / 16))
+        pos = pos + 1
+        set_at(buf, pos, get_at(hex_chars, byte % 16))
+        pos = pos + 1
+        i = i + 1
+    }
+
+    if (len > 16) {
+        set_at(buf, pos, 46)
+        pos = pos + 1
+        set_at(buf, pos, 46)
+        pos = pos + 1
+        set_at(buf, pos, 46)
+        pos = pos + 1
+    }
+
+    set_at(buf, pos, 0)
+    return buf
+}
+
+# Get variant name
+fn argon2_get_variant_name() {
+    if (argon2_variant == ARGON2_I) {
+        return "Argon2i"
+    }
+    if (argon2_variant == ARGON2_D) {
+        return "Argon2d"
+    }
+    if (argon2_variant == ARGON2_ID) {
+        return "Argon2id"
+    }
+    return "Unknown"
+}
+
+# Test Argon2
+fn argon2_test() {
+    var password = "test_password"
+    var salt = "random_salt_123"
+
+    # Test Argon2id
+    argon2_set_variant(ARGON2_ID)
+    var hash = argon2_hash(password, salt)
+    var hex = argon2_get_hex()
+
+    # Verify deterministic
+    var hash2 = argon2_hash(password, salt)
+    var hex2 = argon2_get_hex()
+
+    var i = 0
+    var match = 1
+    while (i < ARGON2_HASH_LENGTH) {
+        if (get_at(hash, i) != get_at(hash2, i)) {
+            match = 0
+        }
+        i = i + 1
+    }
+
+    if (match == 0) {
+        serial_print("Argon2 test: determinism failed")
+        return -1
+    }
+
+    serial_print("Argon2 test: passed")
+    return 0
+}

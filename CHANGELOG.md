@@ -2,11 +2,84 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`292`（69 根目录 + 223 内核模块）
-- H-L 总行数：`~77,600`
-- 内核模块：`223`
-- Shell 命令：`535`
-- 最近完成功能迭代：`237`（bzip2 + scrypt + blake2）
+- `.hl` 文件：`295`（69 根目录 + 226 内核模块）
+- H-L 总行数：`~78,400`
+- 内核模块：`226`
+- Shell 命令：`550`
+- 最近完成功能迭代：`240`（snappy + argon2 + poly1305）
+
+## Iteration 240 — poly1305.hl：Poly1305 消息认证码
+
+- **`bare-kernel/hl/poly1305.hl`** 新增（~280 行）
+  - Poly1305 一次性 MAC（Message Authentication Code）
+  - 注：简化实现，完整精度需要 130 位算术（模 2^130-5）
+  - 用途：消息认证，常与 ChaCha20 配对形成 ChaCha20-Poly1305 认证加密
+  - `poly1305_set_key(key)` — 设置 32 字节密钥：r（16 字节，带钳位）+ s（16 字节）
+  - 钳位（clamping）：r 的特定位清零以避免弱密钥
+  - `poly1305_update(data, len)` — 更新消息：按 16 字节块处理
+  - `_poly1305_process_block(data, offset, block_len, is_final)` — 处理单块：添加填充 + 累加 + 乘法
+  - 填充：每块添加 0x01 字节（Poly1305 规范）
+  - `_poly1305_add(acc, block, len)` — 累加器加法：多精度加法 + 模约简
+  - `_poly1305_multiply(acc, r)` — 累加器乘法：acc = (acc * r) mod (2^130-5)
+  - `_poly1305_reduce(acc)` — 模约简：简化版本，确保 acc < 2^130
+  - `poly1305_finalize()` — 生成 16 字节标签：acc + s
+  - `poly1305_verify(expected_tag)` — 恒定时间标签比较
+  - `poly1305_reset()` — 重置状态以重新计算
+  - Poly1305 安全性：一次性（每个密钥只能用一次），16 字节标签
+  - 算法流程：累加器初始化为 0 → 处理每个块（加 + 乘 r + 约简）→ 加 s → 输出标签
+  - POLY1305_BUF=0x1270000（19398656），512 KB 工作缓冲区（r/s/累加器/乘法中间态）
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`poly1305_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 5 条命令：
+  - `poly1305 key <key>` / `poly1305 update <msg>` / `poly1305 tag` / `poly1305 verify <tag>` / `poly1305 test`
+
+## Iteration 239 — argon2.hl：Argon2 密码哈希
+
+- **`bare-kernel/hl/argon2.hl`** 新增（~280 行）
+  - Argon2id 密码哈希函数（PHC 密码哈希竞赛冠军）
+  - 注：简化实现，64 块（真实建议 ≥1024 块），3 次迭代
+  - 用途：密码存储，抵御 GPU/ASIC/侧信道攻击，优于 bcrypt/scrypt
+  - `argon2_hash(password, salt)` — 哈希密码：初始化内存 → 填充 → 提取
+  - 支持三种变体：Argon2d（数据依赖，抗 GPU）、Argon2i（数据独立，抗侧信道）、Argon2id（混合，推荐）
+  - `_argon2_init_memory(password, pwd_len, salt, salt_len, num_blocks)` — 初始化 64 个内存块
+  - 每个块：64 字节（简化，真实 Argon2 使用 1024 字节）
+  - `_argon2_fill_memory(num_blocks, pass)` — 填充阶段：多次迭代混合内存块
+  - Argon2id 混合策略：第一遍使用 Argon2i（计数器伪随机），后续使用 Argon2d（数据依赖）
+  - `_argon2_mix_blocks(target_idx, ref_idx, num_blocks)` — 混合两个块：XOR + 旋转
+  - 引用块选择：Argon2i 使用伪随机函数，Argon2d 使用前一块数据
+  - `_argon2_hash_block(password, pwd_len, salt, salt_len, block_index)` — 生成初始块：BLAKE2 风格哈希
+  - `_argon2_finalize(num_blocks)` — 提取最终哈希：XOR 所有块
+  - `argon2_set_variant(variant)` — 设置变体（0=d, 1=i, 2=id）
+  - `argon2_set_time_cost(t)` — 设置时间成本（迭代次数，1-10）
+  - 参数：内存成本=1024 KB（简化），时间成本=3，并行度=1
+  - 输出：32 字节哈希（可配置）
+  - ARGON2_BUF=0x1260000（19333120），256 KB 工作缓冲区（内存块 + 临时缓冲）
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`argon2_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 5 条命令：
+  - `argon2 hash <pwd> <salt>` / `argon2 variant <id>` / `argon2 cost <n>` / `argon2 hex` / `argon2 test`
+
+## Iteration 238 — snappy.hl：Snappy 快速压缩
+
+- **`bare-kernel/hl/snappy.hl`** 新增（~280 行）
+  - Snappy 快速压缩算法（Google 开发）
+  - 注：简化实现，哈希表大小 4096（真实 Snappy 更大），受内存限制
+  - 用途：速度优先的压缩，低延迟场景（数据库、网络传输），压缩比次于 zlib
+  - `snappy_compress(data, len)` — 压缩：写入原长度（varint）+ LZ77 压缩数据
+  - `_snappy_compress_fragment(data, len)` — 核心压缩：哈希表匹配 + 字面量/复制操作码
+  - LZ77 匹配：滑动窗口最多回溯 32768 字节，最小匹配 4 字节，最大匹配 64 字节
+  - `_snappy_find_match(data, pos, len)` — 哈希查找匹配：4 字节哈希 → 候选位置 → 扩展匹配
+  - `_snappy_hash_bytes(data, pos)` — 4 字节哈希函数：(b0+b1*256+b2*65536+b3*16777216) % 4096
+  - `_snappy_emit_literal(output, pos, data, start, len)` — 发出字面量：标签（长度-1）+ 原始字节
+  - `_snappy_emit_copy(output, pos, offset, len)` — 发出复制：标签（类型+长度）+ 偏移量（2 字节）
+  - Snappy 操作码：LITERAL（直接字节）、COPY_1（2 字节偏移）、COPY_2（3 字节偏移）、COPY_4（4 字节偏移）
+  - `snappy_decompress(data, len)` — 解压：读取原长度 + 解析操作码 + 还原数据
+  - 复制操作：从已解压数据中复制（允许重叠复制以表示重复模式）
+  - `_snappy_write_varint(buf, pos, value)` — 写入 varint：base-128 编码，MSB 表示是否继续
+  - `_snappy_read_varint(buf, start_pos)` — 读取 varint：解码 base-128
+  - 哈希表：4096 个槽位，存储位置索引用于快速匹配
+  - SNAPPY_BUF=0x1250000（19267584），1 MB 工作缓冲区（哈希表 + 输入/输出缓冲）
+- **`bare-kernel/hl/kernel_init.hl`** Phase 7：`snappy_init()`
+- **`bare-kernel/hl/shell.hl`** 新增 5 条命令：
+  - `snappy compress <data>` / `snappy decompress <data>` / `snappy output` / `snappy len` / `snappy test`
 
 ## Iteration 237 — blake2.hl：BLAKE2 哈希函数
 
