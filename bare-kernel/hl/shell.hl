@@ -192,6 +192,9 @@ fn shell_handle(cmd) {
         serial_print("TarjanSCC:   tr add <u> <v>  tr run  tr scc <v>  tr setn <n>  tr test");
         serial_print("Articulate:  art add <u> <v>  art run  art count  art setn <n>  art test");
         serial_print("EulerPath:   ep add <u> <v>  ep run <start>  ep path  ep setn <n>  ep test");
+        serial_print("2-SAT:       ts add <a> <b>  ts run  ts sat  ts assign <i>  ts setn <n>  ts test");
+        serial_print("Hungarian:   hu set <i> <j> <w>  hu run  hu cost  hu match <i>  hu setn <n>  hu test");
+        serial_print("HopcroftKarp: hk add <l> <r>  hk run  hk size  hk setnl <nl>  hk setnr <nr>  hk test");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -4556,6 +4559,77 @@ fn shell_handle_ext(cmd) {
         return "ep: add " + to_string(epu) + "-" + to_string(epv);
     }
 
+    if cmd == "ts test"   { let tsr = two_sat_test(); return "ts: sat=" + to_string(tsr); }
+    if cmd == "ts sat"    { return "ts: sat=" + to_string(ts_sat); }
+    if _starts_with(cmd, "ts setn ") {
+        let tsn = to_int(str_sub(cmd, 8, len(cmd)));
+        ts_set_n(tsn);
+        return "ts: n=" + to_string(tsn);
+    }
+    if cmd == "ts run" { let tsr2 = two_sat_run(); return "ts: sat=" + to_string(tsr2); }
+    if _starts_with(cmd, "ts assign ") {
+        let tsi = to_int(str_sub(cmd, 10, len(cmd)));
+        return "ts: assign[" + to_string(tsi) + "]=" + to_string(ts_assign[tsi]);
+    }
+    if _starts_with(cmd, "ts add ") {
+        let tsargs = str_sub(cmd, 7, len(cmd));
+        let tssp = _find_space(tsargs);
+        if tssp < 0 { return "ts add: usage ts add <litA> <litB>"; }
+        let tsa = to_int(str_sub(tsargs, 0, tssp));
+        let tsb = to_int(str_sub(tsargs, tssp + 1, len(tsargs)));
+        ts_add_clause(tsa, tsb);
+        return "ts: clause (" + to_string(tsa) + " OR " + to_string(tsb) + ")";
+    }
+
+    if cmd == "hu test"  { let huc = hungarian_test(); return "hu: min_cost=" + to_string(huc); }
+    if cmd == "hu cost"  { return "hu: cost=" + to_string(hu_cost_total); }
+    if cmd == "hu run"   { let huc2 = hungarian_run(); return "hu: min_cost=" + to_string(huc2); }
+    if _starts_with(cmd, "hu setn ") {
+        let hun = to_int(str_sub(cmd, 8, len(cmd)));
+        hu_set_n(hun);
+        return "hu: n=" + to_string(hun);
+    }
+    if _starts_with(cmd, "hu match ") {
+        let hui = to_int(str_sub(cmd, 9, len(cmd)));
+        return "hu: match[" + to_string(hui) + "]=" + to_string(hu_match[hui]);
+    }
+    if _starts_with(cmd, "hu set ") {
+        let huargs = str_sub(cmd, 7, len(cmd));
+        let husp1 = _find_space(huargs);
+        if husp1 < 0 { return "hu set: usage hu set <i> <j> <w>"; }
+        let hui2 = to_int(str_sub(huargs, 0, husp1));
+        let hurest = str_sub(huargs, husp1 + 1, len(huargs));
+        let husp2 = _find_space(hurest);
+        if husp2 < 0 { return "hu set: usage hu set <i> <j> <w>"; }
+        let huj = to_int(str_sub(hurest, 0, husp2));
+        let huw = to_int(str_sub(hurest, husp2 + 1, len(hurest)));
+        hu_set_cost(hui2, huj, huw);
+        return "hu: cost[" + to_string(hui2) + "][" + to_string(huj) + "]=" + to_string(huw);
+    }
+
+    if cmd == "hk test"   { let hks = hopcroft_karp_test(); return "hk: matching=" + to_string(hks); }
+    if cmd == "hk size"   { return "hk: size=" + to_string(hk_size); }
+    if cmd == "hk run"    { let hks2 = hopcroft_karp_run(); return "hk: matching=" + to_string(hks2); }
+    if _starts_with(cmd, "hk setnl ") {
+        let hknl = to_int(str_sub(cmd, 9, len(cmd)));
+        hk_set_nl(hknl);
+        return "hk: nl=" + to_string(hknl);
+    }
+    if _starts_with(cmd, "hk setnr ") {
+        let hknr = to_int(str_sub(cmd, 9, len(cmd)));
+        hk_set_nr(hknr);
+        return "hk: nr=" + to_string(hknr);
+    }
+    if _starts_with(cmd, "hk add ") {
+        let hkargs = str_sub(cmd, 7, len(cmd));
+        let hksp = _find_space(hkargs);
+        if hksp < 0 { return "hk add: usage hk add <l> <r>"; }
+        let hkl = to_int(str_sub(hkargs, 0, hksp));
+        let hkr = to_int(str_sub(hkargs, hksp + 1, len(hkargs)));
+        hk_add_edge(hkl, hkr);
+        return "hk: add " + to_string(hkl) + "-" + to_string(hkr);
+    }
+
     return shell_handle(cmd);
 }
 
@@ -4567,7 +4641,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 835 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath");
+print("shell.hl loaded -- 850 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp");
 
 // Main shell loop (called from kernel_init)
 

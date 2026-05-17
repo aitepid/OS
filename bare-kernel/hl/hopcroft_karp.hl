@@ -1,0 +1,153 @@
+// hopcroft_karp.hl -- Hopcroft-Karp Bipartite Matching
+// Hopcroft-Karp 1973: O(E√V) maximum bipartite matching.
+// BFS builds layered graph (shortest augmenting paths); DFS finds
+// vertex-disjoint augmenting paths simultaneously. HK_MAX_L=HK_MAX_R=32.
+//
+// Runtime buffer: 0x1630000 (4 KB)
+
+let HK_MAX_L = 32;
+let HK_MAX_R = 32;
+let HK_INF   = 1000000;
+
+let hk_adj     = array(1024, 0);
+let hk_match_l = array(32, 0);   // right matched to left i (-1=free)
+let hk_match_r = array(32, 0);   // left matched to right j (-1=free)
+let hk_dist    = array(32, 0);   // BFS layer for left vertices
+let hk_q       = array(64, 0);   // BFS queue
+let hk_nl      = 0;
+let hk_nr      = 0;
+let hk_size    = 0;
+
+fn hopcroft_karp_init() {
+    let i = 0;
+    while i < 1024 {
+        set_at(hk_adj, i, 0);
+        i += 1;
+    }
+    i = 0;
+    while i < 32 {
+        set_at(hk_match_l, i, -1);
+        set_at(hk_match_r, i, -1);
+        set_at(hk_dist, i, 0);
+        i += 1;
+    }
+    hk_nl   = 0;
+    hk_nr   = 0;
+    hk_size = 0;
+    return 0;
+}
+
+fn hk_set_nl(nl) { hk_nl = nl; return 0; }
+fn hk_set_nr(nr) { hk_nr = nr; return 0; }
+
+fn hk_add_edge(l, r) {
+    if l >= HK_MAX_L { return -1; }
+    if r >= HK_MAX_R { return -1; }
+    set_at(hk_adj, l * HK_MAX_R + r, 1);
+    if l + 1 > hk_nl { hk_nl = l + 1; }
+    if r + 1 > hk_nr { hk_nr = r + 1; }
+    return 0;
+}
+
+// BFS: build layered graph from all free left vertices; returns 1 if
+// any augmenting path exists (i.e. a free right vertex was reached)
+fn _hk_bfs() {
+    let qh = 0;
+    let qt = 0;
+    let i = 0;
+    while i < hk_nl {
+        if hk_match_l[i] < 0 {
+            set_at(hk_dist, i, 0);
+            set_at(hk_q, qt, i);
+            qt += 1;
+        } else {
+            set_at(hk_dist, i, HK_INF);
+        }
+        i += 1;
+    }
+    let found = 0;
+    while qh < qt {
+        let u = hk_q[qh];
+        qh += 1;
+        let r = 0;
+        while r < hk_nr {
+            if hk_adj[u * HK_MAX_R + r] == 1 {
+                let v = hk_match_r[r];
+                if v < 0 {
+                    found = 1;
+                } else {
+                    if hk_dist[v] == HK_INF {
+                        set_at(hk_dist, v, hk_dist[u] + 1);
+                        set_at(hk_q, qt, v);
+                        qt += 1;
+                    }
+                }
+            }
+            r += 1;
+        }
+    }
+    return found;
+}
+
+// DFS: augment along layered graph from left vertex u
+fn _hk_dfs(u) {
+    let r = 0;
+    while r < hk_nr {
+        if hk_adj[u * HK_MAX_R + r] == 1 {
+            let v = hk_match_r[r];
+            let ok = 0;
+            if v < 0 {
+                ok = 1;
+            } else {
+                if hk_dist[v] == hk_dist[u] + 1 {
+                    let sub = _hk_dfs(v);
+                    if sub == 1 { ok = 1; }
+                }
+            }
+            if ok == 1 {
+                set_at(hk_match_l, u, r);
+                set_at(hk_match_r, r, u);
+                return 1;
+            }
+        }
+        r += 1;
+    }
+    set_at(hk_dist, u, HK_INF);
+    return 0;
+}
+
+// Run Hopcroft-Karp; returns maximum matching size
+fn hopcroft_karp_run() {
+    hk_size = 0;
+    let go = _hk_bfs();
+    while go == 1 {
+        let i = 0;
+        while i < hk_nl {
+            if hk_match_l[i] < 0 {
+                let aug = _hk_dfs(i);
+                if aug == 1 { hk_size += 1; }
+            }
+            i += 1;
+        }
+        go = _hk_bfs();
+    }
+    return hk_size;
+}
+
+fn hopcroft_karp_test() {
+    hopcroft_karp_init();
+    hk_set_nl(4);
+    hk_set_nr(4);
+    // 4L×4R with crossing edges; perfect matching exists → size=4
+    // Edges: 0-0,0-1, 1-1,1-2, 2-2,2-3, 3-3,3-0
+    hk_add_edge(0, 0);  hk_add_edge(0, 1);
+    hk_add_edge(1, 1);  hk_add_edge(1, 2);
+    hk_add_edge(2, 2);  hk_add_edge(2, 3);
+    hk_add_edge(3, 3);  hk_add_edge(3, 0);
+    let sz = hopcroft_karp_run();
+    print("hopcroft_karp_test nl=4 nr=4 matching=" + to_string(sz));
+    print("match_l[0]=" + to_string(hk_match_l[0]) + " match_l[1]=" + to_string(hk_match_l[1]));
+    return sz;
+}
+
+print("hopcroft_karp.hl loaded");

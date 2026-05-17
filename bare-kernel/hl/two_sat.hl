@@ -1,0 +1,162 @@
+// two_sat.hl -- 2-SAT (Implication Graph + Tarjan SCC)
+// Aspvall-Plass-Tarjan 1979: O(V+E) 2-SAT via implication graph SCC.
+// TS_MAX_N=16 variables → 32 implication nodes. Literal node: var*2=true,
+// var*2+1=false. Clause (a OR b) adds neg(a)→b and neg(b)→a.
+// SAT iff no variable and its negation share an SCC.
+//
+// Runtime buffer: 0x1610000 (4 KB)
+
+let TS_MAX_N = 16;
+let TS_MAX_V = 32;
+
+let ts_adj      = array(1024, 0);
+let ts_disc     = array(32, 0);
+let ts_low      = array(32, 0);
+let ts_on_stack = array(32, 0);
+let ts_stk      = array(32, 0);
+let ts_scc      = array(32, 0);
+let ts_assign   = array(16, 0);
+let ts_n        = 0;
+let ts_gn       = 0;
+let ts_timer     = 0;
+let ts_stk_top   = 0;
+let ts_scc_count = 0;
+let ts_sat       = 0;
+
+fn two_sat_init() {
+    let i = 0;
+    while i < 1024 {
+        set_at(ts_adj, i, 0);
+        i += 1;
+    }
+    i = 0;
+    while i < TS_MAX_V {
+        set_at(ts_disc,     i, -1);
+        set_at(ts_low,      i, -1);
+        set_at(ts_on_stack, i, 0);
+        set_at(ts_stk,      i, 0);
+        set_at(ts_scc,      i, 0);
+        i += 1;
+    }
+    i = 0;
+    while i < TS_MAX_N {
+        set_at(ts_assign, i, 0);
+        i += 1;
+    }
+    ts_n         = 0;
+    ts_gn        = 0;
+    ts_timer     = 0;
+    ts_stk_top   = 0;
+    ts_scc_count = 0;
+    ts_sat       = 0;
+    return 0;
+}
+
+fn ts_set_n(n) {
+    ts_n  = n;
+    ts_gn = n + n;
+    return 0;
+}
+
+// Negate literal node v: even→v+1, odd→v-1 (no XOR needed)
+fn _ts_neg(v) {
+    let rem = v - (v / 2) * 2;
+    if rem == 0 { return v + 1; }
+    return v - 1;
+}
+
+// Add clause (a OR b); a,b are literal nodes (2*var or 2*var+1)
+fn ts_add_clause(a, b) {
+    let na = _ts_neg(a);
+    let nb = _ts_neg(b);
+    set_at(ts_adj, na * TS_MAX_V + b, 1);
+    set_at(ts_adj, nb * TS_MAX_V + a, 1);
+    return 0;
+}
+
+fn _ts_dfs(u) {
+    set_at(ts_disc,     u, ts_timer);
+    set_at(ts_low,      u, ts_timer);
+    ts_timer += 1;
+    set_at(ts_on_stack, u, 1);
+    set_at(ts_stk,      ts_stk_top, u);
+    ts_stk_top += 1;
+    let v = 0;
+    while v < ts_gn {
+        if ts_adj[u * TS_MAX_V + v] == 1 {
+            if ts_disc[v] < 0 {
+                _ts_dfs(v);
+                if ts_low[v] < ts_low[u] { set_at(ts_low, u, ts_low[v]); }
+            } else {
+                if ts_on_stack[v] == 1 {
+                    if ts_disc[v] < ts_low[u] { set_at(ts_low, u, ts_disc[v]); }
+                }
+            }
+        }
+        v += 1;
+    }
+    if ts_low[u] == ts_disc[u] {
+        let done = 0;
+        while done == 0 {
+            ts_stk_top -= 1;
+            let w = ts_stk[ts_stk_top];
+            set_at(ts_on_stack, w, 0);
+            set_at(ts_scc, w, ts_scc_count);
+            if w == u { done = 1; }
+        }
+        ts_scc_count += 1;
+    }
+    return 0;
+}
+
+// Run 2-SAT; returns 1 if satisfiable, 0 if UNSAT
+fn two_sat_run() {
+    let i = 0;
+    while i < ts_gn {
+        set_at(ts_disc,     i, -1);
+        set_at(ts_low,      i, -1);
+        set_at(ts_on_stack, i, 0);
+        i += 1;
+    }
+    ts_timer     = 0;
+    ts_stk_top   = 0;
+    ts_scc_count = 0;
+    i = 0;
+    while i < ts_gn {
+        if ts_disc[i] < 0 { _ts_dfs(i); }
+        i += 1;
+    }
+    ts_sat = 1;
+    i = 0;
+    while i < ts_n {
+        if ts_scc[i + i] == ts_scc[i + i + 1] { ts_sat = 0; }
+        i += 1;
+    }
+    if ts_sat == 1 {
+        i = 0;
+        while i < ts_n {
+            if ts_scc[i + i] > ts_scc[i + i + 1] {
+                set_at(ts_assign, i, 1);
+            } else {
+                set_at(ts_assign, i, 0);
+            }
+            i += 1;
+        }
+    }
+    return ts_sat;
+}
+
+fn two_sat_test() {
+    two_sat_init();
+    ts_set_n(3);
+    // x0,x1,x2; true=2*i, false=2*i+1
+    // Clauses: (x0 OR x1), (NOT x0 OR x2), (NOT x1 OR NOT x2) → SAT
+    ts_add_clause(0, 2);   // x0 OR x1
+    ts_add_clause(1, 4);   // NOT x0 OR x2
+    ts_add_clause(3, 5);   // NOT x1 OR NOT x2
+    let sat = two_sat_run();
+    print("two_sat_test sat=" + to_string(sat) + " x0=" + to_string(ts_assign[0]) + " x1=" + to_string(ts_assign[1]) + " x2=" + to_string(ts_assign[2]));
+    return sat;
+}
+
+print("two_sat.hl loaded");

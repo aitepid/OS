@@ -1,0 +1,161 @@
+// hungarian.hl -- Hungarian Algorithm (Minimum Cost Assignment)
+// Kuhn-Munkres 1955: O(n³) optimal assignment via dual potential method.
+// HU_MAX_N=16; n×n cost matrix (0-indexed input, 1-indexed internally).
+// hu_set_cost(i,j,w) sets cost; hungarian_run() returns min total cost.
+// hu_match[i] = right vertex (0-indexed) assigned to left vertex i.
+//
+// Runtime buffer: 0x1620000 (4 KB)
+
+let HU_MAX_N = 16;
+
+let hu_cost  = array(289, 0);   // (n+1)×17 cost, 1-indexed: [i*17+j]
+let hu_u     = array(17, 0);    // dual potential left (1..n)
+let hu_v     = array(17, 0);    // dual potential right (0..n, 0=dummy)
+let hu_p     = array(17, 0);    // p[j]: left vertex matched to right j
+let hu_way   = array(17, 0);    // augmenting path: prev right vertex
+let hu_minv  = array(17, 0);    // min reduced cost per right vertex
+let hu_used  = array(17, 0);    // visited flag for right vertices
+let hu_match = array(16, 0);    // 0-indexed result: match[left] = right
+let hu_n     = 0;
+let hu_cost_total = 0;
+
+fn hungarian_init() {
+    let i = 0;
+    while i < 289 {
+        set_at(hu_cost, i, 0);
+        i += 1;
+    }
+    i = 0;
+    while i < 17 {
+        set_at(hu_u,    i, 0);
+        set_at(hu_v,    i, 0);
+        set_at(hu_p,    i, 0);
+        set_at(hu_way,  i, 0);
+        set_at(hu_minv, i, 0);
+        set_at(hu_used, i, 0);
+        i += 1;
+    }
+    i = 0;
+    while i < HU_MAX_N {
+        set_at(hu_match, i, 0);
+        i += 1;
+    }
+    hu_n          = 0;
+    hu_cost_total = 0;
+    return 0;
+}
+
+fn hu_set_n(n) {
+    hu_n = n;
+    return 0;
+}
+
+// Set cost[i][j] = w (0-indexed i, j)
+fn hu_set_cost(i, j, w) {
+    set_at(hu_cost, (i + 1) * 17 + (j + 1), w);
+    return 0;
+}
+
+// Run Hungarian algorithm; returns minimum assignment cost
+fn hungarian_run() {
+    let INF  = 1000000;
+    let i    = 0;
+    let row  = 0;
+    let j0   = 0;
+    let i0   = 0;
+    let delta = 0;
+    let j1   = 0;
+    let j    = 0;
+    let cur  = 0;
+    let done  = 0;
+    let done2 = 0;
+    let j1b  = 0;
+    i = 0;
+    while i < 17 {
+        set_at(hu_u,   i, 0);
+        set_at(hu_v,   i, 0);
+        set_at(hu_p,   i, 0);
+        set_at(hu_way, i, 0);
+        i += 1;
+    }
+    row = 1;
+    while row <= hu_n {
+        set_at(hu_p, 0, row);
+        j0 = 0;
+        i = 0;
+        while i <= hu_n {
+            set_at(hu_minv, i, INF);
+            set_at(hu_used, i, 0);
+            i += 1;
+        }
+        done = 0;
+        while done == 0 {
+            set_at(hu_used, j0, 1);
+            i0    = hu_p[j0];
+            delta = INF;
+            j1    = 0;
+            j     = 1;
+            while j <= hu_n {
+                if hu_used[j] == 0 {
+                    cur = hu_cost[i0 * 17 + j] - hu_u[i0] - hu_v[j];
+                    if cur < hu_minv[j] {
+                        set_at(hu_minv, j, cur);
+                        set_at(hu_way,  j, j0);
+                    }
+                    if hu_minv[j] < delta {
+                        delta = hu_minv[j];
+                        j1    = j;
+                    }
+                }
+                j += 1;
+            }
+            j = 0;
+            while j <= hu_n {
+                if hu_used[j] == 1 {
+                    set_at(hu_u, hu_p[j], hu_u[hu_p[j]] + delta);
+                    set_at(hu_v, j,       hu_v[j] - delta);
+                } else {
+                    set_at(hu_minv, j, hu_minv[j] - delta);
+                }
+                j += 1;
+            }
+            j0 = j1;
+            if hu_p[j0] == 0 { done = 1; }
+        }
+        done2 = 0;
+        while done2 == 0 {
+            j1b = hu_way[j0];
+            set_at(hu_p, j0, hu_p[j1b]);
+            j0  = j1b;
+            if j0 == 0 { done2 = 1; }
+        }
+        row += 1;
+    }
+    hu_cost_total = 0;
+    i = 1;
+    while i <= hu_n {
+        set_at(hu_match, hu_p[i] - 1, i - 1);
+        hu_cost_total += hu_cost[hu_p[i] * 17 + i];
+        i += 1;
+    }
+    return hu_cost_total;
+}
+
+fn hungarian_test() {
+    hungarian_init();
+    hu_set_n(4);
+    // 4×4 cost matrix (0-indexed):
+    // row 0: 9 2 7 8  |  row 1: 6 4 3 7
+    // row 2: 5 8 1 8  |  row 3: 7 6 9 4
+    // Optimal: 0→1(2), 1→0(6), 2→2(1), 3→3(4) → min_cost=13
+    hu_set_cost(0, 0, 9);  hu_set_cost(0, 1, 2);  hu_set_cost(0, 2, 7);  hu_set_cost(0, 3, 8);
+    hu_set_cost(1, 0, 6);  hu_set_cost(1, 1, 4);  hu_set_cost(1, 2, 3);  hu_set_cost(1, 3, 7);
+    hu_set_cost(2, 0, 5);  hu_set_cost(2, 1, 8);  hu_set_cost(2, 2, 1);  hu_set_cost(2, 3, 8);
+    hu_set_cost(3, 0, 7);  hu_set_cost(3, 1, 6);  hu_set_cost(3, 2, 9);  hu_set_cost(3, 3, 4);
+    let cost = hungarian_run();
+    print("hungarian_test n=4 min_cost=" + to_string(cost));
+    print("match[0]=" + to_string(hu_match[0]) + " match[1]=" + to_string(hu_match[1]) + " match[2]=" + to_string(hu_match[2]) + " match[3]=" + to_string(hu_match[3]));
+    return cost;
+}
+
+print("hungarian.hl loaded");

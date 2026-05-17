@@ -2,11 +2,47 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`352`（69 根目录 + 283 内核模块）
-- H-L 总行数：`~103,800`
-- 内核模块：`283`
-- Shell 命令：`835`
-- 最近完成功能迭代：`297`（tarjan + articulation + euler_path）
+- `.hl` 文件：`355`（69 根目录 + 286 内核模块）
+- H-L 总行数：`~104,700`
+- 内核模块：`286`
+- Shell 命令：`850`
+- 最近完成功能迭代：`300`（two_sat + hungarian + hopcroft_karp）
+
+## Iteration 300 — hopcroft_karp.hl：Hopcroft-Karp 二部图最大匹配
+
+- **`bare-kernel/hl/hopcroft_karp.hl`** 新增（~115 行）
+  - Hopcroft-Karp 1973：O(E√V)，BFS 分层 + DFS 多路增广
+  - `hk_adj[l*32+r]` — 左右邻接矩阵，HK_MAX_L=HK_MAX_R=32
+  - `_hk_bfs()` — 从所有自由左顶点出发 BFS 建层次图；遇自由右顶点置 found=1
+  - `_hk_dfs(u)` — DFS 沿层次图增广；回溯更新 match_l/match_r；未增广时设 dist=INF
+  - `hopcroft_karp_run()` — 循环 BFS→DFS 直至无增广路
+  - 测试：4L×4R 交叉边图 → perfect matching size=4
+  - Buffer: 0x1630000
+  - Shell 命令：`hk add <l> <r>  hk run  hk size  hk setnl <nl>  hk setnr <nr>  hk test`
+
+## Iteration 299 — hungarian.hl：匈牙利算法（最优指派）
+
+- **`bare-kernel/hl/hungarian.hl`** 新增（~120 行）
+  - Kuhn-Munkres 1955：O(n³) 对偶势方法（Jonker-Volgenant 风格）
+  - `hu_cost[(i+1)*17+(j+1)]` — 1-indexed n×n 代价矩阵，HU_MAX_N=16
+  - `hu_u[i]`, `hu_v[j]` — 左右对偶势；`hu_p[j]` — 右顶点 j 配对的左顶点
+  - `hungarian_run()` — 逐行处理：BFS-like 扫描更新 minv/way → delta 更新势 → 路径增广
+  - `hu_match[i]` — 0-indexed 结果：左顶点 i 匹配的右顶点
+  - 测试：4×4代价矩阵，最优指派 0→1,1→0,2→2,3→3 → min_cost=13
+  - Buffer: 0x1620000
+  - Shell 命令：`hu set <i> <j> <w>  hu run  hu cost  hu match <i>  hu setn <n>  hu test`
+
+## Iteration 298 — two_sat.hl：2-SAT 可满足性求解
+
+- **`bare-kernel/hl/two_sat.hl`** 新增（~110 行）
+  - Aspvall-Plass-Tarjan 1979：O(V+E) 蕴含图 + Tarjan SCC
+  - 文字节点编码：变量 i 真文字=2i，假文字=2i+1；`_ts_neg(v)` 求反（无 XOR，用奇偶判断）
+  - 子句 (a OR b) → 添加边 neg(a)→b 和 neg(b)→a
+  - SAT 充要条件：无变量与其否定同处一个 SCC
+  - `ts_assign[i]` — 满足赋值：`scc[2i]>scc[2i+1]` 则 xi=true
+  - 测试：3 变量，3 子句 → sat=1，给出一组满足赋值
+  - Buffer: 0x1610000，TS_MAX_N=16
+  - Shell 命令：`ts add <a> <b>  ts run  ts sat  ts assign <i>  ts setn <n>  ts test`
 
 ## Iteration 297 — euler_path.hl：Hierholzer 欧拉路径/回路
 
