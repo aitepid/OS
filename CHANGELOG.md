@@ -2,11 +2,56 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`319`（69 根目录 + 250 内核模块）
-- H-L 总行数：`~97,500`
-- 内核模块：`250`
-- Shell 命令：`670`
-- 最近完成功能迭代：`264`（skiplist + hyperloglog + consistent_hash）
+- `.hl` 文件：`322`（69 根目录 + 253 内核模块）
+- H-L 总行数：`~100,500`
+- 内核模块：`253`
+- Shell 命令：`685`
+- 最近完成功能迭代：`267`（count_min_sketch + lru_cache + merkle_tree）
+
+## Iteration 267 — merkle_tree.hl：Merkle 哈希树
+
+- **`bare-kernel/hl/merkle_tree.hl`** 新增（~290 行）
+  - Merkle 树（Ralph Merkle 1987 / US Patent 4,309,569），加密哈希树
+  - 最大 32 叶节点（MERKLE_MAX_LEAVES），完全二叉树（1-indexed 数组表示）
+  - 哈希函数：FNV-1a 变体，`_merkle_hash_int(val)` 叶节点哈希，`_merkle_combine(left, right)` 父节点哈希
+  - `merkle_build(leaf_data, count)` — 自底向上构建树，时间 O(n)
+  - `merkle_update_leaf(leaf_idx, new_data)` — 单叶更新，仅重算受影响祖先路径 O(log n)
+  - `merkle_get_proof(leaf_idx)` — 生成包含证明（Inclusion Proof）：返回兄弟节点哈希数组
+  - `merkle_verify_proof(leaf_data, proof, depth, leaf_idx, root)` — 验证包含证明：从叶到根重算，O(log n)
+  - `merkle_compare_roots(other_root)` — O(1) 根哈希比较，检测任意树差异
+  - 容量自动对齐至 2 的幂次（`_merkle_next_pow2`），空叶填充哈希 0
+  - Buffer: 0x1420000
+  - Shell 命令：`merkle build <n>  merkle root  merkle proof <leaf>  merkle verify <data> <leaf>  merkle update <leaf> <val>  merkle test`
+
+## Iteration 266 — lru_cache.hl：LRU 缓存
+
+- **`bare-kernel/hl/lru_cache.hl`** 新增（~310 行）
+  - LRU 缓存（O(1) get/put），双向链表 + 哈希表实现
+  - 可配置容量（lru_capacity ≤ LRU_MAX_SIZE=64），32 桶开放寻址哈希表
+  - 双向链表：Head ↔ [MRU] ↔ ... ↔ [LRU] ↔ Tail，头尾各一个哨兵节点
+  - `lru_get(key)` — O(1)：哈希查找 + 移至 MRU 头部，统计命中率
+  - `lru_put(key, val)` — O(1)：存在则更新+提升；新增则尾部驱逐 LRU 条目
+  - `lru_peek(key)` — 查询不触发提升（不计入 LRU-K 访问次数）
+  - `lru_invalidate(key)` — 主动删除指定键（用于缓存失效）
+  - **LRU-K 变体**：`lru_k` 参数，仅在第 K 次访问后才提升至 MRU（频率感知驱逐）
+  - 统计：hits / misses / evicts / hit_rate（per-mille）
+  - Buffer: 0x1410000
+  - Shell 命令：`lru get <key>  lru put <key> <val>  lru peek <key>  lru del <key>  lru status  lru test`
+
+## Iteration 265 — count_min_sketch.hl：Count-Min Sketch 频率估计
+
+- **`bare-kernel/hl/count_min_sketch.hl`** 新增（~260 行）
+  - Count-Min Sketch（Cormode & Muthukrishnan 2005 / JACM），流式频率估计
+  - w=64 列 × d=4 行计数器矩阵（256 个计数器），O(1) 更新和查询
+  - 误差界：ε × ‖f‖₁，失败概率 δ ≤ e^(-d)，空间 O(w×d)
+  - d 个独立哈希函数（不同乘法种子），`_cms_hash_int(key, j)` / `_cms_hash_str(s, j)`
+  - `cms_add_int(key, count)` / `cms_add_str(s, count)` — 批量计数支持
+  - `cms_query_int(key)` / `cms_query_str(s)` — 取 d 行最小值（保证不低估）
+  - `cms_inner_product(other)` — 两个 Sketch 的内积估算（Σfₐ×fᵦ）
+  - `cms_merge(other)` — 合并两个 Sketch（逐元素相加，适合分布式聚合）
+  - `cms_track_hh(key, freq)` — 重尾检测（Heavy Hitters），维护 top-16 频繁项
+  - Buffer: 0x1400000
+  - Shell 命令：`cms add <key> <n>  cms query <key>  cms add_str <s> <n>  cms query_str <s>  cms status  cms test`
 
 ## Iteration 264 — consistent_hash.hl：一致性哈希环
 

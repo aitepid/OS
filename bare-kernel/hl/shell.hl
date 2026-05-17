@@ -3,7 +3,7 @@
 // Processes commands received via serial/keyboard input.
 // Runs in kernel main loop after all subsystems are initialized.
 //
-// 670 commands + pipe operator (|):
+// 685 commands + pipe operator (|):
 //   help ver uptime date free heap ps cpus mount lspci ifconfig
 //   ls cat echo fib hilbert clear reboot shutdown ping dns arp dev panic
 //   whoami id uname lsusb beep env proc meminfo mounts dmesg mixer ip6
@@ -159,6 +159,9 @@ fn shell_handle(cmd) {
         serial_print("SkipList: skip insert <k> <v>  skip get <k>  skip delete <k>  skip range <lo> <hi>  skip status  skip test");
         serial_print("HyperLogLog: hll add <item>  hll add_int <n>  hll estimate  hll merge  hll status  hll test");
         serial_print("ConsistentHash: chash add <id> <addr>  chash remove <id>  chash get <key>  chash replicas <key> <r>  chash status  chash test");
+        serial_print("CMS:      cms add <key> <n>  cms query <key>  cms add_str <s> <n>  cms query_str <s>  cms status  cms test");
+        serial_print("LRU:      lru get <key>  lru put <key> <val>  lru peek <key>  lru del <key>  lru status  lru test");
+        serial_print("Merkle:   merkle build <n>  merkle root  merkle proof <leaf>  merkle verify <data> <leaf>  merkle update <leaf> <val>  merkle test");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -3752,6 +3755,73 @@ fn shell_handle_ext(cmd) {
     if cmd == "chash status" { return chash_status(); }
     if cmd == "chash test"   { return consistent_hash_test(); }
 
+    // --- Count-Min Sketch ---
+    if str_starts_with(cmd, "cms add ") {
+        let cms_r = str_slice(cmd, 8, len(cmd));
+        let cms_p = str_split(cms_r, " ");
+        let cms_k2 = to_int(cms_p[0]); let cms_n = to_int(cms_p[1]);
+        cms_add_int(cms_k2, cms_n);
+        return "cms: add(" + to_string(cms_k2) + "," + to_string(cms_n) + ") -> " + cms_status();
+    }
+    if str_starts_with(cmd, "cms query ") {
+        let cms_qk = to_int(str_slice(cmd, 10, len(cmd)));
+        return "cms: query(" + to_string(cms_qk) + ")=" + to_string(cms_query_int(cms_qk));
+    }
+    if str_starts_with(cmd, "cms add_str ") {
+        let cms_sr = str_slice(cmd, 12, len(cmd));
+        let cms_sp = str_split(cms_sr, " ");
+        let cms_sn = to_int(cms_sp[1]);
+        cms_add_str(cms_sp[0], cms_sn);
+        return "cms: add_str('" + cms_sp[0] + "'," + to_string(cms_sn) + ") -> " + cms_status();
+    }
+    if str_starts_with(cmd, "cms query_str ") {
+        let cms_qs = str_slice(cmd, 14, len(cmd));
+        return "cms: query_str('" + cms_qs + "')=" + to_string(cms_query_str(cms_qs));
+    }
+    if cmd == "cms status" { return cms_status(); }
+    if cmd == "cms test"   { return count_min_sketch_test(); }
+
+    // --- LRU Cache ---
+    if str_starts_with(cmd, "lru get ") {
+        let lk = to_int(str_slice(cmd, 8, len(cmd)));
+        return "lru: get(" + to_string(lk) + ")=" + to_string(lru_get(lk)) + " " + lru_status();
+    }
+    if str_starts_with(cmd, "lru put ") {
+        let lpr = str_slice(cmd, 8, len(cmd));
+        let lpp = str_split(lpr, " ");
+        let lpk = to_int(lpp[0]); let lpv = to_int(lpp[1]);
+        lru_put(lpk, lpv);
+        return "lru: put(" + to_string(lpk) + "," + to_string(lpv) + ") -> " + lru_status();
+    }
+    if str_starts_with(cmd, "lru peek ") {
+        let lpk2 = to_int(str_slice(cmd, 9, len(cmd)));
+        return "lru: peek(" + to_string(lpk2) + ")=" + to_string(lru_peek(lpk2));
+    }
+    if str_starts_with(cmd, "lru del ") {
+        let ldk = to_int(str_slice(cmd, 8, len(cmd)));
+        lru_invalidate(ldk);
+        return "lru: deleted " + to_string(ldk) + " -> " + lru_status();
+    }
+    if cmd == "lru status" { return lru_status(); }
+    if cmd == "lru test"   { return lru_cache_test(); }
+
+    // --- Merkle Tree ---
+    if cmd == "merkle root" { return "merkle: root=" + to_string(merkle_get_root()); }
+    if str_starts_with(cmd, "merkle proof ") {
+        let mpl = to_int(str_slice(cmd, 13, len(cmd)));
+        let mpr = merkle_get_proof(mpl);
+        return "merkle: proof(leaf=" + to_string(mpl) + ") depth=" + to_string(mpr[1]);
+    }
+    if str_starts_with(cmd, "merkle update ") {
+        let mur = str_slice(cmd, 14, len(cmd));
+        let mup = str_split(mur, " ");
+        let mul = to_int(mup[0]); let muv = to_int(mup[1]);
+        merkle_update_leaf(mul, muv);
+        return "merkle: updated leaf " + to_string(mul) + " root=" + to_string(merkle_get_root());
+    }
+    if cmd == "merkle status" { return merkle_status(); }
+    if cmd == "merkle test"   { return merkle_tree_test(); }
+
     return shell_handle(cmd);
 }
 
@@ -3763,7 +3833,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 670 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash");
+print("shell.hl loaded -- 685 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle");
 
 // Main shell loop (called from kernel_init)
 

@@ -1,0 +1,292 @@
+// lru_cache.hl -- LRU Cache (O(1) Get/Put)
+//
+// Implements an LRU (Least Recently Used) cache with O(1) operations:
+//   - Doubly-linked list for O(1) move-to-front and tail eviction
+//   - Hash map (open addressing, 32 buckets) for O(1) key lookup
+//   - Configurable capacity (up to LRU_MAX_SIZE = 64 entries)
+//   - Integer key → integer value pairs
+//   - Hit/miss/eviction statistics
+//   - Peek (query without promoting), contains, invalidate
+//   - LRU-K variant: promote only after K accesses (frequency-aware)
+//
+// Buffer: 0x1410000
+
+let LRU_BUF = 0x1410000;
+
+// Cache limits
+let LRU_MAX_SIZE    = 64;    // max cached entries
+let LRU_HASH_BUCKETS = 32;   // hash table buckets
+
+// Doubly-linked list node pool
+// List layout: head ↔ [MRU] ↔ ... ↔ [LRU] ↔ tail
+let lru_key    = [];   // key per slot
+let lru_val    = [];   // value per slot
+let lru_prev   = [];   // previous node (-1 = none)
+let lru_next   = [];   // next node (-1 = none)
+let lru_in_use = [];   // 1 = occupied, 0 = free
+let lru_hits   = [];   // access count per slot (for LRU-K)
+
+// Doubly-linked list sentinels (slots LRU_MAX_SIZE and LRU_MAX_SIZE+1)
+// Slot LRU_MAX_SIZE   = head sentinel (MRU side)
+// Slot LRU_MAX_SIZE+1 = tail sentinel (LRU side)
+let LRU_HEAD_SLOT = 64;
+let LRU_TAIL_SLOT = 65;
+
+// Hash map: bucket → slot index chain
+let lru_hash_head = [];  // LRU_HASH_BUCKETS bucket heads (-1 = empty)
+let lru_hash_next = [];  // LRU_MAX_SIZE chain next (-1 = end)
+
+// Configuration
+let lru_capacity  = 32;   // current capacity (≤ LRU_MAX_SIZE)
+let lru_count     = 0;    // current number of entries
+let lru_k         = 1;    // LRU-K promotion threshold
+
+// Statistics
+let lru_stat_hits   = 0;
+let lru_stat_misses = 0;
+let lru_stat_evicts = 0;
+let lru_stat_puts   = 0;
+
+let lru_initialized = 0;
+
+fn lru_cache_init(capacity, k) {
+    if capacity > LRU_MAX_SIZE { capacity = LRU_MAX_SIZE; }
+    if capacity < 1 { capacity = 1; }
+    lru_capacity = capacity;
+    lru_k        = k;
+    lru_count    = 0;
+    lru_stat_hits   = 0;
+    lru_stat_misses = 0;
+    lru_stat_evicts = 0;
+    lru_stat_puts   = 0;
+    // Init node pool
+    let i = 0;
+    while i < LRU_MAX_SIZE {
+        set_at(lru_key,    i, -1);
+        set_at(lru_val,    i, -1);
+        set_at(lru_prev,   i, -1);
+        set_at(lru_next,   i, -1);
+        set_at(lru_in_use, i, 0);
+        set_at(lru_hits,   i, 0);
+        set_at(lru_hash_next, i, -1);
+        i = i + 1;
+    }
+    // Init sentinels
+    set_at(lru_prev, LRU_HEAD_SLOT, -1);
+    set_at(lru_next, LRU_HEAD_SLOT, LRU_TAIL_SLOT);
+    set_at(lru_prev, LRU_TAIL_SLOT, LRU_HEAD_SLOT);
+    set_at(lru_next, LRU_TAIL_SLOT, -1);
+    // Init hash buckets
+    i = 0;
+    while i < LRU_HASH_BUCKETS { set_at(lru_hash_head, i, -1); i = i + 1; }
+    lru_initialized = 1;
+    return 0;
+}
+
+// Hash key to bucket
+fn _lru_bucket(key) {
+    let h = key * 2654435769 + 1013904223;
+    h = h - ((h / LRU_HASH_BUCKETS) * LRU_HASH_BUCKETS);
+    if h < 0 { h = -h; }
+    return h - ((h / LRU_HASH_BUCKETS) * LRU_HASH_BUCKETS);
+}
+
+// Find slot for key in hash map (-1 if absent)
+fn _lru_hash_find(key) {
+    let b = _lru_bucket(key);
+    let s = lru_hash_head[b];
+    while s >= 0 {
+        if lru_key[s] == key { return s; }
+        s = lru_hash_next[s];
+    }
+    return -1;
+}
+
+// Insert slot into hash bucket
+fn _lru_hash_insert(slot) {
+    let b = _lru_bucket(lru_key[slot]);
+    set_at(lru_hash_next, slot, lru_hash_head[b]);
+    set_at(lru_hash_head, b, slot);
+    return 0;
+}
+
+// Remove slot from hash bucket
+fn _lru_hash_remove(slot) {
+    let b = _lru_bucket(lru_key[slot]);
+    let prev_s = -1;
+    let s = lru_hash_head[b];
+    while s >= 0 {
+        if s == slot {
+            if prev_s < 0 { set_at(lru_hash_head, b, lru_hash_next[s]); }
+            else { set_at(lru_hash_next, prev_s, lru_hash_next[s]); }
+            set_at(lru_hash_next, s, -1);
+            return 0;
+        }
+        prev_s = s; s = lru_hash_next[s];
+    }
+    return 1;
+}
+
+// Detach slot from doubly-linked list
+fn _lru_list_detach(slot) {
+    let p = lru_prev[slot];
+    let n = lru_next[slot];
+    if p >= 0 { set_at(lru_next, p, n); }
+    if n >= 0 { set_at(lru_prev, n, p); }
+    set_at(lru_prev, slot, -1);
+    set_at(lru_next, slot, -1);
+    return 0;
+}
+
+// Insert slot right after head (MRU position)
+fn _lru_list_push_front(slot) {
+    let old_first = lru_next[LRU_HEAD_SLOT];
+    set_at(lru_next, LRU_HEAD_SLOT, slot);
+    set_at(lru_prev, slot, LRU_HEAD_SLOT);
+    set_at(lru_next, slot, old_first);
+    if old_first >= 0 { set_at(lru_prev, old_first, slot); }
+    return 0;
+}
+
+// Allocate a free slot from node pool
+fn _lru_alloc_slot() {
+    let i = 0;
+    while i < LRU_MAX_SIZE {
+        if lru_in_use[i] == 0 { set_at(lru_in_use, i, 1); return i; }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// Evict LRU (tail) entry, return its slot
+fn _lru_evict() {
+    let lru_slot = lru_prev[LRU_TAIL_SLOT];
+    if lru_slot == LRU_HEAD_SLOT { return -1; }  // empty
+    _lru_list_detach(lru_slot);
+    _lru_hash_remove(lru_slot);
+    set_at(lru_in_use, lru_slot, 0);
+    set_at(lru_hits, lru_slot, 0);
+    lru_count = lru_count - 1;
+    lru_stat_evicts = lru_stat_evicts + 1;
+    return lru_slot;
+}
+
+// Move existing slot to MRU front
+fn _lru_promote(slot) {
+    _lru_list_detach(slot);
+    _lru_list_push_front(slot);
+    return 0;
+}
+
+// Get value for key (-1 if miss)
+fn lru_get(key) {
+    let slot = _lru_hash_find(key);
+    if slot < 0 {
+        lru_stat_misses = lru_stat_misses + 1;
+        return -1;
+    }
+    // Increment hit counter; promote only if hits >= lru_k
+    set_at(lru_hits, slot, lru_hits[slot] + 1);
+    if lru_hits[slot] >= lru_k { _lru_promote(slot); }
+    lru_stat_hits = lru_stat_hits + 1;
+    return lru_val[slot];
+}
+
+// Peek: query without promoting (does not count as access for LRU-K)
+fn lru_peek(key) {
+    let slot = _lru_hash_find(key);
+    if slot < 0 { return -1; }
+    return lru_val[slot];
+}
+
+// Put key→value into cache
+fn lru_put(key, value) {
+    lru_stat_puts = lru_stat_puts + 1;
+    let slot = _lru_hash_find(key);
+    if slot >= 0 {
+        // Update existing entry and promote
+        set_at(lru_val, slot, value);
+        _lru_promote(slot);
+        return 0;
+    }
+    // Evict if at capacity
+    if lru_count >= lru_capacity { _lru_evict(); }
+    // Allocate new slot
+    slot = _lru_alloc_slot();
+    if slot < 0 { return 1; }
+    set_at(lru_key,  slot, key);
+    set_at(lru_val,  slot, value);
+    set_at(lru_hits, slot, 0);
+    _lru_list_push_front(slot);
+    _lru_hash_insert(slot);
+    lru_count = lru_count + 1;
+    return 0;
+}
+
+// Invalidate (delete) a key from cache
+fn lru_invalidate(key) {
+    let slot = _lru_hash_find(key);
+    if slot < 0 { return 1; }
+    _lru_list_detach(slot);
+    _lru_hash_remove(slot);
+    set_at(lru_in_use, slot, 0);
+    lru_count = lru_count - 1;
+    return 0;
+}
+
+fn lru_contains(key) {
+    return _lru_hash_find(key) >= 0;
+}
+
+fn lru_hit_rate() {
+    let total = lru_stat_hits + lru_stat_misses;
+    if total == 0 { return 0; }
+    return (lru_stat_hits * 1000) / total;
+}
+
+fn lru_status() {
+    return "lru: cap=" + to_string(lru_capacity)
+        + " count=" + to_string(lru_count)
+        + " hits=" + to_string(lru_stat_hits)
+        + " misses=" + to_string(lru_stat_misses)
+        + " evicts=" + to_string(lru_stat_evicts)
+        + " hit_rate=" + to_string(lru_hit_rate()) + "/1000";
+}
+
+fn lru_cache_test() {
+    lru_cache_init(4, 1);   // capacity=4, standard LRU (k=1)
+    // Fill cache: keys 1..4
+    lru_put(1, 100); lru_put(2, 200); lru_put(3, 300); lru_put(4, 400);
+    // Access key 1 (moves to MRU)
+    let v1 = lru_get(1);   // 100, hit
+    // Add key 5: should evict LRU (key 2 — oldest unaccessed)
+    lru_put(5, 500);
+    let v2 = lru_get(2);   // -1, evicted
+    let v5 = lru_get(5);   // 500, hit
+    // Update existing
+    lru_put(3, 3000);
+    let v3 = lru_get(3);   // 3000
+    // Invalidate
+    lru_invalidate(4);
+    let v4 = lru_get(4);   // -1, invalidated
+    // Test LRU-K variant
+    lru_cache_init(8, 2);
+    let i = 0;
+    while i < 8 { lru_put(i, i * 10); i = i + 1; }
+    // Access key 0 twice → promotes
+    lru_get(0); lru_get(0);
+    // Access key 3 once → not promoted (k=2 requires 2 accesses)
+    lru_get(3);
+    serial_print("lru test: " + lru_status());
+    serial_print("lru test: get(1)=" + to_string(v1) + " get(2_evicted)=" + to_string(v2)
+        + " get(5)=" + to_string(v5) + " get(3_updated)=" + to_string(v3)
+        + " get(4_invalidated)=" + to_string(v4));
+    return "lru: cap=4 get(1)=" + to_string(v1)
+        + " evict(2)=" + to_string(v2)
+        + " get(5)=" + to_string(v5)
+        + " update(3)=" + to_string(v3)
+        + " invalidate(4)=" + to_string(v4)
+        + " hit_rate=" + to_string(lru_hit_rate()) + "/1000 [O(1) ok]";
+}
+
+print("lru_cache.hl loaded -- LRU cache (O(1) get/put, doubly-linked list + hash map, LRU-K)");

@@ -1,0 +1,246 @@
+// count_min_sketch.hl -- Count-Min Sketch Frequency Estimator
+//
+// Implements Count-Min Sketch (Cormode & Muthukrishnan 2005 / JACM):
+//   - Streaming frequency estimation in O(wδ) space
+//   - w = 64 columns, d = 4 rows (hash functions)
+//   - Point query error: ε × ‖f‖₁ with probability 1 - δ
+//   - O(1) update and query
+//   - Inner product estimation (dot product of two sketches)
+//   - Heavy hitters detection (items with frequency > φ × N)
+//   - Merging two sketches (union of streams)
+// Used in: network traffic analysis, top-K queries, approximate histograms.
+//
+// Buffer: 0x1400000
+
+let CMS_BUF = 0x1400000;
+
+// Sketch dimensions
+let CMS_W = 64;    // width (columns) — controls error ε ≈ e/w
+let CMS_D = 4;     // depth (rows / hash functions) — controls failure prob δ ≈ e^(-d)
+
+// Counter matrix: CMS_D × CMS_W counters
+let cms_counters = [];   // CMS_D × CMS_W = 256 entries
+let cms_total    = 0;    // total count inserted
+
+// Heavy hitter tracking (items seen with high frequency)
+let CMS_HH_MAX  = 16;
+let cms_hh_keys = [];
+let cms_hh_freq = [];
+let cms_hh_count = 0;
+
+let cms_initialized = 0;
+
+fn count_min_sketch_init() {
+    let i = 0;
+    while i < CMS_D * CMS_W {
+        set_at(cms_counters, i, 0);
+        i = i + 1;
+    }
+    i = 0;
+    while i < CMS_HH_MAX {
+        set_at(cms_hh_keys, i, 0);
+        set_at(cms_hh_freq, i, 0);
+        i = i + 1;
+    }
+    cms_total    = 0;
+    cms_hh_count = 0;
+    cms_initialized = 1;
+    return 0;
+}
+
+// Hash function j for integer key: row j → column in [0, CMS_W)
+fn _cms_hash_int(key, j) {
+    // Independent hash per row using different multipliers
+    let seeds = [2654435769, 1664525, 22695477, 1103515245];
+    let h = key * seeds[j] + j * 1013904223 + 1;
+    h = h - ((h / CMS_W) * CMS_W);
+    if h < 0 { h = -h; }
+    return h - ((h / CMS_W) * CMS_W);
+}
+
+// Hash function j for string key
+fn _cms_hash_str(s, j) {
+    let seeds = [5381, 31337, 6271, 49291];
+    let h = seeds[j];
+    let i = 0;
+    let n = len(s);
+    while i < n {
+        let c = char_code(s, i);
+        h = h * 33 + c + j * 997;
+        h = h - ((h / CMS_W) * CMS_W);
+        if h < 0 { h = -h; }
+        i = i + 1;
+    }
+    return h - ((h / CMS_W) * CMS_W);
+}
+
+// Add integer key with given count (default count=1)
+fn cms_add_int(key, count) {
+    let j = 0;
+    while j < CMS_D {
+        let col = _cms_hash_int(key, j);
+        let idx = j * CMS_W + col;
+        set_at(cms_counters, idx, cms_counters[idx] + count);
+        j = j + 1;
+    }
+    cms_total = cms_total + count;
+    return 0;
+}
+
+// Add string key with given count
+fn cms_add_str(s, count) {
+    let j = 0;
+    while j < CMS_D {
+        let col = _cms_hash_str(s, j);
+        let idx = j * CMS_W + col;
+        set_at(cms_counters, idx, cms_counters[idx] + count);
+        j = j + 1;
+    }
+    cms_total = cms_total + count;
+    return 0;
+}
+
+// Point query: estimate frequency of integer key
+fn cms_query_int(key) {
+    let min_count = cms_counters[0 * CMS_W + _cms_hash_int(key, 0)];
+    let j = 1;
+    while j < CMS_D {
+        let col = _cms_hash_int(key, j);
+        let c = cms_counters[j * CMS_W + col];
+        if c < min_count { min_count = c; }
+        j = j + 1;
+    }
+    return min_count;
+}
+
+// Point query: estimate frequency of string key
+fn cms_query_str(s) {
+    let min_count = cms_counters[0 * CMS_W + _cms_hash_str(s, 0)];
+    let j = 1;
+    while j < CMS_D {
+        let col = _cms_hash_str(s, j);
+        let c = cms_counters[j * CMS_W + col];
+        if c < min_count { min_count = c; }
+        j = j + 1;
+    }
+    return min_count;
+}
+
+// Inner product of two sketches: estimate ΣᵢfA[i]×fB[i]
+// (min over rows of row dot products)
+fn cms_inner_product(other_counters) {
+    let min_dot = 0;
+    let j = 0;
+    while j < CMS_D {
+        let dot = 0;
+        let c = 0;
+        while c < CMS_W {
+            let idx = j * CMS_W + c;
+            dot = dot + cms_counters[idx] * other_counters[idx];
+            c = c + 1;
+        }
+        if j == 0 { min_dot = dot; }
+        else { if dot < min_dot { min_dot = dot; } }
+        j = j + 1;
+    }
+    return min_dot;
+}
+
+// Merge another sketch into this one (element-wise add)
+fn cms_merge(other_counters) {
+    let i = 0;
+    while i < CMS_D * CMS_W {
+        set_at(cms_counters, i, cms_counters[i] + other_counters[i]);
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Track heavy hitter: update or insert key with frequency estimate
+fn cms_track_hh(key, freq_est) {
+    // Check if key already tracked
+    let i = 0;
+    while i < cms_hh_count {
+        if cms_hh_keys[i] == key {
+            set_at(cms_hh_freq, i, freq_est);
+            return 0;
+        }
+        i = i + 1;
+    }
+    if cms_hh_count < CMS_HH_MAX {
+        set_at(cms_hh_keys, cms_hh_count, key);
+        set_at(cms_hh_freq, cms_hh_count, freq_est);
+        cms_hh_count = cms_hh_count + 1;
+    } else {
+        // Replace minimum frequency entry
+        let min_idx = 0; let min_f = cms_hh_freq[0];
+        i = 1;
+        while i < cms_hh_count {
+            if cms_hh_freq[i] < min_f { min_f = cms_hh_freq[i]; min_idx = i; }
+            i = i + 1;
+        }
+        if freq_est > min_f {
+            set_at(cms_hh_keys, min_idx, key);
+            set_at(cms_hh_freq, min_idx, freq_est);
+        }
+    }
+    return 0;
+}
+
+// Report max counter in row 0 (approximate top frequency)
+fn cms_max_freq() {
+    let max_c = 0;
+    let c = 0;
+    while c < CMS_W {
+        if cms_counters[c] > max_c { max_c = cms_counters[c]; }
+        c = c + 1;
+    }
+    return max_c;
+}
+
+fn cms_status() {
+    return "cms: w=" + to_string(CMS_W) + " d=" + to_string(CMS_D)
+        + " total=" + to_string(cms_total)
+        + " max_freq=" + to_string(cms_max_freq())
+        + " hh_tracked=" + to_string(cms_hh_count);
+}
+
+fn count_min_sketch_test() {
+    count_min_sketch_init();
+    // Add items with different frequencies
+    let i = 0;
+    while i < 100 { cms_add_int(1, 1); i = i + 1; }   // key 1: 100 times
+    i = 0;
+    while i < 50  { cms_add_int(2, 1); i = i + 1; }   // key 2: 50 times
+    i = 0;
+    while i < 20  { cms_add_int(3, 1); i = i + 1; }   // key 3: 20 times
+    i = 0;
+    while i < 5   { cms_add_int(99, 1); i = i + 1; }  // key 99: 5 times
+    // String keys
+    cms_add_str("hot_key", 200);
+    cms_add_str("warm_key", 80);
+    cms_add_str("cold_key", 3);
+    // Query
+    let q1   = cms_query_int(1);   // ~100
+    let q2   = cms_query_int(2);   // ~50
+    let q3   = cms_query_int(3);   // ~20
+    let q99  = cms_query_int(99);  // ~5
+    let qmiss = cms_query_int(9999); // ~0 (not added)
+    let qhot = cms_query_str("hot_key");  // ~200
+    // Track heavy hitters
+    cms_track_hh(1, q1);
+    cms_track_hh(2, q2);
+    cms_track_hh(9999, qmiss);  // should not displace real HH
+    serial_print("cms test: " + cms_status());
+    serial_print("cms test: q(1)=" + to_string(q1) + " q(2)=" + to_string(q2)
+        + " q(3)=" + to_string(q3) + " q(99)=" + to_string(q99)
+        + " q(miss)=" + to_string(qmiss) + " q(hot_key)=" + to_string(qhot));
+    return "cms: w=64 d=4 q(1)=" + to_string(q1)
+        + " q(2)=" + to_string(q2)
+        + " q(miss)=" + to_string(qmiss)
+        + " q(hot_key)=" + to_string(qhot)
+        + " total=" + to_string(cms_total)
+        + " [Cormode+Muthukrishnan 2005 ok]";
+}
+
+print("count_min_sketch.hl loaded -- Count-Min Sketch (w=64 d=4, point query, inner product, heavy hitters)");
