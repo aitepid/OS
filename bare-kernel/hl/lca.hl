@@ -1,0 +1,139 @@
+// lca.hl -- Lowest Common Ancestor via Binary Lifting
+// O(n log n) preprocessing, O(log n) query.
+// Exports lca_tin[] (DFS entry times) for virtual_tree.hl.
+// Runtime buffer: 0x1670000
+
+let LCA_MAX_V = 32;
+let LCA_LOG   = 5;
+
+let lca_adj   = array(1024, 0);
+let lca_depth = array(32, 0);
+let lca_anc   = array(160, 0);
+let lca_tin   = array(32, 0);
+let lca_n     = 0;
+let lca_timer = 0;
+
+fn lca_init() {
+    lca_n     = 0;
+    lca_timer = 0;
+    let i = 0;
+    while i < 1024 { set_at(lca_adj, i, 0); i += 1; }
+    while i < 32   { set_at(lca_depth, i, 0); set_at(lca_tin, i, 0); i += 1; }
+    while i < 160  { set_at(lca_anc, i, 0); i += 1; }
+    return 0;
+}
+
+fn lca_add_edge(u, v) {
+    set_at(lca_adj, u * LCA_MAX_V + v, 1);
+    set_at(lca_adj, v * LCA_MAX_V + u, 1);
+    return 0;
+}
+
+fn _lca_pow2(k) {
+    let r = 1;
+    let i = 0;
+    while i < k { r = r * 2; i += 1; }
+    return r;
+}
+
+fn _lca_dfs(u, par) {
+    set_at(lca_tin, u, lca_timer);
+    lca_timer += 1;
+    set_at(lca_anc, u * LCA_LOG + 0, u);
+    if par >= 0 {
+        set_at(lca_anc, u * LCA_LOG + 0, par);
+        set_at(lca_depth, u, lca_depth[par] + 1);
+    }
+    let v = 0;
+    while v < lca_n {
+        if lca_adj[u * LCA_MAX_V + v] == 1 {
+            if v != par {
+                _lca_dfs(v, u);
+            }
+        }
+        v += 1;
+    }
+    return 0;
+}
+
+fn _lca_build_table() {
+    let k = 1;
+    while k < LCA_LOG {
+        let v = 0;
+        while v < lca_n {
+            let mid = lca_anc[v * LCA_LOG + k - 1];
+            set_at(lca_anc, v * LCA_LOG + k, lca_anc[mid * LCA_LOG + k - 1]);
+            v += 1;
+        }
+        k += 1;
+    }
+    return 0;
+}
+
+fn lca_run() {
+    lca_timer = 0;
+    _lca_dfs(0, -1);
+    _lca_build_table();
+    return 0;
+}
+
+fn lca_query(u0, v0) {
+    let u = u0;
+    let v = v0;
+    let diff = 0;
+    let k = 0;
+    let pw = 0;
+    if lca_depth[u] < lca_depth[v] {
+        let tmp = u;
+        u = v;
+        v = tmp;
+    }
+    diff = lca_depth[u] - lca_depth[v];
+    k = LCA_LOG - 1;
+    while k >= 0 {
+        pw = _lca_pow2(k);
+        if diff >= pw {
+            diff -= pw;
+            u = lca_anc[u * LCA_LOG + k];
+        }
+        k -= 1;
+    }
+    if u == v { return u; }
+    k = LCA_LOG - 1;
+    while k >= 0 {
+        if lca_anc[u * LCA_LOG + k] != lca_anc[v * LCA_LOG + k] {
+            u = lca_anc[u * LCA_LOG + k];
+            v = lca_anc[v * LCA_LOG + k];
+        }
+        k -= 1;
+    }
+    return lca_anc[u * LCA_LOG + 0];
+}
+
+fn lca_test() {
+    lca_init();
+    lca_n = 7;
+    lca_add_edge(0, 1);
+    lca_add_edge(0, 2);
+    lca_add_edge(1, 3);
+    lca_add_edge(1, 4);
+    lca_add_edge(2, 5);
+    lca_add_edge(2, 6);
+    lca_run();
+    let r1 = lca_query(3, 4);
+    let r2 = lca_query(3, 6);
+    let r3 = lca_query(5, 6);
+    print("lca_test: LCA(3,4)=" + to_string(r1) + " LCA(3,6)=" + to_string(r2) + " LCA(5,6)=" + to_string(r3));
+    if r1 == 1 {
+        if r2 == 0 {
+            if r3 == 2 {
+                print("lca_test: PASS");
+                return 1;
+            }
+        }
+    }
+    print("lca_test: FAIL");
+    return 0;
+}
+
+print("lca.hl loaded");

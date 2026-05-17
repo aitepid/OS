@@ -2,11 +2,47 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`358`（69 根目录 + 289 内核模块）
-- H-L 总行数：`~105,500`
-- 内核模块：`289`
-- Shell 命令：`865`
-- 最近完成功能迭代：`303`（min_cost_flow + centroid + heavy_light）
+- `.hl` 文件：`361`（72 根目录 + 292 内核模块）
+- H-L 总行数：`~106,500`
+- 内核模块：`292`
+- Shell 命令：`880`
+- 最近完成功能迭代：`306`（lca + virtual_tree + dominator）
+
+## Iteration 306 — dominator.hl：支配树
+
+- **`bare-kernel/hl/dominator.hl`** 新增（~110 行）
+  - Cooper et al. 2001 迭代算法：RPO 序 + 固定点迭代，O(n²)
+  - `_dom_build_rpo()` — 后序 DFS + 原地逆置 → RPO 顺序；`dom_rpo_idx[v]` = v 的 RPO 位置
+  - `_dom_intersect(b1, b2)` — 沿 idom 链爬升直到 b1==b2，返回两节点在支配树中最近公共祖先
+  - 固定点循环：对每个 RPO 非入口节点，对所有已确定 idom 的前驱取 intersect，有变化则 changed=1
+  - `dom_idom[v]` — v 的直接支配节点（入口节点设为 -1）
+  - 测试：5 顶点 CFG（0→1,0→2,1→3,2→3,3→4）→ idom=[−1,0,0,0,3]
+  - Buffer: 0x1690000，DOM_MAX_V=16
+  - Shell 命令：`dom add <u> <v>  dom run  dom idom <v>  dom setn <n>  dom test`
+
+## Iteration 305 — virtual_tree.hl：虚树构造
+
+- **`bare-kernel/hl/virtual_tree.hl`** 新增（~110 行）
+  - 给定 k 个关键顶点，压缩建树（关键点 + 相邻对 LCA）O(k²)
+  - 收集关键顶点 → 两两求 LCA 补充虚节点 → 按 lca_tin[] 排序 → O(k²) 确定父节点
+  - `_vt_in_nodes(v)` — 去重；`_vt_sort_tin()` — 插入排序（done-flag 替代 break）
+  - 父节点查找：对每个节点 v，遍历所有节点 w，若 `lca_query(v,w)==w` 则 w 是 v 的祖先，取深度最大者
+  - `vt_par_of(v)` — 返回 v 在虚树中的父节点（-1=根）
+  - 测试：7 节点树，关键点 {3,5,6} → nn=5，par(3)=1，par(5)=2，par(6)=2
+  - Buffer: 0x1680000，VT_MAX_KEY=16，VT_MAX_NODE=32
+  - Shell 命令：`vt add <v>  vt build  vt par <v>  vt test`
+
+## Iteration 304 — lca.hl：最近公共祖先（倍增）
+
+- **`bare-kernel/hl/lca.hl`** 新增（~100 行）
+  - 倍增预处理 O(n log n)，查询 O(log n)；为 virtual_tree.hl 导出 lca_tin[]
+  - `_lca_dfs(u, par)` — 记录 DFS 入时戳 tin、深度 depth、0 阶祖先 anc[][0]；根节点自环
+  - `_lca_build_table()` — 倍增填表：`anc[v][k] = anc[anc[v][k-1]][k-1]`
+  - `lca_query(u,v)` — 深度对齐（逐位提升）→ 同时提升两点至 LCA 下方 → 取 anc[][0]
+  - LCA_MAX_V=32，LCA_LOG=5（支持最多 32 个节点深度 ≤ 32 的树）
+  - 测试：7 节点完全二叉树，LCA(3,4)=1，LCA(3,6)=0，LCA(5,6)=2
+  - Buffer: 0x1670000
+  - Shell 命令：`lca add <u> <v>  lca run  lca query <u> <v>  lca setn <n>  lca test`
 
 ## Iteration 303 — heavy_light.hl：重链剖分（HLD）
 

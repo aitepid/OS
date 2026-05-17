@@ -1,0 +1,149 @@
+// dominator.hl -- Dominator Tree (Cooper et al. 2001, iterative RPO)
+// O(n^2) iterative fixed-point over reverse post-order.
+// DOM_MAX_V=16. dom_idom[v] = immediate dominator.
+// Runtime buffer: 0x1690000
+
+let DOM_MAX_V  = 16;
+
+let dom_adj    = array(256, 0);
+let dom_radj   = array(256, 0);
+let dom_idom   = array(16, -1);
+let dom_rpo    = array(16, 0);
+let dom_rpo_idx = array(16, -1);
+let dom_n      = 0;
+let dom_rpo_n  = 0;
+let dom_visited = array(16, 0);
+
+fn dom_init() {
+    dom_n     = 0;
+    dom_rpo_n = 0;
+    let i = 0;
+    while i < 256 { set_at(dom_adj, i, 0); set_at(dom_radj, i, 0); i += 1; }
+    while i < 16  {
+        set_at(dom_idom, i, -1);
+        set_at(dom_rpo, i, 0);
+        set_at(dom_rpo_idx, i, -1);
+        set_at(dom_visited, i, 0);
+        i += 1;
+    }
+    return 0;
+}
+
+fn dom_add_edge(u, v) {
+    set_at(dom_adj,  u * DOM_MAX_V + v, 1);
+    set_at(dom_radj, v * DOM_MAX_V + u, 1);
+    return 0;
+}
+
+fn _dom_dfs_post(u) {
+    set_at(dom_visited, u, 1);
+    let v = 0;
+    while v < dom_n {
+        if dom_adj[u * DOM_MAX_V + v] == 1 {
+            if dom_visited[v] == 0 {
+                _dom_dfs_post(v);
+            }
+        }
+        v += 1;
+    }
+    set_at(dom_rpo, dom_rpo_n, u);
+    dom_rpo_n += 1;
+    return 0;
+}
+
+fn _dom_build_rpo() {
+    _dom_dfs_post(0);
+    let i = 0;
+    let j = dom_rpo_n - 1;
+    while i < j {
+        let tmp = dom_rpo[i];
+        set_at(dom_rpo, i, dom_rpo[j]);
+        set_at(dom_rpo, j, tmp);
+        i += 1;
+        j -= 1;
+    }
+    i = 0;
+    while i < dom_rpo_n {
+        set_at(dom_rpo_idx, dom_rpo[i], i);
+        i += 1;
+    }
+    return 0;
+}
+
+fn _dom_intersect(b1, b2) {
+    let f1 = b1;
+    let f2 = b2;
+    while f1 != f2 {
+        while dom_rpo_idx[f1] > dom_rpo_idx[f2] {
+            f1 = dom_idom[f1];
+        }
+        while dom_rpo_idx[f2] > dom_rpo_idx[f1] {
+            f2 = dom_idom[f2];
+        }
+    }
+    return f1;
+}
+
+fn dom_run() {
+    _dom_build_rpo();
+    set_at(dom_idom, dom_rpo[0], dom_rpo[0]);
+    let changed = 1;
+    while changed == 1 {
+        changed = 0;
+        let i = 1;
+        while i < dom_rpo_n {
+            let b = dom_rpo[i];
+            let new_idom = -1;
+            let p = 0;
+            while p < dom_n {
+                if dom_radj[b * DOM_MAX_V + p] == 1 {
+                    if dom_idom[p] >= 0 {
+                        if new_idom < 0 {
+                            new_idom = p;
+                        } else {
+                            new_idom = _dom_intersect(p, new_idom);
+                        }
+                    }
+                }
+                p += 1;
+            }
+            if new_idom != dom_idom[b] {
+                set_at(dom_idom, b, new_idom);
+                changed = 1;
+            }
+            i += 1;
+        }
+    }
+    set_at(dom_idom, dom_rpo[0], -1);
+    return 0;
+}
+
+fn dom_test() {
+    dom_init();
+    dom_n = 5;
+    dom_add_edge(0, 1);
+    dom_add_edge(0, 2);
+    dom_add_edge(1, 3);
+    dom_add_edge(2, 3);
+    dom_add_edge(3, 4);
+    dom_run();
+    let d1 = dom_idom[1];
+    let d2 = dom_idom[2];
+    let d3 = dom_idom[3];
+    let d4 = dom_idom[4];
+    print("dom_test: idom[1]=" + to_string(d1) + " idom[2]=" + to_string(d2) + " idom[3]=" + to_string(d3) + " idom[4]=" + to_string(d4));
+    if d1 == 0 {
+        if d2 == 0 {
+            if d3 == 0 {
+                if d4 == 3 {
+                    print("dom_test: PASS");
+                    return 1;
+                }
+            }
+        }
+    }
+    print("dom_test: FAIL");
+    return 0;
+}
+
+print("dominator.hl loaded");
