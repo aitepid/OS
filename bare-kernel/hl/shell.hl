@@ -186,6 +186,9 @@ fn shell_handle(cmd) {
         serial_print("Prim MST:    prim add <u> <v> <w>  prim run  prim weight  prim setn <n>  prim test");
         serial_print("Kruskal MST: kr add <u> <v> <w>  kr run  kr weight  kr setn <n>  kr test");
         serial_print("FloydWarsh:  fw add <u> <v> <w>  fw run  fw dist <u> <v>  fw setn <n>  fw test");
+        serial_print("AStar:       as add <u> <v> <w>  as setpos <v> <x> <y>  as run <src> <dst>  as setn <n>  as test");
+        serial_print("MaxFlow:     mf add <u> <v> <c>  mf run <src> <sink>  mf flow  mf setn <n>  mf test");
+        serial_print("BipartMatch: bm add <l> <r>  bm run  bm size  bm setnl <nl>  bm test");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -4399,6 +4402,96 @@ fn shell_handle_ext(cmd) {
         return "fw: add " + to_string(fwau) + "->" + to_string(fwav) + " w=" + to_string(fwaw);
     }
 
+    if cmd == "as test"    { let asr = a_star_test(); return "as: cost=" + to_string(asr); }
+    if _starts_with(cmd, "as setn ") {
+        let asn = to_int(str_sub(cmd, 8, len(cmd)));
+        as_set_n(asn);
+        return "as: n=" + to_string(asn);
+    }
+    if _starts_with(cmd, "as run ") {
+        let asrunargs = str_sub(cmd, 7, len(cmd));
+        let asrunsp = _find_space(asrunargs);
+        if asrunsp < 0 { return "as run: usage as run <src> <dst>"; }
+        let asrsrc = to_int(str_sub(asrunargs, 0, asrunsp));
+        let asrdst = to_int(str_sub(asrunargs, asrunsp + 1, len(asrunargs)));
+        let asrcost = as_run(asrsrc, asrdst);
+        return "as: run " + to_string(asrsrc) + "→" + to_string(asrdst) + " cost=" + to_string(asrcost);
+    }
+    if _starts_with(cmd, "as setpos ") {
+        let asposargs = str_sub(cmd, 10, len(cmd));
+        let aspossp1 = _find_space(asposargs);
+        if aspossp1 < 0 { return "as setpos: usage as setpos <v> <x> <y>"; }
+        let asposv = to_int(str_sub(asposargs, 0, aspossp1));
+        let asposargs2 = str_sub(asposargs, aspossp1 + 1, len(asposargs));
+        let aspossp2 = _find_space(asposargs2);
+        if aspossp2 < 0 { return "as setpos: usage as setpos <v> <x> <y>"; }
+        let asposx = to_int(str_sub(asposargs2, 0, aspossp2));
+        let asposy = to_int(str_sub(asposargs2, aspossp2 + 1, len(asposargs2)));
+        as_set_pos(asposv, asposx, asposy);
+        return "as: setpos v=" + to_string(asposv) + " (" + to_string(asposx) + "," + to_string(asposy) + ")";
+    }
+    if _starts_with(cmd, "as add ") {
+        let asaargs = str_sub(cmd, 7, len(cmd));
+        let asasp1 = _find_space(asaargs);
+        if asasp1 < 0 { return "as add: usage as add <u> <v> <w>"; }
+        let asau = to_int(str_sub(asaargs, 0, asasp1));
+        let asaargs2 = str_sub(asaargs, asasp1 + 1, len(asaargs));
+        let asasp2 = _find_space(asaargs2);
+        if asasp2 < 0 { return "as add: usage as add <u> <v> <w>"; }
+        let asav = to_int(str_sub(asaargs2, 0, asasp2));
+        let asaw = to_int(str_sub(asaargs2, asasp2 + 1, len(asaargs2)));
+        as_add_edge(asau, asav, asaw);
+        return "as: add " + to_string(asau) + "→" + to_string(asav) + " w=" + to_string(asaw);
+    }
+
+    if cmd == "mf test"  { let mfr = max_flow_test(); return "mf: flow=" + to_string(mfr); }
+    if cmd == "mf flow"  { return "mf: flow=" + to_string(mf_flow); }
+    if _starts_with(cmd, "mf setn ") {
+        let mfn = to_int(str_sub(cmd, 8, len(cmd)));
+        mf_set_n(mfn);
+        return "mf: n=" + to_string(mfn);
+    }
+    if _starts_with(cmd, "mf run ") {
+        let mfrunargs = str_sub(cmd, 7, len(cmd));
+        let mfrunsp = _find_space(mfrunargs);
+        if mfrunsp < 0 { return "mf run: usage mf run <src> <sink>"; }
+        let mfrsrc = to_int(str_sub(mfrunargs, 0, mfrunsp));
+        let mfrsink = to_int(str_sub(mfrunargs, mfrunsp + 1, len(mfrunargs)));
+        let mfrf = mf_run(mfrsrc, mfrsink);
+        return "mf: flow=" + to_string(mfrf);
+    }
+    if _starts_with(cmd, "mf add ") {
+        let mfaargs = str_sub(cmd, 7, len(cmd));
+        let mfasp1 = _find_space(mfaargs);
+        if mfasp1 < 0 { return "mf add: usage mf add <u> <v> <c>"; }
+        let mfau = to_int(str_sub(mfaargs, 0, mfasp1));
+        let mfaargs2 = str_sub(mfaargs, mfasp1 + 1, len(mfaargs));
+        let mfasp2 = _find_space(mfaargs2);
+        if mfasp2 < 0 { return "mf add: usage mf add <u> <v> <c>"; }
+        let mfav = to_int(str_sub(mfaargs2, 0, mfasp2));
+        let mfac = to_int(str_sub(mfaargs2, mfasp2 + 1, len(mfaargs2)));
+        mf_add_edge(mfau, mfav, mfac);
+        return "mf: add " + to_string(mfau) + "→" + to_string(mfav) + " cap=" + to_string(mfac);
+    }
+
+    if cmd == "bm test"   { let bmr = bipartite_match_test(); return "bm: size=" + to_string(bmr); }
+    if cmd == "bm run"    { let bms = bm_run(); return "bm: size=" + to_string(bms); }
+    if cmd == "bm size"   { return "bm: size=" + to_string(bm_size); }
+    if _starts_with(cmd, "bm setnl ") {
+        let bmnl = to_int(str_sub(cmd, 9, len(cmd)));
+        bm_set_nl(bmnl);
+        return "bm: nl=" + to_string(bmnl);
+    }
+    if _starts_with(cmd, "bm add ") {
+        let bmaargs = str_sub(cmd, 7, len(cmd));
+        let bmasp = _find_space(bmaargs);
+        if bmasp < 0 { return "bm add: usage bm add <l> <r>"; }
+        let bmal = to_int(str_sub(bmaargs, 0, bmasp));
+        let bmar = to_int(str_sub(bmaargs, bmasp + 1, len(bmaargs)));
+        bm_add_edge(bmal, bmar);
+        return "bm: add L" + to_string(bmal) + "-R" + to_string(bmar);
+    }
+
     return shell_handle(cmd);
 }
 
@@ -4410,7 +4503,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 805 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall");
+print("shell.hl loaded -- 820 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch");
 
 // Main shell loop (called from kernel_init)
 

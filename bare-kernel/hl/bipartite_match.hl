@@ -1,0 +1,133 @@
+// bipartite_match.hl -- Maximum Bipartite Matching (Augmenting Path DFS)
+// O(VE) per left vertex augmenting DFS; Hopcroft-Karp style rematch chain.
+// BM_MAX_L=32 left, BM_MAX_R=32 right nodes.
+//
+// Runtime buffer: 0x15D0000 (4 KB)
+
+let BM_MAX_L = 32;
+let BM_MAX_R = 32;
+
+// Adjacency: bm_adj[l*32+r] = 1 if left l can be matched to right r
+let bm_adj     = array(1024, 0);
+let bm_match_l = array(32, 0);   // matched right node for each left (-1 = free)
+let bm_match_r = array(32, 0);   // matched left node for each right (-1 = free)
+let bm_vis     = array(32, 0);   // right nodes visited in current DFS
+let bm_nl      = 0;              // number of left nodes
+let bm_nr      = 0;              // number of right nodes
+let bm_size    = 0;              // matching cardinality after bm_run()
+
+fn bipartite_match_init() {
+    let i = 0;
+    while i < 1024 {
+        set_at(bm_adj, i, 0);
+        i += 1;
+    }
+    i = 0;
+    while i < BM_MAX_L {
+        set_at(bm_match_l, i, -1);
+        i += 1;
+    }
+    i = 0;
+    while i < BM_MAX_R {
+        set_at(bm_match_r, i, -1);
+        set_at(bm_vis,     i, 0);
+        i += 1;
+    }
+    bm_nl   = 0;
+    bm_nr   = 0;
+    bm_size = 0;
+    return 0;
+}
+
+fn bm_set_nl(nl) { bm_nl = nl; return 0; }
+fn bm_set_nr(nr) { bm_nr = nr; return 0; }
+
+// Add edge between left node l and right node r
+fn bm_add_edge(l, r) {
+    if l >= BM_MAX_L { return -1; }
+    if r >= BM_MAX_R { return -1; }
+    set_at(bm_adj, l * BM_MAX_R + r, 1);
+    if l + 1 > bm_nl { bm_nl = l + 1; }
+    if r + 1 > bm_nr { bm_nr = r + 1; }
+    return 0;
+}
+
+// DFS augmenting path from left node l; returns 1 if augmented
+fn _bm_dfs(l) {
+    let r = 0;
+    while r < bm_nr {
+        if bm_adj[l * BM_MAX_R + r] == 1 {
+            if bm_vis[r] == 0 {
+                set_at(bm_vis, r, 1);
+                let ml = bm_match_r[r];
+                if ml < 0 {
+                    // r is free: augment directly
+                    set_at(bm_match_l, l, r);
+                    set_at(bm_match_r, r, l);
+                    return 1;
+                } else {
+                    // r is matched to ml; try to rematch ml
+                    let aug = _bm_dfs(ml);
+                    if aug == 1 {
+                        set_at(bm_match_l, l, r);
+                        set_at(bm_match_r, r, l);
+                        return 1;
+                    }
+                }
+            }
+        }
+        r += 1;
+    }
+    return 0;
+}
+
+// Run maximum bipartite matching; returns matching cardinality
+fn bm_run() {
+    let i = 0;
+    while i < bm_nl {
+        set_at(bm_match_l, i, -1);
+        i += 1;
+    }
+    i = 0;
+    while i < bm_nr {
+        set_at(bm_match_r, i, -1);
+        i += 1;
+    }
+    bm_size = 0;
+    i = 0;
+    while i < bm_nl {
+        // Reset visited right nodes for this DFS
+        let j = 0;
+        while j < bm_nr {
+            set_at(bm_vis, j, 0);
+            j += 1;
+        }
+        let aug = _bm_dfs(i);
+        if aug == 1 { bm_size += 1; }
+        i += 1;
+    }
+    return bm_size;
+}
+
+fn bipartite_match_test() {
+    bipartite_match_init();
+    bm_set_nl(4);
+    bm_set_nr(4);
+    // L={0,1,2,3} R={0,1,2,3}
+    // Edges: 0-0,0-1, 1-1,1-2, 2-0,2-3, 3-2,3-3
+    // Perfect matching of size 4: e.g. 0↔0, 1↔1, 2↔3, 3↔2
+    bm_add_edge(0, 0);
+    bm_add_edge(0, 1);
+    bm_add_edge(1, 1);
+    bm_add_edge(1, 2);
+    bm_add_edge(2, 0);
+    bm_add_edge(2, 3);
+    bm_add_edge(3, 2);
+    bm_add_edge(3, 3);
+    let sz = bm_run();
+    print("bipartite_test matching_size=" + to_string(sz));
+    print("bm match_l[0]=" + to_string(bm_match_l[0]) + " match_l[1]=" + to_string(bm_match_l[1]));
+    return sz;
+}
+
+print("bipartite_match.hl loaded");

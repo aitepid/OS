@@ -1,0 +1,127 @@
+// max_flow.hl -- Edmonds-Karp Maximum Flow
+// Edmonds-Karp 1972: BFS augmenting paths, O(VE²).
+// MF_MAX_V=16; residual capacities in mf_cap[256] (16×16).
+//
+// Runtime buffer: 0x15C0000 (4 KB)
+
+let MF_MAX_V = 16;
+
+// Residual capacity matrix: mf_cap[u*16+v]
+let mf_cap    = array(256, 0);
+let mf_parent = array(16, 0);    // BFS augmenting-path parent
+let mf_vis    = array(16, 0);    // BFS visited flags
+let mf_q      = array(16, 0);    // BFS queue
+let mf_n      = 0;
+let mf_flow   = 0;               // total max flow after mf_run()
+
+fn max_flow_init() {
+    let i = 0;
+    while i < 256 {
+        set_at(mf_cap, i, 0);
+        i += 1;
+    }
+    mf_n    = 0;
+    mf_flow = 0;
+    return 0;
+}
+
+fn mf_set_n(n) {
+    mf_n = n;
+    return 0;
+}
+
+// Add directed edge u→v with capacity c (parallel edges accumulate)
+fn mf_add_edge(u, v, c) {
+    if u >= MF_MAX_V { return -1; }
+    if v >= MF_MAX_V { return -1; }
+    set_at(mf_cap, u * MF_MAX_V + v, mf_cap[u * MF_MAX_V + v] + c);
+    if u + 1 > mf_n { mf_n = u + 1; }
+    if v + 1 > mf_n { mf_n = v + 1; }
+    return 0;
+}
+
+// BFS to find augmenting path src→sink in residual graph; returns 1 if found
+fn _mf_bfs(src, sink) {
+    let i = 0;
+    while i < mf_n {
+        set_at(mf_vis,    i, 0);
+        set_at(mf_parent, i, -1);
+        i += 1;
+    }
+    set_at(mf_vis, src, 1);
+    let qhead = 0;
+    let qtail = 0;
+    set_at(mf_q, qtail, src);
+    qtail += 1;
+    while qhead < qtail {
+        let u = mf_q[qhead];
+        qhead += 1;
+        i = 0;
+        while i < mf_n {
+            if mf_vis[i] == 0 {
+                if mf_cap[u * MF_MAX_V + i] > 0 {
+                    set_at(mf_vis,    i, 1);
+                    set_at(mf_parent, i, u);
+                    if i == sink { return 1; }
+                    set_at(mf_q, qtail, i);
+                    qtail += 1;
+                }
+            }
+            i += 1;
+        }
+    }
+    return 0;
+}
+
+// Run Edmonds-Karp from src to sink; returns max flow
+fn mf_run(src, sink) {
+    mf_flow = 0;
+    let done = 0;
+    while done == 0 {
+        let found = _mf_bfs(src, sink);
+        if found == 0 {
+            done = 1;
+        } else {
+            // Find bottleneck capacity along BFS path
+            let bottle = 1000000;
+            let v = sink;
+            while v != src {
+                let u = mf_parent[v];
+                let cap = mf_cap[u * MF_MAX_V + v];
+                if cap < bottle { bottle = cap; }
+                v = u;
+            }
+            // Augment residual capacities along path
+            v = sink;
+            while v != src {
+                let u = mf_parent[v];
+                set_at(mf_cap, u * MF_MAX_V + v, mf_cap[u * MF_MAX_V + v] - bottle);
+                set_at(mf_cap, v * MF_MAX_V + u, mf_cap[v * MF_MAX_V + u] + bottle);
+                v = u;
+            }
+            mf_flow += bottle;
+        }
+    }
+    return mf_flow;
+}
+
+fn max_flow_test() {
+    max_flow_init();
+    mf_set_n(6);
+    // Classic CLRS flow network (s=0, t=5), max flow = 23
+    mf_add_edge(0, 1, 16);
+    mf_add_edge(0, 2, 13);
+    mf_add_edge(1, 2, 10);
+    mf_add_edge(1, 3, 12);
+    mf_add_edge(2, 1, 4);
+    mf_add_edge(2, 4, 14);
+    mf_add_edge(3, 2, 9);
+    mf_add_edge(3, 5, 20);
+    mf_add_edge(4, 3, 7);
+    mf_add_edge(4, 5, 4);
+    let f = mf_run(0, 5);
+    print("max_flow_test flow=" + to_string(f));
+    return f;
+}
+
+print("max_flow.hl loaded");

@@ -2,11 +2,44 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`346`（69 根目录 + 277 内核模块）
-- H-L 总行数：`~101,500`
-- 内核模块：`277`
-- Shell 命令：`805`
-- 最近完成功能迭代：`291`（prim + kruskal + floyd_warshall）
+- `.hl` 文件：`349`（69 根目录 + 280 内核模块）
+- H-L 总行数：`~102,500`
+- 内核模块：`280`
+- Shell 命令：`820`
+- 最近完成功能迭代：`294`（a_star + max_flow + bipartite_match）
+
+## Iteration 294 — bipartite_match.hl：二部图最大匹配
+
+- **`bare-kernel/hl/bipartite_match.hl`** 新增（~110 行）
+  - 增广路 DFS 二部图最大匹配 O(VE)；支持递归重匹配链（Hopcroft-Karp 风格）
+  - `bm_adj[l*32+r]` — 左右节点邻接矩阵，BM_MAX_L=32，BM_MAX_R=32
+  - `_bm_dfs(l)` — 递归增广：若右节点 r 空闲直接匹配，否则递归重匹配已占 r 的左节点
+  - `bm_run()` — 逐左节点 DFS，每次重置 bm_vis，累计 bm_size
+  - 测试：L={0,1,2,3} R={0,1,2,3}，8条边 → 完美匹配 size=4
+  - Buffer: 0x15D0000
+  - Shell 命令：`bm add <l> <r>  bm run  bm size  bm setnl <nl>  bm test`
+
+## Iteration 293 — max_flow.hl：Edmonds-Karp 最大流
+
+- **`bare-kernel/hl/max_flow.hl`** 新增（~100 行）
+  - Edmonds-Karp 1972：BFS 增广路 Ford-Fulkerson，O(VE²)
+  - `mf_cap[u*16+v]` — 残差容量矩阵（正向容量 + 反向容量）；MF_MAX_V=16
+  - `_mf_bfs(src, sink)` — BFS 找增广路，返回是否找到；mf_parent 记录路径
+  - `mf_run(src, sink)` — 循环 BFS → 计瓶颈 → 正反向更新残差 → 累计 mf_flow
+  - 测试：CLRS 经典 6 顶点流网络（s=0, t=5）→ max_flow=23
+  - Buffer: 0x15C0000
+  - Shell 命令：`mf add <u> <v> <c>  mf run <src> <sink>  mf flow  mf setn <n>  mf test`
+
+## Iteration 292 — a_star.hl：A* 启发式搜索
+
+- **`bare-kernel/hl/a_star.hl`** 新增（~115 行）
+  - Hart-Nilsson-Raphael 1968：f(v)=g(v)+h(v)，线性扫描 open set O(V²)
+  - `as_set_pos(v, x, y)` — 设置顶点 2D 坐标（Manhattan 距离启发函数）
+  - `_as_h(v, dst)` — h = |hx[v]-hx[dst]| + |hy[v]-hy[dst]|，绝对值用 `0-dx` 模拟
+  - `as_run(src, dst)` — 维护 open/closed 集合，每轮选 min-f 未闭合顶点展开邻居
+  - 测试：5 顶点格点图，所有 0→4 路径均长 6 → cost=6
+  - Buffer: 0x15B0000，AS_MAX_V=32
+  - Shell 命令：`as add <u> <v> <w>  as setpos <v> <x> <y>  as run <src> <dst>  as setn <n>  as test`
 
 ## Iteration 291 — floyd_warshall.hl：Floyd-Warshall 全对最短路
 
