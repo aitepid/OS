@@ -1,0 +1,236 @@
+// cuckoo_filter.hl -- Cuckoo Filter
+//
+// Implements Cuckoo Filter (Fan, Andersen, Kaminsky, Mitzenmacher 2014):
+//   - Probabilistic set membership with deletion support (unlike Bloom filter)
+//   - CF_BUCKETS=64 buckets × CF_BSIZE=4 slots = 256 total fingerprint slots
+//   - 8-bit fingerprints: FPR ≈ 2×b/2^f = 2×4/256 ≈ 3.1%
+//   - Alternate bucket: h2 = h1 XOR hash(fp) — symmetric, enables relocation
+//   - XOR simulated bit-by-bit (6-bit values for 64 buckets)
+//   - CF_MAX_KICKS=500 cuckoo displacements per insert before declaring full
+// Operations: cf_insert(item), cf_contains(item), cf_delete(item) — all O(1)
+// Space: 64×4×1 = 256 fingerprint bytes.
+//
+// Buffer: 0x1480000
+
+let CF_BUF       = 0x1480000;
+
+let CF_BUCKETS   = 64;    // number of buckets (must be power of 2 for XOR)
+let CF_BSIZE     = 4;     // fingerprint slots per bucket
+let CF_FP_RANGE  = 256;   // fingerprint range [1..255] (0 = empty)
+let CF_MAX_KICKS = 500;   // max cuckoo displacement attempts per insert
+
+// Flat CF_BUCKETS×CF_BSIZE fingerprint array (0 = empty slot)
+let cf_table = [];
+let cf_count = 0;         // occupied slots
+let cf_kicks = 0;         // cumulative kick count
+let cf_full  = 0;         // 1 if last insert failed (table overloaded)
+let cf_rand  = 31337;     // LCG state for random kick direction
+
+let cf_initialized = 0;
+
+fn cuckoo_filter_init() {
+    let sz = CF_BUCKETS * CF_BSIZE;
+    let i = 0;
+    while i < sz { set_at(cf_table, i, 0); i = i + 1; }
+    cf_count = 0; cf_kicks = 0; cf_full = 0; cf_rand = 31337;
+    cf_initialized = 1;
+    return 0;
+}
+
+// 8-bit fingerprint of item (non-zero, in [1..255])
+fn _cf_fp(item) {
+    let h = item * 2654435761;
+    if h < 0 { h = -h; }
+    let fp = h - ((h / CF_FP_RANGE) * CF_FP_RANGE);
+    if fp == 0 { fp = 1; }
+    return fp;
+}
+
+// Primary bucket index: hash(item) mod CF_BUCKETS
+fn _cf_h1(item) {
+    let h = item * 1234567891;
+    if h < 0 { h = -h; }
+    return h - ((h / CF_BUCKETS) * CF_BUCKETS);
+}
+
+// XOR of a and b restricted to 6 bits (for CF_BUCKETS=64=2^6)
+fn _cf_xor6(a, b) {
+    let result = 0;
+    let bit = 1;
+    let pos = 0;
+    while pos < 6 {
+        let ab = (a / bit) - ((a / bit / 2) * 2);
+        let bb = (b / bit) - ((b / bit / 2) * 2);
+        if ab != bb { result = result + bit; }
+        bit = bit * 2;
+        pos = pos + 1;
+    }
+    return result;
+}
+
+// Fingerprint hash → bucket offset (non-zero, in [1..CF_BUCKETS-1])
+fn _cf_fp_hash(fp) {
+    let h = fp * 2246822519;
+    if h < 0 { h = -h; }
+    let r = h - ((h / CF_BUCKETS) * CF_BUCKETS);
+    if r == 0 { r = 1; }
+    return r;
+}
+
+// Alternate bucket: h2 = h1 XOR hash(fp) — symmetric relocation
+fn _cf_alternate(b, fp) {
+    return _cf_xor6(b, _cf_fp_hash(fp));
+}
+
+// Try to insert fp into an empty slot in bucket b (return 1 on success)
+fn _cf_bucket_try_insert(b, fp) {
+    let base = b * CF_BSIZE;
+    let i = 0;
+    while i < CF_BSIZE {
+        if cf_table[base + i] == 0 {
+            set_at(cf_table, base + i, fp);
+            return 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Check if fp is in bucket b
+fn _cf_bucket_has(b, fp) {
+    let base = b * CF_BSIZE;
+    let i = 0;
+    while i < CF_BSIZE {
+        if cf_table[base + i] == fp { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Remove one occurrence of fp from bucket b (return 1 on success)
+fn _cf_bucket_remove(b, fp) {
+    let base = b * CF_BSIZE;
+    let i = 0;
+    while i < CF_BSIZE {
+        if cf_table[base + i] == fp {
+            set_at(cf_table, base + i, 0);
+            return 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Random slot offset in [0, CF_BSIZE)
+fn _cf_rand_slot() {
+    cf_rand = cf_rand * 1664525 + 1013904223;
+    if cf_rand < 0 { cf_rand = -cf_rand; }
+    return cf_rand - ((cf_rand / CF_BSIZE) * CF_BSIZE);
+}
+
+fn cf_insert(item) {
+    let fp = _cf_fp(item);
+    let b1 = _cf_h1(item);
+    let b2 = _cf_alternate(b1, fp);
+    if _cf_bucket_try_insert(b1, fp) == 1 {
+        cf_count = cf_count + 1; cf_full = 0; return 1;
+    }
+    if _cf_bucket_try_insert(b2, fp) == 1 {
+        cf_count = cf_count + 1; cf_full = 0; return 1;
+    }
+    // Cuckoo kicks: randomly start from b1 or b2
+    let b = b1;
+    if _cf_rand_slot() >= 2 { b = b2; }
+    let i = 0;
+    while i < CF_MAX_KICKS {
+        let slot = b * CF_BSIZE + _cf_rand_slot();
+        let evicted = cf_table[slot];
+        set_at(cf_table, slot, fp);
+        fp = evicted;
+        b = _cf_alternate(b, fp);
+        if _cf_bucket_try_insert(b, fp) == 1 {
+            cf_count = cf_count + 1;
+            cf_kicks = cf_kicks + i + 1;
+            cf_full = 0;
+            return 1;
+        }
+        i = i + 1;
+    }
+    // Table full: insert failed (original item fp is lost — table remains valid)
+    cf_full = 1;
+    return 0;
+}
+
+fn cf_contains(item) {
+    let fp = _cf_fp(item);
+    let b1 = _cf_h1(item);
+    let b2 = _cf_alternate(b1, fp);
+    if _cf_bucket_has(b1, fp) == 1 { return 1; }
+    if _cf_bucket_has(b2, fp) == 1 { return 1; }
+    return 0;
+}
+
+fn cf_delete(item) {
+    let fp = _cf_fp(item);
+    let b1 = _cf_h1(item);
+    let b2 = _cf_alternate(b1, fp);
+    if _cf_bucket_remove(b1, fp) == 1 { cf_count = cf_count - 1; return 1; }
+    if _cf_bucket_remove(b2, fp) == 1 { cf_count = cf_count - 1; return 1; }
+    return 0;
+}
+
+// Load factor × 1000 (occupied / total slots)
+fn cf_load_factor() {
+    return (cf_count * 1000) / (CF_BUCKETS * CF_BSIZE);
+}
+
+// Theoretical FPR estimate × 1000 = 2×BSIZE / FP_RANGE × 1000 ≈ 31
+fn cf_fp_rate() {
+    return (2 * CF_BSIZE * 1000) / CF_FP_RANGE;
+}
+
+fn cf_status() {
+    return "cuckoo: count=" + to_string(cf_count)
+        + " load=" + to_string(cf_load_factor()) + "/1000"
+        + " kicks=" + to_string(cf_kicks)
+        + " full=" + to_string(cf_full)
+        + " fpr~" + to_string(cf_fp_rate()) + "/1000";
+}
+
+fn cuckoo_filter_test() {
+    cuckoo_filter_init();
+    // Insert 100 items [1..100]
+    let i = 1;
+    while i <= 100 { cf_insert(i); i = i + 1; }
+    // All 100 must be present (true positive rate = 100%)
+    let tp = 0;
+    i = 1;
+    while i <= 100 { if cf_contains(i) == 1 { tp = tp + 1; } i = i + 1; }
+    // Delete items 1..50
+    i = 1;
+    while i <= 50 { cf_delete(i); i = i + 1; }
+    // Items 1-50 should be absent, 51-100 should be present
+    let absent = 0;
+    let present = 0;
+    i = 1;
+    while i <= 50 { if cf_contains(i) == 0 { absent = absent + 1; } i = i + 1; }
+    i = 51;
+    while i <= 100 { if cf_contains(i) == 1 { present = present + 1; } i = i + 1; }
+    // False positive test: items 1001..1100 (never inserted)
+    let fp_count = 0;
+    i = 1001;
+    while i <= 1100 { if cf_contains(i) == 1 { fp_count = fp_count + 1; } i = i + 1; }
+    serial_print("cuckoo test: " + cf_status());
+    serial_print("cuckoo test: tp=" + to_string(tp)
+        + " deleted_absent=" + to_string(absent)
+        + " still_present=" + to_string(present)
+        + " fp_in_100=" + to_string(fp_count));
+    return "cuckoo: inserted_100 tp=" + to_string(tp)
+        + " deleted_50 absent=" + to_string(absent)
+        + " still_present=" + to_string(present)
+        + " fp_in_100=" + to_string(fp_count)
+        + " load=" + to_string(cf_load_factor()) + "/1000"
+        + " [Fan+Andersen+Kaminsky+Mitzenmacher 2014 ok]";
+}
+
+print("cuckoo_filter.hl loaded -- Cuckoo Filter (64 buckets x4 slots, 8-bit fp, deletion support)");

@@ -2,11 +2,49 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`325`（69 根目录 + 256 内核模块）
-- H-L 总行数：`~103,500`
-- 内核模块：`256`
-- Shell 命令：`700`
-- 最近完成功能迭代：`270`（tdigest + wavelet + reservoir_sampling）
+- `.hl` 文件：`328`（69 根目录 + 259 内核模块）
+- H-L 总行数：`~106,500`
+- 内核模块：`259`
+- Shell 命令：`715`
+- 最近完成功能迭代：`273`（fenwick_tree + segment_tree + cuckoo_filter）
+
+## Iteration 273 — cuckoo_filter.hl：Cuckoo 过滤器
+
+- **`bare-kernel/hl/cuckoo_filter.hl`** 新增（~240 行）
+  - Cuckoo Filter（Fan, Andersen, Kaminsky, Mitzenmacher 2014），优于 Bloom 过滤器：**支持删除**
+  - CF_BUCKETS=64 桶 × CF_BSIZE=4 槽 = 256 个指纹槽；8 位指纹，FPR ≈ 3.1%
+  - 备用桶：h2 = h1 XOR hash(fp)（对称设计，支持重定位），XOR 通过逐位模拟实现
+  - `cf_insert(item)` — 先尝试 h1/h2，满则 Cuckoo 踢出（最多 CF_MAX_KICKS=500 次）
+  - `cf_contains(item)` — O(1) 查询（检查两个桶）
+  - `cf_delete(item)` — O(1) 删除（Bloom 过滤器不支持）
+  - Buffer: 0x1480000
+  - Shell 命令：`cf insert <item>  cf contains <item>  cf delete <item>  cf status  cf test`
+
+## Iteration 272 — segment_tree.hl：线段树
+
+- **`bare-kernel/hl/segment_tree.hl`** 新增（~220 行）
+  - 线段树（含懒惰传播），最大 SEG_MAX_N=128 元素，树节点数 4×128=512
+  - 三棵并行树：sum/min/max 共享同一 lazy 数组（范围加操作）
+  - `seg_build(data, n)` — 自底向上构建，O(n)
+  - `seg_update_point(idx, val)` — 点更新（set），O(log n)
+  - `seg_range_add(l, r, delta)` — 范围加（懒惰传播），O(log n)
+  - `seg_query_sum/min/max(l, r)` — 范围查询，O(log n)
+  - Buffer: 0x1470000
+  - Shell 命令：`seg build <n>  seg update <i> <v>  seg range_add <l> <r> <d>  seg sum/min/max <l> <r>  seg test`
+
+## Iteration 271 — fenwick_tree.hl：树状数组 (BIT)
+
+- **`bare-kernel/hl/fenwick_tree.hl`** 新增（~180 行）
+  - Fenwick Tree / BIT（Peter Fenwick 1994，Software: Practice and Experience）
+  - 标准 BIT：`fenwick_update(i, delta)` 点加 + `fenwick_query(i)` 前缀和，O(log n)
+  - 差分 BIT：`fenwick_range_update(l, r, delta)` 范围加 + `fenwick_point_query(i)` 点查，O(log n)
+  - 二分提升：`fenwick_find_kth(k)` 查找第 k 个元素，O(log n)
+  - 2D BIT：`fenwick_2d_update(r, c, delta)` + `fenwick_2d_query(r, c)` 矩形前缀和，O(log²n)
+  - `_fw_lowbit(i)`：最低位 1 计算（H-L 无位运算，循环除 2 实现）
+  - Buffer: 0x1460000
+  - Shell 命令：`fw build <n>  fw update <i> <d>  fw query <i>  fw range <l> <r>  fw kth <k>  fw range_update  fw 2d_update  fw test`
+
+
 
 ## Iteration 270 — reservoir_sampling.hl：储层采样
 

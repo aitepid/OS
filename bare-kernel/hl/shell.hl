@@ -165,6 +165,9 @@ fn shell_handle(cmd) {
         serial_print("tDigest:  td add <val>  td p50  td p90  td p99  td quantile <q>  td status  td test");
         serial_print("Wavelet:  wv load <n>  wv forward <levels>  wv inverse <levels>  wv threshold <t>  wv info  wv test");
         serial_print("Reservoir: rs add <item>  rs add_batch <n>  rs contains <x>  rs bern_init <p>  rs bern_add <item>  rs status  rs test");
+        serial_print("Fenwick:  fw build <n>  fw update <i> <d>  fw query <i>  fw range <l> <r>  fw kth <k>  fw range_update <l> <r> <d>  fw point_query <i>  fw 2d_update <r> <c> <d>  fw 2d_query <r> <c>  fw status  fw test");
+        serial_print("SegTree:  seg build <n>  seg update <i> <v>  seg range_add <l> <r> <d>  seg sum <l> <r>  seg min <l> <r>  seg max <l> <r>  seg status  seg test");
+        serial_print("Cuckoo:   cf insert <item>  cf contains <item>  cf delete <item>  cf status  cf test");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -3896,6 +3899,122 @@ fn shell_handle_ext(cmd) {
     if cmd == "rs status" { return rs_status(); }
     if cmd == "rs test"   { return reservoir_sampling_test(); }
 
+    // --- Fenwick Tree ---
+    if str_starts_with(cmd, "fw build ") {
+        let fwn = to_int(str_slice(cmd, 9, len(cmd)));
+        fenwick_init(fwn);
+        let fwd = [1, 2, 3, 4, 5, 6, 7, 8];
+        fenwick_build(fwd, fwn);
+        return "fenwick: built n=" + to_string(fwn) + " -> " + fenwick_status();
+    }
+    if str_starts_with(cmd, "fw update ") {
+        let fwr = str_slice(cmd, 10, len(cmd));
+        let fwp = str_split(fwr, " ");
+        let fwi = to_int(fwp[0]); let fwd2 = to_int(fwp[1]);
+        fenwick_update(fwi, fwd2);
+        return "fenwick: update(" + to_string(fwi) + "," + to_string(fwd2) + ") -> " + fenwick_status();
+    }
+    if str_starts_with(cmd, "fw query ") {
+        let fwqi = to_int(str_slice(cmd, 9, len(cmd)));
+        return "fenwick: prefix_sum(1.." + to_string(fwqi) + ")=" + to_string(fenwick_query(fwqi));
+    }
+    if str_starts_with(cmd, "fw range ") {
+        let fwrr = str_slice(cmd, 9, len(cmd));
+        let fwrp = str_split(fwrr, " ");
+        let fwrl = to_int(fwrp[0]); let fwrR = to_int(fwrp[1]);
+        return "fenwick: range_sum(" + to_string(fwrl) + ".." + to_string(fwrR) + ")=" + to_string(fenwick_range_sum(fwrl, fwrR));
+    }
+    if str_starts_with(cmd, "fw kth ") {
+        let fwk = to_int(str_slice(cmd, 7, len(cmd)));
+        return "fenwick: kth(" + to_string(fwk) + ")=" + to_string(fenwick_find_kth(fwk));
+    }
+    if str_starts_with(cmd, "fw range_update ") {
+        let fwur = str_slice(cmd, 16, len(cmd));
+        let fwup = str_split(fwur, " ");
+        let fwul = to_int(fwup[0]); let fwuR = to_int(fwup[1]); let fwud = to_int(fwup[2]);
+        fenwick_range_update(fwul, fwuR, fwud);
+        return "fenwick: range_update(" + to_string(fwul) + ".." + to_string(fwuR) + ",+" + to_string(fwud) + ")";
+    }
+    if str_starts_with(cmd, "fw point_query ") {
+        let fwpqi = to_int(str_slice(cmd, 15, len(cmd)));
+        return "fenwick: point_query(" + to_string(fwpqi) + ")=" + to_string(fenwick_point_query(fwpqi));
+    }
+    if str_starts_with(cmd, "fw 2d_update ") {
+        let fw2ur = str_slice(cmd, 13, len(cmd));
+        let fw2up = str_split(fw2ur, " ");
+        let fw2r = to_int(fw2up[0]); let fw2c = to_int(fw2up[1]); let fw2d = to_int(fw2up[2]);
+        fenwick_2d_update(fw2r, fw2c, fw2d);
+        return "fenwick: 2d_update(" + to_string(fw2r) + "," + to_string(fw2c) + ",+" + to_string(fw2d) + ")";
+    }
+    if str_starts_with(cmd, "fw 2d_query ") {
+        let fw2qr = str_slice(cmd, 12, len(cmd));
+        let fw2qp = str_split(fw2qr, " ");
+        let fw2qR = to_int(fw2qp[0]); let fw2qC = to_int(fw2qp[1]);
+        return "fenwick: 2d_query(1.." + to_string(fw2qR) + ",1.." + to_string(fw2qC) + ")=" + to_string(fenwick_2d_query(fw2qR, fw2qC));
+    }
+    if cmd == "fw status" { return fenwick_status(); }
+    if cmd == "fw test"   { return fenwick_tree_test(); }
+
+    // --- Segment Tree ---
+    if str_starts_with(cmd, "seg build ") {
+        let sgn = to_int(str_slice(cmd, 10, len(cmd)));
+        let sgd = [3, 1, 4, 1, 5, 9, 2, 6];
+        seg_build(sgd, sgn);
+        return "segtree: built n=" + to_string(sgn) + " -> " + seg_status();
+    }
+    if str_starts_with(cmd, "seg update ") {
+        let sgur = str_slice(cmd, 11, len(cmd));
+        let sgup = str_split(sgur, " ");
+        let sgui = to_int(sgup[0]); let sguv = to_int(sgup[1]);
+        seg_update_point(sgui, sguv);
+        return "segtree: update(" + to_string(sgui) + "=" + to_string(sguv) + ") -> " + seg_status();
+    }
+    if str_starts_with(cmd, "seg range_add ") {
+        let sgar = str_slice(cmd, 14, len(cmd));
+        let sgap = str_split(sgar, " ");
+        let sgal = to_int(sgap[0]); let sgaR = to_int(sgap[1]); let sgad = to_int(sgap[2]);
+        seg_range_add(sgal, sgaR, sgad);
+        return "segtree: range_add(" + to_string(sgal) + ".." + to_string(sgaR) + ",+" + to_string(sgad) + ") -> " + seg_status();
+    }
+    if str_starts_with(cmd, "seg sum ") {
+        let sgsr = str_slice(cmd, 8, len(cmd));
+        let sgsp = str_split(sgsr, " ");
+        let sgsl = to_int(sgsp[0]); let sgsR = to_int(sgsp[1]);
+        return "segtree: sum(" + to_string(sgsl) + ".." + to_string(sgsR) + ")=" + to_string(seg_query_sum(sgsl, sgsR));
+    }
+    if str_starts_with(cmd, "seg min ") {
+        let sgmr = str_slice(cmd, 8, len(cmd));
+        let sgmp = str_split(sgmr, " ");
+        let sgml = to_int(sgmp[0]); let sgmR = to_int(sgmp[1]);
+        return "segtree: min(" + to_string(sgml) + ".." + to_string(sgmR) + ")=" + to_string(seg_query_min(sgml, sgmR));
+    }
+    if str_starts_with(cmd, "seg max ") {
+        let sgxr = str_slice(cmd, 8, len(cmd));
+        let sgxp = str_split(sgxr, " ");
+        let sgxl = to_int(sgxp[0]); let sgxR = to_int(sgxp[1]);
+        return "segtree: max(" + to_string(sgxl) + ".." + to_string(sgxR) + ")=" + to_string(seg_query_max(sgxl, sgxR));
+    }
+    if cmd == "seg status" { return seg_status(); }
+    if cmd == "seg test"   { return segment_tree_test(); }
+
+    // --- Cuckoo Filter ---
+    if str_starts_with(cmd, "cf insert ") {
+        let cfi = to_int(str_slice(cmd, 10, len(cmd)));
+        let cfr = cf_insert(cfi);
+        return "cuckoo: insert(" + to_string(cfi) + ")=" + to_string(cfr) + " " + cf_status();
+    }
+    if str_starts_with(cmd, "cf contains ") {
+        let cfc = to_int(str_slice(cmd, 12, len(cmd)));
+        return "cuckoo: contains(" + to_string(cfc) + ")=" + to_string(cf_contains(cfc));
+    }
+    if str_starts_with(cmd, "cf delete ") {
+        let cfd = to_int(str_slice(cmd, 10, len(cmd)));
+        let cfdr = cf_delete(cfd);
+        return "cuckoo: delete(" + to_string(cfd) + ")=" + to_string(cfdr) + " " + cf_status();
+    }
+    if cmd == "cf status" { return cf_status(); }
+    if cmd == "cf test"   { return cuckoo_filter_test(); }
+
     return shell_handle(cmd);
 }
 
@@ -3907,7 +4026,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 700 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir");
+print("shell.hl loaded -- 715 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo");
 
 // Main shell loop (called from kernel_init)
 
