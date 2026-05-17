@@ -168,6 +168,9 @@ fn shell_handle(cmd) {
         serial_print("Fenwick:  fw build <n>  fw update <i> <d>  fw query <i>  fw range <l> <r>  fw kth <k>  fw range_update <l> <r> <d>  fw point_query <i>  fw 2d_update <r> <c> <d>  fw 2d_query <r> <c>  fw status  fw test");
         serial_print("SegTree:  seg build <n>  seg update <i> <v>  seg range_add <l> <r> <d>  seg sum <l> <r>  seg min <l> <r>  seg max <l> <r>  seg status  seg test");
         serial_print("Cuckoo:   cf insert <item>  cf contains <item>  cf delete <item>  cf status  cf test");
+        serial_print("DSU:      dsu union <x> <y>  dsu find <x>  dsu connected <x> <y>  dsu size <x>  dsu kruskal  dsu status  dsu test");
+        serial_print("Treap:    treap insert <k> <v>  treap delete <k>  treap search <k>  treap kth <k>  treap rank <k>  treap min  treap max  treap status  treap test");
+        serial_print("SuffixArray: sa build <n>  sa lcp  sa search <p>  sa lrs  sa distinct  sa status  sa test");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -4015,6 +4018,79 @@ fn shell_handle_ext(cmd) {
     if cmd == "cf status" { return cf_status(); }
     if cmd == "cf test"   { return cuckoo_filter_test(); }
 
+    // --- Disjoint Set Union ---
+    if str_starts_with(cmd, "dsu union ") {
+        let dur = str_slice(cmd, 10, len(cmd));
+        let dup = str_split(dur, " ");
+        let dux = to_int(dup[0]); let duy = to_int(dup[1]);
+        let dmr = dsu_union(dux, duy);
+        return "dsu: union(" + to_string(dux) + "," + to_string(duy) + ")=" + to_string(dmr) + " " + dsu_status();
+    }
+    if str_starts_with(cmd, "dsu find ") {
+        let dfx = to_int(str_slice(cmd, 9, len(cmd)));
+        return "dsu: find(" + to_string(dfx) + ")=" + to_string(dsu_find(dfx));
+    }
+    if str_starts_with(cmd, "dsu connected ") {
+        let dcr = str_slice(cmd, 14, len(cmd));
+        let dcp = str_split(dcr, " ");
+        let dcx = to_int(dcp[0]); let dcy = to_int(dcp[1]);
+        return "dsu: connected(" + to_string(dcx) + "," + to_string(dcy) + ")=" + to_string(dsu_connected(dcx, dcy));
+    }
+    if str_starts_with(cmd, "dsu size ") {
+        let dsx = to_int(str_slice(cmd, 9, len(cmd)));
+        return "dsu: size(" + to_string(dsx) + ")=" + to_string(dsu_component_size(dsx));
+    }
+    if cmd == "dsu status" { return dsu_status(); }
+    if cmd == "dsu test"   { return disjoint_set_test(); }
+
+    // --- Treap ---
+    if str_starts_with(cmd, "treap insert ") {
+        let tir = str_slice(cmd, 13, len(cmd));
+        let tip = str_split(tir, " ");
+        let tik = to_int(tip[0]); let tiv = to_int(tip[1]);
+        treap_insert(tik, tiv);
+        return "treap: insert(" + to_string(tik) + "," + to_string(tiv) + ") -> " + treap_status();
+    }
+    if str_starts_with(cmd, "treap delete ") {
+        let tdk = to_int(str_slice(cmd, 13, len(cmd)));
+        treap_delete(tdk);
+        return "treap: deleted " + to_string(tdk) + " -> " + treap_status();
+    }
+    if str_starts_with(cmd, "treap search ") {
+        let tsk = to_int(str_slice(cmd, 13, len(cmd)));
+        return "treap: search(" + to_string(tsk) + ")=" + to_string(treap_search(tsk));
+    }
+    if str_starts_with(cmd, "treap kth ") {
+        let tkk = to_int(str_slice(cmd, 10, len(cmd)));
+        return "treap: kth(" + to_string(tkk) + ")=" + to_string(treap_kth(tkk));
+    }
+    if str_starts_with(cmd, "treap rank ") {
+        let trk = to_int(str_slice(cmd, 11, len(cmd)));
+        return "treap: rank(" + to_string(trk) + ")=" + to_string(treap_rank(trk));
+    }
+    if cmd == "treap min"    { return "treap: min=" + to_string(treap_min()); }
+    if cmd == "treap max"    { return "treap: max=" + to_string(treap_max()); }
+    if cmd == "treap status" { return treap_status(); }
+    if cmd == "treap test"   { return treap_test(); }
+
+    // --- Suffix Array ---
+    if str_starts_with(cmd, "sa build ") {
+        let sabn = to_int(str_slice(cmd, 9, len(cmd)));
+        let sabd = [98, 97, 110, 97, 110, 97];
+        let sabn2 = sabn; if sabn2 > 6 { sabn2 = 6; }
+        sa_load(sabd, sabn2);
+        sa_build();
+        return "sa: built n=" + to_string(sabn2) + " -> " + sa_status();
+    }
+    if cmd == "sa lcp" {
+        sa_build_lcp();
+        return "sa: lcp built lrs=" + to_string(sa_lrs());
+    }
+    if cmd == "sa lrs"      { return "sa: lrs=" + to_string(sa_lrs()); }
+    if cmd == "sa distinct" { return "sa: distinct_substrings=" + to_string(sa_distinct_substrings()); }
+    if cmd == "sa status"   { return sa_status(); }
+    if cmd == "sa test"     { return suffix_array_test(); }
+
     return shell_handle(cmd);
 }
 
@@ -4026,7 +4102,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 715 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo");
+print("shell.hl loaded -- 730 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray");
 
 // Main shell loop (called from kernel_init)
 

@@ -2,11 +2,46 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`328`（69 根目录 + 259 内核模块）
-- H-L 总行数：`~106,500`
-- 内核模块：`259`
-- Shell 命令：`715`
-- 最近完成功能迭代：`273`（fenwick_tree + segment_tree + cuckoo_filter）
+- `.hl` 文件：`331`（69 根目录 + 262 内核模块）
+- H-L 总行数：`~109,500`
+- 内核模块：`262`
+- Shell 命令：`730`
+- 最近完成功能迭代：`276`（disjoint_set + treap + suffix_array）
+
+## Iteration 276 — suffix_array.hl：后缀数组 + LCP
+
+- **`bare-kernel/hl/suffix_array.hl`** 新增（~215 行）
+  - 后缀数组（Manber & Myers 1990，SIAM J. Computing）+ LCP 数组（Kasai et al. 2001）
+  - 构建：前缀倍增法，O(n log²n)；每轮用插入排序对后缀对 (rank[i], rank[i+gap]) 排序
+  - LCP：Kasai 线性算法，利用 "相邻后缀的 LCP 最多减少 1" 性质，O(n)
+  - `sa_search_count(pat, plen)` — 二分搜索统计模式出现次数，O(m log n)
+  - `sa_lrs()` — 最长重复子串长度 = max(LCP)
+  - `sa_distinct_substrings()` — 不同子串数 = n(n+1)/2 - sum(LCP)
+  - 测试：'banana' → SA=[5,3,1,0,4,2], LRS=3("ana"), distinct=15, count("ana")=2
+  - Buffer: 0x14B0000
+  - Shell 命令：`sa build <n>  sa lcp  sa lrs  sa distinct  sa search <p>  sa status  sa test`
+
+## Iteration 275 — treap.hl：Treap（随机平衡 BST）
+
+- **`bare-kernel/hl/treap.hl`** 新增（~190 行）
+  - Treap（Seidel & Aragon 1996，Algorithmica）：BST（按键）+ 最大堆（按随机优先级）
+  - Split/Merge 原语（递归实现），期望 O(log n) 所有操作
+  - 子树大小追踪：`treap_rank(key)` 统计严格小于 key 的元素数；`treap_kth(k)` 第 k 小
+  - `treap_insert/delete/search` + `treap_min/max`；池化节点分配（最多 TREAP_MAX_NODES=64）
+  - Buffer: 0x14A0000
+  - Shell 命令：`treap insert <k> <v>  treap delete <k>  treap search <k>  treap kth <k>  treap rank <k>  treap min/max  treap test`
+
+## Iteration 274 — disjoint_set.hl：并查集（Union-Find）
+
+- **`bare-kernel/hl/disjoint_set.hl`** 新增（~145 行）
+  - Union-Find（Tarjan & van Leeuwen 1984，JACM），两大优化组合：路径压缩 + 按秩合并
+  - 合并时间复杂度：O(α(n)) 摊还（α 为反 Ackermann 函数，实际近常数）
+  - 每个连通分量维护：大小（dsu_sz）、最小元素（dsu_cmin）、最大元素（dsu_cmax）
+  - `dsu_kruskal_mst(edges, num_edges)` — Kruskal 最小生成树（边需预排序）
+  - Buffer: 0x1490000
+  - Shell 命令：`dsu union <x> <y>  dsu find <x>  dsu connected <x> <y>  dsu size <x>  dsu status  dsu test`
+
+
 
 ## Iteration 273 — cuckoo_filter.hl：Cuckoo 过滤器
 

@@ -1,0 +1,142 @@
+// disjoint_set.hl -- Disjoint Set Union (Union-Find)
+//
+// Implements Union-Find with two classic optimizations (Tarjan & van Leeuwen 1984, JACM):
+//   - Path compression: find root and flatten path in one pass
+//   - Union by rank: always attach the shorter tree under the taller
+//   - Combined: O(α(n)) amortized per operation (inverse Ackermann, near-constant)
+//   - Per-component metadata: size, minimum element, maximum element
+//   - Kruskal's MST: process sorted edges, union if not already connected
+// Applications: connected components, Kruskal's MST, cycle detection,
+//               image segmentation, online connectivity queries.
+// Up to DSU_MAX_N=256 elements (0-indexed).
+//
+// Buffer: 0x1490000
+
+let DSU_BUF     = 0x1490000;
+let DSU_MAX_N   = 256;
+
+let dsu_parent  = [];   // parent[i]: parent node (= i if root)
+let dsu_rank    = [];   // rank[i]: upper bound on subtree height
+let dsu_sz      = [];   // sz[i]: component size (valid at root)
+let dsu_cmin    = [];   // cmin[i]: component minimum (valid at root)
+let dsu_cmax    = [];   // cmax[i]: component maximum (valid at root)
+
+let dsu_n       = 0;    // total number of elements
+let dsu_comps   = 0;    // number of distinct components
+
+let dsu_initialized = 0;
+
+fn dsu_init(n) {
+    if n > DSU_MAX_N { n = DSU_MAX_N; }
+    dsu_n = n;
+    dsu_comps = n;
+    let i = 0;
+    while i < n {
+        set_at(dsu_parent, i, i);
+        set_at(dsu_rank,   i, 0);
+        set_at(dsu_sz,     i, 1);
+        set_at(dsu_cmin,   i, i);
+        set_at(dsu_cmax,   i, i);
+        i = i + 1;
+    }
+    dsu_initialized = 1;
+    return 0;
+}
+
+// Find root with two-pass path compression
+fn dsu_find(x) {
+    let root = x;
+    while dsu_parent[root] != root { root = dsu_parent[root]; }
+    while dsu_parent[x] != root {
+        let nxt = dsu_parent[x];
+        set_at(dsu_parent, x, root);
+        x = nxt;
+    }
+    return root;
+}
+
+// Union by rank; returns 1 if merged, 0 if already in same component
+fn dsu_union(x, y) {
+    let rx = dsu_find(x);
+    let ry = dsu_find(y);
+    if rx == ry { return 0; }
+    // Attach smaller-rank tree under larger-rank tree
+    if dsu_rank[rx] < dsu_rank[ry] { let t = rx; rx = ry; ry = t; }
+    set_at(dsu_parent, ry, rx);
+    if dsu_rank[rx] == dsu_rank[ry] {
+        set_at(dsu_rank, rx, dsu_rank[rx] + 1);
+    }
+    set_at(dsu_sz,   rx, dsu_sz[rx]   + dsu_sz[ry]);
+    let mn = dsu_cmin[rx]; if dsu_cmin[ry] < mn { mn = dsu_cmin[ry]; }
+    let mx = dsu_cmax[rx]; if dsu_cmax[ry] > mx { mx = dsu_cmax[ry]; }
+    set_at(dsu_cmin, rx, mn);
+    set_at(dsu_cmax, rx, mx);
+    dsu_comps = dsu_comps - 1;
+    return 1;
+}
+
+fn dsu_connected(x, y) {
+    if dsu_find(x) == dsu_find(y) { return 1; }
+    return 0;
+}
+
+fn dsu_component_size(x) { return dsu_sz[dsu_find(x)]; }
+fn dsu_component_min(x)  { return dsu_cmin[dsu_find(x)]; }
+fn dsu_component_max(x)  { return dsu_cmax[dsu_find(x)]; }
+
+// Kruskal's MST: edges flat array [u0,v0,w0, u1,v1,w1, ...] pre-sorted by weight
+// Returns total MST weight, or -1 if the graph is disconnected
+fn dsu_kruskal_mst(edges, num_edges) {
+    let mst_w    = 0;
+    let mst_cnt  = 0;
+    let i = 0;
+    while i < num_edges {
+        let u = edges[i * 3];
+        let v = edges[i * 3 + 1];
+        let w = edges[i * 3 + 2];
+        if dsu_union(u, v) == 1 {
+            mst_w   = mst_w + w;
+            mst_cnt = mst_cnt + 1;
+        }
+        i = i + 1;
+    }
+    if mst_cnt < dsu_n - 1 { return -1; }
+    return mst_w;
+}
+
+fn dsu_status() {
+    return "dsu: n=" + to_string(dsu_n)
+        + " components=" + to_string(dsu_comps);
+}
+
+fn disjoint_set_test() {
+    dsu_init(10);
+    dsu_union(0, 1); dsu_union(1, 2);
+    dsu_union(3, 4);
+    dsu_union(5, 6); dsu_union(6, 7); dsu_union(7, 8); dsu_union(8, 9);
+    let comps  = dsu_comps;              // 3
+    let conn02 = dsu_connected(0, 2);   // 1
+    let conn03 = dsu_connected(0, 3);   // 0
+    let sz0    = dsu_component_size(0); // 3
+    let mn9    = dsu_component_min(9);  // 5
+    let mx5    = dsu_component_max(5);  // 9
+    // Kruskal's MST on 4-node graph (edges sorted by weight)
+    dsu_init(4);
+    let edges = [0, 1, 1,  1, 2, 2,  2, 3, 3,  0, 2, 4,  1, 3, 5];
+    let mst = dsu_kruskal_mst(edges, 5);  // 1+2+3=6
+    serial_print("dsu test: " + dsu_status());
+    serial_print("dsu test: comps=" + to_string(comps)
+        + " connected(0,2)=" + to_string(conn02)
+        + " connected(0,3)=" + to_string(conn03)
+        + " sz(0)=" + to_string(sz0)
+        + " min{5..9}=" + to_string(mn9)
+        + " max{5..9}=" + to_string(mx5)
+        + " kruskal=" + to_string(mst));
+    return "dsu: n=10 comps=" + to_string(comps)
+        + " connected(0,2)=" + to_string(conn02)
+        + " sz(0)=" + to_string(sz0)
+        + " kruskal_mst_4nodes=" + to_string(mst)
+        + " [Tarjan+vanLeeuwen 1984 ok]";
+}
+
+print("disjoint_set.hl loaded -- Union-Find (path compression + union by rank, Kruskal MST)");

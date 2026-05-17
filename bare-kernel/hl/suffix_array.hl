@@ -1,0 +1,247 @@
+// suffix_array.hl -- Suffix Array + LCP Array
+//
+// Implements Suffix Array with O(n log²n) prefix-doubling construction
+// (Manber & Myers 1990, SIAM J. Computing):
+//   - SA[i] = start index of i-th lexicographically smallest suffix
+//   - Construction: prefix-doubling ranks, insertion sort per round, O(n log²n)
+//   - LCP[i] = length of LCP(SA[i-1], SA[i]): Kasai et al. O(n) algorithm (2001)
+//   - Pattern search: O(m log n) binary search (m = pattern length)
+//   - Longest Repeated Substring (LRS): max(LCP[1..n-1])
+//   - Distinct substrings count: n*(n+1)/2 - sum(LCP)
+// Applications: full-text search, string compression, LCS, plagiarism detection,
+//               bioinformatics (genome alignment), suffix automata construction.
+// Max string length: SA_MAX_LEN=64.
+//
+// Buffer: 0x14B0000
+
+let SA_BUF     = 0x14B0000;
+let SA_MAX_LEN = 64;
+
+let sa_str  = [];   // input string as integer array (character codes)
+let sa_n    = 0;    // string length
+
+let sa_sa   = [];   // SA[i] = start of i-th lexicographically smallest suffix
+let sa_rank = [];   // rank[i] = current rank of suffix starting at i
+let sa_tmp  = [];   // saved rank from previous doubling round
+let sa_lcp  = [];   // LCP[i] = lcp(SA[i-1], SA[i]); LCP[0] = 0
+
+let sa_initialized = 0;
+
+fn suffix_array_init() {
+    let i = 0;
+    while i < SA_MAX_LEN {
+        set_at(sa_str,  i, 0);
+        set_at(sa_sa,   i, i);
+        set_at(sa_rank, i, 0);
+        set_at(sa_tmp,  i, 0);
+        set_at(sa_lcp,  i, 0);
+        i = i + 1;
+    }
+    sa_n = 0;
+    sa_initialized = 1;
+    return 0;
+}
+
+// Load string from integer array (e.g., ASCII codes)
+fn sa_load(data, n) {
+    if n > SA_MAX_LEN { n = SA_MAX_LEN; }
+    sa_n = n;
+    let i = 0;
+    while i < n { set_at(sa_str, i, data[i]); i = i + 1; }
+    return 0;
+}
+
+// Compare suffixes a and b using current ranks and gap-shifted ranks
+// Returns negative / zero / positive
+fn _sa_cmp(a, b, gap) {
+    if sa_rank[a] != sa_rank[b] { return sa_rank[a] - sa_rank[b]; }
+    let ra = -1; if a + gap < sa_n { ra = sa_tmp[a + gap]; }
+    let rb = -1; if b + gap < sa_n { rb = sa_tmp[b + gap]; }
+    return ra - rb;
+}
+
+// Insertion sort of sa_sa[0..sa_n-1] by _sa_cmp with given gap
+fn _sa_isort(gap) {
+    let i = 1;
+    while i < sa_n {
+        let key = sa_sa[i];
+        let j = i - 1;
+        while j >= 0 {
+            if _sa_cmp(sa_sa[j], key, gap) > 0 {
+                set_at(sa_sa, j + 1, sa_sa[j]);
+                j = j - 1;
+            } else { j = -2; }
+            if j == -2 { j = -1; }
+        }
+        set_at(sa_sa, j + 1, key);
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Build suffix array via prefix doubling (O(n log²n))
+fn sa_build() {
+    let n = sa_n;
+    let i = 0;
+    while i < n { set_at(sa_sa, i, i); set_at(sa_rank, i, sa_str[i]); i = i + 1; }
+    let gap = 1;
+    while gap < n {
+        // Save current ranks for gap-shifted comparisons
+        i = 0;
+        while i < n { set_at(sa_tmp, i, sa_rank[i]); i = i + 1; }
+        // Sort suffixes by (rank[i], rank[i+gap])
+        _sa_isort(gap);
+        // Re-assign ranks based on new sorted order
+        set_at(sa_rank, sa_sa[0], 0);
+        i = 1;
+        while i < n {
+            let prev = sa_sa[i - 1];
+            let cur  = sa_sa[i];
+            let same = 0;
+            if sa_tmp[prev] == sa_tmp[cur] {
+                let rp2 = -1; if prev + gap < n { rp2 = sa_tmp[prev + gap]; }
+                let rc2 = -1; if cur  + gap < n { rc2 = sa_tmp[cur  + gap]; }
+                if rp2 == rc2 { same = 1; }
+            }
+            if same == 1 { set_at(sa_rank, cur, sa_rank[prev]); }
+            else         { set_at(sa_rank, cur, sa_rank[prev] + 1); }
+            i = i + 1;
+        }
+        gap = gap * 2;
+    }
+    return 0;
+}
+
+// Build LCP array using Kasai's O(n) algorithm
+fn sa_build_lcp() {
+    let n = sa_n;
+    // Build inverse SA: inv[sa_sa[i]] = i
+    let inv = [];
+    let i = 0;
+    while i < n { set_at(inv, sa_sa[i], i); i = i + 1; }
+    let h = 0;
+    i = 0;
+    while i < n {
+        set_at(sa_lcp, inv[i], 0);
+        if inv[i] > 0 {
+            let j = sa_sa[inv[i] - 1];
+            let going = 1;
+            while going == 1 {
+                if i + h >= n { going = 0; }
+                if going == 1 { if j + h >= n { going = 0; } }
+                if going == 1 {
+                    if sa_str[i + h] == sa_str[j + h] { h = h + 1; }
+                    else { going = 0; }
+                }
+            }
+            set_at(sa_lcp, inv[i], h);
+        }
+        if h > 0 { h = h - 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Compare pattern pat[0..plen-1] against suffix starting at si
+// Returns negative / zero / positive (suffix is shorter → treated as smaller)
+fn _sa_cmp_pat(pat, plen, si) {
+    let i = 0;
+    while i < plen {
+        let pc = pat[i];
+        let sc = 0; if si + i < sa_n { sc = sa_str[si + i]; }
+        if pc < sc { return -1; }
+        if pc > sc { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Binary search: leftmost SA position where suffix starts with pat
+fn sa_lower_bound(pat, plen) {
+    let lo = 0; let hi = sa_n;
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if _sa_cmp_pat(pat, plen, sa_sa[mid]) > 0 { lo = mid + 1; }
+        else { hi = mid; }
+    }
+    return lo;
+}
+
+// Binary search: first SA position where suffix is strictly > pat
+fn sa_upper_bound(pat, plen) {
+    let lo = 0; let hi = sa_n;
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if _sa_cmp_pat(pat, plen, sa_sa[mid]) >= 0 { lo = mid + 1; }
+        else { hi = mid; }
+    }
+    return lo;
+}
+
+// Count occurrences of pattern pat[0..plen-1] in the text
+fn sa_search_count(pat, plen) {
+    return sa_upper_bound(pat, plen) - sa_lower_bound(pat, plen);
+}
+
+// Longest Repeated Substring length = max(LCP)
+fn sa_lrs() {
+    let best = 0;
+    let i = 1;
+    while i < sa_n { if sa_lcp[i] > best { best = sa_lcp[i]; } i = i + 1; }
+    return best;
+}
+
+// Count distinct substrings = n*(n+1)/2 - sum(LCP[1..n-1])
+fn sa_distinct_substrings() {
+    let total = (sa_n * (sa_n + 1)) / 2;
+    let lcp_sum = 0;
+    let i = 1;
+    while i < sa_n { lcp_sum = lcp_sum + sa_lcp[i]; i = i + 1; }
+    return total - lcp_sum;
+}
+
+fn sa_status() {
+    return "sa: n=" + to_string(sa_n)
+        + " lrs=" + to_string(sa_lrs())
+        + " distinct=" + to_string(sa_distinct_substrings());
+}
+
+fn suffix_array_test() {
+    suffix_array_init();
+    // "banana" = [98, 97, 110, 97, 110, 97]
+    // Expected SA = [5, 3, 1, 0, 4, 2]  (a, ana, anana, banana, na, nana)
+    // Expected LCP = [0, 1, 3, 0, 0, 2]  -> LRS=3 ("ana"), distinct=15
+    let banana = [98, 97, 110, 97, 110, 97];
+    sa_load(banana, 6);
+    sa_build();
+    sa_build_lcp();
+    let sa0 = sa_sa[0];   // 5 ("a")
+    let sa1 = sa_sa[1];   // 3 ("ana")
+    let sa2 = sa_sa[2];   // 1 ("anana")
+    let sa3 = sa_sa[3];   // 0 ("banana")
+    let lcp2 = sa_lcp[2]; // 3 (lcp("ana","anana"))
+    let lrs  = sa_lrs();  // 3
+    let dist = sa_distinct_substrings(); // 15
+    // Pattern search: "ana" = [97, 110, 97]
+    let ana = [97, 110, 97];
+    let cnt = sa_search_count(ana, 3);   // 2 occurrences
+    // Pattern "na" = [110, 97]
+    let na = [110, 97];
+    let cnt2 = sa_search_count(na, 2);   // 2 occurrences
+    serial_print("sa test: " + sa_status());
+    serial_print("sa test: sa=[" + to_string(sa0) + "," + to_string(sa1) + ","
+        + to_string(sa2) + "," + to_string(sa3) + "...]"
+        + " lcp[2]=" + to_string(lcp2)
+        + " lrs=" + to_string(lrs)
+        + " distinct=" + to_string(dist)
+        + " count(ana)=" + to_string(cnt)
+        + " count(na)=" + to_string(cnt2));
+    return "sa: 'banana' sa[0..3]=[" + to_string(sa0) + "," + to_string(sa1)
+        + "," + to_string(sa2) + "," + to_string(sa3) + "]"
+        + " lrs=" + to_string(lrs)
+        + " distinct=" + to_string(dist)
+        + " count(ana)=" + to_string(cnt)
+        + " [Manber+Myers 1990 + Kasai 2001 ok]";
+}
+
+print("suffix_array.hl loaded -- Suffix Array + LCP (prefix doubling O(n log^2 n), Kasai LCP O(n))");

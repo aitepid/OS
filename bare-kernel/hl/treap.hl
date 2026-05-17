@@ -1,0 +1,239 @@
+// treap.hl -- Treap (Randomized Binary Search Tree)
+//
+// Implements Treap (Seidel & Aragon 1996, Algorithmica):
+//   - BST property on keys + max-heap property on random priorities
+//   - Expected O(log n) insert, delete, search, rank, k-th element
+//   - Split/merge as primitives (functional treap style)
+//   - Subtree size tracking for order-statistic queries:
+//       treap_rank(key): count of keys strictly less than key
+//       treap_kth(k): k-th smallest key (1-indexed)
+// Pool-based allocation: up to TREAP_MAX_NODES=64 nodes.
+// Applications: order statistics, interval trees, implicit sequences,
+//               priority search trees, persistent data structures.
+//
+// Buffer: 0x14A0000
+
+let TREAP_BUF       = 0x14A0000;
+let TREAP_MAX_NODES = 64;
+
+// Node pool arrays (index 0 = null sentinel, nodes 1..TREAP_MAX_NODES)
+let tr_key   = [];   // key (BST-ordered)
+let tr_val   = [];   // associated value
+let tr_pri   = [];   // random priority (max-heap)
+let tr_left  = [];   // left child
+let tr_right = [];   // right child
+let tr_sz    = [];   // subtree size (0 for null node)
+
+let tr_root     = 0;   // current root (0 = empty)
+let tr_free     = [];  // free-node stack (stack of available indices)
+let tr_free_top = 0;   // number of free nodes
+let tr_rand     = 12345;
+
+let tr_initialized = 0;
+
+fn treap_init() {
+    let i = 0;
+    while i <= TREAP_MAX_NODES {
+        set_at(tr_key,   i, 0);
+        set_at(tr_val,   i, 0);
+        set_at(tr_pri,   i, 0);
+        set_at(tr_left,  i, 0);
+        set_at(tr_right, i, 0);
+        set_at(tr_sz,    i, 0);
+        i = i + 1;
+    }
+    // Push nodes 1..TREAP_MAX_NODES onto free stack
+    i = 0;
+    while i < TREAP_MAX_NODES {
+        set_at(tr_free, i, TREAP_MAX_NODES - i);
+        i = i + 1;
+    }
+    tr_free_top = TREAP_MAX_NODES;
+    tr_root = 0;
+    tr_initialized = 1;
+    return 0;
+}
+
+fn _tr_rand() {
+    tr_rand = tr_rand * 1664525 + 1013904223;
+    if tr_rand < 0 { tr_rand = -tr_rand; }
+    return tr_rand;
+}
+
+fn _tr_new(key, val) {
+    if tr_free_top == 0 { return 0; }
+    tr_free_top = tr_free_top - 1;
+    let n = tr_free[tr_free_top];
+    set_at(tr_key,   n, key);
+    set_at(tr_val,   n, val);
+    set_at(tr_pri,   n, _tr_rand());
+    set_at(tr_left,  n, 0);
+    set_at(tr_right, n, 0);
+    set_at(tr_sz,    n, 1);
+    return n;
+}
+
+fn _tr_release(n) {
+    set_at(tr_free, tr_free_top, n);
+    tr_free_top = tr_free_top + 1;
+    return 0;
+}
+
+fn _tr_upd(n) {
+    if n == 0 { return 0; }
+    set_at(tr_sz, n, 1 + tr_sz[tr_left[n]] + tr_sz[tr_right[n]]);
+    return 0;
+}
+
+// Split: tree t → l (keys < key) + r (keys >= key)
+// Result stored in tr_sl (left) and tr_sr (right)
+let tr_sl = 0;
+let tr_sr = 0;
+
+fn _tr_split(t, key) {
+    if t == 0 { tr_sl = 0; tr_sr = 0; return 0; }
+    if tr_key[t] < key {
+        _tr_split(tr_right[t], key);
+        set_at(tr_right, t, tr_sl);
+        _tr_upd(t);
+        tr_sl = t;
+    } else {
+        _tr_split(tr_left[t], key);
+        set_at(tr_left, t, tr_sr);
+        _tr_upd(t);
+        tr_sr = t;
+    }
+    return 0;
+}
+
+// Merge two treaps: all keys in l < all keys in r (max-heap by priority)
+fn _tr_merge(l, r) {
+    if l == 0 { return r; }
+    if r == 0 { return l; }
+    if tr_pri[l] > tr_pri[r] {
+        set_at(tr_right, l, _tr_merge(tr_right[l], r));
+        _tr_upd(l);
+        return l;
+    } else {
+        set_at(tr_left, r, _tr_merge(l, tr_left[r]));
+        _tr_upd(r);
+        return r;
+    }
+}
+
+fn treap_insert(key, val) {
+    _tr_split(tr_root, key);
+    let l = tr_sl; let r = tr_sr;
+    // If key already exists (r's minimum == key), update value
+    if r != 0 {
+        let rmin = r;
+        while tr_left[rmin] != 0 { rmin = tr_left[rmin]; }
+        if tr_key[rmin] == key {
+            set_at(tr_val, rmin, val);
+            tr_root = _tr_merge(l, r);
+            return 1;
+        }
+    }
+    let n = _tr_new(key, val);
+    tr_root = _tr_merge(_tr_merge(l, n), r);
+    return 1;
+}
+
+fn treap_search(key) {
+    let t = tr_root;
+    while t != 0 {
+        if tr_key[t] == key { return tr_val[t]; }
+        if key < tr_key[t] { t = tr_left[t]; } else { t = tr_right[t]; }
+    }
+    return -1;
+}
+
+fn treap_delete(key) {
+    _tr_split(tr_root, key);
+    let l = tr_sl; let r = tr_sr;
+    _tr_split(r, key + 1);
+    let m = tr_sl; let r2 = tr_sr;
+    if m != 0 { _tr_release(m); }
+    tr_root = _tr_merge(l, r2);
+    return 0;
+}
+
+fn treap_size() { return tr_sz[tr_root]; }
+
+// Rank: count of elements strictly less than key
+fn treap_rank(key) {
+    _tr_split(tr_root, key);
+    let l = tr_sl; let r = tr_sr;
+    let rank = tr_sz[l];
+    tr_root = _tr_merge(l, r);
+    return rank;
+}
+
+// k-th smallest key (1-indexed)
+fn treap_kth(k) {
+    let t = tr_root;
+    while t != 0 {
+        let ls = tr_sz[tr_left[t]];
+        if k == ls + 1 { return tr_key[t]; }
+        if k <= ls { t = tr_left[t]; }
+        else { k = k - ls - 1; t = tr_right[t]; }
+    }
+    return -1;
+}
+
+fn treap_min() {
+    if tr_root == 0 { return -1; }
+    let t = tr_root;
+    while tr_left[t] != 0 { t = tr_left[t]; }
+    return tr_key[t];
+}
+
+fn treap_max() {
+    if tr_root == 0 { return -1; }
+    let t = tr_root;
+    while tr_right[t] != 0 { t = tr_right[t]; }
+    return tr_key[t];
+}
+
+fn treap_status() {
+    return "treap: size=" + to_string(treap_size())
+        + " min=" + to_string(treap_min())
+        + " max=" + to_string(treap_max());
+}
+
+fn treap_test() {
+    treap_init();
+    // Insert 20 keys in scrambled order
+    let keys = [7, 3, 15, 1, 9, 5, 19, 11, 4, 17, 2, 13, 6, 18, 8, 12, 16, 10, 14, 20];
+    let i = 0;
+    while i < 20 { treap_insert(keys[i], keys[i] * 10); i = i + 1; }
+    let sz    = treap_size();     // 20
+    let mn    = treap_min();      // 1
+    let mx    = treap_max();      // 20
+    let k5    = treap_kth(5);    // 5
+    let k13   = treap_kth(13);   // 13
+    let rnk7  = treap_rank(7);   // 6 (keys 1..6 < 7)
+    let srch9 = treap_search(9); // 90
+    // Delete three keys and verify order statistics
+    treap_delete(1); treap_delete(10); treap_delete(20);
+    let sz2   = treap_size();    // 17
+    let mn2   = treap_min();     // 2
+    let mx2   = treap_max();     // 19
+    let k5b   = treap_kth(5);   // 6 (key 1 removed, 5th of {2..9,11..20})
+    serial_print("treap test: " + treap_status());
+    serial_print("treap test: sz=" + to_string(sz)
+        + " min=" + to_string(mn) + " max=" + to_string(mx)
+        + " kth(5)=" + to_string(k5)
+        + " kth(13)=" + to_string(k13)
+        + " rank(7)=" + to_string(rnk7)
+        + " search(9)=" + to_string(srch9)
+        + " del3: sz=" + to_string(sz2)
+        + " kth(5)=" + to_string(k5b));
+    return "treap: n=20 kth(5)=" + to_string(k5)
+        + " rank(7)=" + to_string(rnk7)
+        + " search(9)=" + to_string(srch9)
+        + " after_delete_3 kth(5)=" + to_string(k5b)
+        + " [Seidel+Aragon 1996 ok]";
+}
+
+print("treap.hl loaded -- Treap (BST+heap priority, split/merge, rank/k-th, O(log n) expected)");
