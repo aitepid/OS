@@ -1,0 +1,175 @@
+// min_cost_flow.hl -- Minimum Cost Maximum Flow (SPFA augmenting paths)
+// Successive shortest paths via SPFA (Bellman-Ford with queue), O(VEf).
+// MCF_MAX_V=16, MCF_MAX_E=128 directed edges (including reverse). Edge
+// list with adjacency list links. mcf_rev_e[e] = paired reverse edge.
+// mcf_add_edge(u,v,cap,cost): directed edge. mcf_run(src,sink): min cost.
+//
+// Runtime buffer: 0x1640000 (4 KB)
+
+let MCF_MAX_V = 16;
+let MCF_MAX_E = 128;
+
+let mcf_head   = array(16, 0);    // head[v]: first edge index (-1=none)
+let mcf_next   = array(128, 0);   // adjacency list link (-1=end)
+let mcf_to     = array(128, 0);   // edge destination
+let mcf_cap    = array(128, 0);   // remaining capacity
+let mcf_cost_e = array(128, 0);   // cost per unit on edge
+let mcf_rev_e  = array(128, 0);   // paired reverse edge index
+let mcf_dist   = array(16, 0);    // SPFA shortest distance
+let mcf_in_q   = array(16, 0);    // in SPFA queue flag
+let mcf_prev_e = array(16, 0);    // prev edge on cheapest path
+let mcf_q      = array(256, 0);   // SPFA queue (non-circular)
+let mcf_n      = 0;
+let mcf_e      = 0;
+let mcf_flow   = 0;
+let mcf_cost_total = 0;
+
+fn min_cost_flow_init() {
+    let i = 0;
+    while i < 16 {
+        set_at(mcf_head,   i, -1);
+        set_at(mcf_dist,   i, 0);
+        set_at(mcf_in_q,   i, 0);
+        set_at(mcf_prev_e, i, -1);
+        i += 1;
+    }
+    i = 0;
+    while i < 128 {
+        set_at(mcf_next,   i, -1);
+        set_at(mcf_to,     i, 0);
+        set_at(mcf_cap,    i, 0);
+        set_at(mcf_cost_e, i, 0);
+        set_at(mcf_rev_e,  i, 0);
+        i += 1;
+    }
+    mcf_n          = 0;
+    mcf_e          = 0;
+    mcf_flow       = 0;
+    mcf_cost_total = 0;
+    return 0;
+}
+
+fn mcf_set_n(n) {
+    mcf_n = n;
+    return 0;
+}
+
+fn _mcf_add_raw(u, v, cap, cost) {
+    set_at(mcf_to,     mcf_e, v);
+    set_at(mcf_cap,    mcf_e, cap);
+    set_at(mcf_cost_e, mcf_e, cost);
+    set_at(mcf_next,   mcf_e, mcf_head[u]);
+    set_at(mcf_head,   u, mcf_e);
+    mcf_e += 1;
+    return 0;
+}
+
+// Add directed edge u→v with given capacity and cost per unit
+fn mcf_add_edge(u, v, cap, cost) {
+    let fwd = mcf_e;
+    _mcf_add_raw(u, v, cap, cost);
+    let bwd = mcf_e;
+    _mcf_add_raw(v, u, 0, 0 - cost);
+    set_at(mcf_rev_e, fwd, bwd);
+    set_at(mcf_rev_e, bwd, fwd);
+    if u + 1 > mcf_n { mcf_n = u + 1; }
+    if v + 1 > mcf_n { mcf_n = v + 1; }
+    return 0;
+}
+
+// SPFA: find cheapest path from src to sink; returns 1 if path exists
+fn _mcf_spfa(src, sink) {
+    let INF = 1000000;
+    let i = 0;
+    while i < mcf_n {
+        set_at(mcf_dist,   i, INF);
+        set_at(mcf_in_q,   i, 0);
+        set_at(mcf_prev_e, i, -1);
+        i += 1;
+    }
+    set_at(mcf_dist, src, 0);
+    let qh = 0;
+    let qt = 0;
+    set_at(mcf_q, qt, src);
+    qt += 1;
+    set_at(mcf_in_q, src, 1);
+    while qh < qt {
+        let u = mcf_q[qh];
+        qh += 1;
+        set_at(mcf_in_q, u, 0);
+        let e = mcf_head[u];
+        while e >= 0 {
+            if mcf_cap[e] > 0 {
+                let v  = mcf_to[e];
+                let nd = mcf_dist[u] + mcf_cost_e[e];
+                if nd < mcf_dist[v] {
+                    set_at(mcf_dist,   v, nd);
+                    set_at(mcf_prev_e, v, e);
+                    if mcf_in_q[v] == 0 {
+                        set_at(mcf_in_q, v, 1);
+                        if qt < 256 {
+                            set_at(mcf_q, qt, v);
+                            qt += 1;
+                        }
+                    }
+                }
+            }
+            e = mcf_next[e];
+        }
+    }
+    if mcf_dist[sink] == INF { return 0; }
+    return 1;
+}
+
+// Augment max flow along cheapest path; update cost and flow
+fn _mcf_augment(src, sink) {
+    let flow = 1000000;
+    let v = sink;
+    while v != src {
+        let e = mcf_prev_e[v];
+        if mcf_cap[e] < flow { flow = mcf_cap[e]; }
+        v = mcf_to[mcf_rev_e[e]];
+    }
+    v = sink;
+    while v != src {
+        let e = mcf_prev_e[v];
+        set_at(mcf_cap,  e,            mcf_cap[e]                  - flow);
+        set_at(mcf_cap,  mcf_rev_e[e], mcf_cap[mcf_rev_e[e]]       + flow);
+        mcf_cost_total += flow * mcf_cost_e[e];
+        v = mcf_to[mcf_rev_e[e]];
+    }
+    mcf_flow += flow;
+    return flow;
+}
+
+// Run min-cost max-flow; returns total minimum cost
+fn mcf_run(src, sink) {
+    mcf_flow       = 0;
+    mcf_cost_total = 0;
+    let go = _mcf_spfa(src, sink);
+    while go == 1 {
+        _mcf_augment(src, sink);
+        go = _mcf_spfa(src, sink);
+    }
+    return mcf_cost_total;
+}
+
+fn min_cost_flow_test() {
+    min_cost_flow_init();
+    // 4-vertex graph (s=0, t=3):
+    // 0→1: cap=3, cost=1  |  0→2: cap=2, cost=3
+    // 1→3: cap=2, cost=2  |  2→3: cap=3, cost=1  |  1→2: cap=1, cost=1
+    // Cheapest paths (cost/unit): 0→1→3=3, 0→1→2→3=3, 0→2→3=4
+    // SPFA order: 2 units on 0→1→3 (cost=6), 1 unit on 0→1→2→3 (cost=3),
+    //             2 units on 0→2→3 (cost=8) → flow=5, total_cost=17
+    mcf_add_edge(0, 1, 3, 1);
+    mcf_add_edge(0, 2, 2, 3);
+    mcf_add_edge(1, 3, 2, 2);
+    mcf_add_edge(2, 3, 3, 1);
+    mcf_add_edge(1, 2, 1, 1);
+    let tc = mcf_run(0, 3);
+    print("min_cost_flow_test flow=" + to_string(mcf_flow) + " cost=" + to_string(tc));
+    return tc;
+}
+
+print("min_cost_flow.hl loaded");

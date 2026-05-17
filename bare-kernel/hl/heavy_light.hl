@@ -1,0 +1,176 @@
+// heavy_light.hl -- Heavy-Light Decomposition (HLD)
+// Standard HLD: O(n) build, O(log n) chain hops per path query.
+// HL_MAX_V=32; rooted at vertex 0. Two DFS passes: (1) sz+heavy child,
+// (2) chain head + HLD position. hl_path_sum(u,v) sums vertex values
+// on the path u→v in O(log²n) via chain-by-chain range sums.
+//
+// Runtime buffer: 0x1660000 (4 KB)
+
+let HL_MAX_V = 32;
+
+let hl_adj   = array(1024, 0);  // adjacency matrix (undirected tree)
+let hl_par   = array(32, 0);    // parent of vertex (-1 for root)
+let hl_depth = array(32, 0);    // depth from root
+let hl_sz    = array(32, 0);    // subtree size
+let hl_heavy = array(32, 0);    // heavy child index (-1 if leaf)
+let hl_head  = array(32, 0);    // chain head for vertex
+let hl_pos   = array(32, 0);    // HLD position (for linear range)
+let hl_val   = array(32, 0);    // vertex value (for path queries)
+let hl_arr   = array(32, 0);    // HLD-ordered value array
+let hl_n     = 0;
+let hl_timer = 0;
+
+fn heavy_light_init() {
+    let i = 0;
+    while i < 1024 {
+        set_at(hl_adj, i, 0);
+        i += 1;
+    }
+    i = 0;
+    while i < HL_MAX_V {
+        set_at(hl_par,   i, -1);
+        set_at(hl_depth, i, 0);
+        set_at(hl_sz,    i, 1);
+        set_at(hl_heavy, i, -1);
+        set_at(hl_head,  i, 0);
+        set_at(hl_pos,   i, 0);
+        set_at(hl_val,   i, 0);
+        set_at(hl_arr,   i, 0);
+        i += 1;
+    }
+    hl_n     = 0;
+    hl_timer = 0;
+    return 0;
+}
+
+fn hld_set_n(n) { hl_n = n; return 0; }
+
+fn hld_add_edge(u, v) {
+    if u >= HL_MAX_V { return -1; }
+    if v >= HL_MAX_V { return -1; }
+    set_at(hl_adj, u * HL_MAX_V + v, 1);
+    set_at(hl_adj, v * HL_MAX_V + u, 1);
+    if u + 1 > hl_n { hl_n = u + 1; }
+    if v + 1 > hl_n { hl_n = v + 1; }
+    return 0;
+}
+
+fn hld_set_val(v, w) {
+    set_at(hl_val, v, w);
+    return 0;
+}
+
+// DFS pass 1: compute sz, par, depth, heavy child
+fn _hl_dfs1(u, par, d) {
+    set_at(hl_par,   u, par);
+    set_at(hl_depth, u, d);
+    set_at(hl_sz,    u, 1);
+    set_at(hl_heavy, u, -1);
+    let max_sz = 0;
+    let v = 0;
+    while v < hl_n {
+        if hl_adj[u * HL_MAX_V + v] == 1 {
+            if v != par {
+                _hl_dfs1(v, u, d + 1);
+                set_at(hl_sz, u, hl_sz[u] + hl_sz[v]);
+                if hl_sz[v] > max_sz {
+                    max_sz = hl_sz[v];
+                    set_at(hl_heavy, u, v);
+                }
+            }
+        }
+        v += 1;
+    }
+    return 0;
+}
+
+// DFS pass 2: assign head, pos, and build HLD array
+fn _hl_dfs2(u, head) {
+    set_at(hl_head, u, head);
+    set_at(hl_pos,  u, hl_timer);
+    set_at(hl_arr,  hl_timer, hl_val[u]);
+    hl_timer += 1;
+    if hl_heavy[u] >= 0 {
+        _hl_dfs2(hl_heavy[u], head);
+    }
+    let v = 0;
+    while v < hl_n {
+        if hl_adj[u * HL_MAX_V + v] == 1 {
+            if v != hl_par[u] {
+                if v != hl_heavy[u] {
+                    _hl_dfs2(v, v);
+                }
+            }
+        }
+        v += 1;
+    }
+    return 0;
+}
+
+// Build HLD rooted at vertex 0
+fn heavy_light_run() {
+    hl_timer = 0;
+    _hl_dfs1(0, -1, 0);
+    _hl_dfs2(0, 0);
+    return hl_timer;
+}
+
+// Sum vertex values on path u→v (O(log²n) chain-by-chain sums)
+fn hld_path_sum(u0, v0) {
+    let u = u0;
+    let v = v0;
+    let res = 0;
+    while hl_head[u] != hl_head[v] {
+        if hl_depth[hl_head[u]] < hl_depth[hl_head[v]] {
+            let tmp = u;
+            u = v;
+            v = tmp;
+        }
+        // u's chain head is deeper: add chain head→u then move up
+        let i = hl_pos[hl_head[u]];
+        while i <= hl_pos[u] {
+            res += hl_arr[i];
+            i += 1;
+        }
+        u = hl_par[hl_head[u]];
+    }
+    // Same chain: add shallower..deeper
+    if hl_depth[u] > hl_depth[v] {
+        let tmp2 = u;
+        u = v;
+        v = tmp2;
+    }
+    let i2 = hl_pos[u];
+    while i2 <= hl_pos[v] {
+        res += hl_arr[i2];
+        i2 += 1;
+    }
+    return res;
+}
+
+fn heavy_light_test() {
+    heavy_light_init();
+    hld_set_n(7);
+    // Tree rooted at 0:
+    //      0 (val=1)
+    //     / \
+    //    1   2 (val=2,3)
+    //   / \   \
+    //  3   4   5 (val=4,5,6)
+    //           \
+    //            6 (val=7)
+    // Heavy chains: 0→1→3 (sz=3), 2→5→6 (sz=3), 4 (sz=1)
+    // path_sum(3,6) = val[3]+val[1]+val[0]+val[2]+val[5]+val[6] = 4+2+1+3+6+7 = 23
+    hld_add_edge(0, 1);  hld_add_edge(0, 2);
+    hld_add_edge(1, 3);  hld_add_edge(1, 4);
+    hld_add_edge(2, 5);  hld_add_edge(5, 6);
+    hld_set_val(0, 1);  hld_set_val(1, 2);  hld_set_val(2, 3);
+    hld_set_val(3, 4);  hld_set_val(4, 5);  hld_set_val(5, 6);  hld_set_val(6, 7);
+    heavy_light_run();
+    let s = hld_path_sum(3, 6);
+    print("heavy_light_test n=7 path_sum(3,6)=" + to_string(s));
+    print("hl_head[0]=" + to_string(hl_head[0]) + " hl_head[6]=" + to_string(hl_head[6]));
+    return s;
+}
+
+print("heavy_light.hl loaded");

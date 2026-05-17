@@ -2,11 +2,46 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`355`（69 根目录 + 286 内核模块）
-- H-L 总行数：`~104,700`
-- 内核模块：`286`
-- Shell 命令：`850`
-- 最近完成功能迭代：`300`（two_sat + hungarian + hopcroft_karp）
+- `.hl` 文件：`358`（69 根目录 + 289 内核模块）
+- H-L 总行数：`~105,500`
+- 内核模块：`289`
+- Shell 命令：`865`
+- 最近完成功能迭代：`303`（min_cost_flow + centroid + heavy_light）
+
+## Iteration 303 — heavy_light.hl：重链剖分（HLD）
+
+- **`bare-kernel/hl/heavy_light.hl`** 新增（~120 行）
+  - 标准 HLD：O(n) 构建，路径查询 O(log n) 次链跳，每次 O(链长) 区间求和
+  - 两趟 DFS：`_hl_dfs1(u,par,d)` 计算 sz/par/depth/heavy 子节点；`_hl_dfs2(u,head)` 分配 pos/head/hl_arr
+  - `hl_arr[pos]` — HLD 顺序值数组；heavy 子节点优先处理，延续当前链
+  - `hld_path_sum(u,v)` — 两端不同链时，移动链头较深者并累加链和，最终两端同链时加剩余段
+  - 测试：7 顶点树（chains: 0→1→3, 2→5→6, {4}），path_sum(3,6)=23
+  - Buffer: 0x1660000，HL_MAX_V=32
+  - Shell 命令：`hld add <u> <v>  hld run  hld sum <u> <v>  hld setval <v> <w>  hld setn <n>  hld test`
+
+## Iteration 302 — centroid.hl：树重心分解
+
+- **`bare-kernel/hl/centroid.hl`** 新增（~100 行）
+  - Jordan 1869 / 竞赛标准：O(n log n) 树分治基础
+  - `_cd_calc_size(u, par)` — 递归计算当前连通分量各顶点子树大小（已标记顶点视为屏障）
+  - `_cd_find_centroid(u, par, tree_sz)` — 找到满足所有子分量 ≤ tree_sz/2 的重心
+  - `_cd_decompose(u, par_cent)` — 找重心→标记删除→递归各邻域子分量
+  - `cd_cent[v]` — 重心树中 v 的父重心（-1=根重心）；`cd_cent_count` = n 时分解完成
+  - 测试：路径图 0-1-2-3-4 → 根重心=2，cd_cent=[1,2,-1,2,3]，count=5
+  - Buffer: 0x1650000，CD_MAX_V=32
+  - Shell 命令：`cen add <u> <v>  cen run  cen cent <v>  cen setn <n>  cen test`
+
+## Iteration 301 — min_cost_flow.hl：最小费用最大流
+
+- **`bare-kernel/hl/min_cost_flow.hl`** 新增（~115 行）
+  - 逐次最短路法：SPFA 找最短增广路 + 回溯增广，O(VEf)
+  - 边表 + 邻接链表（mcf_head/mcf_next）；`mcf_rev_e[e]` 存配对反向边索引（无需 XOR）
+  - `_mcf_spfa(src, sink)` — Bellman-Ford 队列版；dist/in_q/prev_e 数组；非循环队列大小 256
+  - `_mcf_augment(src, sink)` — 回溯 prev_e 找瓶颈→正反向更新残差→累计费用
+  - `mcf_flow` — 总流量；`mcf_cost_total` — 总费用
+  - 测试：5 边图（s=0, t=3）→ flow=5, cost=17
+  - Buffer: 0x1640000，MCF_MAX_V=16，MCF_MAX_E=128
+  - Shell 命令：`mcf add <u> <v> <cap> <cost>  mcf run <src> <sink>  mcf flow  mcf cost  mcf setn <n>  mcf test`
 
 ## Iteration 300 — hopcroft_karp.hl：Hopcroft-Karp 二部图最大匹配
 

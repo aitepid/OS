@@ -195,6 +195,9 @@ fn shell_handle(cmd) {
         serial_print("2-SAT:       ts add <a> <b>  ts run  ts sat  ts assign <i>  ts setn <n>  ts test");
         serial_print("Hungarian:   hu set <i> <j> <w>  hu run  hu cost  hu match <i>  hu setn <n>  hu test");
         serial_print("HopcroftKarp: hk add <l> <r>  hk run  hk size  hk setnl <nl>  hk setnr <nr>  hk test");
+        serial_print("MinCostFlow: mcf add <u> <v> <cap> <cost>  mcf run <src> <sink>  mcf flow  mcf cost  mcf setn <n>  mcf test");
+        serial_print("Centroid:    cen add <u> <v>  cen run  cen cent <v>  cen setn <n>  cen test");
+        serial_print("HLD:         hld add <u> <v>  hld run  hld sum <u> <v>  hld setval <v> <w>  hld setn <n>  hld test");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -4630,6 +4633,97 @@ fn shell_handle_ext(cmd) {
         return "hk: add " + to_string(hkl) + "-" + to_string(hkr);
     }
 
+    if cmd == "mcf test"  { let mct = min_cost_flow_test(); return "mcf: cost=" + to_string(mct); }
+    if cmd == "mcf flow"  { return "mcf: flow=" + to_string(mcf_flow); }
+    if cmd == "mcf cost"  { return "mcf: cost=" + to_string(mcf_cost_total); }
+    if _starts_with(cmd, "mcf setn ") {
+        let mcfn = to_int(str_sub(cmd, 9, len(cmd)));
+        mcf_set_n(mcfn);
+        return "mcf: n=" + to_string(mcfn);
+    }
+    if _starts_with(cmd, "mcf run ") {
+        let mcfargs = str_sub(cmd, 8, len(cmd));
+        let mcfsp = _find_space(mcfargs);
+        if mcfsp < 0 { return "mcf run: usage mcf run <src> <sink>"; }
+        let mcfsrc = to_int(str_sub(mcfargs, 0, mcfsp));
+        let mcfsnk = to_int(str_sub(mcfargs, mcfsp + 1, len(mcfargs)));
+        let mctc = mcf_run(mcfsrc, mcfsnk);
+        return "mcf: flow=" + to_string(mcf_flow) + " cost=" + to_string(mctc);
+    }
+    if _starts_with(cmd, "mcf add ") {
+        let mcfad = str_sub(cmd, 8, len(cmd));
+        let s1 = _find_space(mcfad);
+        if s1 < 0 { return "mcf add: usage mcf add <u> <v> <cap> <cost>"; }
+        let mcfu = to_int(str_sub(mcfad, 0, s1));
+        let r1 = str_sub(mcfad, s1 + 1, len(mcfad));
+        let s2 = _find_space(r1);
+        if s2 < 0 { return "mcf add: usage mcf add <u> <v> <cap> <cost>"; }
+        let mcfv = to_int(str_sub(r1, 0, s2));
+        let r2 = str_sub(r1, s2 + 1, len(r1));
+        let s3 = _find_space(r2);
+        if s3 < 0 { return "mcf add: usage mcf add <u> <v> <cap> <cost>"; }
+        let mcfc = to_int(str_sub(r2, 0, s3));
+        let mcfw = to_int(str_sub(r2, s3 + 1, len(r2)));
+        mcf_add_edge(mcfu, mcfv, mcfc, mcfw);
+        return "mcf: add " + to_string(mcfu) + "→" + to_string(mcfv) + " cap=" + to_string(mcfc) + " cost=" + to_string(mcfw);
+    }
+
+    if cmd == "cen test"  { let cent = centroid_test(); return "cen: count=" + to_string(cent); }
+    if cmd == "cen run"   { let cenr = centroid_run();  return "cen: count=" + to_string(cenr); }
+    if _starts_with(cmd, "cen setn ") {
+        let cenn = to_int(str_sub(cmd, 9, len(cmd)));
+        cen_set_n(cenn);
+        return "cen: n=" + to_string(cenn);
+    }
+    if _starts_with(cmd, "cen cent ") {
+        let cenv = to_int(str_sub(cmd, 9, len(cmd)));
+        return "cen: cd_cent[" + to_string(cenv) + "]=" + to_string(cd_cent[cenv]);
+    }
+    if _starts_with(cmd, "cen add ") {
+        let cenargs = str_sub(cmd, 8, len(cmd));
+        let censp = _find_space(cenargs);
+        if censp < 0 { return "cen add: usage cen add <u> <v>"; }
+        let cenu = to_int(str_sub(cenargs, 0, censp));
+        let cenv2 = to_int(str_sub(cenargs, censp + 1, len(cenargs)));
+        cen_add_edge(cenu, cenv2);
+        return "cen: add " + to_string(cenu) + "-" + to_string(cenv2);
+    }
+
+    if cmd == "hld test"   { let hlds = heavy_light_test(); return "hld: sum=" + to_string(hlds); }
+    if cmd == "hld run"    { let hldr = heavy_light_run();  return "hld: timer=" + to_string(hldr); }
+    if _starts_with(cmd, "hld setn ") {
+        let hldn = to_int(str_sub(cmd, 9, len(cmd)));
+        hld_set_n(hldn);
+        return "hld: n=" + to_string(hldn);
+    }
+    if _starts_with(cmd, "hld setval ") {
+        let hldvargs = str_sub(cmd, 11, len(cmd));
+        let hldvsp = _find_space(hldvargs);
+        if hldvsp < 0 { return "hld setval: usage hld setval <v> <w>"; }
+        let hldvi = to_int(str_sub(hldvargs, 0, hldvsp));
+        let hldvw = to_int(str_sub(hldvargs, hldvsp + 1, len(hldvargs)));
+        hld_set_val(hldvi, hldvw);
+        return "hld: val[" + to_string(hldvi) + "]=" + to_string(hldvw);
+    }
+    if _starts_with(cmd, "hld sum ") {
+        let hldsargs = str_sub(cmd, 8, len(cmd));
+        let hldssp = _find_space(hldsargs);
+        if hldssp < 0 { return "hld sum: usage hld sum <u> <v>"; }
+        let hldsu = to_int(str_sub(hldsargs, 0, hldssp));
+        let hldsv = to_int(str_sub(hldsargs, hldssp + 1, len(hldsargs)));
+        let hldss = hld_path_sum(hldsu, hldsv);
+        return "hld: path_sum(" + to_string(hldsu) + "," + to_string(hldsv) + ")=" + to_string(hldss);
+    }
+    if _starts_with(cmd, "hld add ") {
+        let hldaargs = str_sub(cmd, 8, len(cmd));
+        let hldasp = _find_space(hldaargs);
+        if hldasp < 0 { return "hld add: usage hld add <u> <v>"; }
+        let hldau = to_int(str_sub(hldaargs, 0, hldasp));
+        let hldav = to_int(str_sub(hldaargs, hldasp + 1, len(hldaargs)));
+        hld_add_edge(hldau, hldav);
+        return "hld: add " + to_string(hldau) + "-" + to_string(hldav);
+    }
+
     return shell_handle(cmd);
 }
 
@@ -4641,7 +4735,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 850 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp");
+print("shell.hl loaded -- 865 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld");
 
 // Main shell loop (called from kernel_init)
 

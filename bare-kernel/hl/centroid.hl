@@ -1,0 +1,138 @@
+// centroid.hl -- Centroid Decomposition of Trees
+// Jordan 1869 / standard competitive: O(n log n) tree decomposition.
+// CD_MAX_V=32; undirected tree (adjacency matrix). Recursive: find centroid
+// of each component, mark removed, recurse on sub-components.
+// cd_cent[v] = parent centroid (-1 if root centroid).
+//
+// Runtime buffer: 0x1650000 (4 KB)
+
+let CD_MAX_V = 32;
+
+let cd_adj        = array(1024, 0);  // adjacency matrix (undirected tree)
+let cd_sz         = array(32, 0);    // subtree size in current component
+let cd_rem        = array(32, 0);    // 1 if vertex is a centroid (removed)
+let cd_cent       = array(32, 0);    // centroid parent (-1 = root centroid)
+let cd_n          = 0;
+let cd_cent_count = 0;               // total centroids found (= n when done)
+
+fn centroid_init() {
+    let i = 0;
+    while i < 1024 {
+        set_at(cd_adj, i, 0);
+        i += 1;
+    }
+    i = 0;
+    while i < CD_MAX_V {
+        set_at(cd_sz,   i, 0);
+        set_at(cd_rem,  i, 0);
+        set_at(cd_cent, i, -1);
+        i += 1;
+    }
+    cd_n          = 0;
+    cd_cent_count = 0;
+    return 0;
+}
+
+fn cen_set_n(n) {
+    cd_n = n;
+    return 0;
+}
+
+fn cen_add_edge(u, v) {
+    if u >= CD_MAX_V { return -1; }
+    if v >= CD_MAX_V { return -1; }
+    set_at(cd_adj, u * CD_MAX_V + v, 1);
+    set_at(cd_adj, v * CD_MAX_V + u, 1);
+    if u + 1 > cd_n { cd_n = u + 1; }
+    if v + 1 > cd_n { cd_n = v + 1; }
+    return 0;
+}
+
+// Compute subtree sizes in current component (par=-1 for root of component)
+fn _cd_calc_size(u, par) {
+    set_at(cd_sz, u, 1);
+    let v = 0;
+    while v < cd_n {
+        if cd_adj[u * CD_MAX_V + v] == 1 {
+            if v != par {
+                if cd_rem[v] == 0 {
+                    _cd_calc_size(v, u);
+                    set_at(cd_sz, u, cd_sz[u] + cd_sz[v]);
+                }
+            }
+        }
+        v += 1;
+    }
+    return 0;
+}
+
+// Find centroid of component with given total size; par=-1 at start
+fn _cd_find_centroid(u, par, tree_sz) {
+    let v = 0;
+    while v < cd_n {
+        if cd_adj[u * CD_MAX_V + v] == 1 {
+            if v != par {
+                if cd_rem[v] == 0 {
+                    if cd_sz[v] > tree_sz / 2 {
+                        return _cd_find_centroid(v, u, tree_sz);
+                    }
+                }
+            }
+        }
+        v += 1;
+    }
+    return u;
+}
+
+// Decompose component containing u; par_cent = centroid parent (-1 for root)
+fn _cd_decompose(u, par_cent) {
+    _cd_calc_size(u, -1);
+    let c = _cd_find_centroid(u, -1, cd_sz[u]);
+    set_at(cd_cent, c, par_cent);
+    set_at(cd_rem,  c, 1);
+    cd_cent_count += 1;
+    let v = 0;
+    while v < cd_n {
+        if cd_adj[c * CD_MAX_V + v] == 1 {
+            if cd_rem[v] == 0 {
+                _cd_decompose(v, c);
+            }
+        }
+        v += 1;
+    }
+    return 0;
+}
+
+// Run centroid decomposition from vertex 0; returns centroid count (= n)
+fn centroid_run() {
+    let i = 0;
+    while i < cd_n {
+        set_at(cd_rem,  i, 0);
+        set_at(cd_cent, i, -1);
+        i += 1;
+    }
+    cd_cent_count = 0;
+    _cd_decompose(0, -1);
+    return cd_cent_count;
+}
+
+fn centroid_test() {
+    centroid_init();
+    cen_set_n(5);
+    // Path graph: 0-1-2-3-4
+    // Centroid of full tree: 2 (root, cd_cent[2]=-1)
+    // Component {0,1}: centroid=1, cd_cent[1]=2
+    // Component {0}: centroid=0, cd_cent[0]=1
+    // Component {3,4}: centroid=3, cd_cent[3]=2
+    // Component {4}: centroid=4, cd_cent[4]=3
+    cen_add_edge(0, 1);
+    cen_add_edge(1, 2);
+    cen_add_edge(2, 3);
+    cen_add_edge(3, 4);
+    let cnt = centroid_run();
+    print("centroid_test n=5 count=" + to_string(cnt) + " cd_cent[2]=" + to_string(cd_cent[2]));
+    print("cd_cent[0]=" + to_string(cd_cent[0]) + " cd_cent[1]=" + to_string(cd_cent[1]) + " cd_cent[3]=" + to_string(cd_cent[3]));
+    return cnt;
+}
+
+print("centroid.hl loaded");
