@@ -1,0 +1,117 @@
+// matrix_expo.hl -- matrix exponentiation for linear recurrences O(K^3 log n) (iter 323)
+// Buffer: 0x17A0000
+// ME_K=2 (2x2 matrices). me_pool stores 3 slots: base(0), result(4), temp(8).
+
+let ME_K    = 2;
+let ME_SZ   = 4;
+let ME_OFF0 = 0;
+let ME_OFF1 = 4;
+let ME_OFF2 = 8;
+
+let me_pool = array(16, 0);
+
+fn me_init() {
+    let i = 0;
+    while i < 16 {
+        set_at(me_pool, i, 0);
+        i += 1;
+    }
+    return 0;
+}
+
+fn me_set(off, r, c, v) {
+    set_at(me_pool, off + r * ME_K + c, v);
+    return 0;
+}
+
+fn me_get(off, r, c) {
+    return me_pool[off + r * ME_K + c];
+}
+
+fn _me_identity(off) {
+    let i = 0;
+    while i < ME_K {
+        let j = 0;
+        while j < ME_K {
+            if i == j {
+                me_set(off, i, j, 1);
+            } else {
+                me_set(off, i, j, 0);
+            }
+            j += 1;
+        }
+        i += 1;
+    }
+    return 0;
+}
+
+fn _me_mul(a_off, b_off, c_off) {
+    let i = 0;
+    while i < ME_K {
+        let j = 0;
+        while j < ME_K {
+            let s = 0;
+            let k = 0;
+            while k < ME_K {
+                s += me_pool[a_off + i * ME_K + k] * me_pool[b_off + k * ME_K + j];
+                k += 1;
+            }
+            set_at(me_pool, c_off + i * ME_K + j, s);
+            j += 1;
+        }
+        i += 1;
+    }
+    return 0;
+}
+
+fn _me_copy(src_off, dst_off) {
+    let i = 0;
+    while i < ME_SZ {
+        set_at(me_pool, dst_off + i, me_pool[src_off + i]);
+        i += 1;
+    }
+    return 0;
+}
+
+fn me_pow(n) {
+    _me_identity(ME_OFF1);
+    let nn = n;
+    let done = 0;
+    while done == 0 {
+        if nn <= 0 {
+            done = 1;
+        } else {
+            let rem = nn - (nn / 2) * 2;
+            if rem == 1 {
+                _me_mul(ME_OFF1, ME_OFF0, ME_OFF2);
+                _me_copy(ME_OFF2, ME_OFF1);
+            }
+            _me_mul(ME_OFF0, ME_OFF0, ME_OFF2);
+            _me_copy(ME_OFF2, ME_OFF0);
+            nn = nn / 2;
+        }
+    }
+    return 0;
+}
+
+fn me_test() {
+    me_init();
+    me_set(ME_OFF0, 0, 0, 1);
+    me_set(ME_OFF0, 0, 1, 1);
+    me_set(ME_OFF0, 1, 0, 1);
+    me_set(ME_OFF0, 1, 1, 0);
+    me_pow(10);
+    let f10 = me_get(ME_OFF1, 0, 1);
+    let f11 = me_get(ME_OFF1, 0, 0);
+    print("me_test: F(10)=" + to_string(f10) + " F(11)=" + to_string(f11));
+    if f10 == 55 {
+        if f11 == 89 {
+            print("me_test: PASS");
+            return 1;
+        }
+    }
+    print("me_test: FAIL");
+    return 0;
+}
+
+print("matrix_expo.hl loaded");

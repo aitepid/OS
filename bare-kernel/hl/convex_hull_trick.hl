@@ -1,0 +1,108 @@
+// convex_hull_trick.hl -- CHT line envelope O(n) add, O(log n) query (iter 322)
+// Buffer: 0x1790000
+// Minimum CHT: add lines with decreasing slopes; binary-search for optimal x.
+
+let CHT_MAX = 64;
+
+let cht_m  = array(64, 0);
+let cht_b  = array(64, 0);
+let cht_sz = 0;
+
+fn cht_init() {
+    cht_sz = 0;
+    let i = 0;
+    while i < CHT_MAX {
+        set_at(cht_m, i, 0);
+        set_at(cht_b, i, 0);
+        i += 1;
+    }
+    return 0;
+}
+
+fn _cht_bad(l1, l2, m3, b3) {
+    // Returns 1 if line l2 is dominated by l1 and candidate line (m3,b3).
+    // Condition: intersection(l1,l3) <= intersection(l1,l2)
+    //   (b3-b[l1])*(m[l1]-m[l2]) <= (b[l2]-b[l1])*(m[l1]-m3)
+    let db21 = cht_b[l2] - cht_b[l1];
+    let db31 = b3         - cht_b[l1];
+    let dm12 = cht_m[l1]  - cht_m[l2];
+    let dm13 = cht_m[l1]  - m3;
+    if db31 * dm12 <= db21 * dm13 { return 1; }
+    return 0;
+}
+
+fn cht_add_line(m, b) {
+    let done = 0;
+    while done == 0 {
+        if cht_sz < 2 {
+            done = 1;
+        } else {
+            if _cht_bad(cht_sz - 2, cht_sz - 1, m, b) == 1 {
+                cht_sz -= 1;
+            } else {
+                done = 1;
+            }
+        }
+    }
+    set_at(cht_m, cht_sz, m);
+    set_at(cht_b, cht_sz, b);
+    cht_sz += 1;
+    return 0;
+}
+
+fn cht_query(x) {
+    let lo = 0;
+    let hi = cht_sz - 1;
+    let done = 0;
+    while done == 0 {
+        if lo >= hi {
+            done = 1;
+        } else {
+            let mid   = (lo + hi) / 2;
+            let fmid  = cht_m[mid]   * x + cht_b[mid];
+            let fmid1 = cht_m[mid+1] * x + cht_b[mid+1];
+            if fmid <= fmid1 {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+            }
+        }
+    }
+    return cht_m[lo] * x + cht_b[lo];
+}
+
+fn cht_min_all(x) {
+    let best = cht_m[0] * x + cht_b[0];
+    let i = 1;
+    while i < cht_sz {
+        let v = cht_m[i] * x + cht_b[i];
+        if v < best { best = v; }
+        i += 1;
+    }
+    return best;
+}
+
+fn cht_test() {
+    cht_init();
+    cht_add_line( 3,  0);
+    cht_add_line( 1,  4);
+    cht_add_line(-1, 10);
+    let q0 = cht_query(0);
+    let q2 = cht_query(2);
+    let q5 = cht_query(5);
+    print("cht_test: q(0)=" + to_string(q0) +
+          " q(2)=" + to_string(q2) +
+          " q(5)=" + to_string(q5));
+    if q0 == 0 {
+        if q2 == 6 {
+            if q5 == 5 {
+                print("cht_test: PASS");
+                return 1;
+            }
+        }
+    }
+    print("cht_test: FAIL");
+    return 0;
+}
+
+print("convex_hull_trick.hl loaded");

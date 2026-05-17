@@ -2,11 +2,42 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`376`（73 根目录 + 307 内核模块）
-- H-L 总行数：`~111,300`
-- 内核模块：`307`
-- Shell 命令：`967`
-- 最近完成功能迭代：`321`（splay_tree + mo_algorithm + sqrt_decomp）
+- `.hl` 文件：`379`（73 根目录 + 310 内核模块）
+- H-L 总行数：`~112,200`
+- 内核模块：`310`
+- Shell 命令：`984`
+- 最近完成功能迭代：`324`（convex_hull_trick + matrix_expo + number_theory）
+
+## Iteration 324 — number_theory.hl：数论工具箱
+
+- **`bare-kernel/hl/number_theory.hl`** 新增（~130 行）
+  - `nt_gcd_ext(a,b)` — 扩展欧几里得，设全局 nt_gcd/nt_x/nt_y（ax+by=gcd）
+  - `nt_mod_inv(a,m)` — 模逆元（gcd=1时存在），结果规范化为正值
+  - `nt_crt(r1,m1,r2,m2)` — 中国剩余定理（互质模数），Garner 公式
+  - `nt_euler_phi(n)` — Euler φ 函数：逐质因子迭代，`result = result/p*(p-1)`
+  - `nt_sieve(n)` — Eratosthenes 筛法，输出 nt_primes[] + nt_prime_cnt
+  - 测试：sieve(30)=10, phi(12)=4, inv(3,7)=5, crt(2,3,3,5)=8
+  - Buffer: 0x17B0000
+
+## Iteration 323 — matrix_expo.hl：矩阵快速幂
+
+- **`bare-kernel/hl/matrix_expo.hl`** 新增（~110 行）
+  - ME_K=2（2×2矩阵），me_pool[16] 存 3 个矩阵槽：base/result/temp
+  - `_me_mul(a_off,b_off,c_off)` — 三重嵌套 while 矩阵乘法
+  - `me_pow(n)` — 二进制快速幂：奇数位 result*=base，每步 base 自乘
+  - `me_set/me_get` — 矩阵元素读写（行优先 offset + r*K + c）
+  - 测试：Fibonacci [[1,1],[1,0]]^10 → result[0][1]=F(10)=55, result[0][0]=F(11)=89
+  - Buffer: 0x17A0000
+
+## Iteration 322 — convex_hull_trick.hl：凸包优化（CHT）
+
+- **`bare-kernel/hl/convex_hull_trick.hl`** 新增（~90 行）
+  - 最小值 CHT：斜率递减顺序加线，下凸包维护
+  - `_cht_bad(l1,l2,m3,b3)` — 交叉乘积判断 l2 是否被 l1+候选线覆盖
+  - `cht_add_line(m,b)` — 加线时弹出被覆盖的中间线，O(1) 均摊
+  - `cht_query(x)` — 二分搜索最优线，O(log n)
+  - 测试：lines (3,0)+(1,4)+(-1,10) → q(0)=0, q(2)=6, q(5)=5
+  - Buffer: 0x1790000
 
 ## Iteration 321 — sqrt_decomp.hl：sqrt 分块
 

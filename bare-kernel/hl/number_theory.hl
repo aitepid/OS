@@ -1,0 +1,152 @@
+// number_theory.hl -- ext-GCD, mod-inv, CRT, Euler phi, prime sieve (iter 324)
+// Buffer: 0x17B0000
+
+let NT_MAX       = 256;
+let nt_is_prime  = array(256, 0);
+let nt_primes    = array(256, 0);
+let nt_prime_cnt = 0;
+let nt_gcd       = 0;
+let nt_x         = 0;
+let nt_y         = 0;
+
+fn nt_init() {
+    nt_prime_cnt = 0;
+    nt_gcd = 0;
+    nt_x   = 0;
+    nt_y   = 0;
+    let i = 0;
+    while i < NT_MAX {
+        set_at(nt_is_prime, i, 0);
+        set_at(nt_primes,   i, 0);
+        i += 1;
+    }
+    return 0;
+}
+
+fn nt_gcd_ext(a, b) {
+    if b == 0 {
+        nt_gcd = a;
+        nt_x   = 1;
+        nt_y   = 0;
+        return a;
+    }
+    let q   = a / b;
+    let rem = a - q * b;
+    nt_gcd_ext(b, rem);
+    let tmp = nt_x;
+    nt_x = nt_y;
+    nt_y = tmp - q * nt_y;
+    return nt_gcd;
+}
+
+fn nt_mod_inv(a, m) {
+    nt_gcd_ext(a, m);
+    if nt_gcd != 1 { return -1; }
+    let r = nt_x - (nt_x / m) * m;
+    if r < 0 { r = r + m; }
+    return r;
+}
+
+fn nt_crt(r1, m1, r2, m2) {
+    let inv = nt_mod_inv(m1, m2);
+    if inv < 0 { return -1; }
+    let diff = r2 - r1;
+    let dm   = diff - (diff / m2) * m2;
+    if dm < 0 { dm = dm + m2; }
+    let prod = inv * dm;
+    let k    = prod - (prod / m2) * m2;
+    return r1 + m1 * k;
+}
+
+fn nt_euler_phi(n0) {
+    let result = n0;
+    let n      = n0;
+    let i      = 2;
+    let done   = 0;
+    while done == 0 {
+        if i * i > n {
+            done = 1;
+        } else {
+            let rem = n - (n / i) * i;
+            if rem == 0 {
+                result = result / i * (i - 1);
+                let done2 = 0;
+                while done2 == 0 {
+                    let r2 = n - (n / i) * i;
+                    if r2 == 0 {
+                        n = n / i;
+                    } else {
+                        done2 = 1;
+                    }
+                }
+            }
+            i += 1;
+        }
+    }
+    if n > 1 {
+        result = result / n * (n - 1);
+    }
+    return result;
+}
+
+fn nt_sieve(n) {
+    let i = 0;
+    while i <= n {
+        set_at(nt_is_prime, i, 1);
+        i += 1;
+    }
+    set_at(nt_is_prime, 0, 0);
+    set_at(nt_is_prime, 1, 0);
+    i = 2;
+    let done = 0;
+    while done == 0 {
+        if i * i > n {
+            done = 1;
+        } else {
+            if nt_is_prime[i] == 1 {
+                let j = i * i;
+                while j <= n {
+                    set_at(nt_is_prime, j, 0);
+                    j += i;
+                }
+            }
+            i += 1;
+        }
+    }
+    nt_prime_cnt = 0;
+    i = 2;
+    while i <= n {
+        if nt_is_prime[i] == 1 {
+            set_at(nt_primes, nt_prime_cnt, i);
+            nt_prime_cnt += 1;
+        }
+        i += 1;
+    }
+    return nt_prime_cnt;
+}
+
+fn nt_test() {
+    nt_init();
+    let pc  = nt_sieve(30);
+    let phi = nt_euler_phi(12);
+    let inv = nt_mod_inv(3, 7);
+    let crt = nt_crt(2, 3, 3, 5);
+    print("nt_test: sieve(30)=" + to_string(pc) +
+          " phi(12)=" + to_string(phi) +
+          " inv(3,7)=" + to_string(inv) +
+          " crt(2,3,3,5)=" + to_string(crt));
+    if pc == 10 {
+        if phi == 4 {
+            if inv == 5 {
+                if crt == 8 {
+                    print("nt_test: PASS");
+                    return 1;
+                }
+            }
+        }
+    }
+    print("nt_test: FAIL");
+    return 0;
+}
+
+print("number_theory.hl loaded");
