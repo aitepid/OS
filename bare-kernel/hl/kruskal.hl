@@ -1,0 +1,176 @@
+// kruskal.hl -- Kruskal's Minimum Spanning Tree with DSU
+// Kruskal 1956: O(E log E) edge sort + union-find with path compression.
+// KR_MAX_V=32, KR_MAX_E=128; supports undirected weighted graphs.
+//
+// Runtime buffer: 0x1590000 (4 KB)
+
+let KR_MAX_V = 32;
+let KR_MAX_E = 128;
+
+// Edge list
+let kr_eu = array(128, 0);
+let kr_ev = array(128, 0);
+let kr_ew = array(128, 0);
+
+// DSU (Disjoint Set Union)
+let kr_par  = array(32, 0);
+let kr_rank = array(32, 0);
+
+let kr_n          = 0;
+let kr_m          = 0;
+let kr_mst_weight = 0;
+let kr_mst_edges  = 0;
+
+fn kruskal_init() {
+    let i = 0;
+    while i < KR_MAX_E {
+        set_at(kr_eu, i, 0);
+        set_at(kr_ev, i, 0);
+        set_at(kr_ew, i, 0);
+        i += 1;
+    }
+    i = 0;
+    while i < KR_MAX_V {
+        set_at(kr_par,  i, i);
+        set_at(kr_rank, i, 0);
+        i += 1;
+    }
+    kr_n          = 0;
+    kr_m          = 0;
+    kr_mst_weight = 0;
+    kr_mst_edges  = 0;
+    return 0;
+}
+
+fn kr_set_n(n) {
+    kr_n = n;
+    return 0;
+}
+
+// Add undirected weighted edge u-v with weight w
+fn kr_add_edge(u, v, w) {
+    if kr_m >= KR_MAX_E { return -1; }
+    if u >= KR_MAX_V    { return -1; }
+    if v >= KR_MAX_V    { return -1; }
+    set_at(kr_eu, kr_m, u);
+    set_at(kr_ev, kr_m, v);
+    set_at(kr_ew, kr_m, w);
+    kr_m += 1;
+    if u + 1 > kr_n { kr_n = u + 1; }
+    if v + 1 > kr_n { kr_n = v + 1; }
+    return 0;
+}
+
+// DSU find with iterative path compression
+fn _kr_find(x) {
+    let root = x;
+    let done = 0;
+    while done == 0 {
+        if kr_par[root] == root {
+            done = 1;
+        } else {
+            root = kr_par[root];
+        }
+    }
+    // Compress path from x to root
+    let cur = x;
+    done = 0;
+    while done == 0 {
+        if cur == root {
+            done = 1;
+        } else {
+            let nxt = kr_par[cur];
+            set_at(kr_par, cur, root);
+            cur = nxt;
+        }
+    }
+    return root;
+}
+
+// DSU union by rank; returns 1 if merged, 0 if same component
+fn _kr_union(a, b) {
+    let ra = _kr_find(a);
+    let rb = _kr_find(b);
+    if ra == rb { return 0; }
+    if kr_rank[ra] < kr_rank[rb] {
+        set_at(kr_par, ra, rb);
+    } else {
+        if kr_rank[ra] > kr_rank[rb] {
+            set_at(kr_par, rb, ra);
+        } else {
+            set_at(kr_par, rb, ra);
+            set_at(kr_rank, ra, kr_rank[ra] + 1);
+        }
+    }
+    return 1;
+}
+
+// Run Kruskal's: insertion-sort edges by weight, greedy union
+fn kruskal_run() {
+    // Reset DSU
+    let i = 0;
+    while i < kr_n {
+        set_at(kr_par,  i, i);
+        set_at(kr_rank, i, 0);
+        i += 1;
+    }
+    // Insertion sort edges ascending by weight
+    i = 1;
+    while i < kr_m {
+        let eu_i = kr_eu[i];
+        let ev_i = kr_ev[i];
+        let ew_i = kr_ew[i];
+        let j = i;
+        let done = 0;
+        while done == 0 {
+            if j > 0 {
+                if kr_ew[j - 1] > ew_i {
+                    set_at(kr_eu, j, kr_eu[j - 1]);
+                    set_at(kr_ev, j, kr_ev[j - 1]);
+                    set_at(kr_ew, j, kr_ew[j - 1]);
+                    j -= 1;
+                } else {
+                    done = 1;
+                }
+            } else {
+                done = 1;
+            }
+        }
+        set_at(kr_eu, j, eu_i);
+        set_at(kr_ev, j, ev_i);
+        set_at(kr_ew, j, ew_i);
+        i += 1;
+    }
+    // Greedy MST: pick lightest edge that doesn't form a cycle
+    kr_mst_weight = 0;
+    kr_mst_edges  = 0;
+    i = 0;
+    while i < kr_m {
+        if kr_mst_edges < kr_n - 1 {
+            let merged = _kr_union(kr_eu[i], kr_ev[i]);
+            if merged == 1 {
+                kr_mst_weight += kr_ew[i];
+                kr_mst_edges  += 1;
+            }
+        }
+        i += 1;
+    }
+    return kr_mst_weight;
+}
+
+fn kruskal_test() {
+    kruskal_init();
+    // Same graph as prim_test: MST weight = 16
+    kr_add_edge(0, 1, 2);
+    kr_add_edge(0, 3, 6);
+    kr_add_edge(1, 2, 3);
+    kr_add_edge(1, 3, 8);
+    kr_add_edge(1, 4, 5);
+    kr_add_edge(2, 4, 7);
+    kr_add_edge(3, 4, 9);
+    let w = kruskal_run();
+    print("kruskal_test mst_weight=" + to_string(w) + " mst_edges=" + to_string(kr_mst_edges));
+    return w;
+}
+
+print("kruskal.hl loaded");

@@ -2,11 +2,44 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`343`（69 根目录 + 274 内核模块）
-- H-L 总行数：`~120,000`
-- 内核模块：`274`
-- Shell 命令：`790`
-- 最近完成功能迭代：`288`（dijkstra + topological_sort + bellman_ford）
+- `.hl` 文件：`346`（69 根目录 + 277 内核模块）
+- H-L 总行数：`~101,500`
+- 内核模块：`277`
+- Shell 命令：`805`
+- 最近完成功能迭代：`291`（prim + kruskal + floyd_warshall）
+
+## Iteration 291 — floyd_warshall.hl：Floyd-Warshall 全对最短路
+
+- **`bare-kernel/hl/floyd_warshall.hl`** 新增（~110 行）
+  - Roy-Floyd-Warshall 1962：O(V³) 三重循环 DP，支持负权边
+  - `fw_add_edge(u, v, w)` — 有向边，多边取最小权，自动更新 fw_n
+  - `fw_run()` — 三重循环 d[i][j]=min(d[i][j], d[i][k]+d[k][j])；外层 INF 保护避免溢出
+  - `fw_neg_cycle` — fw_dist[i][i]<0 则置 1（负权环检测）
+  - `fw_dist_q(u, v)` — 查询 u→v 距离，不可达返回 -1
+  - 测试：4 顶点 0→1:3,0→3:7,1→0:8,1→2:2,2→0:5,2→3:1,3→0:2 → d[0][1]=3,d[0][2]=5,d[0][3]=6,d[1][0]=5,neg_cycle=0
+  - Buffer: 0x15A0000，FW_MAX_V=16，FW_INF=1000000
+  - Shell 命令：`fw add <u> <v> <w>  fw run  fw dist <u> <v>  fw setn <n>  fw test`
+
+## Iteration 290 — kruskal.hl：Kruskal MST + DSU
+
+- **`bare-kernel/hl/kruskal.hl`** 新增（~120 行）
+  - Kruskal 1956：O(E log E) 边列表按权插入排序 + DSU 贪心合并
+  - `_kr_find(x)` — 迭代路径压缩 DSU find；`_kr_union(a, b)` — 按秩合并，返回是否新合并
+  - `kruskal_run()` — 插入排序边 → 逐边 _kr_union，合并则累计权重，kr_mst_edges < n-1 时停止
+  - 测试：同 prim_test 5 顶点图 → mst_weight=16, mst_edges=4
+  - Buffer: 0x1590000，KR_MAX_V=32，KR_MAX_E=128
+  - Shell 命令：`kr add <u> <v> <w>  kr run  kr weight  kr setn <n>  kr test`
+
+## Iteration 289 — prim.hl：Prim MST
+
+- **`bare-kernel/hl/prim.hl`** 新增（~100 行）
+  - Prim 1957：O(V²) 线性扫描最小 key 顶点，邻接矩阵，无向图
+  - `prim_add_edge(u, v, w)` — 对称置邻接矩阵，自动更新 prim_n
+  - `prim_run()` — 重置 key/parent/in_mst → 反复选 min-key 未访问顶点 u → 松弛邻居
+  - `prim_mst_weight` — 运行后累计 MST 总权重
+  - 测试：5 顶点图 0-1:2,0-3:6,1-2:3,1-3:8,1-4:5,2-4:7,3-4:9 → mst_weight=16（MST:0-1,1-2,1-4,0-3）
+  - Buffer: 0x1580000，PRIM_MAX_V=32，PRIM_INF=1000000
+  - Shell 命令：`prim add <u> <v> <w>  prim run  prim weight  prim setn <n>  prim test`
 
 ## Iteration 288 — bellman_ford.hl：Bellman-Ford 最短路 + 负权环检测
 

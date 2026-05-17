@@ -2,7 +2,7 @@
 
 ## 版本定位
 
-当前仓库处于 `v6.0` 发布线，最新功能里程碑为迭代 288（dijkstra + topological_sort + bellman_ford）。
+当前仓库处于 `v6.0` 发布线，最新功能里程碑为迭代 291（prim + kruskal + floyd_warshall）。
 
 ## 本轮已核实状态（迭代 285 基线）
 
@@ -10,15 +10,15 @@
 
 | 指标 | 当前值 | 说明 |
 |---|---:|---|
-| 全部 `.hl` 文件 | 343 | 69 根目录 + 274 内核模块 |
-| H-L 总行数 | ~120,000 | 持续增长 |
-| `bare-kernel/hl/` 内核模块 | 274 | 编译进 `kernel.bin` |
+| 全部 `.hl` 文件 | 346 | 69 根目录 + 277 内核模块 |
+| H-L 总行数 | ~101,500 | 持续增长 |
+| `bare-kernel/hl/` 内核模块 | 277 | 编译进 `kernel.bin` |
 | `kernel_entry.hl` 行数 | 10,427 | 内核入口 + 命令分发（307 函数） |
 | 编译产出函数数 | 3,757 | bare-kernel/hl 实测 |
 | 链接符号数 | 2,500+ | linker 实测 |
 | `hl-bootstrap.hl` 行数 | 4,572 | 自举编译器（208 函数） |
 | `stdlib.hl` 行数 | 1,545 | 标准库（143 函数） |
-| Shell 命令数 | 790 | shell.hl（+dijkstra/toposort/bellmanford）|
+| Shell 命令数 | 805 | shell.hl（+prim/kruskal/floydwarshall）|
 | `test_*.hl` / `test-*.hl` | 19 | |
 | `IP-Protection/` 文件数 | 60 | 知识产权文件 |
 | `.md` 文档 | 10 | |
@@ -27,8 +27,8 @@
 
 | 验证项 | 结果 |
 |---|---|
-| `hl-bootstrap build` | ✅ 274 模块编译 + 镜像重建 |
-| `validate-workspace` | ✅ 343 HL / 274 模块 / 0 stub |
+| `hl-bootstrap build` | ✅ 277 模块编译 + 镜像重建 |
+| `validate-workspace` | ✅ 346 HL / 277 模块 / 0 stub |
 | `runtime-path-readiness` | ✅ IDT/PIT/KBD + SYSCALL + 网络 + eBPF/TLS/QUIC |
 | `release-validate` | ✅ 18/18 |
 

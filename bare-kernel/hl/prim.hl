@@ -1,0 +1,121 @@
+// prim.hl -- Prim's Minimum Spanning Tree
+// Prim 1957: O(V²) linear-scan minimum key, adjacency matrix.
+// PRIM_MAX_V=32 vertices; undirected weighted graph, weights > 0.
+//
+// Runtime buffer: 0x1580000 (4 KB)
+
+let PRIM_MAX_V = 32;
+let PRIM_INF   = 1000000;
+
+// Adjacency matrix: prim_adj[u*32+v] = weight (0 = no edge)
+let prim_adj       = array(1024, 0);
+let prim_key       = array(32, 0);    // min edge weight to reach vertex
+let prim_parent    = array(32, 0);    // MST parent (-1 = root/unreachable)
+let prim_in_mst    = array(32, 0);    // 1 if vertex is in MST
+let prim_n         = 0;
+let prim_mst_weight = 0;             // total MST weight after prim_run()
+
+fn prim_init() {
+    let i = 0;
+    while i < 1024 {
+        set_at(prim_adj, i, 0);
+        i += 1;
+    }
+    i = 0;
+    while i < PRIM_MAX_V {
+        set_at(prim_key,    i, PRIM_INF);
+        set_at(prim_parent, i, -1);
+        set_at(prim_in_mst, i, 0);
+        i += 1;
+    }
+    prim_n          = 0;
+    prim_mst_weight = 0;
+    return 0;
+}
+
+fn prim_set_n(n) {
+    prim_n = n;
+    return 0;
+}
+
+// Add undirected weighted edge u-v with weight w (w > 0)
+fn prim_add_edge(u, v, w) {
+    if u >= PRIM_MAX_V { return -1; }
+    if v >= PRIM_MAX_V { return -1; }
+    set_at(prim_adj, u * PRIM_MAX_V + v, w);
+    set_at(prim_adj, v * PRIM_MAX_V + u, w);
+    if u + 1 > prim_n { prim_n = u + 1; }
+    if v + 1 > prim_n { prim_n = v + 1; }
+    return 0;
+}
+
+// Run Prim's MST from vertex 0; returns total MST weight
+fn prim_run() {
+    let i = 0;
+    while i < prim_n {
+        set_at(prim_key,    i, PRIM_INF);
+        set_at(prim_parent, i, -1);
+        set_at(prim_in_mst, i, 0);
+        i += 1;
+    }
+    set_at(prim_key, 0, 0);
+    prim_mst_weight = 0;
+    let step = 0;
+    while step < prim_n {
+        // Pick min-key vertex not yet in MST
+        let u = -1;
+        i = 0;
+        while i < prim_n {
+            if prim_in_mst[i] == 0 {
+                if u < 0 {
+                    u = i;
+                } else {
+                    if prim_key[i] < prim_key[u] { u = i; }
+                }
+            }
+            i += 1;
+        }
+        if u < 0 {
+            step = prim_n;
+        } else {
+            set_at(prim_in_mst, u, 1);
+            if prim_key[u] < PRIM_INF {
+                prim_mst_weight += prim_key[u];
+            }
+            // Relax neighbors of u
+            i = 0;
+            while i < prim_n {
+                let w = prim_adj[u * PRIM_MAX_V + i];
+                if w > 0 {
+                    if prim_in_mst[i] == 0 {
+                        if w < prim_key[i] {
+                            set_at(prim_key,    i, w);
+                            set_at(prim_parent, i, u);
+                        }
+                    }
+                }
+                i += 1;
+            }
+            step += 1;
+        }
+    }
+    return prim_mst_weight;
+}
+
+fn prim_test() {
+    prim_init();
+    // Classic 5-vertex graph: 0-1:2, 0-3:6, 1-2:3, 1-3:8, 1-4:5, 2-4:7, 3-4:9
+    // MST: 0-1:2, 1-2:3, 1-4:5, 0-3:6 → total = 16
+    prim_add_edge(0, 1, 2);
+    prim_add_edge(0, 3, 6);
+    prim_add_edge(1, 2, 3);
+    prim_add_edge(1, 3, 8);
+    prim_add_edge(1, 4, 5);
+    prim_add_edge(2, 4, 7);
+    prim_add_edge(3, 4, 9);
+    let w = prim_run();
+    print("prim_test mst_weight=" + to_string(w));
+    return w;
+}
+
+print("prim.hl loaded");

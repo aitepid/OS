@@ -183,6 +183,9 @@ fn shell_handle(cmd) {
         serial_print("Dijkstra:    dijk add <u> <v> <w>  dijk run <src>  dijk dist <v>  dijk setn <n>  dijk test");
         serial_print("TopoSort:    topo add <u> <v>  topo run  topo order  topo cycle  topo setn <n>  topo test");
         serial_print("BellmanFord: bf add <u> <v> <w>  bf run <src>  bf dist <v>  bf setn <n>  bf negcycle  bf test");
+        serial_print("Prim MST:    prim add <u> <v> <w>  prim run  prim weight  prim setn <n>  prim test");
+        serial_print("Kruskal MST: kr add <u> <v> <w>  kr run  kr weight  kr setn <n>  kr test");
+        serial_print("FloydWarsh:  fw add <u> <v> <w>  fw run  fw dist <u> <v>  fw setn <n>  fw test");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -4322,6 +4325,80 @@ fn shell_handle_ext(cmd) {
         return "bf: add " + to_string(bfu) + "->" + to_string(bfv2) + " w=" + to_string(bfw);
     }
 
+    if cmd == "prim test"   { let primr = prim_test(); return "prim: mst_weight=" + to_string(primr); }
+    if cmd == "prim run"    { let primw = prim_run(); return "prim: mst_weight=" + to_string(primw); }
+    if cmd == "prim weight" { return "prim: mst_weight=" + to_string(prim_mst_weight); }
+    if _starts_with(cmd, "prim setn ") {
+        let primn = to_int(str_sub(cmd, 10, len(cmd)));
+        prim_set_n(primn);
+        return "prim: n=" + to_string(primn);
+    }
+    if _starts_with(cmd, "prim add ") {
+        let primargs = str_sub(cmd, 9, len(cmd));
+        let primsp1 = _find_space(primargs);
+        if primsp1 < 0 { return "prim add: usage prim add <u> <v> <w>"; }
+        let primu = to_int(str_sub(primargs, 0, primsp1));
+        let primargs2 = str_sub(primargs, primsp1 + 1, len(primargs));
+        let primsp2 = _find_space(primargs2);
+        if primsp2 < 0 { return "prim add: usage prim add <u> <v> <w>"; }
+        let primv = to_int(str_sub(primargs2, 0, primsp2));
+        let primw = to_int(str_sub(primargs2, primsp2 + 1, len(primargs2)));
+        prim_add_edge(primu, primv, primw);
+        return "prim: add " + to_string(primu) + "-" + to_string(primv) + " w=" + to_string(primw);
+    }
+
+    if cmd == "kr test"   { let krr = kruskal_test(); return "kr: mst_weight=" + to_string(krr); }
+    if cmd == "kr run"    { let krw = kruskal_run(); return "kr: mst_weight=" + to_string(krw) + " edges=" + to_string(kr_mst_edges); }
+    if cmd == "kr weight" { return "kr: mst_weight=" + to_string(kr_mst_weight) + " edges=" + to_string(kr_mst_edges); }
+    if _starts_with(cmd, "kr setn ") {
+        let krn = to_int(str_sub(cmd, 8, len(cmd)));
+        kr_set_n(krn);
+        return "kr: n=" + to_string(krn);
+    }
+    if _starts_with(cmd, "kr add ") {
+        let krargs = str_sub(cmd, 7, len(cmd));
+        let krsp1 = _find_space(krargs);
+        if krsp1 < 0 { return "kr add: usage kr add <u> <v> <w>"; }
+        let kru = to_int(str_sub(krargs, 0, krsp1));
+        let krargs2 = str_sub(krargs, krsp1 + 1, len(krargs));
+        let krsp2 = _find_space(krargs2);
+        if krsp2 < 0 { return "kr add: usage kr add <u> <v> <w>"; }
+        let krv = to_int(str_sub(krargs2, 0, krsp2));
+        let krw2 = to_int(str_sub(krargs2, krsp2 + 1, len(krargs2)));
+        kr_add_edge(kru, krv, krw2);
+        return "kr: add " + to_string(kru) + "-" + to_string(krv) + " w=" + to_string(krw2);
+    }
+
+    if cmd == "fw test"    { let fwr = fw_test(); return "fw: d[0][3]=" + to_string(fwr); }
+    if cmd == "fw run"     { fw_run(); return "fw: done neg_cycle=" + to_string(fw_neg_cycle); }
+    if _starts_with(cmd, "fw setn ") {
+        let fwn = to_int(str_sub(cmd, 8, len(cmd)));
+        fw_set_n(fwn);
+        return "fw: n=" + to_string(fwn);
+    }
+    if _starts_with(cmd, "fw dist ") {
+        let fwdargs = str_sub(cmd, 8, len(cmd));
+        let fwdsp = _find_space(fwdargs);
+        if fwdsp < 0 { return "fw dist: usage fw dist <u> <v>"; }
+        let fwdu = to_int(str_sub(fwdargs, 0, fwdsp));
+        let fwdv = to_int(str_sub(fwdargs, fwdsp + 1, len(fwdargs)));
+        let fwdd = fw_dist_q(fwdu, fwdv);
+        return "fw: dist[" + to_string(fwdu) + "][" + to_string(fwdv) + "]=" + to_string(fwdd);
+    }
+    if _starts_with(cmd, "fw add ") {
+        let fwaargs = str_sub(cmd, 7, len(cmd));
+        let fwasp1 = _find_space(fwaargs);
+        if fwasp1 < 0 { return "fw add: usage fw add <u> <v> <w>"; }
+        let fwau = to_int(str_sub(fwaargs, 0, fwasp1));
+        let fwaargs2 = str_sub(fwaargs, fwasp1 + 1, len(fwaargs));
+        let fwasp2 = _find_space(fwaargs2);
+        if fwasp2 < 0 { return "fw add: usage fw add <u> <v> <w>"; }
+        let fwav = to_int(str_sub(fwaargs2, 0, fwasp2));
+        let fwaw = to_int(str_sub(fwaargs2, fwasp2 + 1, len(fwaargs2)));
+        fw_add_edge(fwau, fwav, fwaw);
+        return "fw: add " + to_string(fwau) + "->" + to_string(fwav) + " w=" + to_string(fwaw);
+    }
+
     return shell_handle(cmd);
 }
 
@@ -4333,7 +4410,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 790 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford");
+print("shell.hl loaded -- 805 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall");
 
 // Main shell loop (called from kernel_init)
 
