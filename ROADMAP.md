@@ -1,14 +1,13 @@
 ﻿# HicOS Roadmap
 
-## 当前同步基线（迭代 246 实测）
+## 当前同步基线（迭代 288 实测）
 
-- `301` 个 `.hl` 文件（~80,300 行）：69 根目录 + 232 内核模块
-- `28` 个 PowerShell 脚本（9,729 行）
-- `hl-bootstrap.hl`：`4,306` 行 / `208` 函数 | `stdlib.hl`：`1,385` 行 / `143` 函数
-- 编译产出函数：`2,200+` | 链接符号：`2,500+` | Shell 命令：`580`
-- 构建/测试主入口：`hl-bootstrap.cmd test`
-- 最近完成功能迭代：`246`（Brotli + SM3 + SM4）
-- Git 提交数：`114`
+- `343` 个 `.hl` 文件（~100,400 行）：69 根目录 + 274 内核模块
+- `29` 个 PowerShell 脚本（11,193 行）
+- `hl-bootstrap.hl`：`4,572` 行 / `208` 函数 | `stdlib.hl`：`1,545` 行 / `143` 函数
+- `kernel_entry.hl`：`10,427` 行 / `307` 函数 | `shell.hl`：`4,510` 行
+- 编译产出函数：`3,757`（bare-kernel/hl）| Shell 命令：`790`
+- 最近完成功能迭代：`288`（dijkstra + topological_sort + bellman_ford）
 
 ## 已完成阶段
 
@@ -144,6 +143,43 @@
 - Shell 命令：68 → 580（增长 753%）
 - 代码行数：46,499 → ~80,300（增长 73%）
 - 功能覆盖：从基础 OS 到完整生态系统
+
+## 阶段 9：高级数据结构与图算法（迭代 247-288）✅
+
+通过 42 次持续迭代，系统模块从 232 个扩展到 274 个，每次迭代添加 3 个新模块：
+
+**分布式系统基础**（iter 247-252）：
+- Raft 共识协议、Gossip 协议、CRDT 无冲突复制、gRPC、X.509、PNG/JPEG 图像格式
+
+**高级压缩/编码**：HTTP/2 帧层、BLAKE2b、Scrypt KDF
+
+**概率数据结构**（iter 253-262）：
+- Bloom Filter、HyperLogLog（基数估计）、Count-Min Sketch（频率估计）
+- Cuckoo Filter、t-Digest（分位数）、Reservoir Sampling（流式采样）
+
+**神经网络/矩阵**（iter 256-261）：
+- Neural Network（全连接 + 反向传播）、Attention Mechanism、Matrix Operations
+
+**高级数据结构**（iter 262-279）：
+- Skip List、Consistent Hash、LRU Cache、Merkle Tree
+- Fenwick Tree（BIT）、Segment Tree（lazy）、Wavelet Tree
+- DSU（并查集 + 路径压缩）、Treap（随机平衡 BST）、Suffix Array（SA-IS O(n)）
+- Aho-Corasick（多模匹配 DFA）、KMP/Z/Rabin-Karp（三合一字符串匹配）、Interval Tree
+
+**空间/查询结构**（iter 280-285）：
+- Sparse Table（O(1) RMQ）、Binary Heap（Floyd 建堆 + Heapsort）、KD-Tree（2D 最近邻）
+- Leftist Heap（可合并优先队列）、LCS/Levenshtein/LIS（动态规划三合一）、Convex Hull（Andrew 单调链）
+
+**图算法**（iter 286-288）：
+- `dijkstra.hl`：Dijkstra O(V²) 单源最短路，邻接矩阵，支持 5 命令
+- `topological_sort.hl`：Kahn BFS 拓扑排序 O(V+E)，负环检测，支持 6 命令
+- `bellman_ford.hl`：Bellman-Ford O(VE)，负权边，负权环检测，支持 6 命令
+
+**阶段成果**：
+- 模块数：232 → 274（增长 18%）
+- Shell 命令：580 → 790（增长 36%）
+- 代码行数：~80,300 → ~100,400（增长 25%）
+- 内核函数：2,200 → 3,757（增长 71%）
 
 ## 当前推荐执行顺序
 

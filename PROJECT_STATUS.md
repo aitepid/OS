@@ -13,11 +13,11 @@
 | 全部 `.hl` 文件 | 343 | 69 根目录 + 274 内核模块 |
 | H-L 总行数 | ~120,000 | 持续增长 |
 | `bare-kernel/hl/` 内核模块 | 274 | 编译进 `kernel.bin` |
-| `kernel_entry.hl` 行数 | 9,428 | 内核入口 + 命令分发 |
-| 编译产出函数数 | 2,200+ | 编译管线实测 |
+| `kernel_entry.hl` 行数 | 10,427 | 内核入口 + 命令分发（307 函数） |
+| 编译产出函数数 | 3,757 | bare-kernel/hl 实测 |
 | 链接符号数 | 2,500+ | linker 实测 |
-| `hl-bootstrap.hl` 行数 | 4,306 | 自举编译器（208 函数） |
-| `stdlib.hl` 行数 | 1,385 | 标准库（143 函数） |
+| `hl-bootstrap.hl` 行数 | 4,572 | 自举编译器（208 函数） |
+| `stdlib.hl` 行数 | 1,545 | 标准库（143 函数） |
 | Shell 命令数 | 790 | shell.hl（+dijkstra/toposort/bellmanford）|
 | `test_*.hl` / `test-*.hl` | 19 | |
 | `IP-Protection/` 文件数 | 60 | 知识产权文件 |
@@ -27,8 +27,8 @@
 
 | 验证项 | 结果 |
 |---|---|
-| `hl-bootstrap build` | ✅ 132 模块编译 + 镜像重建 |
-| `validate-workspace` | ✅ 331 HL / 262 模块 / 0 stub |
+| `hl-bootstrap build` | ✅ 274 模块编译 + 镜像重建 |
+| `validate-workspace` | ✅ 343 HL / 274 模块 / 0 stub |
 | `runtime-path-readiness` | ✅ IDT/PIT/KBD + SYSCALL + 网络 + eBPF/TLS/QUIC |
 | `release-validate` | ✅ 18/18 |
 
@@ -89,8 +89,8 @@
 | 层级 | 载体 | 说明 |
 |---|---|---|
 | A | `scripts/rebuild-image.ps1` → `hicos-hl.img` | BIOS 镜像生成链 |
-| B | `hl-bootstrap.hl`（4,306 行，208 函数） | 自举编译器/解释器/工具链 |
-| C | `bare-kernel/hl/*.hl`（130 模块，36,455 行，1,700 函数） | 内核模块 → `kernel.bin` |
+| B | `hl-bootstrap.hl`（4,572 行，208 函数） | 自举编译器/解释器/工具链 |
+| C | `bare-kernel/hl/*.hl`（274 模块，3,757 函数） | 内核模块 → `kernel.bin` |
 
 ## UI 模块栈（迭代 125-130）
 

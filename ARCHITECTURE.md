@@ -1,4 +1,4 @@
-﻿# HicOS Architecture
+# HicOS Architecture
 
 ## Overview
 
@@ -7,8 +7,8 @@ HicOS is a three-layer experimental x86_64 OS written entirely in Hilbert-Lang.
 | Layer | Medium | Current Role |
 |---|---|---|
 | A | `scripts/rebuild-image.ps1` → `hicos-hl.img` | BIOS image generation chain |
-| B | `hl-bootstrap.hl` (4,306 lines, 208 fn) | Bootstrap compiler/interpreter/toolchain |
-| C | `bare-kernel/hl/*.hl` (130 modules, 36,455 lines) | Kernel source → `kernel.bin` (30,704 bytes) |
+| B | `hl-bootstrap.hl` (4,572 lines, 208 fn) | Bootstrap compiler/interpreter/toolchain |
+| C | `bare-kernel/hl/*.hl` (274 modules, 3,757 fn) | Kernel source → `kernel.bin` (30,704 bytes) |
 
 ## Boot Chain
 
@@ -18,9 +18,9 @@ HicOS is a three-layer experimental x86_64 OS written entirely in Hilbert-Lang.
 stage1 / MBR
 → stage2 (protected → long mode)
 → kernel.bin _start
-→ kernel_entry.hl (10,609 lines)
-→ kernel_init.hl (subsystem initialization)
-→ shell.hl (69 commands + pipe) + kernel_entry.hl (72 commands)
+→ kernel_entry.hl (10,427 lines, 307 fn)
+→ kernel_init.hl (subsystem initialization, 274 modules)
+→ shell.hl (790 commands + pipe)
 ```
 
 ### UEFI Path
@@ -29,38 +29,35 @@ stage1 / MBR
 OVMF → GPT + ESP → BOOTX64.EFI → UEFI boot output
 ```
 
-## Codebase Metrics (post-iteration-130 sync)
+## Codebase Metrics (post-iteration-288 sync)
 
 | Metric | Value |
 |---|---:|
-| Total `.hl` files | 198 |
-| Root `.hl` files | 68 |
-| Kernel modules | 130 |
-| Total H-L lines | 46,499 |
-| Root H-L lines | 10,044 |
-| Kernel lines | 36,455 |
-| Compiled functions | 1,700 |
-| Linker symbols | 2,003 |
-| `kernel_entry.hl` lines | 9,428 |
-| `hl-bootstrap.hl` lines | 4,306 (208 fn) |
-| `stdlib.hl` lines | 1,385 (143 fn) |
-| `kinterp.hl` lines | 1,245 |
-| `scripts/*.ps1` | 28 (9,729 lines) |
-| Shell commands (`if cmd ==`) | 68 |
+| Total `.hl` files | 343 |
+| Root `.hl` files | 69 |
+| Kernel modules | 274 |
+| Total H-L lines | ~100,400 |
+| Kernel module functions | 3,757 |
+| `kernel_entry.hl` lines | 10,427 (307 fn) |
+| `shell.hl` lines | 4,510 |
+| `kernel_init.hl` lines | 368 |
+| `hl-bootstrap.hl` lines | 4,572 (208 fn) |
+| `stdlib.hl` lines | 1,545 (143 fn) |
+| `scripts/*.ps1` | 29 (11,193 lines) |
+| Shell commands | 790 |
 | HicOS_*.hl subsystem modules | 27 |
-| test_*.hl / test-*.hl | 19 |
 | IP-Protection files | 60 |
 | `.md` documents | 10 |
 
 ## Key Source Locations
 
-- `bare-kernel/hl/kernel_entry.hl` — Kernel entry, interrupt init, command dispatch (9,428 lines)
-- `bare-kernel/hl/kernel_init.hl` — Subsystem initialization sequence
-- `bare-kernel/hl/shell.hl` — Serial shell (68 commands + pipe)
-- `bare-kernel/hl/kinterp.hl` — Kernel interpreter (1,245 lines, tree-walk + IR VM)
+- `bare-kernel/hl/kernel_entry.hl` — Kernel entry, interrupt init, command dispatch (10,427 lines, 307 fn)
+- `bare-kernel/hl/kernel_init.hl` — Subsystem initialization sequence (368 lines, 274 modules)
+- `bare-kernel/hl/shell.hl` — Serial shell (4,510 lines, 790 commands)
+- `bare-kernel/hl/kinterp.hl` — Kernel interpreter (tree-walk + IR VM)
 - `bare-kernel/hl/kmod.hl` — Kernel module hot-patching (64 slots, 256 trampolines)
-- `hl-bootstrap.hl` — Self-hosting compiler/toolchain (4,306 lines, 208 fn)
-- `stdlib.hl` — Standard library (1,385 lines, 143 fn)
+- `hl-bootstrap.hl` — Self-hosting compiler/toolchain (4,572 lines, 208 fn)
+- `stdlib.hl` — Standard library (1,545 lines, 143 fn)
 - `scripts/hl-bootstrap-build-test.ps1` — Primary build/test entry
 - `scripts/rebuild-image.ps1` — BIOS image rebuilder
 - `scripts/build-uefi-image.ps1` — UEFI image builder
@@ -154,11 +151,30 @@ Phase 6 incremental runtime upgrades:
 | `wm.hl` | Window manager: title text, drag, minimize, taskbar, click routing |
 | `HicOS_UIServer.hl` | UI server: IPC protocol, focus events, desktop tick integration |
 
+## Iterations 247-288: Advanced Data Structures & Graph Algorithms (42 modules)
+
+Key additions organized by category:
+
+| Category | Modules |
+|---|---|
+| Probabilistic | Bloom Filter, HyperLogLog, Count-Min Sketch, Cuckoo Filter, t-Digest, Reservoir |
+| Trees | Treap, Leftist Heap, KD-Tree, Segment Tree, Fenwick Tree, Sparse Table |
+| String | Aho-Corasick, KMP/Z/Rabin-Karp, Suffix Array |
+| Graph | Dijkstra SSSP, Kahn Topo Sort, Bellman-Ford, Consistent Hash |
+| Geometry | Convex Hull, Interval Tree |
+| ML Basics | Neural Network, Attention, Matrix |
+| Misc | CRDT, Skip List, LRU, DSU, Merkle Tree, Wavelet |
+
+### Graph Algorithm Modules (iter 286-288)
+
+- **`dijkstra.hl`**: O(V²) SSSP, adjacency matrix, 32 vertices, linear min-search
+- **`topological_sort.hl`**: Kahn BFS O(V+E), in-degree from adjacency matrix, cycle detection
+- **`bellman_ford.hl`**: O(VE) edge-list relaxation, negative weights, negative cycle detection
+
 ## Verification
 
-All gates pass on the current iteration-130 baseline:
-- `hl-bootstrap-build-test.ps1` ✅ (132 modules, 1,700 fn, 2,003 symbols)
-- `validate-workspace.ps1` ✅ (198 HL, 130 kernel, 0 stub)
-- `runtime-path-readiness.ps1` ✅
+All gates pass on the current iteration-288 baseline:
+- `hl-bootstrap-build-test.ps1` ✅ (274 modules, 3,757 fn)
+- `validate-workspace.ps1` ✅ (343 HL, 274 kernel, 0 stub)
+- `runtime-path-readiness.ps1` ✅ (IDT/PIT/KBD + SYSCALL + 网络 + eBPF/TLS/QUIC)
 - `release-validate.ps1` ✅ 18/18
-
