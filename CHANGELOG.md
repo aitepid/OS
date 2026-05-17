@@ -2,11 +2,43 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`373`（73 根目录 + 304 内核模块）
-- H-L 总行数：`~110,400`
-- 内核模块：`304`
-- Shell 命令：`949`
-- 最近完成功能迭代：`318`（io_uring + persistent_seg + rollback_dsu）
+- `.hl` 文件：`376`（73 根目录 + 307 内核模块）
+- H-L 总行数：`~111,300`
+- 内核模块：`307`
+- Shell 命令：`967`
+- 最近完成功能迭代：`321`（splay_tree + mo_algorithm + sqrt_decomp）
+
+## Iteration 321 — sqrt_decomp.hl：sqrt 分块
+
+- **`bare-kernel/hl/sqrt_decomp.hl`** 新增（~100 行）
+  - 块大小 SQ_B=8，最多 SQ_MAX_B=8 块，支持 n≤64
+  - `sq_update(pos, val)` — O(1) 单点加，同时更新 sq_block[b]
+  - `sq_range_add(l, r, val)` — 两侧偏块逐元素更新；中间整块用 lazy delta + block_sum 更新 O(√n)
+  - `sq_query(l, r)` — 偏块逐元素求和 + lazy；整块直接用 sq_block[b] O(√n)
+  - 测试：n=16，点更新(1,10)+(9,5)→q=15；range_add(4,12,1)→q=24；q(5,10)=11
+  - Buffer: 0x1780000
+
+## Iteration 320 — mo_algorithm.hl：Mo 离线分块
+
+- **`bare-kernel/hl/mo_algorithm.hl`** 新增（~110 行）
+  - 插入排序按 (block(l), r) 排序查询；块大小 MO_BLOCK=8
+  - 维护当前窗口 [mo_curl, mo_curr] + 累积和 mo_csum
+  - 4 阶段扩展/收缩：expand-right → expand-left → shrink-right → shrink-left
+  - `mo_add_query(l,r)` — 记录查询；`mo_run()` — 按排序顺序处理所有查询
+  - 测试：arr=[1..8]，q=[0,2]=6，q=[1,4]=14，q=[3,7]=30
+  - Buffer: 0x1770000，MO_MAX_N=64，MO_MAX_Q=32
+
+## Iteration 319 — splay_tree.hl：伸展树
+
+- **`bare-kernel/hl/splay_tree.hl`** 新增（~150 行）
+  - 自调整 BST，均摊 O(log n)；访问节点自动 splay 到根
+  - `_sp_rotate(x)` — 单次旋转（右旋/左旋），维护 parent/child 链
+  - `_sp_splay(x)` — while 循环迭代：zig / zig-zig / zig-zag 三类旋转
+  - `sp_insert(k)` — BST 下探 + splay 新节点到根
+  - `sp_find(k)` — BST 搜索 + splay 最近访问节点；返回节点索引或 -1
+  - `sp_min()` / `sp_max()` — 走到最左/最右叶后 splay
+  - 测试：insert(5,3,7,1,4) → min=1, max=7, find(3)≥0, find(9)=-1
+  - Buffer: 0x1760000，SP_MAX=64
 
 ## Iteration 318 — rollback_dsu.hl：可回滚 DSU
 

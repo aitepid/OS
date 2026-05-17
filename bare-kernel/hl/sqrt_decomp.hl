@@ -1,0 +1,120 @@
+// sqrt_decomp.hl -- sqrt decomposition: O(1) update, O(sqrt n) range sum/add (iter 321)
+// Buffer: 0x1780000
+// Block size SQ_B=8. Full middle blocks get lazy delta; partial blocks update individually.
+
+let SQ_MAX_N = 64;
+let SQ_B     = 8;
+let SQ_MAX_B = 8;
+
+let sq_arr   = array(64, 0);
+let sq_block = array(8,  0);
+let sq_lazy  = array(8,  0);
+let sq_n     = 0;
+
+fn sq_init(n) {
+    sq_n = n;
+    let i = 0;
+    while i < n {
+        set_at(sq_arr, i, 0);
+        i += 1;
+    }
+    i = 0;
+    while i < SQ_MAX_B {
+        set_at(sq_block, i, 0);
+        set_at(sq_lazy,  i, 0);
+        i += 1;
+    }
+    return 0;
+}
+
+fn sq_update(pos, val) {
+    let b = pos / SQ_B;
+    set_at(sq_arr,   pos, sq_arr[pos]   + val);
+    set_at(sq_block, b,   sq_block[b]   + val);
+    return 0;
+}
+
+fn sq_range_add(l, r, val) {
+    let bl = l / SQ_B;
+    let br = r / SQ_B;
+    if bl == br {
+        let i = l;
+        while i <= r {
+            sq_update(i, val);
+            i += 1;
+        }
+    } else {
+        let bl_end = (bl + 1) * SQ_B;
+        let i = l;
+        while i < bl_end {
+            sq_update(i, val);
+            i += 1;
+        }
+        let b = bl + 1;
+        while b < br {
+            set_at(sq_lazy,  b, sq_lazy[b]  + val);
+            set_at(sq_block, b, sq_block[b] + val * SQ_B);
+            b += 1;
+        }
+        i = br * SQ_B;
+        while i <= r {
+            sq_update(i, val);
+            i += 1;
+        }
+    }
+    return 0;
+}
+
+fn sq_query(l, r) {
+    let bl = l / SQ_B;
+    let br = r / SQ_B;
+    let sum = 0;
+    if bl == br {
+        let i = l;
+        while i <= r {
+            sum += sq_arr[i] + sq_lazy[bl];
+            i += 1;
+        }
+    } else {
+        let bl_end = (bl + 1) * SQ_B;
+        let i = l;
+        while i < bl_end {
+            sum += sq_arr[i] + sq_lazy[bl];
+            i += 1;
+        }
+        let b = bl + 1;
+        while b < br {
+            sum += sq_block[b];
+            b += 1;
+        }
+        i = br * SQ_B;
+        while i <= r {
+            sum += sq_arr[i] + sq_lazy[br];
+            i += 1;
+        }
+    }
+    return sum;
+}
+
+fn sq_test() {
+    sq_init(16);
+    sq_update(1, 10);
+    sq_update(9, 5);
+    let q1 = sq_query(0, 15);
+    sq_range_add(4, 12, 1);
+    let q2 = sq_query(0, 15);
+    let q3 = sq_query(5, 10);
+    print("sq_test: q1=" + to_string(q1) + " q2=" + to_string(q2) + " q3=" + to_string(q3));
+    if q1 == 15 {
+        if q2 == 24 {
+            if q3 == 11 {
+                print("sq_test: PASS");
+                return 1;
+            }
+        }
+    }
+    print("sq_test: FAIL");
+    return 0;
+}
+
+print("sqrt_decomp.hl loaded");
