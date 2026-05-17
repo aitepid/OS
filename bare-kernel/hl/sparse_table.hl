@@ -1,0 +1,122 @@
+// sparse_table.hl -- Sparse Table for O(1) Range Min/Max Query (RMQ)
+// Bender & Farach-Colton 2000; classical O(n log n) build, O(1) query.
+// ST_MAX_N=64 elements, ST_LOG=7 levels (2^6=64).
+//
+// Runtime buffer: 0x14F0000 (4 KB)
+
+let ST_MAX_N = 64;
+let ST_LOG   = 7;
+
+// st_min[k * ST_MAX_N + i] = min of data[i .. i + 2^k - 1]
+// st_max[k * ST_MAX_N + i] = max of data[i .. i + 2^k - 1]
+let st_min = array(448, 0);
+let st_max = array(448, 0);
+
+// Precomputed floor(log2(i)) for i = 1..64
+let st_log2 = array(65, 0);
+// Precomputed 2^k for k = 0..6
+let st_pow2 = array(7, 0);
+
+let st_n = 0;    // current array size
+
+fn sparse_table_init() {
+    let i = 0;
+    while i < 448 {
+        set_at(st_min, i, 0);
+        set_at(st_max, i, 0);
+        i += 1;
+    }
+    // st_log2: st_log2[1]=0; st_log2[i] = st_log2[i/2] + 1
+    set_at(st_log2, 0, 0);
+    set_at(st_log2, 1, 0);
+    i = 2;
+    while i <= ST_MAX_N {
+        set_at(st_log2, i, st_log2[i / 2] + 1);
+        i += 1;
+    }
+    // st_pow2[k] = 2^k
+    set_at(st_pow2, 0, 1);
+    i = 1;
+    while i < ST_LOG {
+        set_at(st_pow2, i, st_pow2[i - 1] * 2);
+        i += 1;
+    }
+    st_n = 0;
+    return 0;
+}
+
+// Build sparse table from data[0..n-1]
+fn st_build(data, n) {
+    st_n = n;
+    // Level 0: direct copy
+    let i = 0;
+    while i < n {
+        set_at(st_min, i, data[i]);
+        set_at(st_max, i, data[i]);
+        i += 1;
+    }
+    // Levels 1..log2(n)
+    let k = 1;
+    while k < ST_LOG {
+        let half = st_pow2[k - 1];
+        i = 0;
+        while i + st_pow2[k] <= n {
+            let a_min = st_min[(k - 1) * ST_MAX_N + i];
+            let b_min = st_min[(k - 1) * ST_MAX_N + i + half];
+            let a_max = st_max[(k - 1) * ST_MAX_N + i];
+            let b_max = st_max[(k - 1) * ST_MAX_N + i + half];
+            if a_min < b_min {
+                set_at(st_min, k * ST_MAX_N + i, a_min);
+            } else {
+                set_at(st_min, k * ST_MAX_N + i, b_min);
+            }
+            if a_max > b_max {
+                set_at(st_max, k * ST_MAX_N + i, a_max);
+            } else {
+                set_at(st_max, k * ST_MAX_N + i, b_max);
+            }
+            i += 1;
+        }
+        k += 1;
+    }
+    return 0;
+}
+
+// Range minimum query on [l, r] (inclusive, 0-indexed)
+fn st_rmq_min(l, r) {
+    let len = r - l + 1;
+    let k   = st_log2[len];
+    let a   = st_min[k * ST_MAX_N + l];
+    let b   = st_min[k * ST_MAX_N + r - st_pow2[k] + 1];
+    if a < b { return a; }
+    return b;
+}
+
+// Range maximum query on [l, r] (inclusive, 0-indexed)
+fn st_rmq_max(l, r) {
+    let len = r - l + 1;
+    let k   = st_log2[len];
+    let a   = st_max[k * ST_MAX_N + l];
+    let b   = st_max[k * ST_MAX_N + r - st_pow2[k] + 1];
+    if a > b { return a; }
+    return b;
+}
+
+fn st_test() {
+    sparse_table_init();
+    // data = [3,1,4,1,5,9,2,6,5,3]
+    let d = array(10, 0);
+    set_at(d, 0, 3); set_at(d, 1, 1); set_at(d, 2, 4); set_at(d, 3, 1);
+    set_at(d, 4, 5); set_at(d, 5, 9); set_at(d, 6, 2); set_at(d, 7, 6);
+    set_at(d, 8, 5); set_at(d, 9, 3);
+    st_build(d, 10);
+    let mn09 = st_rmq_min(0, 9);   // 1
+    let mx09 = st_rmq_max(0, 9);   // 9
+    let mn38 = st_rmq_min(3, 8);   // 1
+    let mx47 = st_rmq_max(4, 7);   // 9
+    // Expected: min(0,9)=1 max(0,9)=9 min(3,8)=1 max(4,7)=9
+    print("st_test min(0,9)=" + to_string(mn09) + " max(0,9)=" + to_string(mx09) + " min(3,8)=" + to_string(mn38) + " max(4,7)=" + to_string(mx47));
+    return mn09;
+}
+
+print("sparse_table.hl loaded");

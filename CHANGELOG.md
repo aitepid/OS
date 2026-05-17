@@ -2,13 +2,48 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`334`（69 根目录 + 265 内核模块）
-- H-L 总行数：`~112,500`
-- 内核模块：`265`
-- Shell 命令：`745`
-- 最近完成功能迭代：`279`（aho_corasick + kmp + interval_tree）
+- `.hl` 文件：`337`（69 根目录 + 268 内核模块）
+- H-L 总行数：`~115,000`
+- 内核模块：`268`
+- Shell 命令：`760`
+- 最近完成功能迭代：`282`（sparse_table + binary_heap + kd_tree）
 
-## Iteration 279 — interval_tree.hl：增强区间树
+## Iteration 282 — kd_tree.hl：2D KD-Tree
+
+- **`bare-kernel/hl/kd_tree.hl`** 新增（~175 行）
+  - 2D KD-Tree：交替 x/y 轴中位数分割，O(n log n) 构建
+  - `_kd_sort_range(start, end, axis)` — 插入排序对 kd_idx[start..end] 按轴坐标排序
+  - `_kd_build(start, end, depth)` — 递归构建，节点池 1-based，depth mod 2 选轴
+  - `kd_nearest(qx, qy)` — 最近邻：优先探索更近半空间，仅当 diff²<best_d² 才探索另一半
+  - `kd_range_count(qx, qy, r2)` — 球范围计数：对比 split-plane 距离² 与 r² 决定双/单侧递归
+  - 测试：6 点集，nearest(4,5)=(4,6) d²=1；range_r2=10 from (4,5) → 3 点
+  - Buffer: 0x1510000，KD_MAX_N=32
+  - Shell 命令：`kd add <x> <y>  kd build  kd nearest <x> <y>  kd range <x> <y> <r2>  kd status  kd test`
+
+## Iteration 281 — binary_heap.hl：二叉堆 + 堆排序
+
+- **`bare-kernel/hl/binary_heap.hl`** 新增（~130 行）
+  - 二叉最小堆，0-indexed（root=0，parent=(i-1)/2，children=2i+1/2i+2）
+  - `_bh_sift_up(i)` / `_bh_sift_down(i)` — done-flag 循环，O(log n)
+  - `bh_insert` / `bh_extract_min` / `bh_peek` — 标准优先队列接口
+  - `bh_heapify(arr, n)` — Floyd 建堆 O(n)：从最后内部节点向根 sift_down
+  - `bh_heapsort(arr, n)` — 就地堆排序：先建最大堆，再逐步提取最大值，O(n log n)
+  - 测试：insert [5,3,8,1,4,7,2,6] → extract 序列单调；heapsort [9,2,7,4,1,5] → [1,2,4,5,7,9]
+  - Buffer: 0x1500000，BH_MAX_SIZE=128
+  - Shell 命令：`bh insert <v>  bh extract  bh peek  bh heapsort <n>  bh status  bh test`
+
+## Iteration 280 — sparse_table.hl：Sparse Table O(1) RMQ
+
+- **`bare-kernel/hl/sparse_table.hl`** 新增（~90 行）
+  - Sparse Table（Bender & Farach-Colton 2000），O(n log n) 构建，O(1) RMQ
+  - `st_build(data, n)` — 双层循环：k=0 直接复制；k>0 从 k-1 合并 2^(k-1) 宽窗口
+  - `st_rmq_min(l, r)` / `st_rmq_max(l, r)` — k=log2(r-l+1)，双端点重叠覆盖
+  - st_log2[65] 预计算（递推：log2[i] = log2[i/2]+1），st_pow2[7] 预计算幂次
+  - 测试：[3,1,4,1,5,9,2,6,5,3] → min(0,9)=1，max(0,9)=9，min(3,8)=1，max(4,7)=9
+  - Buffer: 0x14F0000，ST_MAX_N=64，ST_LOG=7
+  - Shell 命令：`st build <n>  st min <l> <r>  st max <l> <r>  st status  st test`
+
+
 
 - **`bare-kernel/hl/interval_tree.hl`** 新增（~120 行）
   - 有序区间数组 + 后缀最大值 (suffix-max) 增强，支持 O(k) 期望查询（k=结果数）

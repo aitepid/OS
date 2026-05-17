@@ -174,6 +174,9 @@ fn shell_handle(cmd) {
         serial_print("AhoCorasick: ac init  ac build  ac search <text>  ac status  ac test");
         serial_print("KMP:      kmp search <pat> <text>  kmp z <pat> <text>  kmp rk <pat> <text>  kmp test");
         serial_print("IntervalTree: it insert <lo> <hi>  it stab <q>  it overlap <lo> <hi>  it status  it test");
+        serial_print("SparseTable: st build <n>  st min <l> <r>  st max <l> <r>  st status  st test");
+        serial_print("BinaryHeap:  bh insert <v>  bh extract  bh peek  bh heapsort <n>  bh status  bh test");
+        serial_print("KDTree:      kd add <x> <y>  kd build  kd nearest <x> <y>  kd range <x> <y> <r2>  kd status  kd test");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -4132,6 +4135,73 @@ fn shell_handle_ext(cmd) {
         return "it: overlap([" + to_string(itolo) + "," + to_string(itohi) + "])=" + to_string(itoct);
     }
 
+    // === Sparse Table ===
+    if cmd == "st status" { return "st: n=" + to_string(st_n) + " levels=" + to_string(ST_LOG); }
+    if cmd == "st test"   { let sr = st_test(); return "st: min(0,9)=" + to_string(sr); }
+    if _starts_with(cmd, "st min ") {
+        let stargs = str_sub(cmd, 7, len(cmd));
+        let stsp = _find_space(stargs);
+        if stsp < 0 { return "st min: usage st min <l> <r>"; }
+        let stl = to_int(str_sub(stargs, 0, stsp));
+        let str2 = to_int(str_sub(stargs, stsp + 1, len(stargs)));
+        return "st: min(" + to_string(stl) + "," + to_string(str2) + ")=" + to_string(st_rmq_min(stl, str2));
+    }
+    if _starts_with(cmd, "st max ") {
+        let stmargs = str_sub(cmd, 7, len(cmd));
+        let stmsp = _find_space(stmargs);
+        if stmsp < 0 { return "st max: usage st max <l> <r>"; }
+        let stml = to_int(str_sub(stmargs, 0, stmsp));
+        let stmr = to_int(str_sub(stmargs, stmsp + 1, len(stmargs)));
+        return "st: max(" + to_string(stml) + "," + to_string(stmr) + ")=" + to_string(st_rmq_max(stml, stmr));
+    }
+
+    // === Binary Heap ===
+    if cmd == "bh status"  { return "bh: size=" + to_string(bh_n) + " peek=" + to_string(bh_peek()); }
+    if cmd == "bh extract" { return "bh: extracted=" + to_string(bh_extract_min()) + " size=" + to_string(bh_n); }
+    if cmd == "bh peek"    { return "bh: min=" + to_string(bh_peek()); }
+    if cmd == "bh test"    { let br = bh_test(); return "bh: ok=" + to_string(br); }
+    if _starts_with(cmd, "bh insert ") {
+        let bhv = to_int(str_sub(cmd, 10, len(cmd)));
+        bh_insert(bhv);
+        return "bh: inserted " + to_string(bhv) + " size=" + to_string(bh_n);
+    }
+
+    // === KD-Tree ===
+    if cmd == "kd build"  { let kr2 = kd_build(); return "kd: tree built root=" + to_string(kr2) + " n=" + to_string(kd_n); }
+    if cmd == "kd status" { return "kd: points=" + to_string(kd_n) + " nodes=" + to_string(kd_size); }
+    if cmd == "kd test"   { let ktr = kd_test(); return "kd: nearest_idx=" + to_string(ktr); }
+    if _starts_with(cmd, "kd add ") {
+        let kdaargs = str_sub(cmd, 7, len(cmd));
+        let kdasp = _find_space(kdaargs);
+        if kdasp < 0 { return "kd add: usage kd add <x> <y>"; }
+        let kdax = to_int(str_sub(kdaargs, 0, kdasp));
+        let kday = to_int(str_sub(kdaargs, kdasp + 1, len(kdaargs)));
+        let kdai = kd_add_point(kdax, kday);
+        return "kd: added (" + to_string(kdax) + "," + to_string(kday) + ") idx=" + to_string(kdai);
+    }
+    if _starts_with(cmd, "kd nearest ") {
+        let kdnargs = str_sub(cmd, 11, len(cmd));
+        let kdnsp = _find_space(kdnargs);
+        if kdnsp < 0 { return "kd nearest: usage kd nearest <x> <y>"; }
+        let kdnx = to_int(str_sub(kdnargs, 0, kdnsp));
+        let kdny = to_int(str_sub(kdnargs, kdnsp + 1, len(kdnargs)));
+        let kdnn = kd_nearest(kdnx, kdny);
+        return "kd: nearest(" + to_string(kdnx) + "," + to_string(kdny) + ")=(" + to_string(kd_px[kdnn]) + "," + to_string(kd_py[kdnn]) + ") d2=" + to_string(kd_best_d2);
+    }
+    if _starts_with(cmd, "kd range ") {
+        let kdrargs = str_sub(cmd, 9, len(cmd));
+        let kdrsp1 = _find_space(kdrargs);
+        if kdrsp1 < 0 { return "kd range: usage kd range <x> <y> <r2>"; }
+        let kdrx = to_int(str_sub(kdrargs, 0, kdrsp1));
+        let kdrrem = str_sub(kdrargs, kdrsp1 + 1, len(kdrargs));
+        let kdrsp2 = _find_space(kdrrem);
+        if kdrsp2 < 0 { return "kd range: usage kd range <x> <y> <r2>"; }
+        let kdry = to_int(str_sub(kdrrem, 0, kdrsp2));
+        let kdrr2 = to_int(str_sub(kdrrem, kdrsp2 + 1, len(kdrrem)));
+        let kdrc = kd_range_count(kdrx, kdry, kdrr2);
+        return "kd: range(" + to_string(kdrx) + "," + to_string(kdry) + ",r2=" + to_string(kdrr2) + ")=" + to_string(kdrc);
+    }
+
     return shell_handle(cmd);
 }
 
@@ -4143,7 +4213,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 745 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree");
+print("shell.hl loaded -- 760 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree");
 
 // Main shell loop (called from kernel_init)
 

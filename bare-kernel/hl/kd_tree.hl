@@ -1,0 +1,231 @@
+// kd_tree.hl -- 2D KD-Tree (k-d tree, k=2)
+// Recursive median-split build, O(n log n); nearest neighbor + range count queries.
+// KD_MAX_N=32 points; node pool 1-based (0=null).
+//
+// Runtime buffer: 0x1510000 (4 KB)
+
+let KD_MAX_N = 32;
+
+// Point storage
+let kd_px = array(32, 0);   // x coordinates
+let kd_py = array(32, 0);   // y coordinates
+let kd_n  = 0;              // points inserted (before build)
+
+// Node pool (1-based; node 0 = null)
+let kd_npt       = array(33, 0);  // point index at this node
+let kd_left      = array(33, 0);  // left child
+let kd_right     = array(33, 0);  // right child
+let kd_axis      = array(33, 0);  // split axis: 0=x 1=y
+let kd_split_val = array(33, 0);  // split value (median on chosen axis)
+let kd_size = 0;                  // nodes allocated
+let kd_root = 0;                  // root node
+
+// Scratch permutation for build
+let kd_idx = array(32, 0);
+
+// Nearest-neighbor search globals
+let kd_best_d2 = 0;
+let kd_best_pt = -1;
+
+fn kd_tree_init() {
+    let i = 0;
+    while i < KD_MAX_N {
+        set_at(kd_px, i, 0);
+        set_at(kd_py, i, 0);
+        set_at(kd_idx, i, 0);
+        i += 1;
+    }
+    i = 0;
+    while i <= KD_MAX_N {
+        set_at(kd_npt,       i, 0);
+        set_at(kd_left,      i, 0);
+        set_at(kd_right,     i, 0);
+        set_at(kd_axis,      i, 0);
+        set_at(kd_split_val, i, 0);
+        i += 1;
+    }
+    kd_n    = 0;
+    kd_size = 0;
+    kd_root = 0;
+    kd_best_d2 = 0;
+    kd_best_pt = -1;
+    return 0;
+}
+
+fn kd_add_point(x, y) {
+    if kd_n >= KD_MAX_N { return -1; }
+    set_at(kd_px, kd_n, x);
+    set_at(kd_py, kd_n, y);
+    kd_n += 1;
+    return kd_n - 1;
+}
+
+// Insertion sort kd_idx[start..end] by coordinate on given axis
+fn _kd_sort_range(start, end, axis) {
+    let i = start + 1;
+    while i <= end {
+        let key    = kd_idx[i];
+        let key_v  = 0;
+        if axis == 0 { key_v = kd_px[key]; } else { key_v = kd_py[key]; }
+        let j = i;
+        let done = 0;
+        while done == 0 {
+            if j <= start {
+                done = 1;
+            } else {
+                let prev   = kd_idx[j - 1];
+                let prev_v = 0;
+                if axis == 0 { prev_v = kd_px[prev]; } else { prev_v = kd_py[prev]; }
+                if prev_v > key_v {
+                    set_at(kd_idx, j, prev);
+                    j -= 1;
+                } else {
+                    done = 1;
+                }
+            }
+        }
+        set_at(kd_idx, j, key);
+        i += 1;
+    }
+    return 0;
+}
+
+// Recursive build: returns node index
+fn _kd_build(start, end, depth) {
+    if start > end { return 0; }
+    let axis = depth - (depth / 2) * 2;   // depth mod 2
+    _kd_sort_range(start, end, axis);
+    let mid = (start + end) / 2;
+    kd_size += 1;
+    let node = kd_size;
+    let pt   = kd_idx[mid];
+    set_at(kd_npt,  node, pt);
+    set_at(kd_axis, node, axis);
+    if axis == 0 {
+        set_at(kd_split_val, node, kd_px[pt]);
+    } else {
+        set_at(kd_split_val, node, kd_py[pt]);
+    }
+    let lc = 0;
+    let rc = 0;
+    if mid > start { lc = _kd_build(start, mid - 1, depth + 1); }
+    if mid < end   { rc = _kd_build(mid + 1, end,   depth + 1); }
+    set_at(kd_left,  node, lc);
+    set_at(kd_right, node, rc);
+    return node;
+}
+
+fn kd_build() {
+    let i = 0;
+    while i < kd_n {
+        set_at(kd_idx, i, i);
+        i += 1;
+    }
+    kd_size = 0;
+    kd_root = _kd_build(0, kd_n - 1, 0);
+    return kd_root;
+}
+
+fn _kd_dist2(x1, y1, x2, y2) {
+    let dx = x1 - x2;
+    let dy = y1 - y2;
+    return dx * dx + dy * dy;
+}
+
+// Recursive nearest-neighbor; updates kd_best_d2 / kd_best_pt
+fn _kd_nn(node, qx, qy) {
+    if node == 0 { return 0; }
+    let pt = kd_npt[node];
+    let d2 = _kd_dist2(kd_px[pt], kd_py[pt], qx, qy);
+    if kd_best_pt < 0 {
+        kd_best_d2 = d2;
+        kd_best_pt = pt;
+    } else {
+        if d2 < kd_best_d2 {
+            kd_best_d2 = d2;
+            kd_best_pt = pt;
+        }
+    }
+    let axis = kd_axis[node];
+    let sv   = kd_split_val[node];
+    let diff = 0;
+    if axis == 0 { diff = qx - sv; } else { diff = qy - sv; }
+    let first  = 0;
+    let second = 0;
+    if diff <= 0 {
+        first  = kd_left[node];
+        second = kd_right[node];
+    } else {
+        first  = kd_right[node];
+        second = kd_left[node];
+    }
+    _kd_nn(first, qx, qy);
+    // Explore other half only if split plane circle intersects best sphere
+    if diff * diff < kd_best_d2 {
+        _kd_nn(second, qx, qy);
+    }
+    return 0;
+}
+
+// Returns point index of nearest neighbor to (qx, qy)
+fn kd_nearest(qx, qy) {
+    kd_best_pt = -1;
+    kd_best_d2 = 0;
+    _kd_nn(kd_root, qx, qy);
+    return kd_best_pt;
+}
+
+// Recursive range count: points within squared radius r2 from (qx,qy)
+fn _kd_range(node, qx, qy, r2) {
+    if node == 0 { return 0; }
+    let pt  = kd_npt[node];
+    let d2  = _kd_dist2(kd_px[pt], kd_py[pt], qx, qy);
+    let cnt = 0;
+    if d2 <= r2 { cnt = 1; }
+    let axis = kd_axis[node];
+    let sv   = kd_split_val[node];
+    let diff = 0;
+    if axis == 0 { diff = qx - sv; } else { diff = qy - sv; }
+    if diff < 0 { diff = 0 - diff; }   // abs(diff)
+    if diff * diff <= r2 {
+        cnt += _kd_range(kd_left[node],  qx, qy, r2);
+        cnt += _kd_range(kd_right[node], qx, qy, r2);
+    } else {
+        let axis2 = kd_axis[node];
+        let sv2   = kd_split_val[node];
+        let raw   = 0;
+        if axis2 == 0 { raw = qx - sv2; } else { raw = qy - sv2; }
+        if raw <= 0 {
+            cnt += _kd_range(kd_left[node],  qx, qy, r2);
+        } else {
+            cnt += _kd_range(kd_right[node], qx, qy, r2);
+        }
+    }
+    return cnt;
+}
+
+fn kd_range_count(qx, qy, r2) {
+    return _kd_range(kd_root, qx, qy, r2);
+}
+
+fn kd_test() {
+    kd_tree_init();
+    // Points: (1,2)(4,6)(3,1)(7,3)(5,8)(2,4)
+    kd_add_point(1, 2);
+    kd_add_point(4, 6);
+    kd_add_point(3, 1);
+    kd_add_point(7, 3);
+    kd_add_point(5, 8);
+    kd_add_point(2, 4);
+    kd_build();
+    // Nearest to (4,5): (4,6) with d2=1
+    let nn = kd_nearest(4, 5);
+    let nnx = kd_px[nn];
+    let nny = kd_py[nn];
+    // Range within r2=10 from (4,5): (4,6)d2=1 (2,4)d2=5 (5,8)d2=10 => 3
+    let rc = kd_range_count(4, 5, 10);
+    print("kd_test nearest=(" + to_string(nnx) + "," + to_string(nny) + ") range_r2=10 count=" + to_string(rc));
+    return nn;
+}
+
+print("kd_tree.hl loaded");
