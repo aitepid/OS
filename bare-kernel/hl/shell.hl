@@ -177,6 +177,9 @@ fn shell_handle(cmd) {
         serial_print("SparseTable: st build <n>  st min <l> <r>  st max <l> <r>  st status  st test");
         serial_print("BinaryHeap:  bh insert <v>  bh extract  bh peek  bh heapsort <n>  bh status  bh test");
         serial_print("KDTree:      kd add <x> <y>  kd build  kd nearest <x> <y>  kd range <x> <y> <r2>  kd status  kd test");
+        serial_print("LeftistHeap: lh insert <v>  lh insert2 <v>  lh extract  lh peek  lh merge  lh status  lh test");
+        serial_print("LCS:         lcs compute <alen> <blen>  lcs edit <alen> <blen>  lcs lis <n>  lcs test");
+        serial_print("ConvexHull:  ch add <x> <y>  ch build  ch hull_n  ch test");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -4202,6 +4205,40 @@ fn shell_handle_ext(cmd) {
         return "kd: range(" + to_string(kdrx) + "," + to_string(kdry) + ",r2=" + to_string(kdrr2) + ")=" + to_string(kdrc);
     }
 
+    // === Leftist Heap ===
+    if cmd == "lh status"  { return "lh: size=" + to_string(lh_size) + " size2=" + to_string(lh_size2) + " peek=" + to_string(lh_peek()); }
+    if cmd == "lh extract" { return "lh: extracted=" + to_string(lh_extract_min()) + " size=" + to_string(lh_size); }
+    if cmd == "lh peek"    { return "lh: min=" + to_string(lh_peek()); }
+    if cmd == "lh merge"   { lh_merge_heaps(); return "lh: merged size=" + to_string(lh_size); }
+    if cmd == "lh test"    { let lr = lh_test(); return "lh: ok=" + to_string(lr); }
+    if _starts_with(cmd, "lh insert2 ") {
+        let lhv2 = to_int(str_sub(cmd, 11, len(cmd)));
+        lh_insert2(lhv2);
+        return "lh2: inserted " + to_string(lhv2) + " size2=" + to_string(lh_size2);
+    }
+    if _starts_with(cmd, "lh insert ") {
+        let lhv = to_int(str_sub(cmd, 10, len(cmd)));
+        lh_insert(lhv);
+        return "lh: inserted " + to_string(lhv) + " size=" + to_string(lh_size);
+    }
+
+    // === LCS / Edit Distance / LIS ===
+    if cmd == "lcs test" { let lr2 = lcs_test(); return "lcs: lcs=" + to_string(lr2); }
+
+    // === Convex Hull ===
+    if cmd == "ch build"  { let chr = ch_build(); return "ch: hull_n=" + to_string(chr); }
+    if cmd == "ch hull_n" { return "ch: hull_n=" + to_string(ch_hull_n); }
+    if cmd == "ch test"   { let ctr = ch_test(); return "ch: hull_n=" + to_string(ctr); }
+    if _starts_with(cmd, "ch add ") {
+        let chaargs = str_sub(cmd, 7, len(cmd));
+        let chasp = _find_space(chaargs);
+        if chasp < 0 { return "ch add: usage ch add <x> <y>"; }
+        let chax = to_int(str_sub(chaargs, 0, chasp));
+        let chay = to_int(str_sub(chaargs, chasp + 1, len(chaargs)));
+        let chai = ch_add_point(chax, chay);
+        return "ch: added (" + to_string(chax) + "," + to_string(chay) + ") n=" + to_string(ch_n);
+    }
+
     return shell_handle(cmd);
 }
 
@@ -4213,7 +4250,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 760 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree");
+print("shell.hl loaded -- 775 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull");
 
 // Main shell loop (called from kernel_init)
 

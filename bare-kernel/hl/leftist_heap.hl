@@ -1,0 +1,158 @@
+// leftist_heap.hl -- Leftist Heap (mergeable priority queue)
+// Crane 1972: binary tree satisfying heap + leftist property (rank(left) >= rank(right)).
+// O(log n) merge, insert, extract-min. Supports merging two heaps in O(log n).
+// LH_MAX_NODES=64; node pool 1-based (0=null).
+//
+// Runtime buffer: 0x1520000 (4 KB)
+
+let LH_MAX_NODES = 64;
+
+// Node pool (index 0 = null sentinel)
+let lh_val   = array(65, 0);  // value stored at node
+let lh_left  = array(65, 0);  // left child
+let lh_right = array(65, 0);  // right child
+let lh_rank  = array(65, 0);  // leftist rank (0 for null, >=1 for real nodes)
+
+// Free-list stack
+let lh_free     = array(65, 0);
+let lh_free_top = 0;
+
+// Primary and secondary heap roots
+let lh_root  = 0;
+let lh_root2 = 0;
+let lh_size  = 0;
+let lh_size2 = 0;
+
+fn leftist_heap_init() {
+    let i = 0;
+    while i <= LH_MAX_NODES {
+        set_at(lh_val,   i, 0);
+        set_at(lh_left,  i, 0);
+        set_at(lh_right, i, 0);
+        set_at(lh_rank,  i, 0);
+        i += 1;
+    }
+    // Fill free stack (nodes 1..LH_MAX_NODES)
+    lh_free_top = 0;
+    i = 1;
+    while i <= LH_MAX_NODES {
+        set_at(lh_free, lh_free_top, i);
+        lh_free_top += 1;
+        i += 1;
+    }
+    lh_root  = 0;
+    lh_root2 = 0;
+    lh_size  = 0;
+    lh_size2 = 0;
+    return 0;
+}
+
+fn _lh_alloc(val) {
+    if lh_free_top == 0 { return 0; }
+    lh_free_top -= 1;
+    let nd = lh_free[lh_free_top];
+    set_at(lh_val,   nd, val);
+    set_at(lh_left,  nd, 0);
+    set_at(lh_right, nd, 0);
+    set_at(lh_rank,  nd, 1);
+    return nd;
+}
+
+fn _lh_free_node(nd) {
+    set_at(lh_free, lh_free_top, nd);
+    lh_free_top += 1;
+    return 0;
+}
+
+// Recursive merge of two leftist heaps; returns new root
+fn _lh_merge(a, b) {
+    if a == 0 { return b; }
+    if b == 0 { return a; }
+    // Ensure a has the smaller key (min-heap property)
+    let ra = a;
+    let rb = b;
+    if lh_val[ra] > lh_val[rb] {
+        let t = ra;
+        ra = rb;
+        rb = t;
+    }
+    // Recursively merge ra's right subtree with rb
+    let nr = _lh_merge(lh_right[ra], rb);
+    set_at(lh_right, ra, nr);
+    // Enforce leftist property: rank(left) >= rank(right)
+    let rl = lh_rank[lh_left[ra]];
+    let rr = lh_rank[lh_right[ra]];
+    if rl < rr {
+        let t = lh_left[ra];
+        set_at(lh_left,  ra, lh_right[ra]);
+        set_at(lh_right, ra, t);
+    }
+    // Update rank = rank(right child) + 1
+    set_at(lh_rank, ra, lh_rank[lh_right[ra]] + 1);
+    return ra;
+}
+
+fn lh_insert(val) {
+    let nd = _lh_alloc(val);
+    if nd == 0 { return -1; }
+    lh_root = _lh_merge(lh_root, nd);
+    lh_size += 1;
+    return 0;
+}
+
+fn lh_insert2(val) {
+    let nd = _lh_alloc(val);
+    if nd == 0 { return -1; }
+    lh_root2 = _lh_merge(lh_root2, nd);
+    lh_size2 += 1;
+    return 0;
+}
+
+fn lh_peek() {
+    if lh_root == 0 { return -1; }
+    return lh_val[lh_root];
+}
+
+// Extract minimum from primary heap; returns min value
+fn lh_extract_min() {
+    if lh_root == 0 { return -1; }
+    let mn  = lh_val[lh_root];
+    let old = lh_root;
+    lh_root = _lh_merge(lh_left[lh_root], lh_right[lh_root]);
+    _lh_free_node(old);
+    lh_size -= 1;
+    return mn;
+}
+
+// Merge secondary heap into primary heap O(log n)
+fn lh_merge_heaps() {
+    lh_root  = _lh_merge(lh_root, lh_root2);
+    lh_size  += lh_size2;
+    lh_root2 = 0;
+    lh_size2 = 0;
+    return 0;
+}
+
+fn lh_test() {
+    leftist_heap_init();
+    // Heap1: [5,3,8,1,4,7], Heap2: [2,6,9]
+    lh_insert(5); lh_insert(3); lh_insert(8);
+    lh_insert(1); lh_insert(4); lh_insert(7);
+    lh_insert2(2); lh_insert2(6); lh_insert2(9);
+    // O(log n) merge
+    lh_merge_heaps();
+    // Extract all 9 elements: must come out in ascending order
+    let ok   = 1;
+    let prev = 0 - 1;
+    let i = 0;
+    while i < 9 {
+        let v = lh_extract_min();
+        if v < prev { ok = 0; }
+        prev = v;
+        i += 1;
+    }
+    print("lh_test ok=" + to_string(ok) + " remaining=" + to_string(lh_size));
+    return ok;
+}
+
+print("leftist_heap.hl loaded");

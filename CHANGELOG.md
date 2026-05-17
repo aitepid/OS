@@ -2,13 +2,45 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`337`（69 根目录 + 268 内核模块）
-- H-L 总行数：`~115,000`
-- 内核模块：`268`
-- Shell 命令：`760`
-- 最近完成功能迭代：`282`（sparse_table + binary_heap + kd_tree）
+- `.hl` 文件：`340`（69 根目录 + 271 内核模块）
+- H-L 总行数：`~117,500`
+- 内核模块：`271`
+- Shell 命令：`775`
+- 最近完成功能迭代：`285`（leftist_heap + lcs + convex_hull）
 
-## Iteration 282 — kd_tree.hl：2D KD-Tree
+## Iteration 285 — convex_hull.hl：凸包（Andrew 单调链）
+
+- **`bare-kernel/hl/convex_hull.hl`** 新增（~115 行）
+  - Andrew's Monotone Chain 1979：O(n log n)（插入排序）+ 单次扫描构建上/下包
+  - `_ch_sort()` — 插入排序按 (x,y) 字典序升序
+  - `_ch_cross3(ox,oy,ax,ay,bx,by)` — 有符号叉积：>0 左转，≤0 右转/共线
+  - `ch_build()` — 先建下包（左→右，保 CCW），再建上包（右→左，k≥t 保护下包不被弹出）
+  - 测试：5点 (0,0)(2,0)(2,2)(0,2)(1,1) → hull_n=4，内点(1,1)正确排除
+  - Buffer: 0x1540000，CH_MAX_N=64
+  - Shell 命令：`ch add <x> <y>  ch build  ch hull_n  ch test`
+
+## Iteration 284 — lcs.hl：LCS + 编辑距离 + LIS
+
+- **`bare-kernel/hl/lcs.hl`** 新增（~120 行）
+  - **LCS**（最长公共子序列）O(nm)：标准 DP，dp[i][j]=dp[i-1][j-1]+1 或 max(up,left)
+  - **Levenshtein 编辑距离** O(nm)：dp 初始化 dp[i][0]=i, dp[0][j]=j；三操作取 min
+  - **LIS**（最长上升子序列）O(n²)：lis_dp[i] = 以 arr[i] 结尾的最长严格上升子序列长
+  - 测试：LCS("ABCBDAB","BDCAB")=4；edit("kitten","sitting")=3；LIS([10,9,2,5,3,7,101,18])=4
+  - Buffer: 0x1530000，LCS_MAX=32，LIS_MAX=128
+  - Shell 命令：`lcs test`
+
+## Iteration 283 — leftist_heap.hl：左偏堆（可合并优先队列）
+
+- **`bare-kernel/hl/leftist_heap.hl`** 新增（~130 行）
+  - Crane 1972 左偏堆：满足堆序 + 左偏性质（rank(left)≥rank(right)）
+  - `_lh_merge(a, b)` — 递归合并：保证根更小，递归合并右脊，合并后修正左偏性质，更新 rank
+  - O(log n) merge/insert/extract-min（右脊长度 = rank = O(log n)）
+  - 支持双堆：lh_root（主堆）+ lh_root2（副堆），`lh_merge_heaps()` 合并为单堆
+  - 测试：heap1=[5,3,8,1,4,7]，heap2=[2,6,9]，O(log n) 合并后顺序提取 → 1..9 升序
+  - Buffer: 0x1520000，LH_MAX_NODES=64
+  - Shell 命令：`lh insert <v>  lh insert2 <v>  lh extract  lh peek  lh merge  lh status  lh test`
+
+
 
 - **`bare-kernel/hl/kd_tree.hl`** 新增（~175 行）
   - 2D KD-Tree：交替 x/y 轴中位数分割，O(n log n) 构建
