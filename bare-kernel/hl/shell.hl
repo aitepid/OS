@@ -180,6 +180,9 @@ fn shell_handle(cmd) {
         serial_print("LeftistHeap: lh insert <v>  lh insert2 <v>  lh extract  lh peek  lh merge  lh status  lh test");
         serial_print("LCS:         lcs compute <alen> <blen>  lcs edit <alen> <blen>  lcs lis <n>  lcs test");
         serial_print("ConvexHull:  ch add <x> <y>  ch build  ch hull_n  ch test");
+        serial_print("Dijkstra:    dijk add <u> <v> <w>  dijk run <src>  dijk dist <v>  dijk setn <n>  dijk test");
+        serial_print("TopoSort:    topo add <u> <v>  topo run  topo order  topo cycle  topo setn <n>  topo test");
+        serial_print("BellmanFord: bf add <u> <v> <w>  bf run <src>  bf dist <v>  bf setn <n>  bf negcycle  bf test");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -4239,6 +4242,86 @@ fn shell_handle_ext(cmd) {
         return "ch: added (" + to_string(chax) + "," + to_string(chay) + ") n=" + to_string(ch_n);
     }
 
+    if cmd == "dijk test"    { let dijkr = dijkstra_test(); return "dijk: test d[4]=" + to_string(dijkr); }
+    if _starts_with(cmd, "dijk setn ") {
+        let dijkn = to_int(str_sub(cmd, 10, len(cmd)));
+        dijkstra_set_n(dijkn);
+        return "dijk: n=" + to_string(dijkn);
+    }
+    if _starts_with(cmd, "dijk run ") {
+        let dijksrc = to_int(str_sub(cmd, 9, len(cmd)));
+        dijkstra_run(dijksrc);
+        return "dijk: run from " + to_string(dijksrc);
+    }
+    if _starts_with(cmd, "dijk dist ") {
+        let dijkv = to_int(str_sub(cmd, 10, len(cmd)));
+        let dijkd = dijkstra_dist(dijkv);
+        return "dijk: dist[" + to_string(dijkv) + "]=" + to_string(dijkd);
+    }
+    if _starts_with(cmd, "dijk add ") {
+        let dijkargs = str_sub(cmd, 9, len(cmd));
+        let dijksp1 = _find_space(dijkargs);
+        if dijksp1 < 0 { return "dijk add: usage dijk add <u> <v> <w>"; }
+        let dijku = to_int(str_sub(dijkargs, 0, dijksp1));
+        let dijkargs2 = str_sub(dijkargs, dijksp1 + 1, len(dijkargs));
+        let dijksp2 = _find_space(dijkargs2);
+        if dijksp2 < 0 { return "dijk add: usage dijk add <u> <v> <w>"; }
+        let dijkv2 = to_int(str_sub(dijkargs2, 0, dijksp2));
+        let dijkw = to_int(str_sub(dijkargs2, dijksp2 + 1, len(dijkargs2)));
+        dijkstra_add_edge(dijku, dijkv2, dijkw);
+        return "dijk: add " + to_string(dijku) + "->" + to_string(dijkv2) + " w=" + to_string(dijkw);
+    }
+
+    if cmd == "topo test"  { let topor = topo_test(); return "topo: test cycle=" + to_string(topor); }
+    if cmd == "topo run"   { topo_run(); return "topo: order_n=" + to_string(topo_order_n) + " cycle=" + to_string(topo_has_cycle); }
+    if cmd == "topo order" { return "topo: order[0]=" + to_string(topo_order[0]) + " order[1]=" + to_string(topo_order[1]) + " n=" + to_string(topo_order_n); }
+    if cmd == "topo cycle" { return "topo: has_cycle=" + to_string(topo_has_cycle); }
+    if _starts_with(cmd, "topo setn ") {
+        let toponn = to_int(str_sub(cmd, 10, len(cmd)));
+        topo_set_n(toponn);
+        return "topo: n=" + to_string(toponn);
+    }
+    if _starts_with(cmd, "topo add ") {
+        let topoargs = str_sub(cmd, 9, len(cmd));
+        let toposp = _find_space(topoargs);
+        if toposp < 0 { return "topo add: usage topo add <u> <v>"; }
+        let topou = to_int(str_sub(topoargs, 0, toposp));
+        let topov = to_int(str_sub(topoargs, toposp + 1, len(topoargs)));
+        topo_add_edge(topou, topov);
+        return "topo: add " + to_string(topou) + "->" + to_string(topov);
+    }
+
+    if cmd == "bf test"     { let bfr = bf_test(); return "bf: test d[3]=" + to_string(bfr); }
+    if cmd == "bf negcycle" { return "bf: neg_cycle=" + to_string(bf_neg_cycle); }
+    if _starts_with(cmd, "bf setn ") {
+        let bfn = to_int(str_sub(cmd, 8, len(cmd)));
+        bf_set_n(bfn);
+        return "bf: n=" + to_string(bfn);
+    }
+    if _starts_with(cmd, "bf run ") {
+        let bfsrc = to_int(str_sub(cmd, 7, len(cmd)));
+        bf_run(bfsrc);
+        return "bf: run from " + to_string(bfsrc) + " neg_cycle=" + to_string(bf_neg_cycle);
+    }
+    if _starts_with(cmd, "bf dist ") {
+        let bfv = to_int(str_sub(cmd, 8, len(cmd)));
+        let bfd = bf_dist_v(bfv);
+        return "bf: dist[" + to_string(bfv) + "]=" + to_string(bfd);
+    }
+    if _starts_with(cmd, "bf add ") {
+        let bfargs = str_sub(cmd, 7, len(cmd));
+        let bfsp1 = _find_space(bfargs);
+        if bfsp1 < 0 { return "bf add: usage bf add <u> <v> <w>"; }
+        let bfu = to_int(str_sub(bfargs, 0, bfsp1));
+        let bfargs2 = str_sub(bfargs, bfsp1 + 1, len(bfargs));
+        let bfsp2 = _find_space(bfargs2);
+        if bfsp2 < 0 { return "bf add: usage bf add <u> <v> <w>"; }
+        let bfv2 = to_int(str_sub(bfargs2, 0, bfsp2));
+        let bfw = to_int(str_sub(bfargs2, bfsp2 + 1, len(bfargs2)));
+        bf_add_edge(bfu, bfv2, bfw);
+        return "bf: add " + to_string(bfu) + "->" + to_string(bfv2) + " w=" + to_string(bfw);
+    }
+
     return shell_handle(cmd);
 }
 
@@ -4250,7 +4333,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 775 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull");
+print("shell.hl loaded -- 790 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford");
 
 // Main shell loop (called from kernel_init)
 

@@ -2,11 +2,46 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`340`（69 根目录 + 271 内核模块）
-- H-L 总行数：`~117,500`
-- 内核模块：`271`
-- Shell 命令：`775`
-- 最近完成功能迭代：`285`（leftist_heap + lcs + convex_hull）
+- `.hl` 文件：`343`（69 根目录 + 274 内核模块）
+- H-L 总行数：`~120,000`
+- 内核模块：`274`
+- Shell 命令：`790`
+- 最近完成功能迭代：`288`（dijkstra + topological_sort + bellman_ford）
+
+## Iteration 288 — bellman_ford.hl：Bellman-Ford 最短路 + 负权环检测
+
+- **`bare-kernel/hl/bellman_ford.hl`** 新增（~115 行）
+  - Bellman 1958 / Ford 1956：O(VE) 边列表松弛，支持负权边
+  - `bf_add_edge(u, v, w)` — 边列表追加，自动更新 bf_n
+  - `bf_run(src)` — V-1 轮完整松弛 + 第 V 轮检测负权环（bf_neg_cycle=1）
+  - `bf_dist_v(v)` — 返回 bf_dist[v]，不可达返回 -1
+  - 测试1：0→1:3, 0→2:6, 1→2:-2, 2→3:1 → d[1]=3, d[2]=1, d[3]=2, neg_cycle=0
+  - 测试2：0→1:1, 1→2:-3, 2→0:1 → neg_cycle=1（负权回路正确检测）
+  - Buffer: 0x1570000，BF_MAX_V=32，BF_MAX_E=128
+  - Shell 命令：`bf add <u> <v> <w>  bf run <src>  bf dist <v>  bf setn <n>  bf negcycle  bf test`
+
+## Iteration 287 — topological_sort.hl：Kahn BFS 拓扑排序 + 环检测
+
+- **`bare-kernel/hl/topological_sort.hl`** 新增（~100 行）
+  - Kahn 1962：O(V+E) 入度数组 + BFS 队列，基于邻接矩阵
+  - `topo_add_edge(u, v)` — 邻接矩阵置 1，自动更新 topo_n
+  - `topo_run()` — 从矩阵计算入度 → 零入度入队 → BFS 出队减入度 → 再入队
+  - `topo_has_cycle` — order_n < n 则置 1（存在环）
+  - 测试1：经典 DAG 5→2,5→0,4→0,4→1,2→3,3→1 → order_n=6, has_cycle=0
+  - 测试2：0→1→2→0 环 → order_n=0, has_cycle=1
+  - Buffer: 0x1560000，TOPO_MAX_V=32
+  - Shell 命令：`topo add <u> <v>  topo run  topo order  topo cycle  topo setn <n>  topo test`
+
+## Iteration 286 — dijkstra.hl：Dijkstra 单源最短路
+
+- **`bare-kernel/hl/dijkstra.hl`** 新增（~125 行）
+  - Dijkstra 1959：O(V²) 线性扫描最小未访问顶点，邻接矩阵存边
+  - `dijkstra_add_edge(u, v, w)` — 有向边，自动更新 dijk_n；权重必须为正
+  - `dijkstra_run(src)` — 重置距离数组 → 循环找 min 未访问 u → 松弛出边；u=-1 或 dist[u]≥INF 时提前退出
+  - `dijkstra_dist(v)` — 返回 dist[v]，不可达返回 -1
+  - 测试：5 顶点图 0→1:4,0→2:1,2→1:2,1→3:1,2→3:5,3→4:3 → d[1]=3, d[3]=4, d[4]=7
+  - Buffer: 0x1550000，DIJK_MAX_V=32，DIJK_INF=1000000
+  - Shell 命令：`dijk add <u> <v> <w>  dijk run <src>  dijk dist <v>  dijk setn <n>  dijk test`
 
 ## Iteration 285 — convex_hull.hl：凸包（Andrew 单调链）
 

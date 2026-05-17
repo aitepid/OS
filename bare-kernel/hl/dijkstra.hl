@@ -1,0 +1,124 @@
+// dijkstra.hl -- Dijkstra's Single-Source Shortest Path
+// Dijkstra 1959: O(V²) simple implementation with adjacency matrix.
+// DIJK_MAX_V=32 vertices; edge weights must be positive.
+//
+// Runtime buffer: 0x1550000 (4 KB)
+
+let DIJK_MAX_V = 32;
+let DIJK_INF   = 1000000;
+
+// Adjacency matrix: dijk_adj[u*32+v] = edge weight (0 = no edge)
+let dijk_adj  = array(1024, 0);
+let dijk_dist = array(32, 0);   // shortest distances from source
+let dijk_vis  = array(32, 0);   // visited flags
+let dijk_prev = array(32, 0);   // previous node on shortest path
+let dijk_n    = 0;              // vertex count
+
+fn dijkstra_init() {
+    let i = 0;
+    while i < 1024 {
+        set_at(dijk_adj, i, 0);
+        i += 1;
+    }
+    i = 0;
+    while i < DIJK_MAX_V {
+        set_at(dijk_dist, i, DIJK_INF);
+        set_at(dijk_vis,  i, 0);
+        set_at(dijk_prev, i, -1);
+        i += 1;
+    }
+    dijk_n = 0;
+    return 0;
+}
+
+fn dijkstra_set_n(n) {
+    dijk_n = n;
+    return 0;
+}
+
+// Add directed weighted edge u→v with weight w (w > 0)
+fn dijkstra_add_edge(u, v, w) {
+    if u >= DIJK_MAX_V { return -1; }
+    if v >= DIJK_MAX_V { return -1; }
+    set_at(dijk_adj, u * DIJK_MAX_V + v, w);
+    if u + 1 > dijk_n { dijk_n = u + 1; }
+    if v + 1 > dijk_n { dijk_n = v + 1; }
+    return 0;
+}
+
+// Run Dijkstra from source vertex src
+fn dijkstra_run(src) {
+    let i = 0;
+    while i < dijk_n {
+        set_at(dijk_dist, i, DIJK_INF);
+        set_at(dijk_vis,  i, 0);
+        set_at(dijk_prev, i, -1);
+        i += 1;
+    }
+    set_at(dijk_dist, src, 0);
+    let step = 0;
+    while step < dijk_n {
+        // Pick unvisited vertex with minimum distance
+        let u = -1;
+        i = 0;
+        while i < dijk_n {
+            if dijk_vis[i] == 0 {
+                if u < 0 {
+                    u = i;
+                } else {
+                    if dijk_dist[i] < dijk_dist[u] { u = i; }
+                }
+            }
+            i += 1;
+        }
+        if u < 0 {
+            step = dijk_n;
+        } else {
+            if dijk_dist[u] >= DIJK_INF {
+                step = dijk_n;
+            } else {
+                set_at(dijk_vis, u, 1);
+                // Relax all outgoing edges from u
+                i = 0;
+                while i < dijk_n {
+                    let w = dijk_adj[u * DIJK_MAX_V + i];
+                    if w > 0 {
+                        if dijk_dist[u] + w < dijk_dist[i] {
+                            set_at(dijk_dist, i, dijk_dist[u] + w);
+                            set_at(dijk_prev, i, u);
+                        }
+                    }
+                    i += 1;
+                }
+                step += 1;
+            }
+        }
+    }
+    return 0;
+}
+
+fn dijkstra_dist(v) {
+    if dijk_dist[v] >= DIJK_INF { return -1; }
+    return dijk_dist[v];
+}
+
+fn dijkstra_test() {
+    dijkstra_init();
+    dijkstra_set_n(5);
+    // Graph: 0→1:4, 0→2:1, 2→1:2, 1→3:1, 2→3:5, 3→4:3
+    dijkstra_add_edge(0, 1, 4);
+    dijkstra_add_edge(0, 2, 1);
+    dijkstra_add_edge(2, 1, 2);
+    dijkstra_add_edge(1, 3, 1);
+    dijkstra_add_edge(2, 3, 5);
+    dijkstra_add_edge(3, 4, 3);
+    dijkstra_run(0);
+    // Expected: d[1]=3, d[2]=1, d[3]=4, d[4]=7
+    let d1 = dijkstra_dist(1);
+    let d3 = dijkstra_dist(3);
+    let d4 = dijkstra_dist(4);
+    print("dijkstra_test d[1]=" + to_string(d1) + " d[3]=" + to_string(d3) + " d[4]=" + to_string(d4));
+    return d4;
+}
+
+print("dijkstra.hl loaded");

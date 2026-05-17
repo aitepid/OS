@@ -1,0 +1,134 @@
+// bellman_ford.hl -- Bellman-Ford Single-Source Shortest Path
+// Bellman 1958 / Ford 1956: O(VE) with negative edge support.
+// BF_MAX_V=32, BF_MAX_E=128; detects negative-weight cycles.
+//
+// Runtime buffer: 0x1570000 (4 KB)
+
+let BF_MAX_V = 32;
+let BF_MAX_E = 128;
+let BF_INF   = 1000000;
+
+// Edge list representation
+let bf_eu   = array(128, 0);   // edge source
+let bf_ev   = array(128, 0);   // edge destination
+let bf_ew   = array(128, 0);   // edge weight (may be negative)
+let bf_dist = array(32, 0);    // shortest distances from source
+let bf_prev = array(32, 0);    // previous node on shortest path
+let bf_n    = 0;               // vertex count
+let bf_m    = 0;               // edge count
+let bf_neg_cycle = 0;          // 1 if negative cycle detected
+
+fn bellman_ford_init() {
+    let i = 0;
+    while i < BF_MAX_E {
+        set_at(bf_eu, i, 0);
+        set_at(bf_ev, i, 0);
+        set_at(bf_ew, i, 0);
+        i += 1;
+    }
+    i = 0;
+    while i < BF_MAX_V {
+        set_at(bf_dist, i, BF_INF);
+        set_at(bf_prev, i, -1);
+        i += 1;
+    }
+    bf_n = 0;
+    bf_m = 0;
+    bf_neg_cycle = 0;
+    return 0;
+}
+
+fn bf_set_n(n) {
+    bf_n = n;
+    return 0;
+}
+
+// Add directed weighted edge u→v with weight w (may be negative)
+fn bf_add_edge(u, v, w) {
+    if bf_m >= BF_MAX_E { return -1; }
+    if u >= BF_MAX_V    { return -1; }
+    if v >= BF_MAX_V    { return -1; }
+    set_at(bf_eu, bf_m, u);
+    set_at(bf_ev, bf_m, v);
+    set_at(bf_ew, bf_m, w);
+    bf_m += 1;
+    if u + 1 > bf_n { bf_n = u + 1; }
+    if v + 1 > bf_n { bf_n = v + 1; }
+    return 0;
+}
+
+// Run Bellman-Ford from source vertex src
+fn bf_run(src) {
+    let i = 0;
+    while i < bf_n {
+        set_at(bf_dist, i, BF_INF);
+        set_at(bf_prev, i, -1);
+        i += 1;
+    }
+    set_at(bf_dist, src, 0);
+    // V-1 relaxation rounds
+    let round = 0;
+    while round < bf_n - 1 {
+        let e = 0;
+        while e < bf_m {
+            let u = bf_eu[e];
+            let v = bf_ev[e];
+            let w = bf_ew[e];
+            if bf_dist[u] < BF_INF {
+                if bf_dist[u] + w < bf_dist[v] {
+                    set_at(bf_dist, v, bf_dist[u] + w);
+                    set_at(bf_prev, v, u);
+                }
+            }
+            e += 1;
+        }
+        round += 1;
+    }
+    // Extra round: detect negative cycles
+    bf_neg_cycle = 0;
+    let e = 0;
+    while e < bf_m {
+        let u = bf_eu[e];
+        let v = bf_ev[e];
+        let w = bf_ew[e];
+        if bf_dist[u] < BF_INF {
+            if bf_dist[u] + w < bf_dist[v] {
+                bf_neg_cycle = 1;
+            }
+        }
+        e += 1;
+    }
+    return 0;
+}
+
+fn bf_dist_v(v) {
+    if bf_dist[v] >= BF_INF { return -1; }
+    return bf_dist[v];
+}
+
+fn bf_test() {
+    bellman_ford_init();
+    bf_set_n(4);
+    // Graph: 0→1:3, 0→2:6, 1→2:-2, 2→3:1
+    // Expected: d[1]=3, d[2]=1, d[3]=2, neg_cycle=0
+    bf_add_edge(0, 1, 3);
+    bf_add_edge(0, 2, 6);
+    bf_add_edge(1, 2, -2);
+    bf_add_edge(2, 3, 1);
+    bf_run(0);
+    let d1 = bf_dist_v(1);
+    let d2 = bf_dist_v(2);
+    let d3 = bf_dist_v(3);
+    print("bf_test d[1]=" + to_string(d1) + " d[2]=" + to_string(d2) + " d[3]=" + to_string(d3) + " neg_cycle=" + to_string(bf_neg_cycle));
+    // Negative cycle test
+    bellman_ford_init();
+    bf_set_n(3);
+    bf_add_edge(0, 1, 1);
+    bf_add_edge(1, 2, -3);
+    bf_add_edge(2, 0, 1);
+    bf_run(0);
+    print("bf_neg_cycle_test neg_cycle=" + to_string(bf_neg_cycle));
+    return d3;
+}
+
+print("bellman_ford.hl loaded");

@@ -1,0 +1,132 @@
+// topological_sort.hl -- Kahn's BFS Topological Sort + Cycle Detection
+// Kahn 1962: O(V+E) using in-degree array + queue on adjacency matrix.
+// TOPO_MAX_V=32 vertices; detects cycles if order_n < n.
+//
+// Runtime buffer: 0x1560000 (4 KB)
+
+let TOPO_MAX_V = 32;
+
+// Adjacency matrix: topo_adj[u*32+v] = 1 if edge u→v
+let topo_adj      = array(1024, 0);
+let topo_indeg    = array(32, 0);    // in-degree of each vertex
+let topo_q        = array(32, 0);    // BFS queue
+let topo_order    = array(32, 0);    // topological order output
+let topo_n        = 0;               // vertex count
+let topo_order_n  = 0;               // number of vertices in output
+let topo_has_cycle = 0;              // 1 if cycle detected
+
+fn topological_sort_init() {
+    let i = 0;
+    while i < 1024 {
+        set_at(topo_adj, i, 0);
+        i += 1;
+    }
+    i = 0;
+    while i < TOPO_MAX_V {
+        set_at(topo_indeg, i, 0);
+        set_at(topo_order, i, 0);
+        i += 1;
+    }
+    topo_n        = 0;
+    topo_order_n  = 0;
+    topo_has_cycle = 0;
+    return 0;
+}
+
+fn topo_set_n(n) {
+    topo_n = n;
+    return 0;
+}
+
+// Add directed edge u→v
+fn topo_add_edge(u, v) {
+    if u >= TOPO_MAX_V { return -1; }
+    if v >= TOPO_MAX_V { return -1; }
+    set_at(topo_adj, u * TOPO_MAX_V + v, 1);
+    if u + 1 > topo_n { topo_n = u + 1; }
+    if v + 1 > topo_n { topo_n = v + 1; }
+    return 0;
+}
+
+// Run Kahn's BFS topological sort
+fn topo_run() {
+    // Compute in-degrees from adjacency matrix
+    let i = 0;
+    while i < topo_n {
+        set_at(topo_indeg, i, 0);
+        i += 1;
+    }
+    i = 0;
+    while i < topo_n {
+        let j = 0;
+        while j < topo_n {
+            if topo_adj[i * TOPO_MAX_V + j] == 1 {
+                set_at(topo_indeg, j, topo_indeg[j] + 1);
+            }
+            j += 1;
+        }
+        i += 1;
+    }
+    // Enqueue all zero-indegree vertices
+    let qhead = 0;
+    let qtail = 0;
+    i = 0;
+    while i < topo_n {
+        if topo_indeg[i] == 0 {
+            set_at(topo_q, qtail, i);
+            qtail += 1;
+        }
+        i += 1;
+    }
+    topo_order_n = 0;
+    // BFS: dequeue, record, reduce in-degrees
+    while qhead < qtail {
+        let u = topo_q[qhead];
+        qhead += 1;
+        set_at(topo_order, topo_order_n, u);
+        topo_order_n += 1;
+        let v = 0;
+        while v < topo_n {
+            if topo_adj[u * TOPO_MAX_V + v] == 1 {
+                set_at(topo_indeg, v, topo_indeg[v] - 1);
+                if topo_indeg[v] == 0 {
+                    set_at(topo_q, qtail, v);
+                    qtail += 1;
+                }
+            }
+            v += 1;
+        }
+    }
+    if topo_order_n < topo_n {
+        topo_has_cycle = 1;
+    } else {
+        topo_has_cycle = 0;
+    }
+    return 0;
+}
+
+fn topo_test() {
+    topological_sort_init();
+    topo_set_n(6);
+    // Classic example: 5→2, 5→0, 4→0, 4→1, 2→3, 3→1
+    topo_add_edge(5, 2);
+    topo_add_edge(5, 0);
+    topo_add_edge(4, 0);
+    topo_add_edge(4, 1);
+    topo_add_edge(2, 3);
+    topo_add_edge(3, 1);
+    topo_run();
+    print("topo_test order_n=" + to_string(topo_order_n) + " has_cycle=" + to_string(topo_has_cycle));
+    print("topo order[0]=" + to_string(topo_order[0]) + " order[1]=" + to_string(topo_order[1]));
+    // Cycle test
+    topological_sort_init();
+    topo_set_n(3);
+    topo_add_edge(0, 1);
+    topo_add_edge(1, 2);
+    topo_add_edge(2, 0);
+    topo_run();
+    print("topo_cycle_test order_n=" + to_string(topo_order_n) + " has_cycle=" + to_string(topo_has_cycle));
+    return topo_has_cycle;
+}
+
+print("topological_sort.hl loaded");
