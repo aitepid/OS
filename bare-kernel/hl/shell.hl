@@ -162,6 +162,9 @@ fn shell_handle(cmd) {
         serial_print("CMS:      cms add <key> <n>  cms query <key>  cms add_str <s> <n>  cms query_str <s>  cms status  cms test");
         serial_print("LRU:      lru get <key>  lru put <key> <val>  lru peek <key>  lru del <key>  lru status  lru test");
         serial_print("Merkle:   merkle build <n>  merkle root  merkle proof <leaf>  merkle verify <data> <leaf>  merkle update <leaf> <val>  merkle test");
+        serial_print("tDigest:  td add <val>  td p50  td p90  td p99  td quantile <q>  td status  td test");
+        serial_print("Wavelet:  wv load <n>  wv forward <levels>  wv inverse <levels>  wv threshold <t>  wv info  wv test");
+        serial_print("Reservoir: rs add <item>  rs add_batch <n>  rs contains <x>  rs bern_init <p>  rs bern_add <item>  rs status  rs test");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -3822,6 +3825,77 @@ fn shell_handle_ext(cmd) {
     if cmd == "merkle status" { return merkle_status(); }
     if cmd == "merkle test"   { return merkle_tree_test(); }
 
+    // --- t-Digest ---
+    if str_starts_with(cmd, "td add ") {
+        let tdv = to_int(str_slice(cmd, 7, len(cmd)));
+        tdigest_add(tdv * 1000);
+        return "tdigest: added " + to_string(tdv) + " -> " + tdigest_status();
+    }
+    if cmd == "td p50"    { return "tdigest: p50=" + to_string(tdigest_quantile(500) / 1000); }
+    if cmd == "td p90"    { return "tdigest: p90=" + to_string(tdigest_quantile(900) / 1000); }
+    if cmd == "td p99"    { return "tdigest: p99=" + to_string(tdigest_quantile(990) / 1000); }
+    if str_starts_with(cmd, "td quantile ") {
+        let tdq = to_int(str_slice(cmd, 12, len(cmd)));
+        return "tdigest: quantile(" + to_string(tdq) + ")=" + to_string(tdigest_quantile(tdq) / 1000);
+    }
+    if cmd == "td status" { return tdigest_status(); }
+    if cmd == "td test"   { return tdigest_test(); }
+
+    // --- Wavelet ---
+    if str_starts_with(cmd, "wv load ") {
+        let wvn = to_int(str_slice(cmd, 8, len(cmd)));
+        wavelet_init();
+        let wvd = [1000, 2000, 3000, 4000, -4000, -3000, -2000, -1000];
+        wavelet_load(wvd, wvn);
+        return "wavelet: loaded " + to_string(wvn) + " samples -> " + wavelet_info();
+    }
+    if str_starts_with(cmd, "wv forward ") {
+        let wvl = to_int(str_slice(cmd, 11, len(cmd)));
+        wavelet_forward(wvl);
+        return "wavelet: forward DWT levels=" + to_string(wvl) + " -> " + wavelet_info();
+    }
+    if str_starts_with(cmd, "wv inverse ") {
+        let wvil = to_int(str_slice(cmd, 11, len(cmd)));
+        wavelet_inverse(wvil);
+        return "wavelet: inverse DWT levels=" + to_string(wvil) + " -> " + wavelet_info();
+    }
+    if str_starts_with(cmd, "wv threshold ") {
+        let wvt = to_int(str_slice(cmd, 13, len(cmd)));
+        let wzero = wavelet_threshold(wvt);
+        return "wavelet: threshold=" + to_string(wvt) + " zeroed=" + to_string(wzero) + " -> " + wavelet_info();
+    }
+    if cmd == "wv info"   { return wavelet_info(); }
+    if cmd == "wv test"   { return wavelet_test(); }
+
+    // --- Reservoir Sampling ---
+    if str_starts_with(cmd, "rs add ") {
+        let rsi = to_int(str_slice(cmd, 7, len(cmd)));
+        let rsr = rs_add(rsi);
+        return "reservoir: add(" + to_string(rsi) + ")=" + to_string(rsr) + " " + rs_status();
+    }
+    if str_starts_with(cmd, "rs add_batch ") {
+        let rsbn = to_int(str_slice(cmd, 13, len(cmd)));
+        let rsbv = 1;
+        while rsbv <= rsbn { rs_add(rsbv); rsbv = rsbv + 1; }
+        return "reservoir: batch added 1.." + to_string(rsbn) + " -> " + rs_status();
+    }
+    if str_starts_with(cmd, "rs contains ") {
+        let rscx = to_int(str_slice(cmd, 12, len(cmd)));
+        return "reservoir: contains(" + to_string(rscx) + ")=" + to_string(rs_contains(rscx));
+    }
+    if str_starts_with(cmd, "rs bern_init ") {
+        let rsbp = to_int(str_slice(cmd, 13, len(cmd)));
+        rs_bern_init(rsbp);
+        return "reservoir: bernoulli p=" + to_string(rsbp) + "/1000 initialized";
+    }
+    if str_starts_with(cmd, "rs bern_add ") {
+        let rsba = to_int(str_slice(cmd, 12, len(cmd)));
+        let rsbr = rs_bern_add(rsba);
+        return "reservoir: bern_add(" + to_string(rsba) + ")=" + to_string(rsbr) + " " + rs_status();
+    }
+    if cmd == "rs status" { return rs_status(); }
+    if cmd == "rs test"   { return reservoir_sampling_test(); }
+
     return shell_handle(cmd);
 }
 
@@ -3833,7 +3907,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 685 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle");
+print("shell.hl loaded -- 700 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir");
 
 // Main shell loop (called from kernel_init)
 

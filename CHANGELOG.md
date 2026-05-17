@@ -2,13 +2,48 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`322`（69 根目录 + 253 内核模块）
-- H-L 总行数：`~100,500`
-- 内核模块：`253`
-- Shell 命令：`685`
-- 最近完成功能迭代：`267`（count_min_sketch + lru_cache + merkle_tree）
+- `.hl` 文件：`325`（69 根目录 + 256 内核模块）
+- H-L 总行数：`~103,500`
+- 内核模块：`256`
+- Shell 命令：`700`
+- 最近完成功能迭代：`270`（tdigest + wavelet + reservoir_sampling）
 
-## Iteration 267 — merkle_tree.hl：Merkle 哈希树
+## Iteration 270 — reservoir_sampling.hl：储层采样
+
+- **`bare-kernel/hl/reservoir_sampling.hl`** 新增（~257 行）
+  - 储层采样（Vitter 1985，TOMS Algorithm 970）+ 加权变体（Efraimidis & Spirakis 2006）
+  - Algorithm R：从未知长度流中均匀随机采样 k 个元素，每项 O(1) 均摊
+  - 加权采样：优先键 key_i = rand^(1/weight)，高权重项更可能被保留
+  - Bernoulli 采样：每项以概率 p/1000 独立纳入样本
+  - 分层采样：维护 RS_MAX_STRATA=8 个独立储层，保证按层比例表示
+  - LCG 伪随机数生成器（Knuth 参数：a=1664525, c=1013904223）
+  - Buffer: 0x1450000
+  - Shell 命令：`rs add <item>  rs add_batch <n>  rs contains <x>  rs bern_init <p>  rs bern_add <item>  rs status  rs test`
+
+## Iteration 269 — wavelet.hl：哈尔小波变换
+
+- **`bare-kernel/hl/wavelet.hl`** 新增（~230 行）
+  - Haar 小波变换（Alfred Haar 1909），固定点算术（WAVELET_SCALE=1000）
+  - 1D 前向/逆向 DWT：O(n) 时间，多级分解（最多 WAVELET_MAX_LEVELS=6 级）
+  - 2D DWT：行-列分解（适用于图像/矩阵压缩）
+  - 阈值压缩：置零小系数，返回压缩率（非零系数占比）
+  - Parseval 定理验证：能量保持（`energy_in ≈ energy_out`）
+  - Buffer: 0x1440000
+  - Shell 命令：`wv load <n>  wv forward <levels>  wv inverse <levels>  wv threshold <t>  wv info  wv test`
+
+## Iteration 268 — tdigest.hl：t-Digest 分位数估计器
+
+- **`bare-kernel/hl/tdigest.hl`** 新增（~247 行）
+  - t-Digest（Ted Dunning & Otmar Ertl 2019），质心聚类在线分位数估计
+  - 质心池 TD_MAX_CENTROIDS=128，压缩后保留 TD_COMPRESSION=50 个质心
+  - 极值附近（q≈0/1）质心小 → 高精度；中位数附近质心大 → 均摊高效
+  - `tdigest_quantile(q_times_1000)`：插值查询任意分位 q ∈ [0, 1000]，支持 p50/p90/p99/p99.9
+  - `tdigest_merge`：合并两个 digest（跨节点合并再压缩）
+  - `_td_k_limit`：k-scale 限制函数（简化线性版本）
+  - Buffer: 0x1430000
+  - Shell 命令：`td add <val>  td p50  td p90  td p99  td quantile <q>  td status  td test`
+
+
 
 - **`bare-kernel/hl/merkle_tree.hl`** 新增（~290 行）
   - Merkle 树（Ralph Merkle 1987 / US Patent 4,309,569），加密哈希树

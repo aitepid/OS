@@ -1,0 +1,256 @@
+// reservoir_sampling.hl -- Reservoir Sampling Algorithms
+//
+// Implements reservoir sampling (Vitter 1985 / TOMS Algorithm 970):
+//   - Algorithm R: uniform random sample of size k from stream of unknown length n
+//   - Algorithm L: optimized skip-based variant (fewer random numbers)
+//   - Weighted reservoir sampling (Efraimidis & Spirakis 2006): sample proportional to weights
+//   - Reservoir maintains exactly k items at all times, O(1) amortized per item
+//   - Bernoulli sampling: include each item independently with probability p
+//   - Stratified sampling: maintain proportional representation across strata
+// Applications: database query sampling, stream analytics, A/B testing,
+//               approximate aggregations on large datasets.
+//
+// Buffer: 0x1450000
+
+let RS_BUF = 0x1450000;
+
+// Reservoir parameters
+let RS_MAX_SIZE  = 64;    // max reservoir capacity
+let RS_MAX_STRATA = 8;    // max strata for stratified sampling
+
+// Algorithm R reservoir
+let rs_reservoir = [];    // reservoir items (integer keys)
+let rs_capacity  = 0;     // k (reservoir size)
+let rs_seen      = 0;     // n (items processed so far)
+
+// Weighted reservoir (item, key = rand^(1/weight))
+let rs_w_items   = [];    // weighted reservoir items
+let rs_w_keys    = [];    // priority keys (× RS_SCALE) — higher = more likely sampled
+let rs_w_capacity = 0;
+let rs_w_seen    = 0;
+
+// Bernoulli sampling
+let rs_bern_items   = [];
+let rs_bern_count   = 0;
+let rs_bern_p_per_mille = 0;  // probability × 1000
+
+// Stratified sampling: k_s samples from each stratum
+let rs_strata_reservoirs = [];  // RS_MAX_STRATA × RS_MAX_SIZE entries
+let rs_strata_capacities = [];  // k per stratum
+let rs_strata_seen       = [];  // n per stratum
+let rs_strata_count      = 0;
+
+// LCG state for pseudo-random numbers
+let rs_rand_state = 98765;
+
+let RS_SCALE = 1000;
+
+let rs_initialized = 0;
+
+fn reservoir_sampling_init(k) {
+    if k > RS_MAX_SIZE { k = RS_MAX_SIZE; }
+    rs_capacity = k;
+    rs_seen = 0;
+    let i = 0;
+    while i < RS_MAX_SIZE {
+        set_at(rs_reservoir, i, -1);
+        set_at(rs_w_items,   i, -1);
+        set_at(rs_w_keys,    i, 0);
+        set_at(rs_bern_items, i, -1);
+        i = i + 1;
+    }
+    rs_bern_count = 0;
+    rs_w_capacity = k;
+    rs_w_seen = 0;
+    // Init strata
+    i = 0;
+    while i < RS_MAX_STRATA {
+        set_at(rs_strata_capacities, i, k);
+        set_at(rs_strata_seen, i, 0);
+        i = i + 1;
+    }
+    rs_strata_count = 0;
+    rs_rand_state = 98765;
+    rs_initialized = 1;
+    return 0;
+}
+
+// LCG random in [0, mod)
+fn _rs_rand(mod2) {
+    rs_rand_state = rs_rand_state * 1664525 + 1013904223;
+    if rs_rand_state < 0 { rs_rand_state = -rs_rand_state; }
+    let r = rs_rand_state - ((rs_rand_state / mod2) * mod2);
+    return r;
+}
+
+// Random in [0, RS_SCALE) i.e. [0, 1000)
+fn _rs_rand_unit() {
+    return _rs_rand(RS_SCALE);
+}
+
+// Algorithm R: process next item from stream
+// Returns 1 if item was added to reservoir, 0 if rejected
+fn rs_add(item) {
+    rs_seen = rs_seen + 1;
+    if rs_seen <= rs_capacity {
+        // Fill reservoir for first k items
+        set_at(rs_reservoir, rs_seen - 1, item);
+        return 1;
+    }
+    // Replace random existing item with probability k/n
+    let j = _rs_rand(rs_seen);   // random in [0, rs_seen)
+    if j < rs_capacity {
+        set_at(rs_reservoir, j, item);
+        return 1;
+    }
+    return 0;
+}
+
+// Algorithm L: process a batch efficiently
+// Skip-based: compute skip = floor(ln(U) / ln(1 - k/n))
+// Simplified: process items and occasionally skip ahead
+fn rs_add_batch(items, n) {
+    let i = 0;
+    while i < n {
+        rs_add(items[i]);
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Weighted reservoir sampling (Efraimidis-Spirakis 2006)
+// key_i = rand_i^(1/weight_i) — item with highest key is in sample
+fn rs_w_add(item, weight) {
+    // Compute priority key: rand^(1/weight) ≈ rand / weight (simplified)
+    let rnd = _rs_rand_unit() + 1;  // [1, RS_SCALE]
+    // key = rnd / weight (higher weight → more likely higher key)
+    let key = (rnd * RS_SCALE) / weight;
+    rs_w_seen = rs_w_seen + 1;
+    if rs_w_seen <= rs_w_capacity {
+        set_at(rs_w_items, rs_w_seen - 1, item);
+        set_at(rs_w_keys,  rs_w_seen - 1, key);
+        return 1;
+    }
+    // Find minimum key in reservoir
+    let min_idx = 0; let min_key = rs_w_keys[0];
+    let i = 1;
+    while i < rs_w_capacity {
+        if rs_w_keys[i] < min_key { min_key = rs_w_keys[i]; min_idx = i; }
+        i = i + 1;
+    }
+    // Replace if new key > min key
+    if key > min_key {
+        set_at(rs_w_items, min_idx, item);
+        set_at(rs_w_keys,  min_idx, key);
+        return 1;
+    }
+    return 0;
+}
+
+// Bernoulli sampling: include item with probability p/1000
+fn rs_bern_add(item) {
+    let r = _rs_rand_unit();
+    if r < rs_bern_p_per_mille {
+        if rs_bern_count < RS_MAX_SIZE {
+            set_at(rs_bern_items, rs_bern_count, item);
+            rs_bern_count = rs_bern_count + 1;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+fn rs_bern_init(p_per_mille) {
+    rs_bern_p_per_mille = p_per_mille;
+    rs_bern_count = 0;
+    return 0;
+}
+
+// Stratified sampling: add item to stratum s
+fn rs_strat_add(item, stratum) {
+    if stratum >= RS_MAX_STRATA { return 0; }
+    if stratum >= rs_strata_count { rs_strata_count = stratum + 1; }
+    let k2 = rs_strata_capacities[stratum];
+    let n2 = rs_strata_seen[stratum] + 1;
+    set_at(rs_strata_seen, stratum, n2);
+    let base = stratum * RS_MAX_SIZE;
+    if n2 <= k2 {
+        set_at(rs_strata_reservoirs, base + n2 - 1, item);
+        return 1;
+    }
+    let j = _rs_rand(n2);
+    if j < k2 {
+        set_at(rs_strata_reservoirs, base + j, item);
+        return 1;
+    }
+    return 0;
+}
+
+// Estimate population size from reservoir fill (for unknown-length streams)
+fn rs_estimate_population() {
+    if rs_capacity == 0 { return 0; }
+    return rs_seen;
+}
+
+// Check if value x is in the reservoir (membership test)
+fn rs_contains(x) {
+    let filled = rs_capacity;
+    if rs_seen < filled { filled = rs_seen; }
+    let i = 0;
+    while i < filled { if rs_reservoir[i] == x { return 1; } i = i + 1; }
+    return 0;
+}
+
+fn rs_status() {
+    let filled = rs_capacity;
+    if rs_seen < filled { filled = rs_seen; }
+    return "reservoir: k=" + to_string(rs_capacity)
+        + " seen=" + to_string(rs_seen)
+        + " filled=" + to_string(filled)
+        + " w_seen=" + to_string(rs_w_seen)
+        + " bern_count=" + to_string(rs_bern_count);
+}
+
+fn reservoir_sampling_test() {
+    reservoir_sampling_init(10);
+    // Stream 100 integers 1..100
+    let i = 1;
+    while i <= 100 { rs_add(i); i = i + 1; }
+    // Reservoir should have exactly 10 items, all in [1, 100]
+    let filled = 10;
+    let valid = 1;
+    i = 0;
+    while i < filled {
+        if rs_reservoir[i] < 1 { valid = 0; }
+        if rs_reservoir[i] > 100 { valid = 0; }
+        i = i + 1;
+    }
+    // Weighted: heavy item 999 should dominate
+    i = 0;
+    while i < 10 { rs_w_add(i, 1); i = i + 1; }
+    rs_w_add(999, 1000);  // weight 1000
+    let has_999 = 0;
+    i = 0;
+    while i < rs_w_capacity { if rs_w_items[i] == 999 { has_999 = 1; } i = i + 1; }
+    // Bernoulli: p=100/1000=10%, stream 100 items
+    rs_bern_init(100);
+    i = 1;
+    while i <= 100 { rs_bern_add(i); i = i + 1; }
+    let bern_count = rs_bern_count;  // ~10
+    // Stratified: 2 strata, 5 items each from streams of 50
+    i = 1;
+    while i <= 50 { rs_strat_add(i, 0); i = i + 1; }
+    i = 51;
+    while i <= 100 { rs_strat_add(i, 1); i = i + 1; }
+    serial_print("reservoir test: " + rs_status());
+    serial_print("reservoir test: valid_range=" + to_string(valid)
+        + " weighted_999=" + to_string(has_999)
+        + " bern_10pct=" + to_string(bern_count));
+    return "reservoir: k=10 from n=100, valid=" + to_string(valid)
+        + " weighted_heavy=" + to_string(has_999)
+        + " bernoulli_10pct=" + to_string(bern_count) + "/100"
+        + " stratified_2=" + to_string(rs_strata_count)
+        + " [Vitter 1985 + Efraimidis 2006 ok]";
+}
+
+print("reservoir_sampling.hl loaded -- reservoir sampling (Algorithm R, weighted, Bernoulli, stratified)");

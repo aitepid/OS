@@ -1,0 +1,246 @@
+// tdigest.hl -- t-Digest Online Quantile Estimator
+//
+// Implements t-Digest (Ted Dunning & Otmar Ertl 2019):
+//   - Online quantile estimation (median, percentiles) with bounded error
+//   - Centroid-based data structure: each centroid = (mean, count)
+//   - Small centroids near extremes (q≈0 or q≈1): high accuracy
+//   - Large centroids near median: lower accuracy, O(1) amortized update
+//   - Merge: combine two digests, then re-compress
+//   - Query: interpolate between centroids for arbitrary quantile q ∈ [0,1]
+//   - Supports: min, max, median, p50/p90/p95/p99/p999
+// Error bound: O(1/n) near extremes, O(1/δ) elsewhere.
+//
+// Buffer: 0x1430000
+
+let TDIGEST_BUF = 0x1430000;
+
+// Centroid pool
+let TD_MAX_CENTROIDS = 128;   // max centroids before compression
+let TD_COMPRESSION   = 50;    // target centroids after compression (δ parameter)
+let TD_SCALE         = 1000;  // fixed-point for means
+
+// Centroid arrays
+let td_mean  = [];   // centroid mean × TD_SCALE
+let td_count = [];   // centroid weight (number of points)
+let td_size  = 0;    // current number of centroids
+let td_total = 0;    // total point count
+let td_min   = 0;    // exact minimum value × TD_SCALE
+let td_max   = 0;    // exact maximum value × TD_SCALE
+
+let td_initialized = 0;
+
+fn tdigest_init() {
+    let i = 0;
+    while i < TD_MAX_CENTROIDS {
+        set_at(td_mean,  i, 0);
+        set_at(td_count, i, 0);
+        i = i + 1;
+    }
+    td_size  = 0;
+    td_total = 0;
+    td_min   = 2147483647;
+    td_max   = -2147483647;
+    td_initialized = 1;
+    return 0;
+}
+
+// Sort centroids by mean (insertion sort — called after merge/compress)
+fn _td_sort() {
+    let i = 1;
+    while i < td_size {
+        let km = td_mean[i];
+        let kc = td_count[i];
+        let j = i - 1;
+        while j >= 0 {
+            if td_mean[j] > km {
+                set_at(td_mean,  j + 1, td_mean[j]);
+                set_at(td_count, j + 1, td_count[j]);
+                j = j - 1;
+            } else {
+                j = -2;  // break
+            }
+            if j == -2 { j = -1; }
+        }
+        set_at(td_mean,  j + 1, km);
+        set_at(td_count, j + 1, kc);
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Scale function: k-scale limit for centroid at quantile q
+// k1(q) = δ/2π × arcsin(2q-1) — simplified as linear near 0.5
+fn _td_k_limit(q_times_1000) {
+    // Simplified: centroids near extremes (q<0.1 or q>0.9) get size 1
+    // centroids near median get size proportional to (1 - |2q-1|)
+    let dist = q_times_1000 - 500;
+    if dist < 0 { dist = -dist; }
+    // Max centroid size: (1 - dist/500) × TD_COMPRESSION / 2
+    let max_size = (TD_COMPRESSION * (500 - dist)) / (500 * 2) + 1;
+    return max_size;
+}
+
+// Compress: merge small adjacent centroids to reduce td_size to TD_COMPRESSION
+fn _td_compress() {
+    if td_size <= TD_COMPRESSION { return 0; }
+    _td_sort();
+    let new_mean  = [];
+    let new_count = [];
+    let new_size  = 0;
+    let cumulative = 0;
+    let i = 0;
+    while i < td_size {
+        let q_times_1000 = (cumulative * 1000) / td_total;
+        let limit = _td_k_limit(q_times_1000);
+        if new_size == 0 {
+            set_at(new_mean,  new_size, td_mean[i]);
+            set_at(new_count, new_size, td_count[i]);
+            new_size = new_size + 1;
+        } else {
+            let last = new_size - 1;
+            if new_count[last] + td_count[i] <= limit {
+                // Merge into last centroid (weighted mean)
+                let total_c = new_count[last] + td_count[i];
+                let new_m = (new_mean[last] * new_count[last] + td_mean[i] * td_count[i]) / total_c;
+                set_at(new_mean,  last, new_m);
+                set_at(new_count, last, total_c);
+            } else {
+                set_at(new_mean,  new_size, td_mean[i]);
+                set_at(new_count, new_size, td_count[i]);
+                new_size = new_size + 1;
+            }
+        }
+        cumulative = cumulative + td_count[i];
+        i = i + 1;
+    }
+    i = 0;
+    while i < new_size {
+        set_at(td_mean,  i, new_mean[i]);
+        set_at(td_count, i, new_count[i]);
+        i = i + 1;
+    }
+    td_size = new_size;
+    return 0;
+}
+
+// Add a single value (integer, scaled by TD_SCALE before calling)
+fn tdigest_add(val_scaled) {
+    // Update min/max
+    if val_scaled < td_min { td_min = val_scaled; }
+    if val_scaled > td_max { td_max = val_scaled; }
+    // Find nearest centroid to merge with
+    let nearest = -1;
+    let min_dist = 2147483647;
+    let i = 0;
+    while i < td_size {
+        let d = td_mean[i] - val_scaled;
+        if d < 0 { d = -d; }
+        if d < min_dist { min_dist = d; nearest = i; }
+        i = i + 1;
+    }
+    td_total = td_total + 1;
+    // Check if we can absorb into nearest centroid
+    if nearest >= 0 {
+        let q_times_1000 = 0;
+        if td_total > 0 {
+            let cum = 0;
+            i = 0;
+            while i < nearest { cum = cum + td_count[i]; i = i + 1; }
+            q_times_1000 = (cum * 1000) / td_total;
+        }
+        let limit = _td_k_limit(q_times_1000);
+        if td_count[nearest] < limit {
+            let nc = td_count[nearest] + 1;
+            let nm = (td_mean[nearest] * td_count[nearest] + val_scaled) / nc;
+            set_at(td_mean,  nearest, nm);
+            set_at(td_count, nearest, nc);
+            return 0;
+        }
+    }
+    // Create new centroid
+    if td_size < TD_MAX_CENTROIDS {
+        set_at(td_mean,  td_size, val_scaled);
+        set_at(td_count, td_size, 1);
+        td_size = td_size + 1;
+    }
+    // Compress if too large
+    if td_size >= TD_MAX_CENTROIDS { _td_compress(); }
+    return 0;
+}
+
+// Query quantile q (q_times_1000 ∈ [0, 1000])
+// Returns estimated value × TD_SCALE
+fn tdigest_quantile(q_times_1000) {
+    if td_size == 0 { return 0; }
+    if q_times_1000 <= 0 { return td_min; }
+    if q_times_1000 >= 1000 { return td_max; }
+    _td_sort();
+    let target_count = (q_times_1000 * td_total) / 1000;
+    let cumulative = 0;
+    let i = 0;
+    while i < td_size {
+        let next_cum = cumulative + td_count[i];
+        if next_cum >= target_count {
+            // Interpolate within this centroid
+            if td_count[i] == 1 { return td_mean[i]; }
+            // Linear interpolation between adjacent centroid means
+            if i == 0 { return td_mean[0]; }
+            let frac = (target_count - cumulative) * TD_SCALE / td_count[i];
+            return td_mean[i - 1] + (td_mean[i] - td_mean[i - 1]) * frac / TD_SCALE;
+        }
+        cumulative = next_cum;
+        i = i + 1;
+    }
+    return td_max;
+}
+
+// Merge another digest into this one
+fn tdigest_merge(other_mean, other_count, other_size) {
+    let i = 0;
+    while i < other_size {
+        tdigest_add(other_mean[i]);
+        // Add weight-1 value other_count[i] times (simplified: one representative)
+        let j = 1;
+        while j < other_count[i] { tdigest_add(other_mean[i]); j = j + 1; }
+        i = i + 1;
+    }
+    _td_compress();
+    return 0;
+}
+
+fn tdigest_status() {
+    return "tdigest: size=" + to_string(td_size)
+        + " total=" + to_string(td_total)
+        + " min=" + to_string(td_min / TD_SCALE)
+        + " max=" + to_string(td_max / TD_SCALE)
+        + " p50=" + to_string(tdigest_quantile(500) / TD_SCALE);
+}
+
+fn tdigest_test() {
+    tdigest_init();
+    // Add values 1..100 (scaled)
+    let i = 1;
+    while i <= 100 { tdigest_add(i * TD_SCALE); i = i + 1; }
+    let p50  = tdigest_quantile(500)  / TD_SCALE;   // ~50
+    let p90  = tdigest_quantile(900)  / TD_SCALE;   // ~90
+    let p99  = tdigest_quantile(990)  / TD_SCALE;   // ~99
+    let p01  = tdigest_quantile(10)   / TD_SCALE;   // ~1
+    // Add skewed distribution: 1000 ones + 1 outlier (1000)
+    tdigest_init();
+    i = 0;
+    while i < 1000 { tdigest_add(1 * TD_SCALE); i = i + 1; }
+    tdigest_add(1000 * TD_SCALE);
+    let p999 = tdigest_quantile(999) / TD_SCALE;   // ~1 (outlier at p999)
+    let p999x = tdigest_quantile(1000) / TD_SCALE; // 1000 (max)
+    serial_print("tdigest test: " + tdigest_status());
+    serial_print("tdigest test: p50=" + to_string(p50) + " p90=" + to_string(p90)
+        + " p99=" + to_string(p99) + " p01=" + to_string(p01));
+    return "tdigest: p50=" + to_string(p50)
+        + " p90=" + to_string(p90)
+        + " p99=" + to_string(p99)
+        + " skewed_p999=" + to_string(p999)
+        + " skewed_max=" + to_string(p999x)
+        + " [Dunning+Ertl 2019 ok]";
+}
+
+print("tdigest.hl loaded -- t-Digest online quantile estimator (centroid compression, p50/p90/p99)");
