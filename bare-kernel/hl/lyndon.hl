@@ -1,0 +1,89 @@
+// lyndon.hl -- Lyndon Decomposition (Duval's Algorithm)
+// O(n). Decomposes string into non-increasing sequence of Lyndon words.
+// lyn_run() fills lyn_starts[], lyn_lens[], returns lyn_count.
+// Runtime buffer: 0x16E0000
+
+let LYN_MAX_N = 32;
+
+let lyn_input  = array(32, 0);
+let lyn_starts = array(32, 0);
+let lyn_lens   = array(32, 0);
+let lyn_n      = 0;
+let lyn_count  = 0;
+
+fn lyn_init() {
+    lyn_n     = 0;
+    lyn_count = 0;
+    let i = 0;
+    while i < 32 {
+        set_at(lyn_input,  i, 0);
+        set_at(lyn_starts, i, 0);
+        set_at(lyn_lens,   i, 0);
+        i += 1;
+    }
+    return 0;
+}
+
+fn lyn_add(c) {
+    if lyn_n < LYN_MAX_N { set_at(lyn_input, lyn_n, c); lyn_n += 1; }
+    return 0;
+}
+
+fn lyn_run() {
+    let i       = 0;
+    let j       = 0;
+    let k       = 0;
+    let saved_k = 0;
+    let done    = 0;
+    let l       = 0;
+    lyn_count = 0;
+    while i < lyn_n {
+        j       = i;
+        k       = i + 1;
+        saved_k = lyn_n;
+        done    = 0;
+        while k < lyn_n {
+            if done == 0 {
+                if lyn_input[j] > lyn_input[k] {
+                    done    = 1;
+                    saved_k = k;
+                    k       = lyn_n;
+                } else {
+                    if lyn_input[j] < lyn_input[k] { j = i; } else { j += 1; }
+                    k += 1;
+                }
+            }
+        }
+        l = saved_k - j;
+        while i <= j {
+            set_at(lyn_starts, lyn_count, i);
+            set_at(lyn_lens,   lyn_count, l);
+            lyn_count += 1;
+            i += l;
+        }
+    }
+    return lyn_count;
+}
+
+fn lyn_test() {
+    lyn_init();
+    lyn_add(1); lyn_add(0); lyn_add(1);
+    let cnt = lyn_run();
+    print("lyn_test: count=" + to_string(cnt) + " s0=" + to_string(lyn_starts[0]) + " l0=" + to_string(lyn_lens[0]) + " s1=" + to_string(lyn_starts[1]) + " l1=" + to_string(lyn_lens[1]));
+    if cnt == 2 {
+        if lyn_starts[0] == 0 {
+            if lyn_lens[0] == 1 {
+                if lyn_starts[1] == 1 {
+                    if lyn_lens[1] == 2 {
+                        print("lyn_test: PASS");
+                        return 1;
+                    }
+                }
+            }
+        }
+    }
+    print("lyn_test: FAIL");
+    return 0;
+}
+
+print("lyndon.hl loaded");

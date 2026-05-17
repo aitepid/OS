@@ -1,0 +1,127 @@
+// burrows_wheeler.hl -- Burrows-Wheeler Transform
+// Cyclic rotation sort (O(n^2) insertion sort, n<=32) then extract last column.
+// bwt_run() fills bwt_out[] and sets bwt_orig = original string row index.
+// Runtime buffer: 0x16D0000
+
+let BWT_MAX_N = 32;
+
+let bwt_input = array(32, 0);
+let bwt_sa    = array(32, 0);
+let bwt_out   = array(32, 0);
+let bwt_n     = 0;
+let bwt_orig  = 0;
+
+fn bwt_init() {
+    bwt_n    = 0;
+    bwt_orig = 0;
+    let i = 0;
+    while i < 32 {
+        set_at(bwt_input, i, 0);
+        set_at(bwt_sa,    i, 0);
+        set_at(bwt_out,   i, 0);
+        i += 1;
+    }
+    return 0;
+}
+
+fn bwt_add(c) {
+    if bwt_n < BWT_MAX_N { set_at(bwt_input, bwt_n, c); bwt_n += 1; }
+    return 0;
+}
+
+fn _bwt_cmp_rot(a, b) {
+    let k      = 0;
+    let ra     = 0;
+    let rb     = 0;
+    let sa     = 0;
+    let sb     = 0;
+    let result = 0;
+    let done   = 0;
+    while k < bwt_n {
+        if done == 0 {
+            sa = a + k;
+            sb = b + k;
+            ra = sa - (sa / bwt_n) * bwt_n;
+            rb = sb - (sb / bwt_n) * bwt_n;
+            if bwt_input[ra] < bwt_input[rb] {
+                result = 1; done = 1; k = bwt_n;
+            } else {
+                if bwt_input[ra] > bwt_input[rb] {
+                    done = 1; k = bwt_n;
+                } else {
+                    k += 1;
+                }
+            }
+        }
+    }
+    return result;
+}
+
+fn _bwt_sort_sa() {
+    let i    = 0;
+    let j    = 0;
+    let key  = 0;
+    let ins  = 0;
+    let k    = 0;
+    let done = 0;
+    while i < bwt_n { set_at(bwt_sa, i, i); i += 1; }
+    i = 1;
+    while i < bwt_n {
+        key  = bwt_sa[i];
+        j    = i - 1;
+        ins  = i;
+        done = 0;
+        while j >= 0 {
+            if done == 0 {
+                if _bwt_cmp_rot(key, bwt_sa[j]) == 1 {
+                    ins = j; j -= 1;
+                } else {
+                    done = 1; j = -1;
+                }
+            }
+        }
+        if ins < i {
+            k = i;
+            while k > ins { set_at(bwt_sa, k, bwt_sa[k - 1]); k -= 1; }
+            set_at(bwt_sa, ins, key);
+        }
+        i += 1;
+    }
+    return 0;
+}
+
+fn bwt_run() {
+    let i    = 0;
+    let tmp  = 0;
+    let lpos = 0;
+    _bwt_sort_sa();
+    bwt_orig = 0;
+    while i < bwt_n {
+        tmp  = bwt_sa[i] - 1 + bwt_n;
+        lpos = tmp - (tmp / bwt_n) * bwt_n;
+        set_at(bwt_out, i, bwt_input[lpos]);
+        if bwt_sa[i] == 0 { bwt_orig = i; }
+        i += 1;
+    }
+    return bwt_orig;
+}
+
+fn bwt_test() {
+    bwt_init();
+    bwt_add(0); bwt_add(0); bwt_add(1);
+    bwt_run();
+    let ok = 0;
+    if bwt_out[0] == 1 {
+        if bwt_out[1] == 0 {
+            if bwt_out[2] == 0 {
+                if bwt_orig == 0 { ok = 1; }
+            }
+        }
+    }
+    print("bwt_test: out=[" + to_string(bwt_out[0]) + "," + to_string(bwt_out[1]) + "," + to_string(bwt_out[2]) + "] orig=" + to_string(bwt_orig));
+    if ok == 1 { print("bwt_test: PASS"); return 1; }
+    print("bwt_test: FAIL");
+    return 0;
+}
+
+print("burrows_wheeler.hl loaded");

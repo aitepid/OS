@@ -2,11 +2,45 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`364`（72 根目录 + 295 内核模块）
-- H-L 总行数：`~107,500`
-- 内核模块：`295`
-- Shell 命令：`895`
-- 最近完成功能迭代：`309`（suffix_automaton + manacher + eertree）
+- `.hl` 文件：`367`（72 根目录 + 298 内核模块）
+- H-L 总行数：`~108,500`
+- 内核模块：`298`
+- Shell 命令：`912`
+- 最近完成功能迭代：`312`（burrows_wheeler + lyndon + z_function）
+
+## Iteration 312 — z_function.hl：Z 函数
+
+- **`bare-kernel/hl/z_function.hl`** 新增（~70 行）
+  - Gusfield 1997，O(n)；zf_z[i] = s 和 s[i..] 最长公共前缀长度
+  - 维护最右延伸区间 [l,r]：若 i<r 则用镜像值 min(r-i, z[i-l]) 初始化 zf_z[i]
+  - 朴素扩展内层用嵌套 if/else（H-L 无 break → done-flag）
+  - `zf_result` = max(zf_z[1..n-1])，可用于子串重复检测
+  - 测试："abcabc"=[0,1,2,0,1,2] → z=[6,0,0,3,0,0]，max=3
+  - Buffer: 0x16F0000，ZF_MAX_N=32
+  - Shell 命令：`zf init  zf add <c>  zf run  zf val <i>  zf max  zf test`
+
+## Iteration 311 — lyndon.hl：Lyndon 分解（Duval 算法）
+
+- **`bare-kernel/hl/lyndon.hl`** 新增（~70 行）
+  - Duval 1983，O(n) 时间 O(1) 额外空间；输出字典序非增的 Lyndon 词序列
+  - 三指针 i/j/k：j 跟踪当前 Lyndon 词比较位置，k 向前扫描
+  - 当 s[j]>s[k] 时（遇到更小字符）提前终止：saved_k=k 保存分断点，k=lyn_n 强制退出
+  - 输出阶段：`while i<=j` 反复写出长度 saved_k-j 的 Lyndon 词并推进 i
+  - `lyn_starts[]` + `lyn_lens[]` 记录各 Lyndon 词位置和长度
+  - 测试："bab"=[1,0,1] → count=2，[start=0,len=1,"b"]+[start=1,len=2,"ab"]
+  - Buffer: 0x16E0000，LYN_MAX_N=32
+  - Shell 命令：`lyn init  lyn add <c>  lyn run  lyn count  lyn test`
+
+## Iteration 310 — burrows_wheeler.hl：Burrows-Wheeler 变换
+
+- **`bare-kernel/hl/burrows_wheeler.hl`** 新增（~90 行）
+  - Burrows & Wheeler 1994，O(n²) 循环旋转排序（n≤32 足够）
+  - `_bwt_cmp_rot(a, b)` — 逐字符比较循环旋转 a 和 b，取模用算术：`sum - (sum/n)*n`
+  - `_bwt_sort_sa()` — 对旋转序号的插入排序；比较结果决定插入位置
+  - `bwt_run()` — 提取已排序旋转的最后一列：BWT[i]=s[(sa[i]-1+n)%n]；找 sa[i]==0 行定位 bwt_orig
+  - 测试："aab"=[0,0,1] → bwt_out=[1,0,0]（"baa"），bwt_orig=0
+  - Buffer: 0x16D0000，BWT_MAX_N=32
+  - Shell 命令：`bwt init  bwt add <c>  bwt run  bwt orig  bwt char <i>  bwt test`
 
 ## Iteration 309 — eertree.hl：回文树（Palindromic Tree）
 
