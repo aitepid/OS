@@ -2,23 +2,23 @@
 
 ## 版本定位
 
-当前仓库处于 `v6.0` 发布线，最新功能里程碑为迭代 306（lca + virtual_tree + dominator）。
+当前仓库处于 `v6.0` 发布线，最新功能里程碑为迭代 309（suffix_automaton + manacher + eertree）。
 
-## 本轮已核实状态（迭代 306 基线）
+## 本轮已核实状态（迭代 309 基线）
 
 ### 仓库规模（精确计数）
 
 | 指标 | 当前值 | 说明 |
 |---|---:|---|
-| 全部 `.hl` 文件 | 361 | 72 根目录 + 292 内核模块 |
-| H-L 总行数 | ~106,500 | 持续增长 |
-| `bare-kernel/hl/` 内核模块 | 292 | 编译进 `kernel.bin` |
+| 全部 `.hl` 文件 | 364 | 72 根目录 + 295 内核模块 |
+| H-L 总行数 | ~107,500 | 持续增长 |
+| `bare-kernel/hl/` 内核模块 | 295 | 编译进 `kernel.bin` |
 | `kernel_entry.hl` 行数 | 10,427 | 内核入口 + 命令分发（307 函数） |
 | 编译产出函数数 | 3,757 | bare-kernel/hl 实测 |
 | 链接符号数 | 2,500+ | linker 实测 |
 | `hl-bootstrap.hl` 行数 | 4,572 | 自举编译器（208 函数） |
 | `stdlib.hl` 行数 | 1,545 | 标准库（143 函数） |
-| Shell 命令数 | 880 | shell.hl（+lca/virtual_tree/dominator）|
+| Shell 命令数 | 895 | shell.hl（+sam/manacher/eertree）|
 | `test_*.hl` / `test-*.hl` | 19 | |
 | `IP-Protection/` 文件数 | 60 | 知识产权文件 |
 | `.md` 文档 | 10 | |
@@ -27,8 +27,8 @@
 
 | 验证项 | 结果 |
 |---|---|
-| `hl-bootstrap build` | ✅ 292 模块编译 + 镜像重建 |
-| `validate-workspace` | ✅ 361 HL / 292 模块 / 0 stub |
+| `hl-bootstrap build` | ✅ 295 模块编译 + 镜像重建 |
+| `validate-workspace` | ✅ 364 HL / 295 模块 / 0 stub |
 | `runtime-path-readiness` | ✅ IDT/PIT/KBD + SYSCALL + 网络 + eBPF/TLS/QUIC |
 | `release-validate` | ✅ 18/18 |
 

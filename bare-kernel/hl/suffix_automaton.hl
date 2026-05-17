@@ -1,0 +1,115 @@
+// suffix_automaton.hl -- Suffix Automaton (SAM)
+// O(n) construction via online extension. Input chars as ints 0..25.
+// sam_count_substr() = distinct non-empty substrings (sum len[s]-len[link[s]]).
+// Runtime buffer: 0x16A0000
+
+let SAM_MAX_ST = 64;
+let SAM_ALPHA  = 26;
+
+let sam_len   = array(64, 0);
+let sam_link  = array(64, -1);
+let sam_trans = array(1664, -1);
+let sam_sz    = 0;
+let sam_last  = 0;
+
+fn sam_init() {
+    sam_sz   = 1;
+    sam_last = 0;
+    let i = 0;
+    while i < 64   { set_at(sam_len, i, 0); set_at(sam_link, i, -1); i += 1; }
+    i = 0;
+    while i < 1664 { set_at(sam_trans, i, -1); i += 1; }
+    return 0;
+}
+
+fn sam_extend(c) {
+    let cur    = sam_sz;
+    let i      = 0;
+    let p      = sam_last;
+    let saved  = -1;
+    let done   = 0;
+    let q      = 0;
+    let clone  = 0;
+    let pp     = 0;
+    let done2  = 0;
+    let k      = 0;
+    set_at(sam_len,  cur, sam_len[sam_last] + 1);
+    set_at(sam_link, cur, -1);
+    while i < SAM_ALPHA { set_at(sam_trans, cur * SAM_ALPHA + i, -1); i += 1; }
+    sam_sz += 1;
+    while p >= 0 {
+        if done == 0 {
+            if sam_trans[p * SAM_ALPHA + c] == -1 {
+                set_at(sam_trans, p * SAM_ALPHA + c, cur);
+                p = sam_link[p];
+            } else {
+                saved = p;
+                done  = 1;
+                p     = -1;
+            }
+        }
+    }
+    if saved == -1 {
+        set_at(sam_link, cur, 0);
+    } else {
+        q = sam_trans[saved * SAM_ALPHA + c];
+        if sam_len[q] == sam_len[saved] + 1 {
+            set_at(sam_link, cur, q);
+        } else {
+            clone = sam_sz;
+            sam_sz += 1;
+            set_at(sam_len,  clone, sam_len[saved] + 1);
+            set_at(sam_link, clone, sam_link[q]);
+            k = 0;
+            while k < SAM_ALPHA {
+                set_at(sam_trans, clone * SAM_ALPHA + k, sam_trans[q * SAM_ALPHA + k]);
+                k += 1;
+            }
+            pp    = saved;
+            done2 = 0;
+            while pp >= 0 {
+                if done2 == 0 {
+                    if sam_trans[pp * SAM_ALPHA + c] == q {
+                        set_at(sam_trans, pp * SAM_ALPHA + c, clone);
+                        pp = sam_link[pp];
+                    } else {
+                        done2 = 1;
+                        pp    = -1;
+                    }
+                }
+            }
+            set_at(sam_link, q,   clone);
+            set_at(sam_link, cur, clone);
+        }
+    }
+    sam_last = cur;
+    return 0;
+}
+
+fn sam_count_substr() {
+    let total = 0;
+    let i = 1;
+    while i < sam_sz {
+        total += sam_len[i] - sam_len[sam_link[i]];
+        i += 1;
+    }
+    return total;
+}
+
+fn sam_test() {
+    sam_init();
+    sam_extend(0);
+    sam_extend(1);
+    sam_extend(0);
+    sam_extend(1);
+    let cnt = sam_count_substr();
+    print("sam_test: sz=" + to_string(sam_sz) + " distinct=" + to_string(cnt));
+    if cnt == 7 {
+        print("sam_test: PASS");
+        return 1;
+    }
+    print("sam_test: FAIL");
+    return 0;
+}
+
+print("suffix_automaton.hl loaded");

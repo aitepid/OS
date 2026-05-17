@@ -1,0 +1,110 @@
+// manacher.hl -- Manacher's Algorithm (Longest Palindromic Substring)
+// O(n) via transformed string with separator char 26.
+// man_add(c) appends char (0..25). man_run() returns max palindrome length.
+// Runtime buffer: 0x16B0000
+
+let MAN_MAX  = 64;
+
+let man_input  = array(64, 0);
+let man_s      = array(130, 0);
+let man_p      = array(130, 0);
+let man_n      = 0;
+let man_slen   = 0;
+let man_result = 0;
+
+fn man_init() {
+    man_n      = 0;
+    man_slen   = 0;
+    man_result = 0;
+    let i = 0;
+    while i < 64  { set_at(man_input, i, 0); i += 1; }
+    i = 0;
+    while i < 130 { set_at(man_s, i, 0); set_at(man_p, i, 0); i += 1; }
+    return 0;
+}
+
+fn man_add(c) {
+    if man_n < MAN_MAX {
+        set_at(man_input, man_n, c);
+        man_n += 1;
+    }
+    return 0;
+}
+
+fn _man_build() {
+    set_at(man_s, 0, 26);
+    let i = 0;
+    while i < man_n {
+        set_at(man_s, 2 * i + 1, man_input[i]);
+        set_at(man_s, 2 * i + 2, 26);
+        i += 1;
+    }
+    man_slen = 2 * man_n + 1;
+    return 0;
+}
+
+fn man_run() {
+    let c      = 0;
+    let r      = 0;
+    let i      = 0;
+    let pi     = 0;
+    let mirror = 0;
+    let pm     = 0;
+    let rdiff  = 0;
+    let right  = 0;
+    let left   = 0;
+    let done   = 0;
+    _man_build();
+    man_result = 0;
+    while i < man_slen {
+        mirror = 2 * c - i;
+        pi = 0;
+        if i < r {
+            rdiff = r - i;
+            pm    = 0;
+            if mirror >= 0 { pm = man_p[mirror]; }
+            if rdiff < pm { pi = rdiff; } else { pi = pm; }
+        }
+        done = 0;
+        while done == 0 {
+            right = i + pi + 1;
+            left  = i - pi - 1;
+            if right >= man_slen {
+                done = 1;
+            } else {
+                if left < 0 {
+                    done = 1;
+                } else {
+                    if man_s[right] != man_s[left] {
+                        done = 1;
+                    } else {
+                        pi += 1;
+                    }
+                }
+            }
+        }
+        set_at(man_p, i, pi);
+        if i + pi > r { c = i; r = i + pi; }
+        if pi > man_result { man_result = pi; }
+        i += 1;
+    }
+    return man_result;
+}
+
+fn man_test() {
+    man_init();
+    man_add(0);
+    man_add(1);
+    man_add(1);
+    man_add(0);
+    let res = man_run();
+    print("man_test: longest=" + to_string(res));
+    if res == 4 {
+        print("man_test: PASS");
+        return 1;
+    }
+    print("man_test: FAIL");
+    return 0;
+}
+
+print("manacher.hl loaded");

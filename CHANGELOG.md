@@ -2,11 +2,47 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`361`（72 根目录 + 292 内核模块）
-- H-L 总行数：`~106,500`
-- 内核模块：`292`
-- Shell 命令：`880`
-- 最近完成功能迭代：`306`（lca + virtual_tree + dominator）
+- `.hl` 文件：`364`（72 根目录 + 295 内核模块）
+- H-L 总行数：`~107,500`
+- 内核模块：`295`
+- Shell 命令：`895`
+- 最近完成功能迭代：`309`（suffix_automaton + manacher + eertree）
+
+## Iteration 309 — eertree.hl：回文树（Palindromic Tree）
+
+- **`bare-kernel/hl/eertree.hl`** 新增（~95 行）
+  - Mikhail Rubinchik 2014，O(n) 构建；`et_count` = 不同非空回文子串数量
+  - 两个根节点：state 0（虚根 len=-1，任意字符匹配）、state 1（空串根 len=0）
+  - `_et_get_suf(p, i)` — 从 p 向上走后缀链接，找到可以左右扩展 s[i] 的最长回文后缀
+  - `et_add(c)` — 若转移不存在则创建新节点（len=父回文len+2），查找后缀链接
+  - 新节点后缀链接：len==1→state 1；否则对 link[p] 再次调用 `_et_get_suf` 取转移
+  - 测试："aaaa" → et_count=4（"a"/"aa"/"aaa"/"aaaa"）
+  - Buffer: 0x16C0000，ET_MAX_ST=36，ET_ALPHA=26
+  - Shell 命令：`et init  et add <c>  et count  et sz  et test`
+
+## Iteration 308 — manacher.hl：Manacher 最长回文子串
+
+- **`bare-kernel/hl/manacher.hl`** 新增（~85 行）
+  - Manacher 1975，O(n)，构造分隔符变换串（char 26 为分隔符）
+  - `_man_build()` — 将 s[0..n-1] 变换为 s'[0..2n]（奇长，含分隔）
+  - `man_run()` — 标准 Manacher 扩展：维护右边界 r 和中心 c，镜像取 min(p[mirror], r-i)
+  - `man_result` — 最长回文半径（等于原串中最长回文子串长度）
+  - 内层扩展用嵌套 if/else（H-L 无 else if，无 break→done-flag）
+  - 测试："abba"=[0,1,1,0] → man_result=4
+  - Buffer: 0x16B0000，MAN_MAX=64
+  - Shell 命令：`man init  man add <c>  man run  man len  man test`
+
+## Iteration 307 — suffix_automaton.hl：后缀自动机（SAM）
+
+- **`bare-kernel/hl/suffix_automaton.hl`** 新增（~100 行）
+  - Blumer et al. 1985，O(n) 在线构建；输入字符 int 0..25
+  - 每个状态：`sam_len[]`（最长子串长）、`sam_link[]`（后缀链接）、`sam_trans[]`（26 路转移）
+  - `sam_extend(c)` — 创建新状态 cur；向上遍历 link 添加转移；若遇已有转移则 clone（无 XOR，用 saved 记录分岔点）
+  - 不可变性关键：clone 的 len=分岔点 len+1，接管 q 的转移和链接；重路由上方所有指向 q 的 c-转移 → clone
+  - `sam_count_substr()` = Σ(len[i]-len[link[i]]) for i=1..sz-1
+  - 测试："abab"=[0,1,0,1] → distinct=7（a/b/ab/ba/aba/bab/abab）
+  - Buffer: 0x16A0000，SAM_MAX_ST=64，SAM_ALPHA=26
+  - Shell 命令：`sam init  sam add <c>  sam count  sam sz  sam test`
 
 ## Iteration 306 — dominator.hl：支配树
 

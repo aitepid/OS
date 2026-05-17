@@ -201,6 +201,9 @@ fn shell_handle(cmd) {
         serial_print("LCA:         lca add <u> <v>  lca run  lca query <u> <v>  lca setn <n>  lca test");
         serial_print("VirtTree:    vt add <v>  vt build  vt par <v>  vt test");
         serial_print("Dominator:   dom add <u> <v>  dom run  dom idom <v>  dom setn <n>  dom test");
+        serial_print("SuffixAuto:  sam init  sam add <c>  sam count  sam sz  sam test");
+        serial_print("Manacher:    man init  man add <c>  man run  man len  man test");
+        serial_print("Eertree:     et init  et add <c>  et count  et sz  et test");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -4788,6 +4791,36 @@ fn shell_handle_ext(cmd) {
         return "dom: idom[" + to_string(domiv) + "]=" + to_string(domir);
     }
 
+    if cmd == "sam init"  { sam_init(); return "sam: init"; }
+    if cmd == "sam test"  { let samt = sam_test(); return "sam: " + to_string(samt); }
+    if cmd == "sam count" { let samc = sam_count_substr(); return "sam: distinct=" + to_string(samc); }
+    if cmd == "sam sz"    { return "sam: sz=" + to_string(sam_sz); }
+    if _starts_with(cmd, "sam add ") {
+        let samc2 = to_int(str_sub(cmd, 8, len(cmd)));
+        sam_extend(samc2);
+        return "sam: add " + to_string(samc2);
+    }
+
+    if cmd == "man init"  { man_init(); return "man: init"; }
+    if cmd == "man test"  { let mant = man_test(); return "man: " + to_string(mant); }
+    if cmd == "man run"   { let manr = man_run(); return "man: longest=" + to_string(manr); }
+    if cmd == "man len"   { return "man: result=" + to_string(man_result); }
+    if _starts_with(cmd, "man add ") {
+        let manc = to_int(str_sub(cmd, 8, len(cmd)));
+        man_add(manc);
+        return "man: add " + to_string(manc);
+    }
+
+    if cmd == "et init"   { et_init(); return "et: init"; }
+    if cmd == "et test"   { let ett = et_test(); return "et: " + to_string(ett); }
+    if cmd == "et count"  { return "et: palindromes=" + to_string(et_count); }
+    if cmd == "et sz"     { return "et: sz=" + to_string(et_sz); }
+    if _starts_with(cmd, "et add ") {
+        let etc = to_int(str_sub(cmd, 7, len(cmd)));
+        et_add(etc);
+        return "et: add " + to_string(etc);
+    }
+
     return shell_handle(cmd);
 }
 
@@ -4799,7 +4832,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 880 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld + lca + virtualtree + dominator");
+print("shell.hl loaded -- 895 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld + lca + virtualtree + dominator + sam + manacher + eertree");
 
 // Main shell loop (called from kernel_init)
 

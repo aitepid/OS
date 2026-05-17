@@ -1,0 +1,101 @@
+// eertree.hl -- Palindromic Tree (Eertree / Palindromic Automaton)
+// O(n) construction. et_count = distinct non-empty palindromic substrings.
+// Two roots: state 0 (imaginary, len=-1) and state 1 (empty, len=0).
+// Runtime buffer: 0x16C0000
+
+let ET_MAX_ST = 36;
+let ET_ALPHA  = 26;
+
+let et_len   = array(36, 0);
+let et_link  = array(36, 0);
+let et_trans = array(936, -1);
+let et_s     = array(32, 0);
+let et_slen  = 0;
+let et_sz    = 0;
+let et_last  = 0;
+let et_count = 0;
+
+fn et_init() {
+    et_slen  = 0;
+    et_sz    = 2;
+    et_last  = 1;
+    et_count = 0;
+    let i = 0;
+    while i < 32  { set_at(et_s, i, 0); i += 1; }
+    i = 0;
+    while i < 36  { set_at(et_len, i, 0); set_at(et_link, i, 0); i += 1; }
+    i = 0;
+    while i < 936 { set_at(et_trans, i, -1); i += 1; }
+    set_at(et_len,  0, -1);
+    set_at(et_link, 0, 0);
+    set_at(et_len,  1, 0);
+    set_at(et_link, 1, 0);
+    return 0;
+}
+
+fn _et_get_suf(p0, i) {
+    let p    = p0;
+    let pos  = 0;
+    let done = 0;
+    while done == 0 {
+        pos = i - et_len[p] - 1;
+        if pos >= 0 {
+            if et_s[pos] == et_s[i] {
+                done = 1;
+            } else {
+                p = et_link[p];
+            }
+        } else {
+            p = et_link[p];
+        }
+    }
+    return p;
+}
+
+fn et_add(c) {
+    let i   = et_slen;
+    let p   = 0;
+    let cur = 0;
+    let p2  = 0;
+    let lnk = 0;
+    let j   = 0;
+    set_at(et_s, et_slen, c);
+    et_slen += 1;
+    p = _et_get_suf(et_last, i);
+    if et_trans[p * ET_ALPHA + c] == -1 {
+        cur = et_sz;
+        et_sz += 1;
+        set_at(et_len, cur, et_len[p] + 2);
+        j = 0;
+        while j < ET_ALPHA { set_at(et_trans, cur * ET_ALPHA + j, -1); j += 1; }
+        if et_len[cur] == 1 {
+            lnk = 1;
+        } else {
+            p2  = _et_get_suf(et_link[p], i);
+            lnk = et_trans[p2 * ET_ALPHA + c];
+        }
+        set_at(et_link, cur, lnk);
+        set_at(et_trans, p * ET_ALPHA + c, cur);
+        et_count += 1;
+    }
+    et_last = et_trans[p * ET_ALPHA + c];
+    return 0;
+}
+
+fn et_test() {
+    et_init();
+    et_add(0);
+    et_add(0);
+    et_add(0);
+    et_add(0);
+    let cnt = et_count;
+    print("et_test: sz=" + to_string(et_sz) + " palindromes=" + to_string(cnt));
+    if cnt == 4 {
+        print("et_test: PASS");
+        return 1;
+    }
+    print("et_test: FAIL");
+    return 0;
+}
+
+print("eertree.hl loaded");
