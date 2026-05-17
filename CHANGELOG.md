@@ -2,11 +2,46 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`349`（69 根目录 + 280 内核模块）
-- H-L 总行数：`~102,500`
-- 内核模块：`280`
-- Shell 命令：`820`
-- 最近完成功能迭代：`294`（a_star + max_flow + bipartite_match）
+- `.hl` 文件：`352`（69 根目录 + 283 内核模块）
+- H-L 总行数：`~103,800`
+- 内核模块：`283`
+- Shell 命令：`835`
+- 最近完成功能迭代：`297`（tarjan + articulation + euler_path）
+
+## Iteration 297 — euler_path.hl：Hierholzer 欧拉路径/回路
+
+- **`bare-kernel/hl/euler_path.hl`** 新增（~115 行）
+  - Hierholzer 1873：O(E) 迭代 DFS 回溯栈，路径末尾反转
+  - `ep_adj[u*32+v]` — 边计数矩阵（支持多重边），EP_MAX_V=32
+  - `_ep_check_and_start()` — 奇度数=0 → 欧拉回路（start=0）；奇度数=2 → 欧拉路径（start=奇度顶点）；否则无欧拉路径
+  - 奇偶判断：`rem = ep_deg[i] - (ep_deg[i] / 2) * 2`（H-L 无 % 运算符）
+  - `ep_run(start)` — 栈顶 v 有未用边→压入邻居；否则弹出并记录路径；最后反转
+  - 测试：4 顶点回路 0-1,1-2,2-3,3-0 → is_circuit=1，path_n=5，path[0]=0，path[4]=0
+  - Buffer: 0x1600000
+  - Shell 命令：`ep add <u> <v>  ep run  ep path  ep setn <n>  ep test`
+
+## Iteration 296 — articulation.hl：关节点与桥（Tarjan DFS）
+
+- **`bare-kernel/hl/articulation.hl`** 新增（~115 行）
+  - Tarjan 1974：O(V+E) DFS low-link 无向图关节点+桥同步检测
+  - `art_adj[u*32+v]` — 无向邻接矩阵，ART_MAX_V=32
+  - `_art_dfs(u, par)` — 树边：子节点 DFS 后更新 low；非根 AP 条件：`low[v]>=disc[u]`；桥条件：`low[v]>disc[u]`；回边跳过父节点
+  - 根节点 AP 判断：DFS 子树数量 > 1（循环结束后检查）
+  - `articulation_run()` — 重置状态，遍历所有未访问顶点，返回关节点数
+  - 测试：0-1,1-2,2-3,1-3,3-4 → art_count=2（顶点 1,3），bridges=1（边 3-4）
+  - Buffer: 0x15F0000
+  - Shell 命令：`art add <u> <v>  art run  art count  art setn <n>  art test`
+
+## Iteration 295 — tarjan.hl：Tarjan 强连通分量
+
+- **`bare-kernel/hl/tarjan.hl`** 新增（~105 行）
+  - Tarjan 1972：O(V+E) 递归 DFS disc/low-link，SCC 栈弹出
+  - `tr_adj[u*32+v]` — 有向邻接矩阵，TR_MAX_V=32
+  - `_tr_dfs(u)` — 设 disc/low，压栈 on_stack；树边递归更新 low；回边仅当 on_stack 时更新 low；`low[u]==disc[u]` 时弹出 SCC
+  - `tr_scc[v]` — 顶点所属 SCC 编号（0-indexed）；`tr_scc_count` — SCC 总数
+  - 测试：0→1,1→2,2→0,0→3,3→4 → scc_count=3（{0,1,2},{3},{4}）
+  - Buffer: 0x15E0000
+  - Shell 命令：`tr add <u> <v>  tr run  tr scc <v>  tr setn <n>  tr test`
 
 ## Iteration 294 — bipartite_match.hl：二部图最大匹配
 

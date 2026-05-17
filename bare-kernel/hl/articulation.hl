@@ -1,0 +1,137 @@
+// articulation.hl -- Articulation Points and Bridges (Tarjan DFS)
+// Tarjan 1974: O(V+E) DFS with low-link values on undirected graph.
+// ART_MAX_V=32; detects cut vertices and bridges simultaneously.
+//
+// Runtime buffer: 0x15F0000 (4 KB)
+
+let ART_MAX_V = 32;
+
+let art_adj         = array(1024, 0);  // adjacency matrix (undirected, [u*32+v]=1)
+let art_disc        = array(32, 0);    // discovery time (-1 = unvisited)
+let art_low         = array(32, 0);    // low-link value
+let art_is_art      = array(32, 0);    // 1 if vertex is an articulation point
+let art_n           = 0;
+let art_timer       = 0;
+let art_art_count   = 0;               // number of articulation points
+let art_bridge_count = 0;              // number of bridges
+
+fn articulation_init() {
+    let i = 0;
+    while i < 1024 {
+        set_at(art_adj, i, 0);
+        i += 1;
+    }
+    i = 0;
+    while i < ART_MAX_V {
+        set_at(art_disc,   i, -1);
+        set_at(art_low,    i, -1);
+        set_at(art_is_art, i, 0);
+        i += 1;
+    }
+    art_n            = 0;
+    art_timer        = 0;
+    art_art_count    = 0;
+    art_bridge_count = 0;
+    return 0;
+}
+
+fn art_set_n(n) {
+    art_n = n;
+    return 0;
+}
+
+// Add undirected edge u-v
+fn art_add_edge(u, v) {
+    if u >= ART_MAX_V { return -1; }
+    if v >= ART_MAX_V { return -1; }
+    set_at(art_adj, u * ART_MAX_V + v, 1);
+    set_at(art_adj, v * ART_MAX_V + u, 1);
+    if u + 1 > art_n { art_n = u + 1; }
+    if v + 1 > art_n { art_n = v + 1; }
+    return 0;
+}
+
+// Recursive DFS for articulation points and bridges
+fn _art_dfs(u, par) {
+    set_at(art_disc, u, art_timer);
+    set_at(art_low,  u, art_timer);
+    art_timer += 1;
+    let children = 0;
+    let v = 0;
+    while v < art_n {
+        if art_adj[u * ART_MAX_V + v] == 1 {
+            if art_disc[v] < 0 {
+                // Tree edge
+                children += 1;
+                _art_dfs(v, u);
+                if art_low[v] < art_low[u] { set_at(art_low, u, art_low[v]); }
+                if par >= 0 {
+                    // Non-root AP condition: low[v] >= disc[u]
+                    if art_low[v] >= art_disc[u] {
+                        set_at(art_is_art, u, 1);
+                    }
+                    // Bridge condition: low[v] > disc[u]
+                    if art_low[v] > art_disc[u] {
+                        art_bridge_count += 1;
+                    }
+                }
+            } else {
+                // Back edge: update low (skip parent edge)
+                if v != par {
+                    if art_disc[v] < art_low[u] { set_at(art_low, u, art_disc[v]); }
+                }
+            }
+        }
+        v += 1;
+    }
+    // Root AP condition: more than one DFS child
+    if par < 0 {
+        if children > 1 { set_at(art_is_art, u, 1); }
+    }
+    return 0;
+}
+
+// Run articulation/bridge detection; returns articulation point count
+fn articulation_run() {
+    let i = 0;
+    while i < art_n {
+        set_at(art_disc,   i, -1);
+        set_at(art_low,    i, -1);
+        set_at(art_is_art, i, 0);
+        i += 1;
+    }
+    art_timer        = 0;
+    art_art_count    = 0;
+    art_bridge_count = 0;
+    i = 0;
+    while i < art_n {
+        if art_disc[i] < 0 { _art_dfs(i, -1); }
+        i += 1;
+    }
+    // Count articulation points
+    i = 0;
+    while i < art_n {
+        if art_is_art[i] == 1 { art_art_count += 1; }
+        i += 1;
+    }
+    return art_art_count;
+}
+
+fn articulation_test() {
+    articulation_init();
+    art_set_n(5);
+    // Graph: 0-1, 1-2, 2-3, 1-3, 3-4
+    // Articulation points: 1 (cuts off 0) and 3 (cuts off 4) → count=2
+    // Bridge: edge 3-4 → bridge_count=1
+    art_add_edge(0, 1);
+    art_add_edge(1, 2);
+    art_add_edge(2, 3);
+    art_add_edge(1, 3);
+    art_add_edge(3, 4);
+    let cnt = articulation_run();
+    print("articulation_test art_count=" + to_string(cnt) + " bridges=" + to_string(art_bridge_count));
+    print("art_is_art[1]=" + to_string(art_is_art[1]) + " art_is_art[3]=" + to_string(art_is_art[3]));
+    return cnt;
+}
+
+print("articulation.hl loaded");

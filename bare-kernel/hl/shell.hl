@@ -189,6 +189,9 @@ fn shell_handle(cmd) {
         serial_print("AStar:       as add <u> <v> <w>  as setpos <v> <x> <y>  as run <src> <dst>  as setn <n>  as test");
         serial_print("MaxFlow:     mf add <u> <v> <c>  mf run <src> <sink>  mf flow  mf setn <n>  mf test");
         serial_print("BipartMatch: bm add <l> <r>  bm run  bm size  bm setnl <nl>  bm test");
+        serial_print("TarjanSCC:   tr add <u> <v>  tr run  tr scc <v>  tr setn <n>  tr test");
+        serial_print("Articulate:  art add <u> <v>  art run  art count  art setn <n>  art test");
+        serial_print("EulerPath:   ep add <u> <v>  ep run <start>  ep path  ep setn <n>  ep test");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -4492,6 +4495,67 @@ fn shell_handle_ext(cmd) {
         return "bm: add L" + to_string(bmal) + "-R" + to_string(bmar);
     }
 
+    if cmd == "tr test"    { let trr = tarjan_test(); return "tr: scc_count=" + to_string(trr); }
+    if cmd == "tr run"     { let trc = tarjan_run(); return "tr: scc_count=" + to_string(trc); }
+    if _starts_with(cmd, "tr setn ") {
+        let trn = to_int(str_sub(cmd, 8, len(cmd)));
+        tr_set_n(trn);
+        return "tr: n=" + to_string(trn);
+    }
+    if _starts_with(cmd, "tr scc ") {
+        let trsv = to_int(str_sub(cmd, 7, len(cmd)));
+        return "tr: scc[" + to_string(trsv) + "]=" + to_string(tr_scc[trsv]);
+    }
+    if _starts_with(cmd, "tr add ") {
+        let trargs = str_sub(cmd, 7, len(cmd));
+        let trsp = _find_space(trargs);
+        if trsp < 0 { return "tr add: usage tr add <u> <v>"; }
+        let tru = to_int(str_sub(trargs, 0, trsp));
+        let trv = to_int(str_sub(trargs, trsp + 1, len(trargs)));
+        tr_add_edge(tru, trv);
+        return "tr: add " + to_string(tru) + "→" + to_string(trv);
+    }
+
+    if cmd == "art test"   { let artr = articulation_test(); return "art: count=" + to_string(artr); }
+    if cmd == "art run"    { let artc = articulation_run(); return "art: count=" + to_string(artc) + " bridges=" + to_string(art_bridge_count); }
+    if cmd == "art count"  { return "art: count=" + to_string(art_art_count) + " bridges=" + to_string(art_bridge_count); }
+    if _starts_with(cmd, "art setn ") {
+        let artn = to_int(str_sub(cmd, 9, len(cmd)));
+        art_set_n(artn);
+        return "art: n=" + to_string(artn);
+    }
+    if _starts_with(cmd, "art add ") {
+        let artargs = str_sub(cmd, 8, len(cmd));
+        let artsp = _find_space(artargs);
+        if artsp < 0 { return "art add: usage art add <u> <v>"; }
+        let artu = to_int(str_sub(artargs, 0, artsp));
+        let artv = to_int(str_sub(artargs, artsp + 1, len(artargs)));
+        art_add_edge(artu, artv);
+        return "art: add " + to_string(artu) + "-" + to_string(artv);
+    }
+
+    if cmd == "ep test"   { let epr = euler_path_test(); return "ep: path_n=" + to_string(epr); }
+    if cmd == "ep path"   { return "ep: path_n=" + to_string(ep_path_n) + " path[0]=" + to_string(ep_path[0]); }
+    if _starts_with(cmd, "ep setn ") {
+        let epn = to_int(str_sub(cmd, 8, len(cmd)));
+        ep_set_n(epn);
+        return "ep: n=" + to_string(epn);
+    }
+    if _starts_with(cmd, "ep run ") {
+        let epstart = to_int(str_sub(cmd, 7, len(cmd)));
+        let eppn = ep_run(epstart);
+        return "ep: path_n=" + to_string(eppn) + " circuit=" + to_string(ep_is_circuit);
+    }
+    if _starts_with(cmd, "ep add ") {
+        let epargs = str_sub(cmd, 7, len(cmd));
+        let epsp = _find_space(epargs);
+        if epsp < 0 { return "ep add: usage ep add <u> <v>"; }
+        let epu = to_int(str_sub(epargs, 0, epsp));
+        let epv = to_int(str_sub(epargs, epsp + 1, len(epargs)));
+        ep_add_edge(epu, epv);
+        return "ep: add " + to_string(epu) + "-" + to_string(epv);
+    }
+
     return shell_handle(cmd);
 }
 
@@ -4503,7 +4567,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 820 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch");
+print("shell.hl loaded -- 835 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath");
 
 // Main shell loop (called from kernel_init)
 

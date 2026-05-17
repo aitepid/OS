@@ -1,0 +1,132 @@
+// tarjan.hl -- Tarjan's Strongly Connected Components
+// Tarjan 1972: DFS with discovery/low-link values, O(V+E).
+// TR_MAX_V=32; directed graph. SCCs numbered in reverse topological order.
+//
+// Runtime buffer: 0x15E0000 (4 KB)
+
+let TR_MAX_V = 32;
+
+let tr_adj      = array(1024, 0);  // adjacency matrix [u*32+v] = 1 if edge u→v
+let tr_disc     = array(32, 0);    // discovery time (-1 = unvisited)
+let tr_low      = array(32, 0);    // low-link value
+let tr_on_stack = array(32, 0);    // 1 if vertex is on Tarjan stack
+let tr_stack    = array(32, 0);    // Tarjan DFS stack
+let tr_scc      = array(32, 0);    // SCC ID for each vertex (-1 = unknown)
+let tr_n        = 0;
+let tr_timer    = 0;
+let tr_stack_top = 0;
+let tr_scc_count = 0;
+
+fn tarjan_init() {
+    let i = 0;
+    while i < 1024 {
+        set_at(tr_adj, i, 0);
+        i += 1;
+    }
+    i = 0;
+    while i < TR_MAX_V {
+        set_at(tr_disc,     i, -1);
+        set_at(tr_low,      i, -1);
+        set_at(tr_on_stack, i, 0);
+        set_at(tr_scc,      i, -1);
+        i += 1;
+    }
+    tr_n         = 0;
+    tr_timer     = 0;
+    tr_stack_top = 0;
+    tr_scc_count = 0;
+    return 0;
+}
+
+fn tr_set_n(n) {
+    tr_n = n;
+    return 0;
+}
+
+// Add directed edge u→v
+fn tr_add_edge(u, v) {
+    if u >= TR_MAX_V { return -1; }
+    if v >= TR_MAX_V { return -1; }
+    set_at(tr_adj, u * TR_MAX_V + v, 1);
+    if u + 1 > tr_n { tr_n = u + 1; }
+    if v + 1 > tr_n { tr_n = v + 1; }
+    return 0;
+}
+
+// Recursive DFS for Tarjan's algorithm
+fn _tr_dfs(u) {
+    set_at(tr_disc,     u, tr_timer);
+    set_at(tr_low,      u, tr_timer);
+    tr_timer += 1;
+    set_at(tr_on_stack, u, 1);
+    set_at(tr_stack, tr_stack_top, u);
+    tr_stack_top += 1;
+    // Explore neighbors
+    let v = 0;
+    while v < tr_n {
+        if tr_adj[u * TR_MAX_V + v] == 1 {
+            if tr_disc[v] < 0 {
+                // Unvisited: tree edge
+                _tr_dfs(v);
+                if tr_low[v] < tr_low[u] { set_at(tr_low, u, tr_low[v]); }
+            } else {
+                // Visited: back edge (only if v is on stack)
+                if tr_on_stack[v] == 1 {
+                    if tr_disc[v] < tr_low[u] { set_at(tr_low, u, tr_disc[v]); }
+                }
+            }
+        }
+        v += 1;
+    }
+    // If u is SCC root (low == disc): pop and label SCC
+    if tr_low[u] == tr_disc[u] {
+        let done = 0;
+        while done == 0 {
+            tr_stack_top -= 1;
+            let w = tr_stack[tr_stack_top];
+            set_at(tr_on_stack, w, 0);
+            set_at(tr_scc, w, tr_scc_count);
+            if w == u { done = 1; }
+        }
+        tr_scc_count += 1;
+    }
+    return 0;
+}
+
+// Run Tarjan's SCC on all vertices; returns SCC count
+fn tarjan_run() {
+    let i = 0;
+    while i < tr_n {
+        set_at(tr_disc,     i, -1);
+        set_at(tr_low,      i, -1);
+        set_at(tr_on_stack, i, 0);
+        set_at(tr_scc,      i, -1);
+        i += 1;
+    }
+    tr_timer     = 0;
+    tr_stack_top = 0;
+    tr_scc_count = 0;
+    i = 0;
+    while i < tr_n {
+        if tr_disc[i] < 0 { _tr_dfs(i); }
+        i += 1;
+    }
+    return tr_scc_count;
+}
+
+fn tarjan_test() {
+    tarjan_init();
+    tr_set_n(5);
+    // Graph: 0→1, 1→2, 2→0, 0→3, 3→4
+    // SCCs: {0,1,2} (cycle), {3} (singleton), {4} (singleton) → count=3
+    tr_add_edge(0, 1);
+    tr_add_edge(1, 2);
+    tr_add_edge(2, 0);
+    tr_add_edge(0, 3);
+    tr_add_edge(3, 4);
+    let cnt = tarjan_run();
+    print("tarjan_test scc_count=" + to_string(cnt) + " scc[0]=" + to_string(tr_scc[0]) + " scc[3]=" + to_string(tr_scc[3]) + " scc[4]=" + to_string(tr_scc[4]));
+    return cnt;
+}
+
+print("tarjan.hl loaded");
