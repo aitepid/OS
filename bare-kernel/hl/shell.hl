@@ -4914,6 +4914,63 @@ fn shell_handle_ext(cmd) {
         return "cg: live[" + to_string(cgi) + "]=" + to_string(cg_live[cgi]);
     }
 
+    if cmd == "ior init"    { ior_init(); return "ior: init"; }
+    if cmd == "ior test"    { let irt = ior_test(); return "ior: " + to_string(irt); }
+    if cmd == "ior process" { let irp = ior_process(); return "ior: processed=" + to_string(irp); }
+    if cmd == "ior pending" { return "ior: pending=" + to_string(ior_cq_pending()); }
+    if cmd == "ior consume" { let irc = ior_consume(); return "ior: id=" + to_string(irc); }
+    if cmd == "ior sqavail" { return "ior: sq_avail=" + to_string(ior_sq_avail()); }
+    if cmd == "ior cqavail" { return "ior: cq_avail=" + to_string(ior_cq_avail()); }
+    if _starts_with(cmd, "ior write ") {
+        let ior_args = str_sub(cmd, 10, len(cmd));
+        let ior_id = ior_submit(IOR_WRITE, 1, 0x1000, to_int(ior_args));
+        return "ior: submit_id=" + to_string(ior_id);
+    }
+    if _starts_with(cmd, "ior read ") {
+        let ior_args2 = str_sub(cmd, 9, len(cmd));
+        let ior_id2 = ior_submit(IOR_READ, 1, 0x2000, to_int(ior_args2));
+        return "ior: submit_id=" + to_string(ior_id2);
+    }
+    if cmd == "ior dropped" { return "ior: dropped=" + to_string(ior_dropped); }
+
+    if cmd == "pst init"  { ps_init(); return "pst: init"; }
+    if cmd == "pst test"  { let pstt = pst_test(); return "pst: " + to_string(pstt); }
+    if cmd == "pst ver"   { return "pst: ver=" + to_string(ps_ver); }
+    if cmd == "pst pool"  { return "pst: pool=" + to_string(ps_pool); }
+    if _starts_with(cmd, "pst build ") {
+        let pst_n = to_int(str_sub(cmd, 10, len(cmd)));
+        let pst_r = ps_build(pst_n);
+        return "pst: root=" + to_string(pst_r);
+    }
+    if _starts_with(cmd, "pst query ") {
+        let pst_args = str_sub(cmd, 10, len(cmd));
+        let pst_v = to_int(pst_args);
+        let pst_q = ps_query(pst_v, 8, 0, 7);
+        return "pst: sum=" + to_string(pst_q);
+    }
+
+    if cmd == "rdu init"  { rdu_init(32); return "rdu: init 32"; }
+    if cmd == "rdu test"  { let rdut = rdu_test(); return "rdu: " + to_string(rdut); }
+    if _starts_with(cmd, "rdu find ") {
+        let rdu_x = to_int(str_sub(cmd, 9, len(cmd)));
+        return "rdu: find=" + to_string(rdu_find(rdu_x));
+    }
+    if _starts_with(cmd, "rdu union ") {
+        let rdu_args = str_sub(cmd, 10, len(cmd));
+        let rdu_a = to_int(rdu_args);
+        let rdu_b = to_int(str_sub(rdu_args, 2, len(rdu_args)));
+        let rdu_ok = rdu_union(rdu_a, rdu_b);
+        return "rdu: union=" + to_string(rdu_ok);
+    }
+    if _starts_with(cmd, "rdu same ") {
+        let rdu_sargs = str_sub(cmd, 9, len(cmd));
+        let rdu_sa = to_int(rdu_sargs);
+        let rdu_sb = to_int(str_sub(rdu_sargs, 2, len(rdu_sargs)));
+        return "rdu: same=" + to_string(rdu_same(rdu_sa, rdu_sb));
+    }
+    if cmd == "rdu rollback" { let rdu_rb = rdu_rollback(); return "rdu: rollback=" + to_string(rdu_rb); }
+    if cmd == "rdu htop"     { return "rdu: h_top=" + to_string(rdu_h_top); }
+
     return shell_handle(cmd);
 }
 
@@ -4925,7 +4982,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 932 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld + lca + virtualtree + dominator + sam + manacher + eertree + bwt + lyndon + zfunction + ir + regalloc + codegen");
+print("shell.hl loaded -- 949 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld + lca + virtualtree + dominator + sam + manacher + eertree + bwt + lyndon + zfunction + ir + regalloc + codegen + ioring + persistseg + rollbackdsu");
 
 // Main shell loop (called from kernel_init)
 

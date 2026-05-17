@@ -2,11 +2,44 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`370`（72 根目录 + 301 内核模块）
-- H-L 总行数：`~109,500`
-- 内核模块：`301`
-- Shell 命令：`932`
-- 最近完成功能迭代：`315`（ir + regalloc + codegen）
+- `.hl` 文件：`373`（73 根目录 + 304 内核模块）
+- H-L 总行数：`~110,400`
+- 内核模块：`304`
+- Shell 命令：`949`
+- 最近完成功能迭代：`318`（io_uring + persistent_seg + rollback_dsu）
+
+## Iteration 318 — rollback_dsu.hl：可回滚 DSU
+
+- **`bare-kernel/hl/rollback_dsu.hl`** 新增（~110 行）
+  - 按秩合并（无路径压缩），支持 O(1) 回滚
+  - `rdu_union(a,b)` — 找根，小秩接到大秩下，历史栈记录 (child, old_parent, root, old_rank)
+  - `rdu_rollback()` — 从历史栈弹出一步，恢复 parent 和 rank，返回 0 表示栈空
+  - `rdu_same(a,b)` — 判断同集合；`rdu_find(x)` — 无压缩路径查根
+  - 测试：union(0,1), union(2,3), union(0,2) → same(0,3)=1；rollback() → same(0,3)=0, same(0,1)=1
+  - Buffer: 0x1750000，RDU_MAX_N=32，RDU_HIST_MAX=128
+
+## Iteration 317 — persistent_seg.hl：可持久化线段树
+
+- **`bare-kernel/hl/persistent_seg.hl`** 新增（~120 行）
+  - 写时复制节点池；每次更新沿路创建 O(log n) 新节点
+  - `ps_build(n)` — 构建版本 0（全零叶）；返回根节点编号
+  - `ps_update(ver,n,pos,addval)` — 从 ver 版本创建新版本，单点加法
+  - `ps_query(ver,n,ql,qr)` — 查询版本 ver 中 [ql,qr] 区间和
+  - `_ps_copy_node(src)` — 复制节点到新池位置，实现版本隔离
+  - 测试：n=4，2 次更新 → q(v0)=0, q(v1)=5, q(v2)=8
+  - Buffer: 0x1740000，PS_MAX_NODES=256，PS_MAX_VER=16
+
+## Iteration 316 — io_uring.hl：异步 I/O 环形缓冲
+
+- **`bare-kernel/hl/io_uring.hl`** 新增（~120 行）
+  - SQ（提交队列）16 槽 + CQ（完成队列）32 槽；整数算术取模模拟环形索引
+  - `ior_submit(op,fd,buf,ilen)` — 入队 SQ，返回 request_id；队满返回 -1 并计 dropped
+  - `ior_process()` — 消费 SQ 全部条目，写入 CQ，返回处理数
+  - `ior_consume()` — 弹出 CQ 一条记录，返回 request_id
+  - `ior_cq_pending()` — 当前未消费 CQ 条目数
+  - 操作码：IOR_READ=0, IOR_WRITE=1, IOR_ACCEPT=2, IOR_SEND=3, IOR_RECV=4
+  - 测试：提交 3 个操作 → process() 返回 3，cq_pending()=3
+  - Buffer: 0x1730000，IOR_SQ_SIZE=16，IOR_CQ_SIZE=32
 
 ## Iteration 315 — codegen.hl：窥孔优化器 + 死代码消除
 

@@ -1,0 +1,121 @@
+// io_uring.hl -- async I/O ring buffer subsystem (iter 316)
+// Buffer: 0x1730000
+// SQ = submission queue, CQ = completion queue
+
+let IOR_SQ_SIZE = 16;
+let IOR_CQ_SIZE = 32;
+let IOR_READ   = 0;
+let IOR_WRITE  = 1;
+let IOR_ACCEPT = 2;
+let IOR_SEND   = 3;
+let IOR_RECV   = 4;
+
+let ior_sq_ops  = array(16, 0);
+let ior_sq_fd   = array(16, 0);
+let ior_sq_buf  = array(16, 0);
+let ior_sq_len  = array(16, 0);
+let ior_sq_id   = array(16, 0);
+let ior_cq_id   = array(32, 0);
+let ior_cq_res  = array(32, 0);
+
+let ior_sq_head  = 0;
+let ior_sq_tail  = 0;
+let ior_cq_head  = 0;
+let ior_cq_tail  = 0;
+let ior_next_id  = 0;
+let ior_dropped  = 0;
+
+fn ior_init() {
+    ior_sq_head = 0;
+    ior_sq_tail = 0;
+    ior_cq_head = 0;
+    ior_cq_tail = 0;
+    ior_next_id = 0;
+    ior_dropped = 0;
+    return 0;
+}
+
+fn ior_sq_avail() {
+    let used = ior_sq_tail - ior_sq_head;
+    return IOR_SQ_SIZE - used;
+}
+
+fn ior_cq_avail() {
+    let used = ior_cq_tail - ior_cq_head;
+    return IOR_CQ_SIZE - used;
+}
+
+fn ior_submit(op, fd, buf, ilen) {
+    let avail = ior_sq_avail();
+    if avail <= 0 {
+        ior_dropped += 1;
+        return -1;
+    }
+    let tail = ior_sq_tail;
+    let idx = tail - (tail / IOR_SQ_SIZE) * IOR_SQ_SIZE;
+    set_at(ior_sq_ops, idx, op);
+    set_at(ior_sq_fd,  idx, fd);
+    set_at(ior_sq_buf, idx, buf);
+    set_at(ior_sq_len, idx, ilen);
+    let rid = ior_next_id;
+    set_at(ior_sq_id, idx, rid);
+    ior_next_id += 1;
+    ior_sq_tail += 1;
+    return rid;
+}
+
+fn ior_process() {
+    let count = 0;
+    let done  = 0;
+    while done == 0 {
+        if ior_sq_head >= ior_sq_tail {
+            done = 1;
+        } else {
+            let cavail = ior_cq_avail();
+            if cavail <= 0 {
+                done = 1;
+            } else {
+                let sidx = ior_sq_head - (ior_sq_head / IOR_SQ_SIZE) * IOR_SQ_SIZE;
+                let cidx = ior_cq_tail - (ior_cq_tail / IOR_CQ_SIZE) * IOR_CQ_SIZE;
+                set_at(ior_cq_id,  cidx, ior_sq_id[sidx]);
+                set_at(ior_cq_res, cidx, ior_sq_len[sidx]);
+                ior_sq_head += 1;
+                ior_cq_tail += 1;
+                count += 1;
+            }
+        }
+    }
+    return count;
+}
+
+fn ior_consume() {
+    let cq = 0;
+    if ior_cq_head < ior_cq_tail {
+        let cidx = ior_cq_head - (ior_cq_head / IOR_CQ_SIZE) * IOR_CQ_SIZE;
+        cq = ior_cq_id[cidx];
+        ior_cq_head += 1;
+    }
+    return cq;
+}
+
+fn ior_cq_pending() {
+    return ior_cq_tail - ior_cq_head;
+}
+
+fn ior_test() {
+    ior_init();
+    ior_submit(IOR_WRITE, 3, 0x1000, 512);
+    ior_submit(IOR_WRITE, 4, 0x2000, 256);
+    ior_submit(IOR_READ,  5, 0x3000, 128);
+    let n  = ior_process();
+    let cq = ior_cq_pending();
+    print("ior_test: processed=" + to_string(n) + " cq=" + to_string(cq));
+    if cq == 3 {
+        print("ior_test: PASS");
+        return 1;
+    }
+    print("ior_test: FAIL");
+    return 0;
+}
+
+print("io_uring.hl loaded");

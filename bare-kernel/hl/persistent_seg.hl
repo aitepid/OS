@@ -1,0 +1,142 @@
+// persistent_seg.hl -- persistent segment tree with copy-on-write (iter 317)
+// Buffer: 0x1740000
+// Each update creates O(log n) new nodes; version roots array tracks history.
+
+let PS_MAX_NODES = 256;
+let PS_MAX_VER   = 16;
+let PS_LEAF_N    = 8;
+
+let ps_left  = array(256, -1);
+let ps_right = array(256, -1);
+let ps_val   = array(256,  0);
+let ps_pool  = 0;
+
+let ps_roots = array(16, -1);
+let ps_ver   = 0;
+
+fn ps_init() {
+    ps_pool = 0;
+    ps_ver  = 0;
+    let i = 0;
+    while i < PS_MAX_NODES {
+        set_at(ps_left,  i, -1);
+        set_at(ps_right, i, -1);
+        set_at(ps_val,   i,  0);
+        i += 1;
+    }
+    i = 0;
+    while i < PS_MAX_VER {
+        set_at(ps_roots, i, -1);
+        i += 1;
+    }
+    return 0;
+}
+
+fn _ps_new_node() {
+    let n = ps_pool;
+    set_at(ps_left,  n, -1);
+    set_at(ps_right, n, -1);
+    set_at(ps_val,   n,  0);
+    ps_pool += 1;
+    return n;
+}
+
+fn _ps_copy_node(src) {
+    let n = _ps_new_node();
+    if src >= 0 {
+        set_at(ps_left,  n, ps_left[src]);
+        set_at(ps_right, n, ps_right[src]);
+        set_at(ps_val,   n, ps_val[src]);
+    }
+    return n;
+}
+
+fn _ps_build(lo, hi) {
+    let nd = _ps_new_node();
+    if lo == hi {
+        return nd;
+    }
+    let mid = (lo + hi) / 2;
+    set_at(ps_left,  nd, _ps_build(lo, mid));
+    set_at(ps_right, nd, _ps_build(mid + 1, hi));
+    return nd;
+}
+
+fn ps_build(n) {
+    let root = _ps_build(0, n - 1);
+    set_at(ps_roots, 0, root);
+    ps_ver = 1;
+    return root;
+}
+
+fn _ps_update(prev, lo, hi, pos, addval) {
+    let nd = _ps_copy_node(prev);
+    if lo == hi {
+        set_at(ps_val, nd, ps_val[nd] + addval);
+        return nd;
+    }
+    let mid = (lo + hi) / 2;
+    if pos <= mid {
+        set_at(ps_left, nd, _ps_update(ps_left[nd], lo, mid, pos, addval));
+    } else {
+        set_at(ps_right, nd, _ps_update(ps_right[nd], mid + 1, hi, pos, addval));
+    }
+    set_at(ps_val, nd, ps_val[ps_left[nd]] + ps_val[ps_right[nd]]);
+    return nd;
+}
+
+fn ps_update(ver, n, pos, addval) {
+    let prev = ps_roots[ver];
+    let root = _ps_update(prev, 0, n - 1, pos, addval);
+    set_at(ps_roots, ps_ver, root);
+    ps_ver += 1;
+    return ps_ver - 1;
+}
+
+fn _ps_query(nd, lo, hi, ql, qr) {
+    if nd < 0 {
+        return 0;
+    }
+    if ql <= lo {
+        if hi <= qr {
+            return ps_val[nd];
+        }
+    }
+    let mid = (lo + hi) / 2;
+    let res = 0;
+    if ql <= mid {
+        res += _ps_query(ps_left[nd], lo, mid, ql, qr);
+    }
+    if qr > mid {
+        res += _ps_query(ps_right[nd], mid + 1, hi, ql, qr);
+    }
+    return res;
+}
+
+fn ps_query(ver, n, ql, qr) {
+    return _ps_query(ps_roots[ver], 0, n - 1, ql, qr);
+}
+
+fn pst_test() {
+    ps_init();
+    let n = 4;
+    ps_build(n);
+    let v1 = ps_update(0, n, 1, 5);
+    let v2 = ps_update(v1, n, 2, 3);
+    let q0 = ps_query(0, n, 0, 3);
+    let q1 = ps_query(v1, n, 0, 3);
+    let q2 = ps_query(v2, n, 0, 3);
+    print("pst_test: q0=" + to_string(q0) + " q1=" + to_string(q1) + " q2=" + to_string(q2));
+    if q0 == 0 {
+        if q1 == 5 {
+            if q2 == 8 {
+                print("pst_test: PASS");
+                return 1;
+            }
+        }
+    }
+    print("pst_test: FAIL");
+    return 0;
+}
+
+print("persistent_seg.hl loaded");

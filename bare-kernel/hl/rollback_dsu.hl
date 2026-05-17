@@ -1,0 +1,111 @@
+// rollback_dsu.hl -- DSU with rollback (no path compression) (iter 318)
+// Buffer: 0x1750000
+// Union by rank only; history stack saves (child, old_parent, root, old_rank)
+// for O(1) rollback per recorded union.
+
+let RDU_MAX_N    = 32;
+let RDU_HIST_MAX = 128;
+
+let rdu_parent  = array(32,  0);
+let rdu_rank    = array(32,  0);
+let rdu_h_child = array(128, 0);
+let rdu_h_opar  = array(128, 0);
+let rdu_h_root  = array(128, 0);
+let rdu_h_orank = array(128, 0);
+let rdu_n       = 0;
+let rdu_h_top   = 0;
+
+fn rdu_init(n) {
+    rdu_n     = n;
+    rdu_h_top = 0;
+    let i = 0;
+    while i < n {
+        set_at(rdu_parent, i, i);
+        set_at(rdu_rank,   i, 0);
+        i += 1;
+    }
+    return 0;
+}
+
+fn rdu_find(x) {
+    let v = x; let done = 0;
+    while done == 0 {
+        if rdu_parent[v] == v {
+            done = 1;
+        } else {
+            v = rdu_parent[v];
+        }
+    }
+    return v;
+}
+
+fn rdu_union(a, b) {
+    let ra = rdu_find(a);
+    let rb = rdu_find(b);
+    if ra == rb {
+        return 0;
+    }
+    let child = 0;
+    let root  = 0;
+    if rdu_rank[ra] < rdu_rank[rb] {
+        child = ra;
+        root  = rb;
+    } else {
+        child = rb;
+        root  = ra;
+    }
+    let top = rdu_h_top;
+    set_at(rdu_h_child, top, child);
+    set_at(rdu_h_opar,  top, rdu_parent[child]);
+    set_at(rdu_h_root,  top, root);
+    set_at(rdu_h_orank, top, rdu_rank[root]);
+    rdu_h_top += 1;
+    set_at(rdu_parent, child, root);
+    if rdu_rank[ra] == rdu_rank[rb] {
+        set_at(rdu_rank, root, rdu_rank[root] + 1);
+    }
+    return 1;
+}
+
+fn rdu_rollback() {
+    if rdu_h_top <= 0 {
+        return 0;
+    }
+    rdu_h_top -= 1;
+    let top   = rdu_h_top;
+    let child = rdu_h_child[top];
+    let root  = rdu_h_root[top];
+    set_at(rdu_parent, child, rdu_h_opar[top]);
+    set_at(rdu_rank,   root,  rdu_h_orank[top]);
+    return 1;
+}
+
+fn rdu_same(a, b) {
+    return rdu_find(a) == rdu_find(b);
+}
+
+fn rdu_test() {
+    rdu_init(4);
+    rdu_union(0, 1);
+    rdu_union(2, 3);
+    rdu_union(0, 2);
+    let s03 = rdu_same(0, 3);
+    let s12 = rdu_same(1, 2);
+    print("rdu_test: same(0,3)=" + to_string(s03) + " same(1,2)=" + to_string(s12));
+    rdu_rollback();
+    let s03b = rdu_same(0, 3);
+    let s01  = rdu_same(0, 1);
+    print("rdu_test: after rollback same(0,3)=" + to_string(s03b) + " same(0,1)=" + to_string(s01));
+    if s03 == 1 {
+        if s03b == 0 {
+            if s01 == 1 {
+                print("rdu_test: PASS");
+                return 1;
+            }
+        }
+    }
+    print("rdu_test: FAIL");
+    return 0;
+}
+
+print("rollback_dsu.hl loaded");
