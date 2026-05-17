@@ -1,592 +1,116 @@
-// ir.hl -- Hilbert Intermediate Representation (H-IR)
-//
-// Lightweight SSA-like IR between AST and native code generation.
-// Enables optimization passes before final x86_64 emission.
-//
-// IR opcodes (3-address form): [op, dst, src1, src2]
-//   IR_CONST   dst, imm, _     -- dst = immediate value
-//   IR_COPY    dst, src, _     -- dst = src
-//   IR_ADD     dst, a, b       -- dst = a + b
-//   IR_SUB     dst, a, b       -- dst = a - b
-//   IR_MUL     dst, a, b       -- dst = a * b
-//   IR_DIV     dst, a, b       -- dst = a / b
-//   IR_MOD     dst, a, b       -- dst = a % b
-//   IR_NEG     dst, src, _     -- dst = -src
-//   IR_AND     dst, a, b       -- dst = a & b
-//   IR_OR      dst, a, b       -- dst = a | b
-//   IR_XOR     dst, a, b       -- dst = a ^ b
-//   IR_SHL     dst, a, b       -- dst = a << b
-//   IR_SHR     dst, a, b       -- dst = a >> b
-//   IR_NOT     dst, src, _     -- dst = ~src
-//   IR_CMP_EQ  dst, a, b       -- dst = (a == b)
-//   IR_CMP_NE  dst, a, b       -- dst = (a != b)
-//   IR_CMP_LT  dst, a, b       -- dst = (a < b)
-//   IR_CMP_LE  dst, a, b       -- dst = (a <= b)
-//   IR_CMP_GT  dst, a, b       -- dst = (a > b)
-//   IR_CMP_GE  dst, a, b       -- dst = (a >= b)
-//   IR_JMP     label, _, _     -- unconditional jump
-//   IR_JZ      cond, label, _  -- jump if cond == 0
-//   IR_JNZ     cond, label, _  -- jump if cond != 0
-//   IR_LABEL   id, _, _        -- label definition
-//   IR_CALL    dst, func, argc -- function call, args on stack
-//   IR_ARG     n, src, _       -- set argument n = src
-//   IR_RET     src, _, _       -- return src
-//   IR_LOAD    dst, addr, _    -- dst = mem[addr]
-//   IR_STORE   addr, src, _    -- mem[addr] = src
-//   IR_PHI     dst, a, b       -- SSA phi node
-//   IR_NOP     _, _, _         -- no operation (DCE marker)
+// ir.hl -- SSA Intermediate Representation
+// Basic blocks + typed instructions (NOP/COPY/ADD/SUB/MUL/PHI/JUMP/BRANCH/RET).
+// ir_emit(bb, op, dst, src1, src2) appends to BB. Phi nodes tracked separately.
+// Runtime buffer: 0x1700000
 
-let IR_CONST = 1;
-let IR_COPY = 2;
-let IR_ADD = 3;
-let IR_SUB = 4;
-let IR_MUL = 5;
-let IR_DIV = 6;
-let IR_MOD = 7;
-let IR_NEG = 8;
-let IR_AND = 9;
-let IR_OR = 10;
-let IR_XOR = 11;
-let IR_SHL = 12;
-let IR_SHR = 13;
-let IR_NOT = 14;
-let IR_CMP_EQ = 15;
-let IR_CMP_NE = 16;
-let IR_CMP_LT = 17;
-let IR_CMP_LE = 18;
-let IR_CMP_GT = 19;
-let IR_CMP_GE = 20;
-let IR_JMP = 21;
-let IR_JZ = 22;
-let IR_JNZ = 23;
-let IR_LABEL = 24;
-let IR_CALL = 25;
-let IR_ARG = 26;
-let IR_RET = 27;
-let IR_LOAD = 28;
-let IR_STORE = 29;
-let IR_PHI = 30;
-let IR_NOP = 31;
-let IR_STR_CONST = 32;  // dst = string constant (pointer to data section)
-let IR_ALLOC = 33;      // dst = allocate src1 bytes on heap
-let IR_ARRAY_GET = 34;  // dst = array[src1] at offset src2
-let IR_ARRAY_SET = 35;  // array[src1] = src2
-let IR_PRINT = 36;      // serial output of src1 (side effect)
-let IR_MEMCPY = 37;     // memcpy(dst, src1, src2_bytes)
+let IR_MAX_INST = 64;
+let IR_MAX_BB   = 16;
 
-let IR_MAX_INSTRS = 1024;
-let mut ir_count = 0;
-let mut ir_next_tmp = 0; // next temporary virtual register
+let IR_NOP    = 0;
+let IR_COPY   = 1;
+let IR_ADD    = 2;
+let IR_SUB    = 3;
+let IR_MUL    = 4;
+let IR_PHI    = 5;
+let IR_JUMP   = 6;
+let IR_BRANCH = 7;
+let IR_RET    = 8;
 
-let ir_op = [];
-let ir_dst = [];
-let ir_src1 = [];
-let ir_src2 = [];
-let ir_dead = [];  // 1 = dead (eliminated by DCE)
+let ir_op    = array(64, 0);
+let ir_dst   = array(64, 0);
+let ir_src1  = array(64, 0);
+let ir_src2  = array(64, 0);
+let ir_ibb   = array(64, 0);
+let ir_n     = 0;
+
+let ir_bb_start  = array(16, 0);
+let ir_bb_size   = array(16, 0);
+let ir_bb_succ0  = array(16, -1);
+let ir_bb_succ1  = array(16, -1);
+let ir_bb_n      = 0;
+let ir_cur_bb    = 0;
+let ir_phi_count = 0;
 
 fn ir_init() {
-    ir_count = 0;
-    ir_next_tmp = 0;
-    let mut i = 0;
-    while i < IR_MAX_INSTRS {
-        push(ir_op, 0);
-        push(ir_dst, 0);
-        push(ir_src1, 0);
-        push(ir_src2, 0);
-        push(ir_dead, 0);
-        i = i + 1;
+    ir_n         = 0;
+    ir_bb_n      = 0;
+    ir_cur_bb    = 0;
+    ir_phi_count = 0;
+    let i = 0;
+    while i < 64 {
+        set_at(ir_op,   i, 0); set_at(ir_dst,  i, 0);
+        set_at(ir_src1, i, 0); set_at(ir_src2, i, 0);
+        set_at(ir_ibb,  i, 0);
+        i += 1;
+    }
+    i = 0;
+    while i < 16 {
+        set_at(ir_bb_start, i, 0); set_at(ir_bb_size,  i, 0);
+        set_at(ir_bb_succ0, i, -1); set_at(ir_bb_succ1, i, -1);
+        i += 1;
     }
     return 0;
 }
 
-fn ir_new_tmp() {
-    let t = ir_next_tmp;
-    ir_next_tmp = ir_next_tmp + 1;
-    return t;
+fn ir_new_bb() {
+    let bb = ir_bb_n;
+    set_at(ir_bb_start, bb, ir_n);
+    set_at(ir_bb_size,  bb, 0);
+    ir_bb_n   += 1;
+    ir_cur_bb  = bb;
+    return bb;
 }
 
-fn ir_emit(op, dst, s1, s2) {
-    if ir_count >= IR_MAX_INSTRS { return 0 - 1; }
-    let idx = ir_count;
-    ir_op[idx] = op;
-    ir_dst[idx] = dst;
-    ir_src1[idx] = s1;
-    ir_src2[idx] = s2;
-    ir_dead[idx] = 0;
-    ir_count = ir_count + 1;
+fn ir_emit(bb, op, dst, src1, src2) {
+    let idx = ir_n;
+    set_at(ir_op,   idx, op);
+    set_at(ir_dst,  idx, dst);
+    set_at(ir_src1, idx, src1);
+    set_at(ir_src2, idx, src2);
+    set_at(ir_ibb,  idx, bb);
+    ir_n += 1;
+    set_at(ir_bb_size, bb, ir_bb_size[bb] + 1);
+    if op == IR_PHI { ir_phi_count += 1; }
     return idx;
 }
 
-// === Optimization Pass 1: Constant Folding ===
-// If both operands of an arithmetic op are IR_CONST, compute at compile time
-fn ir_pass_const_fold() {
-    let mut changed = 0;
-    let mut i = 0;
-    while i < ir_count {
-        if ir_dead[i] == 0 {
-            let op = ir_op[i];
-            let s1 = ir_src1[i];
-            let s2 = ir_src2[i];
-
-            // Check if both sources are constants
-            let s1_const = 0 - 1;
-            let s2_const = 0 - 1;
-            let mut j = 0;
-            while j < i {
-                if ir_dead[j] == 0 {
-                    if ir_op[j] == IR_CONST {
-                        if ir_dst[j] == s1 { s1_const = ir_src1[j]; }
-                        if ir_dst[j] == s2 { s2_const = ir_src1[j]; }
-                    }
-                }
-                j = j + 1;
-            }
-
-            if s1_const != (0 - 1) {
-                if s2_const != (0 - 1) {
-                    let result = 0;
-                    let fold = 0;
-                    if op == IR_ADD { result = s1_const + s2_const; fold = 1; }
-                    if op == IR_SUB { result = s1_const - s2_const; fold = 1; }
-                    if op == IR_MUL { result = s1_const * s2_const; fold = 1; }
-                    if op == IR_AND { result = s1_const & s2_const; fold = 1; }
-                    if op == IR_OR  { result = s1_const | s2_const; fold = 1; }
-                    if op == IR_XOR { result = s1_const ^ s2_const; fold = 1; }
-                    if op == IR_DIV {
-                        if s2_const != 0 { result = s1_const / s2_const; fold = 1; }
-                    }
-                    if op == IR_CMP_EQ { result = 0; if s1_const == s2_const { result = 1; } fold = 1; }
-                    if op == IR_CMP_NE { result = 0; if s1_const != s2_const { result = 1; } fold = 1; }
-                    if op == IR_CMP_LT { result = 0; if s1_const < s2_const { result = 1; } fold = 1; }
-
-                    if fold == 1 {
-                        ir_op[i] = IR_CONST;
-                        ir_src1[i] = result;
-                        ir_src2[i] = 0;
-                        changed = changed + 1;
-                    }
-                }
-            }
-        }
-        i = i + 1;
-    }
-    return changed;
-}
-
-// === Optimization Pass 2: Dead Code Elimination ===
-// Mark instructions whose dst is never used as dead
-fn ir_pass_dce() {
-    let mut changed = 0;
-    let mut i = ir_count - 1;
-    while i >= 0 {
-        if ir_dead[i] == 0 {
-            let op = ir_op[i];
-            // Skip control flow and side effects
-            if op != IR_JMP { if op != IR_JZ { if op != IR_JNZ {
-            if op != IR_LABEL { if op != IR_CALL { if op != IR_RET {
-            if op != IR_STORE { if op != IR_ARG { if op != IR_NOP {
-                let dst = ir_dst[i];
-                // Check if dst is used by any later live instruction
-                let mut used = 0;
-                let mut j = i + 1;
-                while j < ir_count {
-                    if ir_dead[j] == 0 {
-                        if ir_src1[j] == dst { used = 1; }
-                        if ir_src2[j] == dst { used = 1; }
-                    }
-                    j = j + 1;
-                }
-                if used == 0 {
-                    ir_dead[i] = 1;
-                    changed = changed + 1;
-                }
-            } } } } } } } } }
-        }
-        i = i - 1;
-    }
-    return changed;
-}
-
-// === Optimization Pass 3: Strength Reduction ===
-// Replace expensive ops with cheaper ones:
-//   x * 2  -> x << 1
-//   x * 4  -> x << 2
-//   x * 8  -> x << 3
-//   x / 2  -> x >> 1
-fn ir_pass_strength_reduce() {
-    let mut changed = 0;
-    let mut i = 0;
-    while i < ir_count {
-        if ir_dead[i] == 0 {
-            let op = ir_op[i];
-            let s2 = ir_src2[i];
-
-            // Find constant value of s2
-            let mut s2_val = 0 - 1;
-            let mut j = 0;
-            while j < i {
-                if ir_dead[j] == 0 {
-                    if ir_op[j] == IR_CONST {
-                        if ir_dst[j] == s2 { s2_val = ir_src1[j]; }
-                    }
-                }
-                j = j + 1;
-            }
-
-            if op == IR_MUL {
-                if s2_val == 2  { ir_op[i] = IR_SHL; ir_src2[i] = 1; changed = changed + 1; }
-                if s2_val == 4  { ir_op[i] = IR_SHL; ir_src2[i] = 2; changed = changed + 1; }
-                if s2_val == 8  { ir_op[i] = IR_SHL; ir_src2[i] = 3; changed = changed + 1; }
-                if s2_val == 16 { ir_op[i] = IR_SHL; ir_src2[i] = 4; changed = changed + 1; }
-            }
-            if op == IR_DIV {
-                if s2_val == 2 { ir_op[i] = IR_SHR; ir_src2[i] = 1; changed = changed + 1; }
-                if s2_val == 4 { ir_op[i] = IR_SHR; ir_src2[i] = 2; changed = changed + 1; }
-            }
-        }
-        i = i + 1;
-    }
-    return changed;
-}
-
-// Run all optimization passes (iterate until fixpoint)
-fn ir_optimize() {
-    let mut total = 0;
-    let mut iter = 0;
-    let max_iters = 10;
-    while iter < max_iters {
-        let c = 0;
-        c = c + ir_pass_const_fold();
-        c = c + ir_pass_dce();
-        c = c + ir_pass_strength_reduce();
-        total = total + c;
-        if c == 0 { return total; } // fixpoint reached
-        iter = iter + 1;
-    }
-    return total;
-}
-
-// Count live (non-dead) instructions
-fn ir_live_count() {
-    let mut c = 0;
-    let mut i = 0;
-    while i < ir_count {
-        if ir_dead[i] == 0 { c = c + 1; }
-        i = i + 1;
-    }
-    return c;
-}
-
-fn ir_status() {
-    return to_string(ir_count) + " IR instrs (" +
-           to_string(ir_live_count()) + " live, " +
-           to_string(ir_count - ir_live_count()) + " dead), " +
-           to_string(ir_next_tmp) + " temps";
-}
-
-// ============================================================
-// AST → IR Lowering (Phase 2 of compilation pipeline)
-// ============================================================
-// Translates parsed AST nodes into H-IR instructions.
-// Each function returns a virtual register (tmp) holding the result.
-
-// Variable table for IR: [name, vreg] pairs
-let mut ir_var_table = [];
-
-fn ir_var_lookup(name) {
-    let mut i = len(ir_var_table) - 1;
-    while i >= 0 {
-        if ir_var_table[i][0] == name {
-            return ir_var_table[i][1];
-        }
-        i = i - 1;
-    }
-    return 0 - 1; // not found
-}
-
-fn ir_var_define(name) {
-    let t = ir_new_tmp();
-    push(ir_var_table, [name, t]);
-    return t;
-}
-
-// Label counter for IR control flow
-let mut ir_label_counter = 0;
-fn ir_new_label() {
-    ir_label_counter = ir_label_counter + 1;
-    return ir_label_counter;
-}
-
-// Function table: [name, label_id] pairs
-let mut ir_fn_table = [];
-
-fn ir_fn_lookup(name) {
-    let mut i = len(ir_fn_table) - 1;
-    while i >= 0 {
-        if ir_fn_table[i][0] == name {
-            return ir_fn_table[i][1];
-        }
-        i = i - 1;
-    }
-    return 0 - 1;
-}
-
-// Lower an expression AST node → IR, return result vreg
-fn ir_lower_expr(node) {
-    if node == nil { return 0; }
-    let ntype = node[0];
-
-    if ntype == "Num" {
-        let t = ir_new_tmp();
-        ir_emit(IR_CONST, t, node[1], 0);
-        return t;
-    }
-
-    if ntype == "Bool" {
-        let t = ir_new_tmp();
-        let v = 0;
-        if node[1] == true { v = 1; }
-        ir_emit(IR_CONST, t, v, 0);
-        return t;
-    }
-
-    if ntype == "Nil" {
-        let t = ir_new_tmp();
-        ir_emit(IR_CONST, t, 0, 0);
-        return t;
-    }
-
-    if ntype == "Str" {
-        let t = ir_new_tmp();
-        ir_emit(IR_STR_CONST, t, node[1], 0);
-        return t;
-    }
-
-    if ntype == "Var" {
-        let vreg = ir_var_lookup(node[1]);
-        if vreg >= 0 {
-            let t = ir_new_tmp();
-            ir_emit(IR_COPY, t, vreg, 0);
-            return t;
-        }
-        // Unknown variable: return 0
-        let t = ir_new_tmp();
-        ir_emit(IR_CONST, t, 0, 0);
-        return t;
-    }
-
-    if ntype == "BinOp" {
-        let op = node[1];
-        let left = ir_lower_expr(node[2]);
-        let right = ir_lower_expr(node[3]);
-        let t = ir_new_tmp();
-        if op == "+"  { ir_emit(IR_ADD, t, left, right); return t; }
-        if op == "-"  { ir_emit(IR_SUB, t, left, right); return t; }
-        if op == "*"  { ir_emit(IR_MUL, t, left, right); return t; }
-        if op == "/"  { ir_emit(IR_DIV, t, left, right); return t; }
-        if op == "%"  { ir_emit(IR_MOD, t, left, right); return t; }
-        if op == "&"  { ir_emit(IR_AND, t, left, right); return t; }
-        if op == "|"  { ir_emit(IR_OR, t, left, right); return t; }
-        if op == "^"  { ir_emit(IR_XOR, t, left, right); return t; }
-        if op == "<<" { ir_emit(IR_SHL, t, left, right); return t; }
-        if op == ">>" { ir_emit(IR_SHR, t, left, right); return t; }
-        if op == "==" { ir_emit(IR_CMP_EQ, t, left, right); return t; }
-        if op == "!=" { ir_emit(IR_CMP_NE, t, left, right); return t; }
-        if op == "<"  { ir_emit(IR_CMP_LT, t, left, right); return t; }
-        if op == "<=" { ir_emit(IR_CMP_LE, t, left, right); return t; }
-        if op == ">"  { ir_emit(IR_CMP_GT, t, left, right); return t; }
-        if op == ">=" { ir_emit(IR_CMP_GE, t, left, right); return t; }
-        // Default: copy left
-        ir_emit(IR_COPY, t, left, 0);
-        return t;
-    }
-
-    if ntype == "Unary" {
-        let inner = ir_lower_expr(node[2]);
-        let t = ir_new_tmp();
-        if node[1] == "-" { ir_emit(IR_NEG, t, inner, 0); return t; }
-        if node[1] == "!" { ir_emit(IR_NOT, t, inner, 0); return t; }
-        if node[1] == "~" { ir_emit(IR_NOT, t, inner, 0); return t; }
-        ir_emit(IR_COPY, t, inner, 0);
-        return t;
-    }
-
-    if ntype == "Call" {
-        // Lower arguments
-        let args = node[2];
-        let mut ai = 0;
-        while ai < len(args) {
-            let a = ir_lower_expr(args[ai]);
-            ir_emit(IR_ARG, ai, a, 0);
-            ai = ai + 1;
-        }
-        // Emit call
-        let t = ir_new_tmp();
-        // callee is node[1], which should be a Var
-        let fn_name = "";
-        if node[1][0] == "Var" { fn_name = node[1][1]; }
-        let fn_label = ir_fn_lookup(fn_name);
-        ir_emit(IR_CALL, t, fn_label, len(args));
-        return t;
-    }
-
-    // Fallback: constant 0
-    let t = ir_new_tmp();
-    ir_emit(IR_CONST, t, 0, 0);
-    return t;
-}
-
-// Lower a statement AST node → IR
-fn ir_lower_stmt(node) {
-    if node == nil { return 0; }
-    let ntype = node[0];
-
-    if ntype == "Let" {
-        let name = node[1];
-        let vreg = ir_var_define(name);
-        if node[3] != nil {
-            let val = ir_lower_expr(node[3]);
-            ir_emit(IR_COPY, vreg, val, 0);
-        } else {
-            ir_emit(IR_CONST, vreg, 0, 0);
-        }
-        return 0;
-    }
-
-    if ntype == "Assign" {
-        let name = node[1];
-        let val = ir_lower_expr(node[2]);
-        let vreg = ir_var_lookup(name);
-        if vreg >= 0 {
-            ir_emit(IR_COPY, vreg, val, 0);
-        }
-        return 0;
-    }
-
-    if ntype == "FnDef" {
-        let name = node[1];
-        let params = node[2];
-        let body = node[3];
-        let label = ir_new_label();
-        push(ir_fn_table, [name, label]);
-        ir_emit(IR_LABEL, label, 0, 0);
-        // Bind parameters as variables
-        let mut pi = 0;
-        while pi < len(params) {
-            let pvreg = ir_var_define(params[pi]);
-            ir_emit(IR_ARG, pvreg, pi, 0); // load arg pi
-            pi = pi + 1;
-        }
-        // Lower body statements
-        ir_lower_stmts(body);
-        // Implicit return 0
-        let zero = ir_new_tmp();
-        ir_emit(IR_CONST, zero, 0, 0);
-        ir_emit(IR_RET, zero, 0, 0);
-        return 0;
-    }
-
-    if ntype == "Return" {
-        if node[1] != nil {
-            let val = ir_lower_expr(node[1]);
-            ir_emit(IR_RET, val, 0, 0);
-        } else {
-            let zero = ir_new_tmp();
-            ir_emit(IR_CONST, zero, 0, 0);
-            ir_emit(IR_RET, zero, 0, 0);
-        }
-        return 0;
-    }
-
-    if ntype == "If" {
-        let cond = ir_lower_expr(node[1]);
-        let else_label = ir_new_label();
-        let end_label = ir_new_label();
-        ir_emit(IR_JZ, cond, else_label, 0);
-        // then branch
-        ir_lower_stmts(node[2]);
-        ir_emit(IR_JMP, end_label, 0, 0);
-        // else branch
-        ir_emit(IR_LABEL, else_label, 0, 0);
-        if node[3] != nil {
-            ir_lower_stmts(node[3]);
-        }
-        ir_emit(IR_LABEL, end_label, 0, 0);
-        return 0;
-    }
-
-    if ntype == "While" {
-        let loop_label = ir_new_label();
-        let end_label = ir_new_label();
-        ir_emit(IR_LABEL, loop_label, 0, 0);
-        let cond = ir_lower_expr(node[1]);
-        ir_emit(IR_JZ, cond, end_label, 0);
-        ir_lower_stmts(node[2]);
-        ir_emit(IR_JMP, loop_label, 0, 0);
-        ir_emit(IR_LABEL, end_label, 0, 0);
-        return 0;
-    }
-
-    if ntype == "For" {
-        // Desugar: for var in iter { body } → let i=0; while i<len(iter) { var=iter[i]; body; i=i+1; }
-        // For-loop desugaring pending; emit NOP as default
-        ir_emit(IR_NOP, 0, 0, 0);
-        return 0;
-    }
-
-    if ntype == "Print" {
-        let val = ir_lower_expr(node[1]);
-        ir_emit(IR_PRINT, val, 0, 0);
-        return 0;
-    }
-
-    if ntype == "ExprStmt" {
-        ir_lower_expr(node[1]);
-        return 0;
-    }
-
-    if ntype == "Quadrant" {
-        // Lower all statements inside the quadrant
-        ir_lower_stmts(node[2]);
-        return 0;
-    }
-
-    if ntype == "Block" {
-        ir_lower_stmts(node[1]);
-        return 0;
-    }
-
-    // Unhandled: emit NOP
-    ir_emit(IR_NOP, 0, 0, 0);
-    return 0;
-}
-
-// Lower a list of statements
-fn ir_lower_stmts(stmts) {
-    if stmts == nil { return 0; }
-    let mut i = 0;
-    while i < len(stmts) {
-        ir_lower_stmt(stmts[i]);
-        i = i + 1;
+fn ir_add_edge(pred, succ) {
+    if ir_bb_succ0[pred] == -1 {
+        set_at(ir_bb_succ0, pred, succ);
+    } else {
+        set_at(ir_bb_succ1, pred, succ);
     }
     return 0;
 }
 
-// Lower an entire module AST (top-level statement list)
-fn ir_lower_module(ast) {
-    ir_lower_stmts(ast);
-    return ir_status();
-}
-
-// Reset IR lowering state (call between modules)
-fn ir_lower_reset() {
-    ir_var_table = [];
-    ir_fn_table = [];
-    ir_label_counter = 0;
+fn ir_test() {
+    let bb0 = 0;
+    let bb1 = 0;
+    let bb2 = 0;
+    ir_init();
+    bb0 = ir_new_bb();
+    bb1 = ir_new_bb();
+    bb2 = ir_new_bb();
+    ir_emit(bb0, IR_COPY,   0, 1, 0);
+    ir_emit(bb0, IR_JUMP,   bb2, 0, 0);
+    ir_emit(bb1, IR_COPY,   1, 2, 0);
+    ir_emit(bb1, IR_JUMP,   bb2, 0, 0);
+    ir_emit(bb2, IR_PHI,    2, 0, 1);
+    ir_emit(bb2, IR_ADD,    3, 2, 1);
+    ir_emit(bb2, IR_RET,    3, 0, 0);
+    ir_add_edge(bb0, bb2);
+    ir_add_edge(bb1, bb2);
+    print("ir_test: n=" + to_string(ir_n) + " bbs=" + to_string(ir_bb_n) + " phi=" + to_string(ir_phi_count));
+    if ir_n == 7 {
+        if ir_bb_n == 3 {
+            if ir_phi_count == 1 {
+                print("ir_test: PASS");
+                return 1;
+            }
+        }
+    }
+    print("ir_test: FAIL");
     return 0;
 }
 
 print("ir.hl loaded");
-print("H-IR: " + to_string(IR_MAX_INSTRS) + " max instrs, " +
-      to_string(IR_PRINT) + " opcodes, " +
-      "const-fold + DCE + strength-reduce + AST lowering");

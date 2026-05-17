@@ -2,11 +2,42 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`367`（72 根目录 + 298 内核模块）
-- H-L 总行数：`~108,500`
-- 内核模块：`298`
-- Shell 命令：`912`
-- 最近完成功能迭代：`312`（burrows_wheeler + lyndon + z_function）
+- `.hl` 文件：`370`（72 根目录 + 301 内核模块）
+- H-L 总行数：`~109,500`
+- 内核模块：`301`
+- Shell 命令：`932`
+- 最近完成功能迭代：`315`（ir + regalloc + codegen）
+
+## Iteration 315 — codegen.hl：窥孔优化器 + 死代码消除
+
+- **`bare-kernel/hl/codegen.hl`** 新增（~110 行）
+  - 窥孔优化三模式：① COPY dst=src（恒等拷贝）→ 删除；② ADD dst,src,0 → COPY；③ MUL dst,src,1 → COPY
+  - `cg_peephole()` — 迭代扫描直到无变化，`cg_opts` 累计优化次数
+  - `cg_dce()` — 单趟死寄存器消除：标记所有被引用的 dst，未被引用的非 RET 指令标记为 dead
+  - `cg_live[]` — 指令活跃标志（0=已删除）；`cg_reg_used[32]` — 寄存器使用标记
+  - 测试：3 条指令（ADD+0/COPY identity/MUL×1）→ cg_peephole() 返回 3
+  - Buffer: 0x1720000，CG_MAX_INST=64，CG_MAX_REG=32
+
+## Iteration 314 — regalloc.hl：图着色寄存器分配
+
+- **`bare-kernel/hl/regalloc.hl`** 新增（~90 行）
+  - 贪心图着色，K=4 个物理寄存器（RA_K）；干涉图 16×16 邻接矩阵
+  - `ra_add_interfere(u,v)` — 添加干涉边（对称）
+  - `_ra_choose_color(v)` — 扫描邻居已分配颜色，用 `ra_tmp_used[K]` 标记占用，返回最低可用色
+  - `ra_run()` — 按变量编号顺序贪心着色；无可用色则标记 spill（color=-1）
+  - 测试：4 变量 干涉（0-1,1-2,2-3,0-2），K=4 → colors=[0,1,2,0]，spills=0
+  - Buffer: 0x1710000，RA_MAX_VAR=16
+
+## Iteration 313 — ir.hl：SSA 中间表示
+
+- **`bare-kernel/hl/ir.hl`** 新增（~95 行）
+  - 9 种操作码：NOP/COPY/ADD/SUB/MUL/PHI/JUMP/BRANCH/RET
+  - `ir_new_bb()` — 创建基本块，设置 ir_cur_bb
+  - `ir_emit(bb, op, dst, src1, src2)` — 追加指令，PHI 自动计数
+  - `ir_add_edge(pred, succ)` — 添加控制流边（ir_bb_succ0/succ1）
+  - `ir_phi_count` — phi 节点数；`ir_bb_size[]` — 每 BB 指令数
+  - 测试：3 BB（BB0→BB2, BB1→BB2）+ 1 phi → ir_n=7, ir_bb_n=3, ir_phi_count=1
+  - Buffer: 0x1700000，IR_MAX_INST=64，IR_MAX_BB=16
 
 ## Iteration 312 — z_function.hl：Z 函数
 

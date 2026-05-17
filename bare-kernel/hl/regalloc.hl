@@ -1,254 +1,91 @@
-// regalloc.hl -- Linear Scan Register Allocator
-//
-// Maps H-L local variables to x86_64 registers instead of stack slots.
-// Falls back to stack spill when all registers are occupied.
-//
-// Strategy: Linear Scan (Poletto & Sarkar, 1999)
-//   1. Compute live intervals for each variable
-//   2. Sort intervals by start point
-//   3. Walk intervals, assign registers greedily
-//   4. Spill longest-lived variable when all registers exhausted
-//
-// Available registers (callee-saved preferred for long-lived vars):
-//   Caller-saved (scratch): RAX, RCX, RDX, RSI, RDI, R8-R11
-//   Callee-saved (preserved): RBX, R12-R15
-//   Reserved: RSP (stack), RBP (frame)
-//
-// After allocation, codegen uses register assignments instead of
-// [RBP+offset] memory loads/stores, yielding ~3-10x speedup.
+// regalloc.hl -- Graph-Coloring Register Allocation (Greedy)
+// Interference graph (RA_MAX_VAR x RA_MAX_VAR) + greedy K-coloring.
+// ra_run() assigns physical registers; returns spill count.
+// Runtime buffer: 0x1710000
 
-// Register pool (indices into Reg64 enum)
-// Exclude RSP=4, RBP=5 (reserved)
-let REG_POOL = [0, 1, 2, 3, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
-let REG_POOL_SIZE = 14;
+let RA_MAX_VAR = 16;
+let RA_K       = 4;
 
-// Caller-saved (must save before calls): RAX=0 RCX=1 RDX=2 RSI=6 RDI=7 R8-R11
-let CALLER_SAVED = [0, 1, 2, 6, 7, 8, 9, 10, 11];
-// Callee-saved (must save in prologue if used): RBX=3 R12-R15
-let CALLEE_SAVED = [3, 12, 13, 14, 15];
+let ra_ig       = array(256, 0);
+let ra_color    = array(16, -1);
+let ra_tmp_used = array(8, 0);
+let ra_n        = 0;
+let ra_spill    = 0;
 
-// Live interval: [var_name, start_pos, end_pos, assigned_reg, spill_offset]
-// assigned_reg = -1 means spilled to stack
-let RA_MAX_INTERVALS = 64;
-let mut ra_count = 0;
-
-let ra_name = [];
-let ra_start = [];
-let ra_end = [];
-let ra_reg = [];
-let ra_spill = [];
-
-// Active intervals (sorted by end point)
-let mut ra_active = [];
-
-// Free register set
-let mut ra_free = [];
-
-fn regalloc_init() {
-    ra_count = 0;
-    ra_active = [];
-    ra_free = [];
-    let mut i = 0;
-    while i < RA_MAX_INTERVALS {
-        push(ra_name, "");
-        push(ra_start, 0);
-        push(ra_end, 0);
-        push(ra_reg, 0 - 1);
-        push(ra_spill, 0);
-        i = i + 1;
-    }
-    // Initialize free register pool
+fn ra_init() {
+    ra_n     = 0;
+    ra_spill = 0;
+    let i = 0;
+    while i < 256 { set_at(ra_ig,    i, 0);  i += 1; }
     i = 0;
-    while i < REG_POOL_SIZE {
-        push(ra_free, REG_POOL[i]);
-        i = i + 1;
-    }
-    return 0;
-}
-
-// Add a live interval for a variable
-fn ra_add_interval(name, start, end) {
-    if ra_count >= RA_MAX_INTERVALS { return 0 - 1; }
-    let idx = ra_count;
-    ra_name[idx] = name;
-    ra_start[idx] = start;
-    ra_end[idx] = end;
-    ra_reg[idx] = 0 - 1;
-    ra_spill[idx] = 0;
-    ra_count = ra_count + 1;
-    return idx;
-}
-
-// Sort intervals by start point (insertion sort)
-fn ra_sort_by_start() {
-    let mut i = 1;
-    while i < ra_count {
-        let mut j = i;
-        while j > 0 {
-            if ra_start[j] < ra_start[j - 1] {
-                // Swap j and j-1
-                let tn = ra_name[j]; ra_name[j] = ra_name[j-1]; ra_name[j-1] = tn;
-                let ts = ra_start[j]; ra_start[j] = ra_start[j-1]; ra_start[j-1] = ts;
-                let te = ra_end[j]; ra_end[j] = ra_end[j-1]; ra_end[j-1] = te;
-                let tr = ra_reg[j]; ra_reg[j] = ra_reg[j-1]; ra_reg[j-1] = tr;
-                let tp = ra_spill[j]; ra_spill[j] = ra_spill[j-1]; ra_spill[j-1] = tp;
-            }
-            j = j - 1;
-        }
-        i = i + 1;
-    }
-    return 0;
-}
-
-// Expire old intervals whose end < current start
-fn ra_expire_old(cur_start) {
-    let mut new_active = [];
-    let mut i = 0;
-    while i < len(ra_active) {
-        let idx = ra_active[i];
-        if ra_end[idx] < cur_start {
-            // Free its register
-            let r = ra_reg[idx];
-            if r >= 0 { push(ra_free, r); }
-        } else {
-            push(new_active, idx);
-        }
-        i = i + 1;
-    }
-    ra_active = new_active;
-    return 0;
-}
-
-// Spill the interval with the longest remaining life
-fn ra_spill_longest(new_idx, spill_slot) {
-    // Find active interval with greatest end
-    let mut worst = 0 - 1;
-    let mut worst_end = 0;
-    let mut i = 0;
-    while i < len(ra_active) {
-        let idx = ra_active[i];
-        if ra_end[idx] > worst_end {
-            worst = i;
-            worst_end = ra_end[idx];
-        }
-        i = i + 1;
-    }
-
-    if worst >= 0 {
-        if ra_end[ra_active[worst]] > ra_end[new_idx] {
-            // Spill the longest-lived active interval
-            let spilled_idx = ra_active[worst];
-            ra_reg[new_idx] = ra_reg[spilled_idx];
-            ra_reg[spilled_idx] = 0 - 1;
-            ra_spill[spilled_idx] = spill_slot;
-            // Replace in active list
-            ra_active[worst] = new_idx;
-            return spill_slot + 8;
-        }
-    }
-
-    // Spill the new interval itself
-    ra_reg[new_idx] = 0 - 1;
-    ra_spill[new_idx] = spill_slot;
-    return spill_slot + 8;
-}
-
-// Run linear scan allocation
-fn regalloc_run() {
-    ra_sort_by_start();
-    ra_active = [];
-
-    // Reset free pool
-    ra_free = [];
-    let mut i = 0;
-    while i < REG_POOL_SIZE {
-        push(ra_free, REG_POOL[i]);
-        i = i + 1;
-    }
-
-    let mut spill_slot = 0;
+    while i < 16  { set_at(ra_color, i, -1); i += 1; }
     i = 0;
-    while i < ra_count {
-        ra_expire_old(ra_start[i]);
-
-        if len(ra_free) == 0 {
-            // All registers occupied: spill
-            spill_slot = ra_spill_longest(i, spill_slot);
-        } else {
-            // Assign a free register
-            let r = ra_free[len(ra_free) - 1];
-            // pop last element
-            let mut new_free = [];
-            let mut fi = 0;
-            while fi < len(ra_free) - 1 {
-                push(new_free, ra_free[fi]);
-                fi = fi + 1;
-            }
-            ra_free = new_free;
-            ra_reg[i] = r;
-            push(ra_active, i);
-        }
-        i = i + 1;
-    }
-    return spill_slot; // total spill bytes needed
-}
-
-// Query: what register is variable assigned to?
-fn ra_get_reg(name) {
-    let mut i = 0;
-    while i < ra_count {
-        if ra_name[i] == name {
-            return ra_reg[i];
-        }
-        i = i + 1;
-    }
-    return 0 - 1; // not found
-}
-
-// Query: if spilled, what's the stack offset?
-fn ra_get_spill(name) {
-    let mut i = 0;
-    while i < ra_count {
-        if ra_name[i] == name {
-            return ra_spill[i];
-        }
-        i = i + 1;
-    }
+    while i < 8   { set_at(ra_tmp_used, i, 0); i += 1; }
     return 0;
 }
 
-// Which callee-saved regs are actually used? (for prologue/epilogue)
-fn ra_used_callee_saved() {
-    let mut result = [];
-    let mut i = 0;
-    while i < ra_count {
-        let r = ra_reg[i];
-        if r >= 0 {
-            let mut j = 0;
-            while j < len(CALLEE_SAVED) {
-                if CALLEE_SAVED[j] == r {
-                    // Check not already in result
-                    let mut dup = 0;
-                    let mut k = 0;
-                    while k < len(result) {
-                        if result[k] == r { dup = 1; }
-                        k = k + 1;
-                    }
-                    if dup == 0 { push(result, r); }
-                }
-                j = j + 1;
-            }
-        }
-        i = i + 1;
-    }
-    return result;
+fn ra_add_interfere(u, v) {
+    set_at(ra_ig, u * RA_MAX_VAR + v, 1);
+    set_at(ra_ig, v * RA_MAX_VAR + u, 1);
+    return 0;
 }
 
-fn regalloc_status() {
-    return to_string(ra_count) + " intervals, " +
-           to_string(len(ra_free)) + "/" + to_string(REG_POOL_SIZE) + " regs free";
+fn _ra_choose_color(v) {
+    let i    = 0;
+    let c    = -1;
+    let done = 0;
+    while i < RA_K { set_at(ra_tmp_used, i, 0); i += 1; }
+    i = 0;
+    while i < ra_n {
+        if ra_ig[v * RA_MAX_VAR + i] == 1 {
+            if ra_color[i] >= 0 {
+                set_at(ra_tmp_used, ra_color[i], 1);
+            }
+        }
+        i += 1;
+    }
+    i = 0;
+    while i < RA_K {
+        if done == 0 {
+            if ra_tmp_used[i] == 0 { c = i; done = 1; }
+        }
+        i += 1;
+    }
+    return c;
+}
+
+fn ra_run() {
+    let i = 0;
+    let c = 0;
+    ra_spill = 0;
+    while i < ra_n {
+        c = _ra_choose_color(i);
+        if c >= 0 {
+            set_at(ra_color, i, c);
+        } else {
+            set_at(ra_color, i, -1);
+            ra_spill += 1;
+        }
+        i += 1;
+    }
+    return ra_spill;
+}
+
+fn ra_test() {
+    ra_init();
+    ra_n = 4;
+    ra_add_interfere(0, 1);
+    ra_add_interfere(1, 2);
+    ra_add_interfere(2, 3);
+    ra_add_interfere(0, 2);
+    let sp = ra_run();
+    print("ra_test: colors=[" + to_string(ra_color[0]) + "," + to_string(ra_color[1]) + "," + to_string(ra_color[2]) + "," + to_string(ra_color[3]) + "] spills=" + to_string(sp));
+    if sp == 0 {
+        print("ra_test: PASS");
+        return 1;
+    }
+    print("ra_test: FAIL");
+    return 0;
 }
 
 print("regalloc.hl loaded");
-print("Linear scan: 14 GP regs (RAX-R15 excl RSP/RBP), " +
-      to_string(RA_MAX_INTERVALS) + " max intervals");

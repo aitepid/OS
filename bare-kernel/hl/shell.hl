@@ -207,6 +207,9 @@ fn shell_handle(cmd) {
         serial_print("BWT:         bwt init  bwt add <c>  bwt run  bwt orig  bwt char <i>  bwt test");
         serial_print("Lyndon:      lyn init  lyn add <c>  lyn run  lyn count  lyn test");
         serial_print("ZFunction:   zf init  zf add <c>  zf run  zf val <i>  zf max  zf test");
+        serial_print("IR/SSA:      ir init  ir bb  ir edge <p> <s>  ir n  ir bbs  ir phi  ir test");
+        serial_print("RegAlloc:    ra init  ra setn <n>  ra inter <u> <v>  ra run  ra color <v>  ra spills  ra test");
+        serial_print("CodeGen:     cg init  cg peep  cg dce  cg opts  cg live <i>  cg test");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -4862,6 +4865,55 @@ fn shell_handle_ext(cmd) {
         return "zf: z[" + to_string(zfi) + "]=" + to_string(zf_z[zfi]);
     }
 
+    if cmd == "ir init" { ir_init(); return "ir: init"; }
+    if cmd == "ir test" { let irt = ir_test(); return "ir: " + to_string(irt); }
+    if cmd == "ir bb"   { let irb = ir_new_bb(); return "ir: bb=" + to_string(irb); }
+    if cmd == "ir n"    { return "ir: n=" + to_string(ir_n); }
+    if cmd == "ir bbs"  { return "ir: bbs=" + to_string(ir_bb_n); }
+    if cmd == "ir phi"  { return "ir: phi=" + to_string(ir_phi_count); }
+    if _starts_with(cmd, "ir edge ") {
+        let ireargs = str_sub(cmd, 8, len(cmd));
+        let iresp   = _find_space(ireargs);
+        if iresp < 0 { return "ir edge: usage ir edge <pred> <succ>"; }
+        let irep = to_int(str_sub(ireargs, 0, iresp));
+        let ires = to_int(str_sub(ireargs, iresp + 1, len(ireargs)));
+        ir_add_edge(irep, ires);
+        return "ir: edge " + to_string(irep) + "->" + to_string(ires);
+    }
+
+    if cmd == "ra init"   { ra_init(); return "ra: init"; }
+    if cmd == "ra test"   { let rat = ra_test(); return "ra: " + to_string(rat); }
+    if cmd == "ra run"    { let rar = ra_run(); return "ra: spills=" + to_string(rar); }
+    if cmd == "ra spills" { return "ra: spills=" + to_string(ra_spill); }
+    if _starts_with(cmd, "ra setn ") {
+        let ran = to_int(str_sub(cmd, 8, len(cmd)));
+        ra_n = ran;
+        return "ra: n=" + to_string(ran);
+    }
+    if _starts_with(cmd, "ra color ") {
+        let rav = to_int(str_sub(cmd, 9, len(cmd)));
+        return "ra: color[" + to_string(rav) + "]=" + to_string(ra_color[rav]);
+    }
+    if _starts_with(cmd, "ra inter ") {
+        let raiargs = str_sub(cmd, 9, len(cmd));
+        let raisp   = _find_space(raiargs);
+        if raisp < 0 { return "ra inter: usage ra inter <u> <v>"; }
+        let raiu = to_int(str_sub(raiargs, 0, raisp));
+        let raiv = to_int(str_sub(raiargs, raisp + 1, len(raiargs)));
+        ra_add_interfere(raiu, raiv);
+        return "ra: interfere " + to_string(raiu) + "," + to_string(raiv);
+    }
+
+    if cmd == "cg init" { cg_init(); return "cg: init"; }
+    if cmd == "cg test" { let cgt = cg_test(); return "cg: " + to_string(cgt); }
+    if cmd == "cg peep" { let cgp = cg_peephole(); return "cg: peep=" + to_string(cgp); }
+    if cmd == "cg dce"  { let cgd = cg_dce(); return "cg: dce=" + to_string(cgd); }
+    if cmd == "cg opts" { return "cg: opts=" + to_string(cg_opts); }
+    if _starts_with(cmd, "cg live ") {
+        let cgi = to_int(str_sub(cmd, 8, len(cmd)));
+        return "cg: live[" + to_string(cgi) + "]=" + to_string(cg_live[cgi]);
+    }
+
     return shell_handle(cmd);
 }
 
@@ -4873,7 +4925,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 912 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld + lca + virtualtree + dominator + sam + manacher + eertree + bwt + lyndon + zfunction");
+print("shell.hl loaded -- 932 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld + lca + virtualtree + dominator + sam + manacher + eertree + bwt + lyndon + zfunction + ir + regalloc + codegen");
 
 // Main shell loop (called from kernel_init)
 
