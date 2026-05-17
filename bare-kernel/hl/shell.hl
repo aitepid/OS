@@ -171,6 +171,9 @@ fn shell_handle(cmd) {
         serial_print("DSU:      dsu union <x> <y>  dsu find <x>  dsu connected <x> <y>  dsu size <x>  dsu kruskal  dsu status  dsu test");
         serial_print("Treap:    treap insert <k> <v>  treap delete <k>  treap search <k>  treap kth <k>  treap rank <k>  treap min  treap max  treap status  treap test");
         serial_print("SuffixArray: sa build <n>  sa lcp  sa search <p>  sa lrs  sa distinct  sa status  sa test");
+        serial_print("AhoCorasick: ac init  ac build  ac search <text>  ac status  ac test");
+        serial_print("KMP:      kmp search <pat> <text>  kmp z <pat> <text>  kmp rk <pat> <text>  kmp test");
+        serial_print("IntervalTree: it insert <lo> <hi>  it stab <q>  it overlap <lo> <hi>  it status  it test");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
@@ -4091,6 +4094,44 @@ fn shell_handle_ext(cmd) {
     if cmd == "sa status"   { return sa_status(); }
     if cmd == "sa test"     { return suffix_array_test(); }
 
+    // === Aho-Corasick ===
+    if cmd == "ac init"   { ac_init(); return "ac: automaton cleared"; }
+    if cmd == "ac build"  { ac_build(); return "ac: DFA built nodes=" + to_string(ac_size); }
+    if cmd == "ac status" { return "ac: nodes=" + to_string(ac_size) + " patterns=" + to_string(ac_np) + " last_matches=" + to_string(ac_match_cnt); }
+    if cmd == "ac test"   { return "ac: matches=" + to_string(ac_test()); }
+
+    // === KMP ===
+    if cmd == "kmp test"  { let kr = kmp_test(); return "kmp: ok kmp/z/rk=" + to_string(kr); }
+
+    // === Interval Tree ===
+    if cmd == "it init"   { interval_tree_init(); return "it: cleared"; }
+    if cmd == "it status" { return "it: n=" + to_string(it_n) + " last_res=" + to_string(it_res_cnt); }
+    if cmd == "it test"   { let ir = it_test(); return "it: stab=" + to_string(ir); }
+
+    if _starts_with(cmd, "it insert ") {
+        let itargs = str_sub(cmd, 10, len(cmd));
+        let itsp = _find_space(itargs);
+        if itsp < 0 { return "it insert: usage it insert <lo> <hi>"; }
+        let itlo = to_int(str_sub(itargs, 0, itsp));
+        let ithi = to_int(str_sub(itargs, itsp + 1, len(itargs)));
+        let itid = it_insert(itlo, ithi);
+        return "it: inserted [" + to_string(itlo) + "," + to_string(ithi) + "] id=" + to_string(itid) + " n=" + to_string(it_n);
+    }
+    if _starts_with(cmd, "it stab ") {
+        let itq = to_int(str_sub(cmd, 8, len(cmd)));
+        let itcnt = it_stab(itq);
+        return "it: stab(" + to_string(itq) + ")=" + to_string(itcnt);
+    }
+    if _starts_with(cmd, "it overlap ") {
+        let itov = str_sub(cmd, 11, len(cmd));
+        let itosp = _find_space(itov);
+        if itosp < 0 { return "it overlap: usage it overlap <lo> <hi>"; }
+        let itolo = to_int(str_sub(itov, 0, itosp));
+        let itohi = to_int(str_sub(itov, itosp + 1, len(itov)));
+        let itoct = it_overlap(itolo, itohi);
+        return "it: overlap([" + to_string(itolo) + "," + to_string(itohi) + "])=" + to_string(itoct);
+    }
+
     return shell_handle(cmd);
 }
 
@@ -4102,7 +4143,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 730 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray");
+print("shell.hl loaded -- 745 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree");
 
 // Main shell loop (called from kernel_init)
 

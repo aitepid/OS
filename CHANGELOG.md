@@ -2,13 +2,49 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`331`（69 根目录 + 262 内核模块）
-- H-L 总行数：`~109,500`
-- 内核模块：`262`
-- Shell 命令：`730`
-- 最近完成功能迭代：`276`（disjoint_set + treap + suffix_array）
+- `.hl` 文件：`334`（69 根目录 + 265 内核模块）
+- H-L 总行数：`~112,500`
+- 内核模块：`265`
+- Shell 命令：`745`
+- 最近完成功能迭代：`279`（aho_corasick + kmp + interval_tree）
 
-## Iteration 276 — suffix_array.hl：后缀数组 + LCP
+## Iteration 279 — interval_tree.hl：增强区间树
+
+- **`bare-kernel/hl/interval_tree.hl`** 新增（~120 行）
+  - 有序区间数组 + 后缀最大值 (suffix-max) 增强，支持 O(k) 期望查询（k=结果数）
+  - `it_insert(lo, hi)` — 插入排序维护 lo 有序；每次插入后重建 suffix-max（O(n)）
+  - `_it_rebuild_max()` — 反向一遍重建 it_max_suf[i] = max(hi[i..n-1])
+  - `it_stab(q)` — 刺查询（点 q 落在哪些区间）：it_lo[i]>q 时终止；suffix-max<q 时提前退出
+  - `it_overlap(qlo, qhi)` — 区间重叠查询：条件 it_lo[i]≤qhi AND it_hi[i]≥qlo
+  - 测试：5 区间 [1,5][3,7][2,6][8,10][4,9] → stab(4)=4, overlap([5,8])=5, overlap([11,20])=0
+  - Buffer: 0x14E0000
+  - Shell 命令：`it insert <lo> <hi>  it stab <q>  it overlap <lo> <hi>  it status  it test`
+
+## Iteration 278 — kmp.hl：KMP + Z函数 + Rabin-Karp
+
+- **`bare-kernel/hl/kmp.hl`** 新增（~130 行）
+  - **KMP**（Knuth-Morris-Pratt 1977）：失败函数构建 + 线性搜索，O(n+m)
+    - 失败函数用 done-flag 内循环模拟 break；k 在迭代间持续
+  - **Z函数**（Gusfield 1997）：z[i] = s 与 s[i..] 的最长公共前缀；标准双窗口 O(n)
+    - z_search_count：构建 pat + [0] + text，Z值=|pat| 处即为匹配
+  - **Rabin-Karp**（1987）：多项式哈希（base=31，mod=100003），rk_pow 预计算
+    - 每窗口重新计算哈希（避免减法溢出问题）+ 字符验证消除假阳性
+  - 测试：'ana' in 'banana' → kmp=2, z=2, rk=2（位置 1,3）
+  - Buffer: 0x14D0000
+  - Shell 命令：`kmp search  kmp z  kmp rk  kmp test`
+
+## Iteration 277 — aho_corasick.hl：Aho-Corasick 多模式匹配
+
+- **`bare-kernel/hl/aho_corasick.hl`** 新增（~155 行）
+  - Aho & Corasick 1975：Trie + BFS 失败链接 + 完整 DFA，O(n + 匹配数) 搜索
+  - `ac_ch[node*26+c]`：Trie 子节点；`ac_dfa[node*26+c]`：完整 DFA（构建后使用）
+  - `ac_fail[]`：失败链接（指向最长真后缀）；`ac_dict[]`：字典后缀链接（最近完整词祖先）
+  - `ac_build()`：BFS 两阶段 — 先处理根的子节点，再队列处理剩余节点
+  - 测试：模式 "he"/"she"/"his"/"hers" in "ushers" → 3 次匹配（she@3, he@3, hers@5）
+  - Buffer: 0x14C0000，AC_MAX_NODES=64，AC_ALPHA=26
+  - Shell 命令：`ac init  ac build  ac search <text>  ac status  ac test`
+
+
 
 - **`bare-kernel/hl/suffix_array.hl`** 新增（~215 行）
   - 后缀数组（Manber & Myers 1990，SIAM J. Computing）+ LCP 数组（Kasai et al. 2001）

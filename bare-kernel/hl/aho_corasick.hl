@@ -1,0 +1,192 @@
+// aho_corasick.hl -- Aho-Corasick multi-pattern string matching
+// Aho & Corasick 1975: simultaneous search via trie + BFS failure links + complete DFA.
+// AC_MAX_NODES=64, AC_ALPHA=26 (a-z mapped 0-25).
+//
+// Runtime buffer: 0x14C0000 (8 KB)
+
+let AC_MAX_NODES = 64;
+let AC_ALPHA = 26;
+
+// Trie children: ac_ch[node*26 + c] = child node (0 = null, root = 1)
+let ac_ch = array(1664, 0);
+// Complete DFA (after ac_build): ac_dfa[node*26 + c] = next state
+let ac_dfa = array(1664, 0);
+// Failure links
+let ac_fail = array(64, 0);
+// Dictionary suffix links (nearest ancestor that is a complete word end)
+let ac_dict = array(64, 0);
+// Pattern ID stored at node (0 = none, 1-based)
+let ac_out = array(64, 0);
+// Total match count reachable from node via output + dict chain
+let ac_out_cnt = array(64, 0);
+
+let ac_size = 0;    // nodes allocated (root=1, so ac_size >= 1)
+let ac_np   = 0;    // patterns inserted
+
+// BFS queue for ac_build
+let ac_q  = array(64, 0);
+let ac_qh = 0;
+let ac_qt = 0;
+
+// Match result buffers
+let ac_match_pos = array(256, 0);
+let ac_match_pat = array(256, 0);
+let ac_match_cnt = 0;
+
+fn ac_init() {
+    let i = 0;
+    while i < 1664 {
+        set_at(ac_ch,  i, 0);
+        set_at(ac_dfa, i, 0);
+        i += 1;
+    }
+    i = 0;
+    while i < AC_MAX_NODES {
+        set_at(ac_fail,    i, 0);
+        set_at(ac_dict,    i, 0);
+        set_at(ac_out,     i, 0);
+        set_at(ac_out_cnt, i, 0);
+        i += 1;
+    }
+    ac_size = 1;
+    ac_np   = 0;
+    ac_match_cnt = 0;
+    return 0;
+}
+
+// Insert pattern pat[0..plen-1] (values 97-122) into trie
+fn ac_insert(pat, plen) {
+    let node = 1;
+    let i = 0;
+    while i < plen {
+        let c   = pat[i] - 97;
+        let idx = node * AC_ALPHA + c;
+        if ac_ch[idx] == 0 {
+            ac_size += 1;
+            set_at(ac_ch, idx, ac_size);
+        }
+        node = ac_ch[idx];
+        i += 1;
+    }
+    ac_np += 1;
+    set_at(ac_out, node, ac_np);
+    return 0;
+}
+
+// Build failure links + complete DFA via BFS from root
+fn ac_build() {
+    ac_qh = 0;
+    ac_qt = 0;
+    // Phase 1: set up root's children
+    let c = 0;
+    while c < AC_ALPHA {
+        let idx = 1 * AC_ALPHA + c;
+        let ch  = ac_ch[idx];
+        if ch == 0 {
+            set_at(ac_dfa, idx, 1);
+        } else {
+            set_at(ac_fail, ch, 1);
+            set_at(ac_dfa,  idx, ch);
+            set_at(ac_q, ac_qt, ch);
+            ac_qt += 1;
+        }
+        c += 1;
+    }
+    // Phase 2: BFS
+    while ac_qh < ac_qt {
+        let u = ac_q[ac_qh];
+        ac_qh += 1;
+        // Build dictionary suffix link for u
+        let flink = ac_fail[u];
+        if ac_out[flink] > 0 {
+            set_at(ac_dict, u, flink);
+        } else {
+            set_at(ac_dict, u, ac_dict[flink]);
+        }
+        // Count outputs reachable from u
+        let cnt = 0;
+        if ac_out[u] > 0 { cnt += 1; }
+        let dl = ac_dict[u];
+        while dl > 0 {
+            cnt += 1;
+            dl = ac_dict[dl];
+        }
+        set_at(ac_out_cnt, u, cnt);
+        // Build DFA for each character from u
+        c = 0;
+        while c < AC_ALPHA {
+            let uidx = u * AC_ALPHA + c;
+            let ch   = ac_ch[uidx];
+            let fidx = ac_fail[u] * AC_ALPHA + c;
+            if ch != 0 {
+                set_at(ac_fail, ch, ac_dfa[fidx]);
+                set_at(ac_dfa,  uidx, ch);
+                set_at(ac_q, ac_qt, ch);
+                ac_qt += 1;
+            } else {
+                set_at(ac_dfa, uidx, ac_dfa[fidx]);
+            }
+            c += 1;
+        }
+    }
+    return 0;
+}
+
+// Search text[0..tlen-1]; returns total match count stored in ac_match_*
+fn ac_search(text, tlen) {
+    ac_match_cnt = 0;
+    let state = 1;
+    let i = 0;
+    while i < tlen {
+        let c   = text[i] - 97;
+        let idx = state * AC_ALPHA + c;
+        state = ac_dfa[idx];
+        if ac_out[state] > 0 {
+            if ac_match_cnt < 256 {
+                set_at(ac_match_pos, ac_match_cnt, i);
+                set_at(ac_match_pat, ac_match_cnt, ac_out[state]);
+                ac_match_cnt += 1;
+            }
+        }
+        let s = ac_dict[state];
+        while s > 0 {
+            if ac_match_cnt < 256 {
+                set_at(ac_match_pos, ac_match_cnt, i);
+                set_at(ac_match_pat, ac_match_cnt, ac_out[s]);
+                ac_match_cnt += 1;
+            }
+            s = ac_dict[s];
+        }
+        i += 1;
+    }
+    return ac_match_cnt;
+}
+
+fn ac_test() {
+    ac_init();
+    // Patterns: "he"(1) "she"(2) "his"(3) "hers"(4)
+    // h=104 e=101 s=115 i=105 r=114
+    let p0 = array(2, 0);
+    set_at(p0, 0, 104); set_at(p0, 1, 101);
+    let p1 = array(3, 0);
+    set_at(p1, 0, 115); set_at(p1, 1, 104); set_at(p1, 2, 101);
+    let p2 = array(3, 0);
+    set_at(p2, 0, 104); set_at(p2, 1, 105); set_at(p2, 2, 115);
+    let p3 = array(4, 0);
+    set_at(p3, 0, 104); set_at(p3, 1, 101); set_at(p3, 2, 114); set_at(p3, 3, 115);
+    ac_insert(p0, 2);
+    ac_insert(p1, 3);
+    ac_insert(p2, 3);
+    ac_insert(p3, 4);
+    ac_build();
+    // Text "ushers" = [117,115,104,101,114,115]
+    let t0 = array(6, 0);
+    set_at(t0, 0, 117); set_at(t0, 1, 115); set_at(t0, 2, 104);
+    set_at(t0, 3, 101); set_at(t0, 4, 114); set_at(t0, 5, 115);
+    let cnt = ac_search(t0, 6);
+    // Expected: 3 matches (she@3, he@3, hers@5)
+    print("ac_test ushers matches=" + to_string(cnt));
+    return cnt;
+}
+
+print("aho_corasick.hl loaded");

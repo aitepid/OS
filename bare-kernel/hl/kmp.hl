@@ -1,0 +1,213 @@
+// kmp.hl -- String matching: KMP + Z-function + Rabin-Karp
+// Knuth-Morris-Pratt 1977 / Gusfield Z-function 1997 / Rabin-Karp 1987.
+// KMP_MAX_LEN=128 for patterns/text up to 128 chars.
+//
+// Runtime buffer: 0x14D0000 (4 KB)
+
+let KMP_MAX_LEN = 128;
+let KMP_P = 100003;    // prime modulus for Rabin-Karp polynomial hash
+let KMP_B = 31;        // polynomial base
+
+let kmp_fail = array(128, 0);    // KMP failure (partial match) function
+let z_s      = array(256, 0);    // concatenated string: pat + [0] + text
+let z_z      = array(256, 0);    // Z-array over z_s
+let kmp_match     = array(256, 0);  // match start positions (shared by all 3 algorithms)
+let kmp_match_cnt = 0;
+
+let rk_pow = array(128, 0);      // rk_pow[i] = KMP_B^i mod KMP_P
+
+fn kmp_init() {
+    let i = 0;
+    while i < KMP_MAX_LEN {
+        set_at(kmp_fail, i, 0);
+        i += 1;
+    }
+    kmp_match_cnt = 0;
+    // Precompute powers: rk_pow[i] = B^i mod P
+    set_at(rk_pow, 0, 1);
+    i = 1;
+    while i < KMP_MAX_LEN {
+        let v = rk_pow[i - 1] * KMP_B;
+        set_at(rk_pow, i, v - (v / KMP_P) * KMP_P);
+        i += 1;
+    }
+    return 0;
+}
+
+// Build KMP failure function for pat[0..plen-1]
+fn kmp_build(pat, plen) {
+    set_at(kmp_fail, 0, 0);
+    let k = 0;
+    let i = 1;
+    while i < plen {
+        let done = 0;
+        while done == 0 {
+            if k == 0 {
+                done = 1;
+            } else {
+                if pat[i] == pat[k] {
+                    done = 1;
+                } else {
+                    k = kmp_fail[k - 1];
+                }
+            }
+        }
+        if pat[i] == pat[k] { k += 1; }
+        set_at(kmp_fail, i, k);
+        i += 1;
+    }
+    return 0;
+}
+
+// KMP: find all occurrences of pat in text; returns count
+fn kmp_search(pat, plen, text, tlen) {
+    kmp_build(pat, plen);
+    kmp_match_cnt = 0;
+    let k = 0;
+    let i = 0;
+    while i < tlen {
+        let done = 0;
+        while done == 0 {
+            if k == 0 {
+                done = 1;
+            } else {
+                if text[i] == pat[k] {
+                    done = 1;
+                } else {
+                    k = kmp_fail[k - 1];
+                }
+            }
+        }
+        if text[i] == pat[k] { k += 1; }
+        if k == plen {
+            if kmp_match_cnt < 256 {
+                set_at(kmp_match, kmp_match_cnt, i - plen + 1);
+                kmp_match_cnt += 1;
+            }
+            k = kmp_fail[k - 1];
+        }
+        i += 1;
+    }
+    return kmp_match_cnt;
+}
+
+// Z-function: z_z[i] = length of longest common prefix of z_s and z_s[i..]
+// Operates on global z_s[0..n-1], writes result to z_z[0..n-1]
+fn z_build(n) {
+    set_at(z_z, 0, n);
+    let l = 0;
+    let r = 0;
+    let i = 1;
+    while i < n {
+        let zi = 0;
+        if i < r {
+            let rem = r - i;
+            let fi  = i - l;
+            if z_z[fi] < rem { zi = z_z[fi]; } else { zi = rem; }
+        }
+        let done = 0;
+        while done == 0 {
+            if i + zi >= n {
+                done = 1;
+            } else {
+                if z_s[zi] != z_s[i + zi] {
+                    done = 1;
+                } else {
+                    zi += 1;
+                }
+            }
+        }
+        set_at(z_z, i, zi);
+        if i + zi > r { l = i; r = i + zi; }
+        i += 1;
+    }
+    return 0;
+}
+
+// Z-function search: count occurrences of pat in text
+fn z_search_count(pat, plen, text, tlen) {
+    // Build z_s = pat + [0] + text
+    let i = 0;
+    while i < plen {
+        set_at(z_s, i, pat[i]);
+        i += 1;
+    }
+    set_at(z_s, plen, 0);
+    i = 0;
+    while i < tlen {
+        set_at(z_s, plen + 1 + i, text[i]);
+        i += 1;
+    }
+    let n = plen + 1 + tlen;
+    z_build(n);
+    kmp_match_cnt = 0;
+    i = plen + 1;
+    while i < n {
+        if z_z[i] == plen {
+            if kmp_match_cnt < 256 {
+                set_at(kmp_match, kmp_match_cnt, i - plen - 1);
+                kmp_match_cnt += 1;
+            }
+        }
+        i += 1;
+    }
+    return kmp_match_cnt;
+}
+
+// Polynomial hash of arr[start..start+len-1] mod KMP_P
+fn rk_hash(arr, start, len) {
+    let h = 0;
+    let i = 0;
+    while i < len {
+        let v = arr[start + i] * rk_pow[i];
+        h = h + v;
+        h = h - (h / KMP_P) * KMP_P;
+        i += 1;
+    }
+    return h;
+}
+
+// Rabin-Karp search (with per-window hash + verification)
+fn rk_search(pat, plen, text, tlen) {
+    kmp_match_cnt = 0;
+    if plen > tlen { return 0; }
+    let phash = rk_hash(pat, 0, plen);
+    let i = 0;
+    while i + plen <= tlen {
+        let whash = rk_hash(text, i, plen);
+        if whash == phash {
+            let ok = 1;
+            let j = 0;
+            while j < plen {
+                if text[i + j] != pat[j] { ok = 0; }
+                j += 1;
+            }
+            if ok == 1 {
+                if kmp_match_cnt < 256 {
+                    set_at(kmp_match, kmp_match_cnt, i);
+                    kmp_match_cnt += 1;
+                }
+            }
+        }
+        i += 1;
+    }
+    return kmp_match_cnt;
+}
+
+fn kmp_test() {
+    kmp_init();
+    // Pattern "ana"=[97,110,97] in text "banana"=[98,97,110,97,110,97]
+    let pat  = array(3, 0);
+    set_at(pat, 0, 97); set_at(pat, 1, 110); set_at(pat, 2, 97);
+    let text = array(6, 0);
+    set_at(text, 0, 98); set_at(text, 1, 97); set_at(text, 2, 110);
+    set_at(text, 3, 97); set_at(text, 4, 110); set_at(text, 5, 97);
+    let c1 = kmp_search(pat, 3, text, 6);
+    let c2 = z_search_count(pat, 3, text, 6);
+    let c3 = rk_search(pat, 3, text, 6);
+    // All three should return 2 (positions 1 and 3)
+    print("kmp_test kmp=" + to_string(c1) + " z=" + to_string(c2) + " rk=" + to_string(c3));
+    return c1;
+}
+
+print("kmp.hl loaded");
