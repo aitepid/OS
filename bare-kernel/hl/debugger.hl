@@ -1,0 +1,124 @@
+// debugger.hl -- H-L Built-in Debugger (Phase 7: 生态与自举完善, iter 430)
+// Buffer: 0x1E50000
+// Debug sessions: attach, step (RIP+1 per step), continue; track step counts
+// DBG_MAX_SESSIONS=4; DBG_STOPPED=0, DBG_RUNNING=1, DBG_STEP=2
+// Shell: dbg init/test/attach/step/cont/rip/steps (7 commands)
+
+let DBG_MAX_SESSIONS = 4;
+let DBG_STOPPED      = 0;
+let DBG_RUNNING      = 1;
+let DBG_STEP         = 2;
+
+let dbg_session_id    = array(4, 0);
+let dbg_session_state = array(4, 0);
+let dbg_session_rip   = array(4, 0);
+let dbg_session_rsp   = array(4, 0);
+let dbg_step_count    = array(4, 0);
+let dbg_n_sessions    = 0;
+
+fn dbg_init() {
+    let i = 0;
+    while i < DBG_MAX_SESSIONS {
+        set_at(dbg_session_id,    i, 0);
+        set_at(dbg_session_state, i, DBG_STOPPED);
+        set_at(dbg_session_rip,   i, 0);
+        set_at(dbg_session_rsp,   i, 0);
+        set_at(dbg_step_count,    i, 0);
+        i += 1;
+    }
+    dbg_n_sessions = 0;
+    return 0;
+}
+
+fn _dbg_find(session_id) {
+    let i = 0;
+    while i < dbg_n_sessions {
+        if dbg_session_id[i] == session_id { return i; }
+        i += 1;
+    }
+    return 0 - 1;
+}
+
+fn dbg_attach(session_id, rip, rsp) {
+    let idx = _dbg_find(session_id);
+    if idx >= 0 {
+        set_at(dbg_session_rip,   idx, rip);
+        set_at(dbg_session_rsp,   idx, rsp);
+        set_at(dbg_session_state, idx, DBG_STOPPED);
+        return idx;
+    }
+    if dbg_n_sessions >= DBG_MAX_SESSIONS { return 0 - 1; }
+    let slot = dbg_n_sessions;
+    set_at(dbg_session_id,    slot, session_id);
+    set_at(dbg_session_rip,   slot, rip);
+    set_at(dbg_session_rsp,   slot, rsp);
+    set_at(dbg_session_state, slot, DBG_STOPPED);
+    set_at(dbg_step_count,    slot, 0);
+    dbg_n_sessions += 1;
+    return slot;
+}
+
+fn dbg_step(session_id) {
+    let idx = _dbg_find(session_id);
+    if idx < 0 { return 0 - 1; }
+    set_at(dbg_session_rip,   idx, dbg_session_rip[idx] + 1);
+    set_at(dbg_step_count,    idx, dbg_step_count[idx] + 1);
+    set_at(dbg_session_state, idx, DBG_STEP);
+    return dbg_session_rip[idx];
+}
+
+fn dbg_continue(session_id) {
+    let idx = _dbg_find(session_id);
+    if idx < 0 { return 0 - 1; }
+    set_at(dbg_session_state, idx, DBG_RUNNING);
+    return DBG_RUNNING;
+}
+
+fn dbg_get_rip(session_id) {
+    let idx = _dbg_find(session_id);
+    if idx < 0 { return 0 - 1; }
+    return dbg_session_rip[idx];
+}
+
+fn dbg_get_steps(session_id) {
+    let idx = _dbg_find(session_id);
+    if idx < 0 { return 0 - 1; }
+    return dbg_step_count[idx];
+}
+
+fn dbg_get_state(session_id) {
+    let idx = _dbg_find(session_id);
+    if idx < 0 { return 0 - 1; }
+    return dbg_session_state[idx];
+}
+
+fn dbg_test() {
+    dbg_init();
+    dbg_attach(1, 4096, 32768);
+
+    dbg_step(1);
+    dbg_step(1);
+
+    let rip   = dbg_get_rip(1);    // 4098
+    let steps = dbg_get_steps(1);  // 2
+
+    dbg_continue(1);
+    let state = dbg_get_state(1);  // 1=DBG_RUNNING
+
+    print("dbg_test: rip=" + to_string(rip)
+          + " steps=" + to_string(steps)
+          + " state=" + to_string(state));
+
+    if rip == 4098 {
+        if steps == 2 {
+            if state == DBG_RUNNING {
+                print("dbg_test: PASS");
+                return 1;
+            }
+        }
+    }
+    print("dbg_test: FAIL");
+    return 0;
+}
+
+print("debugger.hl loaded");

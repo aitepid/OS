@@ -2,14 +2,45 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`484`（76 根目录 + 415 内核模块）
-- H-L 总行数：`~159,300`
-- 内核模块：`415`
-- Shell 命令：`1723`
-- 最近完成功能迭代：`429`（lsp_server + syntax_highlight + code_complete）
+- `.hl` 文件：`487`（76 根目录 + 418 内核模块）
+- H-L 总行数：`~159,650`
+- 内核模块：`418`
+- Shell 命令：`1744`
+- 最近完成功能迭代：`432`（debugger + gdb_stub + breakpoint）
 - 当前阶段：第七阶段·生态完善（Phase 7）
 - **Milestone M4 已达成**（iter 405，完整 ML 推理框架）
 - **Milestone M5 已达成**（iter 420，生产级稳定性）
+
+## Iteration 432 — breakpoint.hl：断点管理器
+
+- **`breakpoint.hl`**（Buffer: 0x1E70000）：BP_MAX_BPS=32
+  - 状态：BP_DISABLED=0 / BP_ENABLED=1
+  - `bp_set(addr)`：注册断点并启用（已存在则重新启用）
+  - `bp_hit(addr)`：仅 ENABLED 状态触发命中计数 + bp_total_hits
+  - `bp_disable(addr)`：禁用后 bp_hit() 为空操作
+  - `bp_get_hits(addr)` / `bp_count()`
+  - 测试：set(4096)+set(8192)→hit(4096)×2+hit(8192)×1→disable(4096)→hit(4096 no-op) → total=3 cnt=2 → PASS
+  - Shell：bp init/test/set/enable/disable/hit/hits（7 命令）
+
+## Iteration 431 — gdb_stub.hl：GDB Remote Protocol 桩
+
+- **`gdb_stub.hl`**（Buffer: 0x1E60000）：GS_MAX_PKTS=16，gs_regs[8] 模拟寄存器
+  - 命令：GS_CMD_HALT=0 / CONT=1 / STEP=2 / READ_REG=3 / WRITE_REG=4
+  - `gs_send_pkt(cmd, arg)`：处理 RSP 风格数据包，STEP/HALT 置 gs_halted=1
+  - `gs_read_reg(i)` / `gs_write_reg(i, val)` / `gs_get_result(pkt_idx)` / `gs_count()`
+  - 测试：wreg(0,1000)+wreg(1,2000)→pkt(READ_REG,0)→pkt(STEP) → r0=1000 n=2 halted=1 reg1=2000 → PASS
+  - Shell：gs init/test/pkt/reg/wreg/count/halted（7 命令）
+
+## Iteration 430 — debugger.hl：H-L 内置调试器
+
+- **`debugger.hl`**（Buffer: 0x1E50000）：DBG_MAX_SESSIONS=4
+  - 状态：DBG_STOPPED=0 / DBG_RUNNING=1 / DBG_STEP=2
+  - `dbg_attach(session_id, rip, rsp)`：绑定调试会话，初始为 STOPPED
+  - `dbg_step(session_id)`：RIP+1，step_count+1，状态→DBG_STEP
+  - `dbg_continue(session_id)`：状态→DBG_RUNNING
+  - `dbg_get_rip(id)` / `dbg_get_steps(id)` / `dbg_get_state(id)`
+  - 测试：attach(1,4096,32768)→step×2→cont → rip=4098 steps=2 state=RUNNING=1 → PASS
+  - Shell：dbg init/test/attach/step/cont/rip/steps（7 命令）
 
 ## Iteration 429 — code_complete.hl：H-L 代码补全引擎
 

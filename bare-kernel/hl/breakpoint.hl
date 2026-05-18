@@ -1,0 +1,126 @@
+// breakpoint.hl -- Breakpoint Manager (Phase 7: 生态与自举完善, iter 432)
+// Buffer: 0x1E70000
+// Set/enable/disable breakpoints by address; bp_hit() fires only when enabled
+// BP_MAX_BPS=32; BP_DISABLED=0, BP_ENABLED=1
+// Shell: bp init/test/set/enable/disable/hit/hits (7 commands)
+
+let BP_MAX_BPS  = 32;
+let BP_DISABLED = 0;
+let BP_ENABLED  = 1;
+
+let bp_addr       = array(32, 0);   // breakpoint addresses
+let bp_enabled    = array(32, 0);   // BP_DISABLED/BP_ENABLED
+let bp_hit_count  = array(32, 0);   // per-bp hit counters
+let bp_n_bps      = 0;
+let bp_total_hits = 0;
+
+fn bp_init() {
+    let i = 0;
+    while i < BP_MAX_BPS {
+        set_at(bp_addr,      i, 0);
+        set_at(bp_enabled,   i, BP_DISABLED);
+        set_at(bp_hit_count, i, 0);
+        i += 1;
+    }
+    bp_n_bps      = 0;
+    bp_total_hits = 0;
+    return 0;
+}
+
+fn bp_find(addr) {
+    let i = 0;
+    while i < bp_n_bps {
+        if bp_addr[i] == addr { return i; }
+        i += 1;
+    }
+    return 0 - 1;
+}
+
+fn bp_set(addr) {
+    let idx = bp_find(addr);
+    if idx >= 0 {
+        set_at(bp_enabled, idx, BP_ENABLED);
+        return idx;
+    }
+    if bp_n_bps >= BP_MAX_BPS { return 0 - 1; }
+    let slot = bp_n_bps;
+    set_at(bp_addr,      slot, addr);
+    set_at(bp_enabled,   slot, BP_ENABLED);
+    set_at(bp_hit_count, slot, 0);
+    bp_n_bps += 1;
+    return slot;
+}
+
+fn bp_enable(addr) {
+    let idx = bp_find(addr);
+    if idx < 0 { return 0 - 1; }
+    set_at(bp_enabled, idx, BP_ENABLED);
+    return idx;
+}
+
+fn bp_disable(addr) {
+    let idx = bp_find(addr);
+    if idx < 0 { return 0 - 1; }
+    set_at(bp_enabled, idx, BP_DISABLED);
+    return idx;
+}
+
+fn bp_hit(addr) {
+    let idx = bp_find(addr);
+    if idx < 0 { return 0; }
+    if bp_enabled[idx] == BP_DISABLED { return 0; }
+    set_at(bp_hit_count, idx, bp_hit_count[idx] + 1);
+    bp_total_hits += 1;
+    return bp_hit_count[idx];
+}
+
+fn bp_get_hits(addr) {
+    let idx = bp_find(addr);
+    if idx < 0 { return 0 - 1; }
+    return bp_hit_count[idx];
+}
+
+fn bp_count() { return bp_n_bps; }
+
+fn bp_test() {
+    bp_init();
+    bp_set(4096);
+    bp_set(8192);
+
+    bp_hit(4096);
+    bp_hit(4096);
+    bp_hit(8192);
+
+    let h4096  = bp_get_hits(4096);  // 2
+    let h8192  = bp_get_hits(8192);  // 1
+    let total1 = bp_total_hits;      // 3
+
+    // Disable 4096 → hit no-op
+    bp_disable(4096);
+    bp_hit(4096);
+    let total2 = bp_total_hits;      // still 3
+    let cnt    = bp_count();         // 2
+
+    print("bp_test: h4096=" + to_string(h4096)
+          + " h8192=" + to_string(h8192)
+          + " total1=" + to_string(total1)
+          + " total2=" + to_string(total2)
+          + " cnt=" + to_string(cnt));
+
+    if h4096 == 2 {
+        if h8192 == 1 {
+            if total1 == 3 {
+                if total2 == 3 {
+                    if cnt == 2 {
+                        print("bp_test: PASS");
+                        return 1;
+                    }
+                }
+            }
+        }
+    }
+    print("bp_test: FAIL");
+    return 0;
+}
+
+print("breakpoint.hl loaded");

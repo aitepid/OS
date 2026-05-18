@@ -1,0 +1,106 @@
+// gdb_stub.hl -- GDB Remote Protocol Stub (Phase 7: 生态与自举完善, iter 431)
+// Buffer: 0x1E60000
+// Processes GDB RSP-style packets: HALT/CONT/STEP/READ_REG/WRITE_REG
+// GS_MAX_PKTS=16; gs_regs[8] simulated register file
+// Shell: gs init/test/pkt/reg/wreg/count/halted (7 commands)
+
+let GS_MAX_PKTS    = 16;
+let GS_CMD_HALT    = 0;
+let GS_CMD_CONT    = 1;
+let GS_CMD_STEP    = 2;
+let GS_CMD_READ_REG  = 3;
+let GS_CMD_WRITE_REG = 4;
+
+let gs_pkt_cmd    = array(16, 0);   // command type per packet
+let gs_pkt_arg    = array(16, 0);   // argument per packet
+let gs_pkt_result = array(16, 0);   // result per packet
+let gs_regs       = array(8, 0);    // simulated registers r0..r7
+let gs_n_pkts     = 0;
+let gs_halted     = 0;
+
+fn gs_init() {
+    let i = 0;
+    while i < GS_MAX_PKTS {
+        set_at(gs_pkt_cmd,    i, 0);
+        set_at(gs_pkt_arg,    i, 0);
+        set_at(gs_pkt_result, i, 0);
+        i += 1;
+    }
+    let j = 0;
+    while j < 8 {
+        set_at(gs_regs, j, 0);
+        j += 1;
+    }
+    gs_n_pkts = 0;
+    gs_halted = 0;
+    return 0;
+}
+
+fn gs_read_reg(reg_idx)      { return gs_regs[reg_idx]; }
+fn gs_write_reg(reg_idx, val) { set_at(gs_regs, reg_idx, val); return val; }
+
+fn gs_send_pkt(cmd, arg) {
+    if gs_n_pkts >= GS_MAX_PKTS { return 0 - 1; }
+    let slot = gs_n_pkts;
+    set_at(gs_pkt_cmd, slot, cmd);
+    set_at(gs_pkt_arg, slot, arg);
+    let result = 0;
+    if cmd == GS_CMD_HALT      { gs_halted = 1; result = 1; }
+    if cmd == GS_CMD_CONT      { gs_halted = 0; result = 0; }
+    if cmd == GS_CMD_STEP      { gs_halted = 1; result = 1; }
+    if cmd == GS_CMD_READ_REG  { result = gs_regs[arg]; }
+    if cmd == GS_CMD_WRITE_REG { result = 0; }
+    set_at(gs_pkt_result, slot, result);
+    gs_n_pkts += 1;
+    return result;
+}
+
+fn gs_get_result(pkt_idx) {
+    if pkt_idx >= gs_n_pkts { return 0 - 1; }
+    return gs_pkt_result[pkt_idx];
+}
+
+fn gs_count()  { return gs_n_pkts; }
+fn gs_is_halted() { return gs_halted; }
+
+fn gs_test() {
+    gs_init();
+    gs_write_reg(0, 1000);
+    gs_write_reg(1, 2000);
+
+    // Send READ_REG(0) → result=1000; Send STEP → halted=1
+    let r0 = gs_send_pkt(GS_CMD_READ_REG, 0);   // 1000
+    gs_send_pkt(GS_CMD_STEP, 0);
+
+    let n_pkts  = gs_count();       // 2
+    let halted  = gs_is_halted();   // 1
+    let reg0    = gs_read_reg(0);   // 1000
+    let reg1    = gs_read_reg(1);   // 2000
+    let res0    = gs_get_result(0); // 1000
+
+    print("gs_test: r0=" + to_string(r0)
+          + " n=" + to_string(n_pkts)
+          + " halted=" + to_string(halted)
+          + " reg0=" + to_string(reg0)
+          + " reg1=" + to_string(reg1)
+          + " res0=" + to_string(res0));
+
+    if r0 == 1000 {
+        if n_pkts == 2 {
+            if halted == 1 {
+                if reg0 == 1000 {
+                    if reg1 == 2000 {
+                        if res0 == 1000 {
+                            print("gs_test: PASS");
+                            return 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    print("gs_test: FAIL");
+    return 0;
+}
+
+print("gdb_stub.hl loaded");
