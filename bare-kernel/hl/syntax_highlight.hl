@@ -209,74 +209,102 @@ fn sh_set_line_len(len) {
 
 // Scan one token from sh_line_buf starting at `pos`.
 // Returns: token_len * 10 + token_type   (0 if pos >= sh_line_len)
+//
+// Each variable-length scanner uses a `token_end` variable (defaults to
+// sh_line_len) that is set to the actual terminating position when a
+// boundary character is found, avoiding the off-by-one that arises from
+// using the loop variable itself as a break flag.
 fn sh_scan_token(pos) {
     if pos >= sh_line_len { return 0; }
     let ch = sh_line_buf[pos];
 
     // Whitespace
     if sh_is_space(ch) == 1 {
-        let end = pos + 1;
-        while end < sh_line_len {
-            if sh_is_space(sh_line_buf[end]) == 0 { end = sh_line_len + 1; }
-            if end < sh_line_len { end = end + 1; }
+        let wend = sh_line_len;
+        let ws   = pos + 1;
+        let wdone = 0;
+        while ws < sh_line_len {
+            if wdone == 0 {
+                if sh_is_space(sh_line_buf[ws]) == 0 {
+                    wend  = ws;
+                    ws    = sh_line_len;
+                    wdone = 1;
+                }
+            }
+            if wdone == 0 { ws = ws + 1; }
         }
-        let wlen = end - pos;
-        if end > sh_line_len { wlen = sh_line_len - pos; }
-        return wlen * 10 + SH_TYPE_SPACE;
+        return (wend - pos) * 10 + SH_TYPE_SPACE;
     }
 
     // Line comment: '//' (47 47)
     if ch == 47 {
         if pos + 1 < sh_line_len {
             if sh_line_buf[pos + 1] == 47 {
-                let clen = sh_line_len - pos;
-                return clen * 10 + SH_TYPE_COMMENT;
+                return (sh_line_len - pos) * 10 + SH_TYPE_COMMENT;
             }
         }
-        return 1 * 10 + SH_TYPE_SYMBOL;
+        return 10 + SH_TYPE_SYMBOL;
     }
 
-    // String: starts with '"' (34)
+    // String: starts with '"' (34); scan to closing '"' (inclusive)
     if ch == 34 {
-        let sq = pos + 1;
-        while sq < sh_line_len {
-            if sh_line_buf[sq] == 34 { sq = sh_line_len + 1; }
-            if sq < sh_line_len { sq = sq + 1; }
+        let send = sh_line_len;
+        let ss   = pos + 1;
+        let sdone = 0;
+        while ss < sh_line_len {
+            if sdone == 0 {
+                if sh_line_buf[ss] == 34 {
+                    send  = ss + 1;   // include the closing quote
+                    ss    = sh_line_len;
+                    sdone = 1;
+                }
+            }
+            if sdone == 0 { ss = ss + 1; }
         }
-        let slen = sq - pos;
-        if sq <= sh_line_len { slen = slen + 1; }   // include closing quote
-        if slen > sh_line_len - pos { slen = sh_line_len - pos; }
-        return slen * 10 + SH_TYPE_STRING;
+        return (send - pos) * 10 + SH_TYPE_STRING;
     }
 
     // Number: starts with digit
     if sh_is_digit(ch) == 1 {
-        let ne = pos + 1;
-        while ne < sh_line_len {
-            if sh_is_digit(sh_line_buf[ne]) == 0 { ne = sh_line_len + 1; }
-            if ne < sh_line_len { ne = ne + 1; }
+        let nend = sh_line_len;
+        let ns   = pos + 1;
+        let ndone = 0;
+        while ns < sh_line_len {
+            if ndone == 0 {
+                if sh_is_digit(sh_line_buf[ns]) == 0 {
+                    nend  = ns;
+                    ns    = sh_line_len;
+                    ndone = 1;
+                }
+            }
+            if ndone == 0 { ns = ns + 1; }
         }
-        let nlen = ne - pos;
-        if ne > sh_line_len { nlen = sh_line_len - pos; }
-        return nlen * 10 + SH_TYPE_NUMBER;
+        return (nend - pos) * 10 + SH_TYPE_NUMBER;
     }
 
     // Identifier or keyword: starts with alpha/underscore
     if sh_is_alpha(ch) == 1 {
-        let ie = pos + 1;
-        while ie < sh_line_len {
-            if sh_is_alnum(sh_line_buf[ie]) == 0 { ie = sh_line_len + 1; }
-            if ie < sh_line_len { ie = ie + 1; }
+        let iend = sh_line_len;
+        let is_  = pos + 1;
+        let idone = 0;
+        while is_ < sh_line_len {
+            if idone == 0 {
+                if sh_is_alnum(sh_line_buf[is_]) == 0 {
+                    iend  = is_;
+                    is_   = sh_line_len;
+                    idone = 1;
+                }
+            }
+            if idone == 0 { is_ = is_ + 1; }
         }
-        let ilen = ie - pos;
-        if ie > sh_line_len { ilen = sh_line_len - pos; }
+        let ilen = iend - pos;
         let tok_type = SH_TYPE_IDENT;
         if _sh_is_keyword(pos, ilen) == 1 { tok_type = SH_TYPE_KEYWORD; }
         return ilen * 10 + tok_type;
     }
 
     // Single-char symbol (operators, braces, etc.)
-    return 1 * 10 + SH_TYPE_SYMBOL;
+    return 10 + SH_TYPE_SYMBOL;
 }
 
 // Tokenize sh_line_buf and fill sh_line_colors with per-column color codes.

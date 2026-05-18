@@ -6,13 +6,13 @@
 //   Checksum = 8-bit sum of all data bytes, mod 256
 //   ACK = '+' (43), NACK = '-' (45)
 //
-// Commands: HALT/CONT/STEP/READ_REG/WRITE_REG (same as before)
+// Commands: HALT/CONT/STEP/READ_REG/WRITE_REG
 // gs_regs[8]: simulated register file r0..r7
 // GS_MAX_PKTS=16: packet log
 //
 // Shell: gs init/test/pkt/reg/wreg/count/halted/parse/checksum (9 commands)
 
-let GS_MAX_PKTS    = 16;
+let GS_MAX_PKTS      = 16;
 let GS_CMD_HALT      = 0;
 let GS_CMD_CONT      = 1;
 let GS_CMD_STEP      = 2;
@@ -20,29 +20,29 @@ let GS_CMD_READ_REG  = 3;
 let GS_CMD_WRITE_REG = 4;
 
 // RSP status codes returned by gdb_parse_packet
-let GS_PKT_OK       = 0;   // valid packet, checksums match
-let GS_PKT_BAD_CK   = 1;   // checksum mismatch
-let GS_PKT_EMPTY    = 2;   // no $ found or zero-length data
-let GS_PKT_ACK      = 43;  // '+' ack byte value
-let GS_PKT_NACK     = 45;  // '-' nack byte value
+let GS_PKT_OK     = 0;   // valid packet, checksums match
+let GS_PKT_BAD_CK = 1;   // checksum mismatch
+let GS_PKT_EMPTY  = 2;   // no $ found or zero-length data
+let GS_PKT_ACK    = 43;  // '+' ack byte value
+let GS_PKT_NACK   = 45;  // '-' nack byte value
 
-let gs_pkt_cmd    = array(16, 0);   // command type per packet
-let gs_pkt_arg    = array(16, 0);   // argument per packet
-let gs_pkt_result = array(16, 0);   // result per packet
+let gs_pkt_cmd    = array(16, 0);
+let gs_pkt_arg    = array(16, 0);
+let gs_pkt_result = array(16, 0);
 
 // RSP framing state for the most-recently parsed packet
-let gs_last_data_len  = 0;   // byte count of last packet data field
-let gs_last_checksum  = 0;   // computed checksum of last packet
-let gs_last_status    = 0;   // GS_PKT_OK / GS_PKT_BAD_CK / GS_PKT_EMPTY
+let gs_last_data_len = 0;
+let gs_last_checksum = 0;
+let gs_last_status   = 0;
 
-// Outgoing reply buffer (integer-encoded: reply_buf[0..GS_REPLY_LEN-1])
-let GS_REPLY_LEN   = 32;
-let gs_reply_buf   = array(32, 0);
-let gs_reply_len   = 0;
+// Outgoing reply buffer
+let GS_REPLY_LEN = 32;
+let gs_reply_buf = array(32, 0);
+let gs_reply_len = 0;
 
-let gs_regs       = array(8, 0);    // simulated registers r0..r7
-let gs_n_pkts     = 0;
-let gs_halted     = 0;
+let gs_regs   = array(8, 0);
+let gs_n_pkts = 0;
+let gs_halted = 0;
 
 fn gdb_stub_init() {
     let i = 0;
@@ -74,8 +74,7 @@ fn gdb_stub_init() {
 fn gs_read_reg(reg_idx)       { return gs_regs[reg_idx]; }
 fn gs_write_reg(reg_idx, val) { set_at(gs_regs, reg_idx, val); return val; }
 
-// Compute 8-bit GDB RSP checksum over an integer array `data` of `len` bytes.
-// Each element is treated as one byte (0-255).
+// Compute 8-bit GDB RSP checksum over integer array `data` of `len` bytes.
 fn gdb_checksum(data, len) {
     let sum = 0;
     let i   = 0;
@@ -83,22 +82,40 @@ fn gdb_checksum(data, len) {
         sum = sum + data[i];
         i += 1;
     }
-    // mod 256: sum - (sum/256)*256
-    let mod256 = sum - (sum / 256) * 256;
-    return mod256;
+    return sum - (sum / 256) * 256;
+}
+
+// Convert a single ASCII hex digit character to its integer value 0-15.
+// '0'-'9'=48-57 → 0-9; 'A'-'F'=65-70 → 10-15; 'a'-'f'=97-102 → 10-15.
+fn gdb_hex_digit(ch) {
+    if ch >= 48 { if ch <= 57  { return ch - 48; } }
+    if ch >= 65 { if ch <= 70  { return ch - 55; } }
+    if ch >= 97 { if ch <= 102 { return ch - 87; } }
+    return 0;
+}
+
+// Convert nibble (0-15) to lowercase ASCII hex character.
+fn gdb_nibble_to_hex(n) {
+    if n < 10 { return 48 + n; }   // '0'-'9'
+    return 87 + n;                  // 'a'-'f'
 }
 
 // Parse a GDB RSP packet stored as integer array `raw` of `raw_len` bytes.
-// Expects format: '$' data... '#' hi lo   (hi,lo are ASCII hex digits)
+// Expects: '$' data... '#' hi lo  (hi, lo are ASCII hex digits of checksum)
+// Finds the FIRST '$' and the first '#' after it (protocol-correct).
 // Populates gs_last_data_len, gs_last_checksum, gs_last_status.
-// Returns GS_PKT_OK on success, GS_PKT_BAD_CK on mismatch, GS_PKT_EMPTY if malformed.
+// Returns GS_PKT_OK / GS_PKT_BAD_CK / GS_PKT_EMPTY.
 fn gdb_parse_packet(raw, raw_len) {
-    // Find '$' (36)
+    // Find FIRST '$' (36)
     let data_start = 0 - 1;
-    let i = 0;
+    let i     = 0;
+    let found = 0;
     while i < raw_len {
-        if raw[i] == 36 {
-            data_start = i + 1;
+        if found == 0 {
+            if raw[i] == 36 {
+                data_start = i + 1;
+                found = 1;
+            }
         }
         i += 1;
     }
@@ -107,12 +124,16 @@ fn gdb_parse_packet(raw, raw_len) {
         return GS_PKT_EMPTY;
     }
 
-    // Find '#' (35) after data_start
-    let hash_pos = 0 - 1;
-    let j = data_start;
+    // Find FIRST '#' (35) after data_start
+    let hash_pos  = 0 - 1;
+    let j         = data_start;
+    let found_hsh = 0;
     while j < raw_len {
-        if raw[j] == 35 {
-            hash_pos = j;
+        if found_hsh == 0 {
+            if raw[j] == 35 {
+                hash_pos  = j;
+                found_hsh = 1;
+            }
         }
         j += 1;
     }
@@ -124,9 +145,7 @@ fn gdb_parse_packet(raw, raw_len) {
     let data_len = hash_pos - data_start;
     set_at(gs_last_data_len, 0, data_len);
 
-    // Extract data slice starting at data_start for gdb_checksum
-    // We compute checksum over raw[data_start .. hash_pos-1]
-    // Build a temporary view by re-computing using raw directly
+    // Compute checksum of data bytes
     let computed = 0;
     let k = data_start;
     while k < hash_pos {
@@ -136,33 +155,13 @@ fn gdb_parse_packet(raw, raw_len) {
     let ck = computed - (computed / 256) * 256;
     set_at(gs_last_checksum, 0, ck);
 
-    // Decode two ASCII hex digits after '#' into expected checksum
+    // Decode two ASCII hex digits after '#'
     let hi = 0;
     let lo = 0;
     if hash_pos + 1 < raw_len { hi = raw[hash_pos + 1]; }
     if hash_pos + 2 < raw_len { lo = raw[hash_pos + 2]; }
 
-    // ASCII '0'-'9'=48-57, 'a'-'f'=97-102, 'A'-'F'=65-70
-    fn hex_digit(ch) {
-        if ch >= 48 {
-            if ch <= 57 {
-                return ch - 48;
-            }
-        }
-        if ch >= 65 {
-            if ch <= 70 {
-                return ch - 55;
-            }
-        }
-        if ch >= 97 {
-            if ch <= 102 {
-                return ch - 87;
-            }
-        }
-        return 0;
-    }
-
-    let expected = hex_digit(hi) * 16 + hex_digit(lo);
+    let expected = gdb_hex_digit(hi) * 16 + gdb_hex_digit(lo);
 
     if ck == expected {
         set_at(gs_last_status, 0, GS_PKT_OK);
@@ -176,14 +175,11 @@ fn gs_get_last_status()   { return gs_last_status; }
 fn gs_get_last_checksum() { return gs_last_checksum; }
 fn gs_get_last_data_len() { return gs_last_data_len; }
 
-// Encode a reply value into the gs_reply_buf as "$<hex-value>#<checksum>".
-// Uses decimal encoding (simplified — real RSP uses hex).
-// Stores byte values in gs_reply_buf; sets gs_reply_len.
+// Encode a reply value into gs_reply_buf as "$<decimal>#<checksum-2hex>".
 fn gdb_encode_reply(value) {
-    // Frame: $ value # ck
-    // Encode value as decimal digits into reply buffer
     set_at(gs_reply_buf, 0, 36);   // '$'
-    // Convert value to digit string (up to 10 digits)
+
+    // Convert value to decimal digits (reversed) then write forward
     let digits = array(10, 0);
     let ndig   = 0;
     let v      = value;
@@ -196,20 +192,20 @@ fn gdb_encode_reply(value) {
             let d = v - (v / 10) * 10;
             set_at(digits, ndig, d);
             ndig = ndig + 1;
-            v = v / 10;
+            v    = v / 10;
         }
     }
-    // Reverse digits into reply_buf[1..]
     let pos = 1;
     let di  = ndig - 1;
     while di >= 0 {
-        set_at(gs_reply_buf, pos, 48 + digits[di]);   // ASCII '0'+d
+        set_at(gs_reply_buf, pos, 48 + digits[di]);
         pos = pos + 1;
         di  = di - 1;
     }
     set_at(gs_reply_buf, pos, 35);   // '#'
     pos = pos + 1;
-    // Compute checksum of data portion (reply_buf[1..pos-2])
+
+    // Checksum of data portion (reply_buf[1 .. pos-2])
     let ck_sum = 0;
     let ci = 1;
     while ci < pos - 1 {
@@ -217,15 +213,10 @@ fn gdb_encode_reply(value) {
         ci += 1;
     }
     let ck = ck_sum - (ck_sum / 256) * 256;
-    // Write two hex digits
     let hi = ck / 16;
     let lo = ck - hi * 16;
-    fn nibble_to_hex(n) {
-        if n < 10 { return 48 + n; }
-        return 87 + n;   // 'a' - 10 + n
-    }
-    set_at(gs_reply_buf, pos,     nibble_to_hex(hi));
-    set_at(gs_reply_buf, pos + 1, nibble_to_hex(lo));
+    set_at(gs_reply_buf, pos,     gdb_nibble_to_hex(hi));
+    set_at(gs_reply_buf, pos + 1, gdb_nibble_to_hex(lo));
     set_at(gs_reply_len, 0, pos + 2);
     return pos + 2;
 }
@@ -264,17 +255,15 @@ fn gs_test() {
     gs_write_reg(0, 1000);
     gs_write_reg(1, 2000);
 
-    // Send READ_REG(0) → result=1000
     let r0 = gs_send_pkt(GS_CMD_READ_REG, 0);
     if r0 != 1000 { pass = 0; }
 
-    // Send STEP → halted=1
     gs_send_pkt(GS_CMD_STEP, 0);
-    let n_pkts  = gs_count();
-    let halted  = gs_is_halted();
-    let reg0    = gs_read_reg(0);
-    let reg1    = gs_read_reg(1);
-    let res0    = gs_get_result(0);
+    let n_pkts = gs_count();
+    let halted = gs_is_halted();
+    let reg0   = gs_read_reg(0);
+    let reg1   = gs_read_reg(1);
+    let res0   = gs_get_result(0);
 
     if n_pkts != 2  { pass = 0; }
     if halted != 1  { pass = 0; }
@@ -282,7 +271,7 @@ fn gs_test() {
     if reg1 != 2000 { pass = 0; }
     if res0 != 1000 { pass = 0; }
 
-    // Test gdb_checksum: data = [72, 101, 108] → sum=281 → 281 mod 256 = 25
+    // gdb_checksum: [72, 101, 108] → 281 mod 256 = 25
     let sample = array(3, 0);
     set_at(sample, 0, 72);
     set_at(sample, 1, 101);
@@ -290,24 +279,44 @@ fn gs_test() {
     let ck = gdb_checksum(sample, 3);
     if ck != 25 { pass = 0; }
 
-    // Test gdb_encode_reply: encode 42 → buf[0]='$' (36)
+    // gdb_encode_reply: '$' must be buf[0]
     gdb_encode_reply(42);
     let rlen = gs_get_reply_len();
     if gs_reply_buf[0] != 36 { pass = 0; }
-    if rlen < 4 { pass = 0; }   // at minimum: $ 4 2 # hi lo = 6 bytes
+    if rlen < 4 { pass = 0; }
 
-    // Test gdb_parse_packet: build packet for "c" (99) data with checksum 99
-    // Packet: $ c # 6 3   → 36 99 35 54 51
+    // gdb_hex_digit: '6'=54 → 6; 'c'=99 → 12
+    if gdb_hex_digit(54) != 6  { pass = 0; }
+    if gdb_hex_digit(99) != 12 { pass = 0; }
+
+    // gdb_nibble_to_hex: 6 → '6'=54; 12 → 'c'=99
+    if gdb_nibble_to_hex(6)  != 54 { pass = 0; }
+    if gdb_nibble_to_hex(12) != 99 { pass = 0; }
+
+    // gdb_parse_packet: '$' 'c' '#' '6' '3' → data='c'(99) ck=0x63=99 ✓
     let pkt = array(5, 0);
-    set_at(pkt, 0, 36);   // '$'
-    set_at(pkt, 1, 99);   // 'c'
-    set_at(pkt, 2, 35);   // '#'
-    set_at(pkt, 3, 54);   // '6'
-    set_at(pkt, 4, 51);   // '3'  → 0x63 = 99
+    set_at(pkt, 0, 36);  // '$'
+    set_at(pkt, 1, 99);  // 'c'
+    set_at(pkt, 2, 35);  // '#'
+    set_at(pkt, 3, 54);  // '6'
+    set_at(pkt, 4, 51);  // '3'  → 0x63 = 99
     let parse_result = gdb_parse_packet(pkt, 5);
     if parse_result != GS_PKT_OK { pass = 0; }
     let parsed_ck = gs_get_last_checksum();
-    if parsed_ck != 99 { pass = 0; }   // data byte 'c'=99; 99 mod 256 = 99
+    if parsed_ck != 99 { pass = 0; }
+
+    // First-$ search: second '$' must be ignored
+    let pkt2 = array(8, 0);
+    set_at(pkt2, 0, 36);  // '$' first
+    set_at(pkt2, 1, 99);  // 'c'
+    set_at(pkt2, 2, 36);  // '$' second (should be ignored)
+    set_at(pkt2, 3, 103); // 'g' (should be treated as data of first pkt, but # not found here)
+    set_at(pkt2, 4, 35);  // '#'
+    set_at(pkt2, 5, 54);  // '6'
+    set_at(pkt2, 6, 51);  // '3'  → data from pos 1 = [99,36,103]→sum=238→ck=0xEE, NOT 0x63 → BAD_CK
+    let parse2 = gdb_parse_packet(pkt2, 7);
+    // data = [99,36,103], sum=238, mod256=238; expected from '6'+'3' = 0x63=99 → mismatch → BAD_CK
+    if parse2 != GS_PKT_BAD_CK { pass = 0; }
 
     print("gs_test: r0=" + to_string(r0)
           + " n=" + to_string(n_pkts)
