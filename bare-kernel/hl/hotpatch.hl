@@ -1,0 +1,111 @@
+// hotpatch.hl -- Kernel Hot-Patching via Trampolines (Phase 6: 系统稳定化, iter 414)
+// Buffer: 0x1D50000
+// Runtime function replacement: hp_apply(orig_fid, repl_fid) installs a trampoline
+// hp_dispatch(func_id): returns replacement fid if patched, else original fid
+// HP_MAX_PATCHES=16; patches can be reverted individually
+
+let HP_MAX_PATCHES = 16;
+
+let hp_orig_fid  = array(16, 0);   // original function id
+let hp_repl_fid  = array(16, 0);   // replacement function id
+let hp_active    = array(16, 0);   // 1=patch applied
+let hp_n_patches = 0;
+let hp_total_dispatches = 0;
+
+fn hp_init() {
+    let i = 0;
+    while i < HP_MAX_PATCHES {
+        set_at(hp_orig_fid, i, 0);
+        set_at(hp_repl_fid, i, 0);
+        set_at(hp_active,   i, 0);
+        i += 1;
+    }
+    hp_n_patches        = 0;
+    hp_total_dispatches = 0;
+    return 0;
+}
+
+fn hp_apply(orig_fid, repl_fid) {
+    let id = hp_n_patches;
+    set_at(hp_orig_fid, id, orig_fid);
+    set_at(hp_repl_fid, id, repl_fid);
+    set_at(hp_active,   id, 1);
+    hp_n_patches += 1;
+    return id;
+}
+
+fn hp_revert(patch_id) {
+    set_at(hp_active, patch_id, 0);
+    return 0;
+}
+
+fn hp_dispatch(func_id) {
+    hp_total_dispatches += 1;
+    let i = 0;
+    while i < hp_n_patches {
+        if hp_active[i] == 1 {
+            if hp_orig_fid[i] == func_id {
+                return hp_repl_fid[i];
+            }
+        }
+        i += 1;
+    }
+    return func_id;
+}
+
+fn hp_get_repl(orig_fid) {
+    let i = 0;
+    while i < hp_n_patches {
+        if hp_active[i] == 1 {
+            if hp_orig_fid[i] == orig_fid {
+                return hp_repl_fid[i];
+            }
+        }
+        i += 1;
+    }
+    return orig_fid;
+}
+
+fn hp_get_n_patches()        { return hp_n_patches; }
+fn hp_get_total_dispatches() { return hp_total_dispatches; }
+
+fn hp_test() {
+    hp_init();
+
+    // Patch func 10 → 20, func 30 → 40
+    hp_apply(10, 20);
+    hp_apply(30, 40);
+
+    let d10  = hp_dispatch(10);   // 20 (patched)
+    let d30  = hp_dispatch(30);   // 40 (patched)
+    let d99  = hp_dispatch(99);   // 99 (not patched → passthrough)
+
+    // Revert patch 0 (func 10)
+    hp_revert(0);
+
+    let d10r = hp_dispatch(10);   // 10 (reverted)
+    let d30r = hp_dispatch(30);   // 40 (still active)
+
+    print("hp_test: d10=" + to_string(d10)
+          + " d30=" + to_string(d30)
+          + " d99=" + to_string(d99)
+          + " d10r=" + to_string(d10r)
+          + " d30r=" + to_string(d30r));
+
+    if d10 == 20 {
+        if d30 == 40 {
+            if d99 == 99 {
+                if d10r == 10 {
+                    if d30r == 40 {
+                        print("hp_test: PASS");
+                        return 1;
+                    }
+                }
+            }
+        }
+    }
+    print("hp_test: FAIL");
+    return 0;
+}
+
+print("hotpatch.hl loaded");

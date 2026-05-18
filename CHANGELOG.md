@@ -2,13 +2,39 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`466`（76 根目录 + 397 内核模块）
-- H-L 总行数：`~155,900`
-- 内核模块：`397`
-- Shell 命令：`1597`
-- 最近完成功能迭代：`411`（kprobe + memory_profiler + heap_checker）
+- `.hl` 文件：`469`（76 根目录 + 400 内核模块）
+- H-L 总行数：`~156,600`
+- 内核模块：`400`
+- Shell 命令：`1618`
+- 最近完成功能迭代：`414`（crash_reporter + core_dump + hotpatch）
 - 当前阶段：第六阶段·系统稳定化（Phase 6）
 - **Milestone M4 已达成**（iter 405，完整 ML 推理框架）
+
+## Iteration 414 — hotpatch.hl：内核热补丁
+
+- **`hotpatch.hl`**（Buffer: 0x1D50000）：HP_MAX_PATCHES=16
+  - `hp_apply(orig_fid, repl_fid)`：安装跳板，返回 patch_id
+  - `hp_revert(patch_id)`：撤销指定补丁
+  - `hp_dispatch(func_id)`：如有活跃补丁则返回替换 fid，否则返回原 fid（透传）
+  - `hp_get_total_dispatches()`：全局调度次数统计
+  - 测试：apply(10,20)+apply(30,40)→d10=20 d30=40 d99=99；revert(0)→d10r=10 d30r=40 → PASS
+
+## Iteration 413 — core_dump.hl：内核崩溃转储
+
+- **`core_dump.hl`**（Buffer: 0x1D40000）：CD_MAGIC=32581 (0x7F45)，简化 ELF core 格式
+  - 格式：HEADER(4) + REGS(8) + MEM_SNAPSHOT(16) = 28 words
+  - `cd_set_reg(idx, val)` / `cd_set_mem(idx, val)`：填充寄存器和内存快照
+  - `cd_dump()`：序列化到 cd_buf，返回 buf_len=28
+  - 测试：reg[0]=4096(RIP) reg[1]=32767(RSP) mem[0]=57005 → n=28 magic=32581 rip=4096 mem0=57005 → PASS
+
+## Iteration 412 — crash_reporter.hl：崩溃报告生成器
+
+- **`crash_reporter.hl`**（Buffer: 0x1D30000）：CR_MAX_STACK=8
+  - 故障类型：CR_GPF=0 / CR_PF=1 / CR_DIV=2 / CR_UD=3
+  - `cr_record(fault_type, fault_addr, rip, rsp)`：快照崩溃现场，递增 crash_count
+  - `cr_push_frame(addr)`：追加调用栈帧
+  - `cr_clear()`：重置当前报告（保留 crash_count）
+  - 测试：record(PF,4096,20480,28672)+frame(16384)+frame(12288) → ft=1 fa=4096 rip=20480 sd=2 f0=16384 → PASS
 
 ## Iteration 411 — heap_checker.hl：堆越界检测器
 

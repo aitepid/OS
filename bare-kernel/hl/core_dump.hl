@@ -1,0 +1,112 @@
+// core_dump.hl -- Kernel Crash Dump / ELF Core Simulator (Phase 6: 系统稳定化, iter 413)
+// Buffer: 0x1D40000
+// Simplified ELF core format: HEADER(4) + REGS(8) + MEM_SNAPSHOT(16) = 28 words
+// CD_MAGIC=32581 (0x7F45), CD_CLASS=2 (ELF64), CD_TYPE=4 (ET_CORE)
+// cd_dump(): serialize into cd_buf[], return buf_len
+
+let CD_MAGIC    = 32581;   // 0x7F45 (ELF magic prefix)
+let CD_CLASS    = 2;       // 64-bit ELF
+let CD_TYPE     = 4;       // ET_CORE
+let CD_N_REGS   = 8;
+let CD_MEM_SNAP = 16;
+
+let cd_regs     = array(8,   0);   // RIP RSP RBP RAX RBX RCX RDX RFLAGS
+let cd_mem      = array(64,  0);   // captured memory words
+let cd_buf      = array(128, 0);   // serialized output
+let cd_buf_len  = 0;
+let cd_n_dumps  = 0;
+
+fn cd_init() {
+    let i = 0;
+    while i < CD_N_REGS {
+        set_at(cd_regs, i, 0);
+        i += 1;
+    }
+    i = 0;
+    while i < 64 {
+        set_at(cd_mem, i, 0);
+        i += 1;
+    }
+    i = 0;
+    while i < 128 {
+        set_at(cd_buf, i, 0);
+        i += 1;
+    }
+    cd_buf_len = 0;
+    cd_n_dumps = 0;
+    return 0;
+}
+
+fn cd_set_reg(idx, val) { set_at(cd_regs, idx, val); return 0; }
+fn cd_set_mem(idx, val) { set_at(cd_mem,  idx, val); return 0; }
+
+fn cd_dump() {
+    // Header: [MAGIC, CLASS, TYPE, N_REGS]
+    set_at(cd_buf, 0, CD_MAGIC);
+    set_at(cd_buf, 1, CD_CLASS);
+    set_at(cd_buf, 2, CD_TYPE);
+    set_at(cd_buf, 3, CD_N_REGS);
+    let pos = 4;
+
+    // Register state
+    let i = 0;
+    while i < CD_N_REGS {
+        set_at(cd_buf, pos, cd_regs[i]);
+        pos += 1;
+        i += 1;
+    }
+
+    // Memory snapshot (first CD_MEM_SNAP words)
+    i = 0;
+    while i < CD_MEM_SNAP {
+        set_at(cd_buf, pos, cd_mem[i]);
+        pos += 1;
+        i += 1;
+    }
+
+    cd_buf_len = pos;
+    cd_n_dumps += 1;
+    return pos;
+}
+
+fn cd_get_buf_word(idx) { return cd_buf[idx]; }
+fn cd_get_buf_len()     { return cd_buf_len; }
+fn cd_get_n_dumps()     { return cd_n_dumps; }
+
+fn cd_test() {
+    cd_init();
+
+    // Set RIP=4096, RSP=32767
+    cd_set_reg(0, 4096);
+    cd_set_reg(1, 32767);
+
+    // Set first memory word to 0xDEAD=57005
+    cd_set_mem(0, 57005);
+
+    // Dump: header(4) + regs(8) + mem_snap(16) = 28 words
+    let n = cd_dump();
+
+    let magic = cd_get_buf_word(0);    // 32581
+    let rip   = cd_get_buf_word(4);    // 4096  (pos=4 = start of regs)
+    let mem0  = cd_get_buf_word(12);   // 57005 (pos=12 = start of mem snapshot)
+
+    print("cd_test: n=" + to_string(n)
+          + " magic=" + to_string(magic)
+          + " rip=" + to_string(rip)
+          + " mem0=" + to_string(mem0));
+
+    if n == 28 {
+        if magic == CD_MAGIC {
+            if rip == 4096 {
+                if mem0 == 57005 {
+                    print("cd_test: PASS");
+                    return 1;
+                }
+            }
+        }
+    }
+    print("cd_test: FAIL");
+    return 0;
+}
+
+print("core_dump.hl loaded");

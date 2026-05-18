@@ -1,0 +1,114 @@
+// crash_reporter.hl -- Crash Report Generator (Phase 6: 系统稳定化, iter 412)
+// Buffer: 0x1D30000
+// Captures fault type, fault address, register state, and stack trace
+// Fault types: CR_GPF=0, CR_PF=1, CR_DIV=2, CR_UD=3
+// cr_record(fault_type, fault_addr, rip, rsp): snapshot the crash
+// cr_push_frame(addr): append a stack frame to the trace
+
+let CR_MAX_STACK = 8;
+let CR_GPF = 0;
+let CR_PF  = 1;
+let CR_DIV = 2;
+let CR_UD  = 3;
+
+let cr_fault_type  = 0;
+let cr_fault_addr  = 0;
+let cr_rip         = 0;
+let cr_rsp         = 0;
+let cr_rbp         = 0;
+let cr_stack_trace = array(8, 0);
+let cr_stack_depth = 0;
+let cr_crash_count = 0;
+
+fn cr_init() {
+    let i = 0;
+    while i < CR_MAX_STACK {
+        set_at(cr_stack_trace, i, 0);
+        i += 1;
+    }
+    cr_fault_type  = 0;
+    cr_fault_addr  = 0;
+    cr_rip         = 0;
+    cr_rsp         = 0;
+    cr_rbp         = 0;
+    cr_stack_depth = 0;
+    cr_crash_count = 0;
+    return 0;
+}
+
+fn cr_record(fault_type, fault_addr, rip, rsp) {
+    cr_fault_type  = fault_type;
+    cr_fault_addr  = fault_addr;
+    cr_rip         = rip;
+    cr_rsp         = rsp;
+    cr_stack_depth = 0;
+    cr_crash_count += 1;
+    return 0;
+}
+
+fn cr_push_frame(addr) {
+    if cr_stack_depth < CR_MAX_STACK {
+        set_at(cr_stack_trace, cr_stack_depth, addr);
+        cr_stack_depth += 1;
+    }
+    return 0;
+}
+
+fn cr_get_fault_type()      { return cr_fault_type; }
+fn cr_get_fault_addr()      { return cr_fault_addr; }
+fn cr_get_rip()             { return cr_rip; }
+fn cr_get_rsp()             { return cr_rsp; }
+fn cr_get_stack_depth()     { return cr_stack_depth; }
+fn cr_get_stack_frame(idx)  { return cr_stack_trace[idx]; }
+fn cr_get_crash_count()     { return cr_crash_count; }
+
+fn cr_clear() {
+    let i = 0;
+    while i < CR_MAX_STACK { set_at(cr_stack_trace, i, 0); i += 1; }
+    cr_fault_type  = 0;
+    cr_fault_addr  = 0;
+    cr_rip         = 0;
+    cr_rsp         = 0;
+    cr_stack_depth = 0;
+    return 0;
+}
+
+fn cr_test() {
+    cr_init();
+
+    // Record a page fault at addr=4096, rip=20480, rsp=28672
+    cr_record(CR_PF, 4096, 20480, 28672);
+
+    // Push two stack frames
+    cr_push_frame(16384);   // frame 0
+    cr_push_frame(12288);   // frame 1
+
+    let ft  = cr_get_fault_type();       // 1 (CR_PF)
+    let fa  = cr_get_fault_addr();       // 4096
+    let rip = cr_get_rip();             // 20480
+    let sd  = cr_get_stack_depth();     // 2
+    let f0  = cr_get_stack_frame(0);    // 16384
+
+    print("cr_test: ft=" + to_string(ft)
+          + " fa=" + to_string(fa)
+          + " rip=" + to_string(rip)
+          + " sd=" + to_string(sd)
+          + " f0=" + to_string(f0));
+
+    if ft == CR_PF {
+        if fa == 4096 {
+            if rip == 20480 {
+                if sd == 2 {
+                    if f0 == 16384 {
+                        print("cr_test: PASS");
+                        return 1;
+                    }
+                }
+            }
+        }
+    }
+    print("cr_test: FAIL");
+    return 0;
+}
+
+print("crash_reporter.hl loaded");
