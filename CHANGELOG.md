@@ -2,11 +2,44 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`391`（76 根目录 + 322 内核模块）
-- H-L 总行数：`~115,900`
-- 内核模块：`322`
-- Shell 命令：`1071`
-- 最近完成功能迭代：`336`（quickselect + ntt + seg_merge）
+- `.hl` 文件：`394`（76 根目录 + 325 内核模块）
+- H-L 总行数：`~117,100`
+- 内核模块：`325`
+- Shell 命令：`1093`
+- 最近完成功能迭代：`339`（palindrome_dp + knuth_dp + bitset_ops）
+
+## Iteration 339 — bitset_ops.hl：固定位图（AND/OR/popcount）
+
+- **`bare-kernel/hl/bitset_ops.hl`** 新增（~110 行）
+  - 18 个 30-bit 字，覆盖 512 位（BTS_WBITS=30，BTS_WORDS=18）
+  - `bts_a[18]` / `bts_b[18]`：两个独立位图，所有变更操作针对 bts_a
+  - `bts_set(i)` / `bts_clear(i)` / `bts_get(i)` — 单位操作，幂次通过 `_bts_pw` 计算
+  - `_bts_xor_word(x,y)` — 逐位 XOR（无原生 XOR，位提取用除法取模替代）
+  - `_bts_and_word(x,y)` — `(x+y-xor)/2`；`_bts_or_word(x,y)` — `x+y-and`
+  - `bts_and_a()` / `bts_or_a()` — 字级 AND/OR 批处理
+  - `bts_count()` — 全图 popcount，逐字逐位统计
+  - 测试：a={0,3,7,100} count=4；AND b={3,7,100} → count=3；OR b={3,7,100,200} → count=5 PASS
+  - Buffer: 0x18A0000
+
+## Iteration 338 — knuth_dp.hl：Knuth DP 优化（最优合并石子）
+
+- **`bare-kernel/hl/knuth_dp.hl`** 新增（~80 行）
+  - KN_MAX=16，`kn_w[16]` 石子权重，`kn_s[17]` 前缀和
+  - `kn_dp[256]`（kn_dp[i*16+j]）/ `kn_opt[256]`（最优分割点）
+  - `kn_build(n)` — 按长度递推，Knuth 括号约束 opt[i][j-1]≤opt[i][j]≤opt[i+1][j]
+  - 时间复杂度 O(n²)（朴素 O(n³) 降维）
+  - `kn_cost()` — 返回 kn_dp[0][n-1] 最小合并总代价
+  - 测试：石子 [1,2,3,4] → 最优代价=19 PASS
+  - Buffer: 0x1890000
+
+## Iteration 337 — palindrome_dp.hl：回文划分最小切割 DP
+
+- **`bare-kernel/hl/palindrome_dp.hl`** 新增（~80 行）
+  - PL_MAX=32，`pl_s[32]` 整数序列，`pl_is[1024]`（pl_is[i*32+j]=1 iff [i,j] 回文）
+  - `pl_build(n)` — O(n²) 填表：长度 1/2 直接判断，长度≥3 扩展 → DP 求最小切割
+  - `pl_min_cuts()` — 返回 pl_dp[n-1]；`pl_pal(i,j)` — 回文谓词
+  - 测试：`aab`=[0,0,1] → 1 cut；`abcba`=[0,1,2,1,0] → 0 cuts PASS
+  - Buffer: 0x1880000
 
 ## Iteration 336 — seg_merge.hl：稀疏线段树合并
 

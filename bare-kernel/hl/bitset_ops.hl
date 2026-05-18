@@ -1,0 +1,149 @@
+// bitset_ops.hl -- Fixed 512-bit bitset with AND/OR/popcount (iter 339)
+// Buffer: 0x18A0000
+// 18 words * 30 bits = 540 bits, using bits 0-511.
+// bts_a[18], bts_b[18]: two bitsets. All ops target bts_a unless noted.
+// bts_set/clear/get operate on bts_a. bts_and_a: a &= b. bts_or_a: a |= b.
+
+let BTS_WBITS = 30;
+let BTS_WORDS = 18;
+
+let bts_a = array(18, 0);
+let bts_b = array(18, 0);
+
+fn bts_init() {
+    let i = 0;
+    while i < BTS_WORDS { set_at(bts_a, i, 0); set_at(bts_b, i, 0); i += 1; }
+    return 0;
+}
+
+fn _bts_pw(b) {
+    let pw = 1;
+    let i  = 0;
+    while i < b { pw = pw * 2; i += 1; }
+    return pw;
+}
+
+fn bts_set(i) {
+    let w   = i / BTS_WBITS;
+    let b   = i - w * BTS_WBITS;
+    let pw  = _bts_pw(b);
+    let cur = bts_a[w];
+    let has = cur / pw - (cur / (pw * 2)) * 2;
+    if has == 0 { set_at(bts_a, w, cur + pw); }
+    return 0;
+}
+
+fn bts_clear(i) {
+    let w   = i / BTS_WBITS;
+    let b   = i - w * BTS_WBITS;
+    let pw  = _bts_pw(b);
+    let cur = bts_a[w];
+    let has = cur / pw - (cur / (pw * 2)) * 2;
+    if has == 1 { set_at(bts_a, w, cur - pw); }
+    return 0;
+}
+
+fn bts_get(i) {
+    let w  = i / BTS_WBITS;
+    let b  = i - w * BTS_WBITS;
+    let pw = _bts_pw(b);
+    let cur = bts_a[w];
+    return cur / pw - (cur / (pw * 2)) * 2;
+}
+
+fn _bts_xor_word(x, y) {
+    let result = 0;
+    let pw = 1;
+    let i  = 0;
+    while i < BTS_WBITS {
+        let bx = x / pw - (x / (pw * 2)) * 2;
+        let by = y / pw - (y / (pw * 2)) * 2;
+        if bx != by { result = result + pw; }
+        pw = pw * 2;
+        i  += 1;
+    }
+    return result;
+}
+
+fn _bts_and_word(x, y) {
+    let xr = _bts_xor_word(x, y);
+    return (x + y - xr) / 2;
+}
+
+fn _bts_or_word(x, y) {
+    let a = _bts_and_word(x, y);
+    return x + y - a;
+}
+
+fn bts_and_a() {
+    let w = 0;
+    while w < BTS_WORDS {
+        set_at(bts_a, w, _bts_and_word(bts_a[w], bts_b[w]));
+        w += 1;
+    }
+    return 0;
+}
+
+fn bts_or_a() {
+    let w = 0;
+    while w < BTS_WORDS {
+        set_at(bts_a, w, _bts_or_word(bts_a[w], bts_b[w]));
+        w += 1;
+    }
+    return 0;
+}
+
+fn bts_count() {
+    let cnt = 0;
+    let w   = 0;
+    while w < BTS_WORDS {
+        let cur = bts_a[w];
+        let pw  = 1;
+        let i   = 0;
+        while i < BTS_WBITS {
+            cnt += cur / pw - (cur / (pw * 2)) * 2;
+            pw  = pw * 2;
+            i   += 1;
+        }
+        w += 1;
+    }
+    return cnt;
+}
+
+fn bts_run_test() {
+    let i = 0;
+    while i < BTS_WORDS { set_at(bts_a, i, 0); set_at(bts_b, i, 0); i += 1; }
+    // bts_a: bits 0,3,7,100
+    bts_set(0); bts_set(3); bts_set(7); bts_set(100);
+    let ca = bts_count();  // expect 4
+    // bts_b: bits 3,7,100 (same 3 bits that are also in a)
+    // bit 3 -> word 0, pos 3, pw=8
+    // bit 7 -> word 0, pos 7, pw=128
+    // bit 100 -> word=100/30=3, pos=100-90=10, pw=1024
+    set_at(bts_b, 0, 8 + 128);  // bits 3 and 7
+    set_at(bts_b, 3, 1024);      // bit 100
+    bts_and_a();
+    let ca_and = bts_count();  // expect 3 (bits 3,7,100; bit 0 removed)
+    // reset for OR test
+    i = 0; while i < BTS_WORDS { set_at(bts_a, i, 0); set_at(bts_b, i, 0); i += 1; }
+    bts_set(0); bts_set(3); bts_set(7); bts_set(100);
+    set_at(bts_b, 0, 8 + 128);   // bits 3,7
+    set_at(bts_b, 3, 1024);       // bit 100
+    // bit 200 -> word=200/30=6, pos=200-180=20, pw=2^20=1048576
+    set_at(bts_b, 6, 1048576);    // bit 200
+    bts_or_a();
+    let ca_or = bts_count();  // expect 5 (bits 0,3,7,100,200)
+    print("bts_run_test: count=" + to_string(ca) + " and=" + to_string(ca_and) + " or=" + to_string(ca_or));
+    if ca == 4 {
+        if ca_and == 3 {
+            if ca_or == 5 {
+                print("bts_run_test: PASS");
+                return 1;
+            }
+        }
+    }
+    print("bts_run_test: FAIL");
+    return 0;
+}
+
+print("bitset_ops.hl loaded");
