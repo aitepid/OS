@@ -151,30 +151,29 @@ fn usb_kbd_poll() {
     let mut key_idx = 2;
     while key_idx < 8 {
         let usage = mem_read_u8(USB_KBD_REPORT_BUF + key_idx);
-        if usage == 0 { key_idx = key_idx + 1; continue; }
-        if usage == 1 { key_idx = key_idx + 1; continue; }  // ErrorRollOver
-
-        // Check if this key was in previous report (ignore if already held)
-        let mut was_pressed = 0;
-        let mut j = 0;
-        while j < 6 {
-            if usb_kbd_last_keys[j] == usage {
-                was_pressed = 1;
-            }
-            j = j + 1;
-        }
-
-        if was_pressed == 0 {
-            // New key press - convert to ASCII
-            let ascii = _usb_kbd_usage_to_ascii(usage, shifted);
-            if ascii > 0 {
-                // Save current keys for next comparison
-                let mut k = 0;
-                while k < 6 {
-                    usb_kbd_last_keys[k] = mem_read_u8(USB_KBD_REPORT_BUF + 2 + k);
-                    k = k + 1;
+        if usage > 1 {
+            // Check if this key was in previous report (ignore if already held)
+            let mut was_pressed = 0;
+            let mut j = 0;
+            while j < 6 {
+                if usb_kbd_last_keys[j] == usage {
+                    was_pressed = 1;
                 }
-                return ascii;
+                j = j + 1;
+            }
+
+            if was_pressed == 0 {
+                // New key press - convert to ASCII
+                let ascii = _usb_kbd_usage_to_ascii(usage, shifted);
+                if ascii > 0 {
+                    // Save current keys for next comparison
+                    let mut k = 0;
+                    while k < 6 {
+                        usb_kbd_last_keys[k] = mem_read_u8(USB_KBD_REPORT_BUF + 2 + k);
+                        k = k + 1;
+                    }
+                    return ascii;
+                }
             }
         }
         key_idx = key_idx + 1;

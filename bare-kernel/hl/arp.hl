@@ -5,10 +5,10 @@
 // Design:
 //   32 cache entries, 16-bucket hash table (separate chaining)
 //   Hash function: packed_ip % 16
-//   arp_lookup/arp_update: O(1) average
+//   arp_table_lookup/arp_table_update: O(1) average
 //
 // Public API (all signatures preserved):
-//   arp_lookup / arp_update / arp_build_request / arp_handle_packet / arp_resolve
+//   arp_table_lookup / arp_table_update / arp_build_request / arp_handle_packet / arp_resolve
 
 let ARP_HTYPE_ETHERNET = 1;
 let ARP_PTYPE_IPV4 = 2048;
@@ -107,13 +107,13 @@ fn _arp_ht_remove(slot) {
 // Public API
 // ============================================================
 
-fn arp_lookup(ip) {
+fn arp_table_lookup(ip) {
     let slot = _arp_ht_find(ip);
     if slot >= 0 { return _arp_mac[slot]; }
     return [0, 0, 0, 0, 0, 0];
 }
 
-fn arp_update(ip, mac) {
+fn arp_table_update(ip, mac) {
     // Check if already cached
     let slot = _arp_ht_find(ip);
     if slot >= 0 {
@@ -171,12 +171,12 @@ fn arp_handle_packet(data) {
     let op = data[6] * 256 + data[7];
     let sender_mac = [data[8], data[9], data[10], data[11], data[12], data[13]];
     let sender_ip = data[14] * 16777216 + data[15] * 65536 + data[16] * 256 + data[17];
-    arp_update(sender_ip, sender_mac);
+    arp_table_update(sender_ip, sender_mac);
     return 0;
 }
 
 fn arp_resolve(target_ip) {
-    let mac = arp_lookup(target_ip);
+    let mac = arp_table_lookup(target_ip);
     if mac[0] != 0 { return mac; }
     return [0, 0, 0, 0, 0, 0];
 }

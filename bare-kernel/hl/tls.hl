@@ -14,10 +14,10 @@
 //   8 = CLOSED
 //
 // Public API (preserved + new):
-//   sha256_hash / hmac_sha256 / hkdf_extract / hkdf_expand (crypto)
+//   tls12_sha256_hash / hmac_sha256 / hkdf_extract / hkdf_expand (crypto)
 //   x25519_keygen / x25519_shared_secret (key exchange)
-//   tls_connect / tls_send / tls_recv / tls_close / https_get
-//   tls_session_state / tls_status (new)
+//   tls_connect / tls12_send / tls12_recv / tls12_close / https_get
+//   tls12_session_state / tls_status (new)
 
 let TLS_VERSION_13 = 771;     // 0x0303 (record layer) + supported_versions ext = 0x0304
 let TLS_CONTENT_HANDSHAKE = 22;
@@ -52,14 +52,14 @@ let SHA256_K = [
     2428436474, 2756734187, 3204031479, 3329325298
 ];
 
-fn sha256_init() {
+fn tls12_sha256_init() {
     // Return initial state (8 * u32)
     return [SHA256_H[0], SHA256_H[1], SHA256_H[2], SHA256_H[3],
             SHA256_H[4], SHA256_H[5], SHA256_H[6], SHA256_H[7]];
 }
 
 // Simplified: full implementation would process 64-byte blocks
-fn sha256_hash(data) {
+fn tls12_sha256_hash(data) {
     // Pad message
     let mut msg = [];
     let mut i = 0;
@@ -154,7 +154,7 @@ fn hmac_sha256(key, message) {
     let mut k = [];
     let mut i = 0;
     // If key > 64 bytes, hash it
-    if len(key) > 64 { k = sha256_hash(key); }
+    if len(key) > 64 { k = tls12_sha256_hash(key); }
     else { while i < len(key) { push(k, key[i]); i = i + 1; } }
     // Pad to 64 bytes
     while len(k) < 64 { push(k, 0); }
@@ -172,14 +172,14 @@ fn hmac_sha256(key, message) {
     while i < len(ipad) { push(inner_data, ipad[i]); i = i + 1; }
     i = 0;
     while i < len(message) { push(inner_data, message[i]); i = i + 1; }
-    let inner = sha256_hash(inner_data);
+    let inner = tls12_sha256_hash(inner_data);
     // outer = sha256(opad || inner)
     let mut outer_data = [];
     i = 0;
     while i < len(opad) { push(outer_data, opad[i]); i = i + 1; }
     i = 0;
     while i < len(inner) { push(outer_data, inner[i]); i = i + 1; }
-    return sha256_hash(outer_data);
+    return tls12_sha256_hash(outer_data);
 }
 
 // === HKDF (RFC 5869) ===
@@ -226,7 +226,7 @@ fn x25519_keygen() {
     set_at(private_key, 31, (private_key[31] & 127) | 64);
     // Public key = scalar_mult(private, basepoint=9)
     // Simplified: return hash-derived public key (not cryptographically valid)
-    let public_key = sha256_hash(private_key);
+    let public_key = tls12_sha256_hash(private_key);
     return [private_key, public_key];
 }
 
@@ -301,7 +301,7 @@ fn _tls_alloc() {
     return 0 - 1;
 }
 
-fn tls_client_hello() {
+fn tls12_client_hello() {
     let mut hello = [];
     push(hello, TLS_CONTENT_HANDSHAKE);
     push(hello, 3); push(hello, 3);
@@ -346,7 +346,7 @@ fn tls_connect(tcp_fd) {
     set_at(_tls_pub_key, sess, keys[1]);
 
     // STATE 1: Send ClientHello
-    let hello = tls_client_hello();
+    let hello = tls12_client_hello();
     tcp_send(tcp_fd, hello, len(hello));
     set_at(_tls_state, sess, TLS_ST_CH_SENT);
 
@@ -393,7 +393,7 @@ fn tls_connect(tcp_fd) {
     set_at(_tls_app_key_rd, sess, app_key_rd);
 
     // STATE 6: Send client Finished
-    let verify_data = hmac_sha256(hs_secret, sha256_hash([]));
+    let verify_data = hmac_sha256(hs_secret, tls12_sha256_hash([]));
     let mut cfin = [];
     push(cfin, TLS_CONTENT_HANDSHAKE);
     push(cfin, 3); push(cfin, 3);
@@ -416,7 +416,7 @@ fn tls_connect(tcp_fd) {
 // Application data send/recv (simplified AES-GCM wrapper)
 // ============================================================
 
-fn tls_send(session, data) {
+fn tls12_send(session, data) {
     if session < 0 { return 0; }
     if _tls_state[session] != TLS_ST_ESTABLISHED { return 0; }
     let tcp_fd = _tls_tcp_fd[session];
@@ -447,7 +447,7 @@ fn tls_send(session, data) {
     return len(data);
 }
 
-fn tls_recv(session) {
+fn tls12_recv(session) {
     if session < 0 { return []; }
     if _tls_state[session] != TLS_ST_ESTABLISHED { return []; }
     let tcp_fd = _tls_tcp_fd[session];
@@ -474,7 +474,7 @@ fn tls_recv(session) {
     return plain;
 }
 
-fn tls_close(session) {
+fn tls12_close(session) {
     if session < 0 { return 0; }
     set_at(_tls_state, session, TLS_ST_CLOSED);
     // Send close_notify alert
@@ -490,7 +490,7 @@ fn tls_close(session) {
     return 0;
 }
 
-fn tls_session_state(session) {
+fn tls12_session_state(session) {
     if session < 0 { return TLS_ST_CLOSED; }
     return _tls_state[session];
 }
@@ -527,10 +527,10 @@ fn https_get(host, path) {
     let req_str = "GET " + path + " HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n\r\n";
     let mut ri = 0;
     while ri < len(req_str) { push(req, req_str[ri]); ri = ri + 1; }
-    tls_send(session, req);
+    tls12_send(session, req);
     // 5. Receive response
-    let resp = tls_recv(session);
-    tls_close(session);
+    let resp = tls12_recv(session);
+    tls12_close(session);
     return resp;
 }
 

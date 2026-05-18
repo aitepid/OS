@@ -110,37 +110,42 @@ fn nf_match(chain, proto, src_ip, dst_ip, src_port, dst_port, pkt_len) {
     while i < nf_rule_count {
         if nf_active[i] == 1 {
             if nf_chain[i] == chain {
+                let mut skip = 0;
                 // Protocol match (0 = any)
-                if nf_proto[i] == NF_PROTO_ANY { }
-                else { if nf_proto[i] != proto { i = i + 1; continue; } }
+                if nf_proto[i] != NF_PROTO_ANY {
+                    if nf_proto[i] != proto { skip = 1; }
+                }
                 // Source IP match (with mask)
-                if nf_src_mask[i] != 0 {
-                    if (src_ip & nf_src_mask[i]) != (nf_src_ip[i] & nf_src_mask[i]) {
-                        i = i + 1; continue;
+                if skip == 0 {
+                    if nf_src_mask[i] != 0 {
+                        if (src_ip & nf_src_mask[i]) != (nf_src_ip[i] & nf_src_mask[i]) {
+                            skip = 1;
+                        }
                     }
                 }
                 // Dest IP match
-                if nf_dst_mask[i] != 0 {
-                    if (dst_ip & nf_dst_mask[i]) != (nf_dst_ip[i] & nf_dst_mask[i]) {
-                        i = i + 1; continue;
+                if skip == 0 {
+                    if nf_dst_mask[i] != 0 {
+                        if (dst_ip & nf_dst_mask[i]) != (nf_dst_ip[i] & nf_dst_mask[i]) {
+                            skip = 1;
+                        }
                     }
                 }
                 // Port range match
-                if src_port < nf_sport_min[i] { i = i + 1; continue; }
-                if src_port > nf_sport_max[i] { i = i + 1; continue; }
-                if dst_port < nf_dport_min[i] { i = i + 1; continue; }
-                if dst_port > nf_dport_max[i] { i = i + 1; continue; }
+                if skip == 0 { if src_port < nf_sport_min[i] { skip = 1; } }
+                if skip == 0 { if src_port > nf_sport_max[i] { skip = 1; } }
+                if skip == 0 { if dst_port < nf_dport_min[i] { skip = 1; } }
+                if skip == 0 { if dst_port > nf_dport_max[i] { skip = 1; } }
 
-                // Match found
-                nf_match_count[i] = nf_match_count[i] + 1;
-                nf_byte_count[i] = nf_byte_count[i] + pkt_len;
-
-                if nf_action[i] == NF_LOG {
-                    // klog(LOG_INFO, 0, "netfilter: LOG rule " + to_string(i));
-                    i = i + 1;
-                    continue; // LOG doesn't terminate, continue matching
+                // Rule matched
+                if skip == 0 {
+                    nf_match_count[i] = nf_match_count[i] + 1;
+                    nf_byte_count[i] = nf_byte_count[i] + pkt_len;
+                    if nf_action[i] != NF_LOG {
+                        return nf_action[i];
+                    }
+                    // LOG action: fall through to next rule
                 }
-                return nf_action[i];
             }
         }
         i = i + 1;
