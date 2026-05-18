@@ -1,0 +1,267 @@
+// lsm_memtable.hl -- LSM-Tree MemTable: sorted write buffer + SSTable flush (iter 378)
+// Buffer: 0x1B10000
+// LSM_MAXKEYS=64 entries, sorted by key (insertion-sort order maintenance)
+// Operations: put(k,v) O(n), get(k) binary search O(log n), flush() freeze + sort
+// Compaction: merge two sorted runs (merge two immutable MemTables)
+// SSTable simulation: sorted array of (key, val, seq) -- sequence number for versioning
+
+let LSM_MAXKEYS = 64;
+
+// Active MemTable (mutable write buffer)
+let lsm_keys   = array(64, 0);
+let lsm_vals   = array(64, 0);
+let lsm_seqs   = array(64, 0);    // sequence number per entry
+let lsm_n      = 0;
+let lsm_seq    = 0;               // global monotone sequence counter
+let lsm_frozen = 0;               // 1 = immutable (after flush)
+
+// Immutable SSTable (Level-0 simulated)
+let LSM_SS_MAX = 64;
+let ss_keys = array(64, 0);
+let ss_vals = array(64, 0);
+let ss_seqs = array(64, 0);
+let ss_n    = 0;
+
+// Compaction output (merges two runs)
+let LSM_COMP_MAX = 128;
+let comp_keys = array(128, 0);
+let comp_vals = array(128, 0);
+let comp_n    = 0;
+
+fn lsm_init() {
+    lsm_n      = 0;
+    lsm_seq    = 0;
+    lsm_frozen = 0;
+    ss_n       = 0;
+    comp_n     = 0;
+    return 0;
+}
+
+fn _lsm_bsearch(k) {
+    // Binary search in sorted lsm_keys[0..lsm_n-1]
+    // Returns index of first key >= k
+    let lo = 0;
+    let hi = lsm_n;
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if lsm_keys[mid] < k {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo;
+}
+
+fn lsm_put(k, v) {
+    if lsm_frozen == 1 { return 0 - 1; }
+
+    lsm_seq += 1;
+
+    // Check if key already exists (update in place)
+    let pos = _lsm_bsearch(k);
+    if pos < lsm_n {
+        if lsm_keys[pos] == k {
+            // Update: newer seq wins
+            set_at(lsm_vals, pos, v);
+            set_at(lsm_seqs, pos, lsm_seq);
+            return 0;
+        }
+    }
+
+    // Insert at pos, shift right
+    if lsm_n >= LSM_MAXKEYS { return 0 - 1; }   // full
+
+    let i = lsm_n;
+    while i > pos {
+        set_at(lsm_keys, i, lsm_keys[i - 1]);
+        set_at(lsm_vals, i, lsm_vals[i - 1]);
+        set_at(lsm_seqs, i, lsm_seqs[i - 1]);
+        i -= 1;
+    }
+    set_at(lsm_keys, pos, k);
+    set_at(lsm_vals, pos, v);
+    set_at(lsm_seqs, pos, lsm_seq);
+    lsm_n += 1;
+    return 0;
+}
+
+fn lsm_get(k) {
+    // Binary search in active memtable
+    let pos = _lsm_bsearch(k);
+    if pos < lsm_n {
+        if lsm_keys[pos] == k {
+            return lsm_vals[pos];
+        }
+    }
+    return 0 - 1;
+}
+
+fn lsm_flush() {
+    // Freeze active memtable -> copy to SSTable (sorted, already)
+    lsm_frozen = 1;
+    let i = 0;
+    while i < lsm_n {
+        set_at(ss_keys, ss_n + i, lsm_keys[i]);
+        set_at(ss_vals, ss_n + i, lsm_vals[i]);
+        set_at(ss_seqs, ss_n + i, lsm_seqs[i]);
+        i += 1;
+    }
+    ss_n += lsm_n;
+    return lsm_n;
+}
+
+fn lsm_ss_get(k) {
+    // Binary search in SSTable
+    let lo = 0;
+    let hi = ss_n;
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if ss_keys[mid] < k {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    if lo < ss_n {
+        if ss_keys[lo] == k {
+            return ss_vals[lo];
+        }
+    }
+    return 0 - 1;
+}
+
+fn lsm_compact(a_keys, a_vals, a_n, b_keys, b_vals, b_n) {
+    // Merge two sorted runs a[] and b[] into comp_*
+    // Later sequence number wins on duplicate keys
+    // Since we can't pass arrays, we use global a=lsm_keys/lsm_n and b=ss_keys/ss_n
+    // (Parameters are ignored; this uses global state — H-L no-array-param constraint)
+    comp_n = 0;
+    let ai = 0;
+    let bi = 0;
+    let go = 1;
+    while go == 1 {
+        if ai >= lsm_n {
+            if bi >= ss_n {
+                go = 0;
+            }
+        }
+        if go == 1 {
+            let take_a = 0;
+            if ai >= lsm_n {
+                take_a = 0;
+            } else {
+                if bi >= ss_n {
+                    take_a = 1;
+                } else {
+                    if lsm_keys[ai] <= ss_keys[bi] {
+                        take_a = 1;
+                    }
+                }
+            }
+            if take_a == 1 {
+                // Check if same key in b; if so, pick latest seq
+                if bi < ss_n {
+                    if lsm_keys[ai] == ss_keys[bi] {
+                        // Both have same key: pick higher seq
+                        let wk = lsm_keys[ai];
+                        let wv = 0;
+                        if lsm_seqs[ai] >= ss_seqs[bi] {
+                            wv = lsm_vals[ai];
+                        } else {
+                            wv = ss_vals[bi];
+                        }
+                        if comp_n < LSM_COMP_MAX {
+                            set_at(comp_keys, comp_n, wk);
+                            set_at(comp_vals, comp_n, wv);
+                            comp_n += 1;
+                        }
+                        ai += 1;
+                        bi += 1;
+                    } else {
+                        if comp_n < LSM_COMP_MAX {
+                            set_at(comp_keys, comp_n, lsm_keys[ai]);
+                            set_at(comp_vals, comp_n, lsm_vals[ai]);
+                            comp_n += 1;
+                        }
+                        ai += 1;
+                    }
+                } else {
+                    if comp_n < LSM_COMP_MAX {
+                        set_at(comp_keys, comp_n, lsm_keys[ai]);
+                        set_at(comp_vals, comp_n, lsm_vals[ai]);
+                        comp_n += 1;
+                    }
+                    ai += 1;
+                }
+            } else {
+                if comp_n < LSM_COMP_MAX {
+                    set_at(comp_keys, comp_n, ss_keys[bi]);
+                    set_at(comp_vals, comp_n, ss_vals[bi]);
+                    comp_n += 1;
+                }
+                bi += 1;
+            }
+        }
+    }
+    return comp_n;
+}
+
+fn lsm_size()     { return lsm_n; }
+fn lsm_ss_size()  { return ss_n; }
+fn lsm_seq_num()  { return lsm_seq; }
+
+fn lsm_test() {
+    lsm_init();
+
+    // Write 6 keys
+    lsm_put(10, 100);
+    lsm_put(30, 300);
+    lsm_put(20, 200);
+    lsm_put(50, 500);
+    lsm_put(40, 400);
+    lsm_put(10, 101);   // update key 10
+
+    let g10 = lsm_get(10);   // should be 101 (updated)
+    let g30 = lsm_get(30);
+    let gms = lsm_get(99);   // miss
+
+    // Flush to SSTable
+    let flushed = lsm_flush();
+
+    // ss_get should find values
+    let sg20 = lsm_ss_get(20);
+    let sg10 = lsm_ss_get(10);
+
+    print("lsm_test: get10=" + to_string(g10) + " get30=" + to_string(g30) + " miss=" + to_string(gms));
+    print("lsm_test: flushed=" + to_string(flushed) + " ss_get20=" + to_string(sg20) + " ss_get10=" + to_string(sg10));
+    print("lsm_test: seq=" + to_string(lsm_seq) + " frozen=" + to_string(lsm_frozen));
+
+    // Test compaction: create second memtable data and merge
+    // Reinit active, add new keys, compact active + ss
+    lsm_frozen = 0;
+    lsm_n = 0;
+    lsm_put(10, 999);  // overwrite key 10 with higher seq
+    lsm_put(60, 600);
+    let cn = lsm_compact(lsm_keys, lsm_vals, lsm_n, ss_keys, ss_vals, ss_n);
+    print("lsm_test: compacted=" + to_string(cn) + " comp_keys[0]=" + to_string(comp_keys[0]));
+
+    if g10 == 101 {
+        if g30 == 300 {
+            if gms == (0 - 1) {
+                if flushed == 5 {
+                    if sg20 == 200 {
+                        if cn >= 5 {
+                            print("lsm_test: PASS");
+                            return 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    print("lsm_test: FAIL");
+    return 0;
+}
+
+print("lsm_memtable.hl loaded");

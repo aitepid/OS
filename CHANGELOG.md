@@ -2,12 +2,41 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`430`（76 根目录 + 361 内核模块）
-- H-L 总行数：`~135,000`
-- 内核模块：`361`
-- Shell 命令：`1345`
-- 最近完成功能迭代：`375`（dwarf + perf_counter + jit_stub）
-- **Milestone M2 达成**（第二阶段·调试信息与性能，自宿主编译器成熟）
+- `.hl` 文件：`433`（76 根目录 + 364 内核模块）
+- H-L 总行数：`~139,500`
+- 内核模块：`364`
+- Shell 命令：`1366`
+- 最近完成功能迭代：`378`（btree + btree_plus + lsm_memtable）
+- **Milestone M2 已达成**（iter 375）；当前进行第三阶段·存储引擎
+
+## Iteration 378 — lsm_memtable.hl：LSM MemTable 排序写缓冲
+
+- **`lsm_memtable.hl`**（Buffer: 0x1B10000）：LSM_MAXKEYS=64
+  - `lsm_put(k,v)`：二分定位插入保持有序，同键更新序号最大者胜
+  - `lsm_get(k)`：二分查找 O(log n)
+  - `lsm_flush()`：冻结 MemTable，追加至 SSTable 数组（已有序）
+  - `lsm_ss_get(k)`：在不可变 SSTable 中二分查找
+  - `lsm_compact(a,b,...)`：归并两个有序 run，序列号冲突取大者
+  - 测试：6 次写入（含一次覆盖）→ flush=5；ssget=200；compacted≥5 → PASS
+
+## Iteration 377 — btree_plus.hl：B+ 树（区间查询）
+
+- **`btree_plus.hl`**（Buffer: 0x1B00000）：BTP_T=2，BTP_MAXNODES=64
+  - 与 B-Tree 的核心区别：所有 (k,v) 只存于叶节点，内部节点仅做路由
+  - 叶节点通过 `btp_next[]` 链表连接，支持顺序遍历
+  - `_btp_split_leaf`：叶分裂时更新链表指针，推 copy 键至父节点
+  - `_btp_split_internal`：内部节点分裂，推 median 至父节点（不保留）
+  - `btp_range(lo, hi)`：沿叶链表收集 [lo,hi] 范围内所有键值对
+  - 测试：插入 1..10 → range[3,7]=5 项；point search 正确 → PASS
+
+## Iteration 376 — btree.hl：B-Tree（读优化键值存储）
+
+- **`btree.hl`**（Buffer: 0x1AF0000）：BT_T=2，BT_MAXNODES=64（2-3-4 树）
+  - `bt_insert(k,v)`：分裂下行（split-on-the-way-down），根满时升高树
+  - `bt_search(nd, k)`：递归二分定位，O(log_T N)
+  - `_bt_split_child(par, ci)`：CLRS 标准分裂——中位键升至父节点
+  - `bt_height()`：沿最左子路径计算树高
+  - 测试：插入 1..12 → search(5)=50，search(12)=120，miss=-1 → PASS
 
 ## Iteration 375 — jit_stub.hl：JIT 编译桩
 

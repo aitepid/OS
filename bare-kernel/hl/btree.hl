@@ -1,0 +1,225 @@
+// btree.hl -- B-Tree (min degree T=2, order 4) read-optimized key-value store (iter 376)
+// Buffer: 0x1AF0000
+// BT_T=2: each node holds 1..3 keys and 2..4 children (2-3-4 tree)
+// BT_MAXNODES=64 nodes; flat parallel arrays (no structs)
+// CLRS B-Tree split-on-the-way-down insertion, O(log_T N) search
+
+let BT_T       = 2;
+let BT_MAXKEYS = 3;    // 2*T - 1
+let BT_MAXCH   = 4;    // 2*T
+let BT_MAXN    = 64;
+
+// Parallel arrays: index by (node_id * stride + slot)
+let bt_nkeys  = array(64,  0);    // keys per node
+let bt_isleaf = array(64,  0);    // 1 = leaf
+let bt_keys   = array(192, 0);    // bt_keys[node*3 + i]
+let bt_vals   = array(192, 0);    // bt_vals[node*3 + i]
+let bt_ch     = array(256, 0);    // bt_ch  [node*4 + i]
+
+let bt_root  = 0;
+let bt_nnodes = 0;
+let bt_size   = 0;
+
+fn bt_init() {
+    bt_root   = 0;
+    bt_nnodes = 0;
+    bt_size   = 0;
+    return 0;
+}
+
+fn _bt_alloc() {
+    let id = bt_nnodes;
+    set_at(bt_nkeys,  id, 0);
+    set_at(bt_isleaf, id, 0);
+    bt_nnodes += 1;
+    return id;
+}
+
+fn bt_search(nd, k) {
+    // Returns value for key k in subtree rooted at nd, or -1 (0-1) if absent
+    let n = bt_nkeys[nd];
+    let i = 0;
+    let go = 1;
+    while go == 1 {
+        if i < n {
+            if bt_keys[nd * BT_MAXKEYS + i] < k {
+                i += 1;
+            } else {
+                go = 0;
+            }
+        } else {
+            go = 0;
+        }
+    }
+    // bt_keys[i] >= k (or i == n)
+    if i < n {
+        if bt_keys[nd * BT_MAXKEYS + i] == k {
+            return bt_vals[nd * BT_MAXKEYS + i];
+        }
+    }
+    if bt_isleaf[nd] == 1 { return 0 - 1; }
+    return bt_search(bt_ch[nd * BT_MAXCH + i], k);
+}
+
+fn _bt_split_child(par, ci) {
+    // Split full child (bt_ch[par*4+ci]) and push median up to par
+    let fc = bt_ch[par * BT_MAXCH + ci];
+    let nn = _bt_alloc();
+    set_at(bt_isleaf, nn, bt_isleaf[fc]);
+
+    // nn gets keys [T..2T-2] from fc (indices T..2T-2, i.e., T-1 keys)
+    let j = 0;
+    while j < BT_T - 1 {
+        set_at(bt_keys, nn * BT_MAXKEYS + j, bt_keys[fc * BT_MAXKEYS + BT_T + j]);
+        set_at(bt_vals, nn * BT_MAXKEYS + j, bt_vals[fc * BT_MAXKEYS + BT_T + j]);
+        j += 1;
+    }
+    // nn gets children [T..2T-1] from fc if internal
+    if bt_isleaf[fc] == 0 {
+        j = 0;
+        while j < BT_T {
+            set_at(bt_ch, nn * BT_MAXCH + j, bt_ch[fc * BT_MAXCH + BT_T + j]);
+            j += 1;
+        }
+    }
+    set_at(bt_nkeys, nn, BT_T - 1);
+    set_at(bt_nkeys, fc, BT_T - 1);
+
+    // Median key from fc[T-1] goes into par at position ci
+    let med_k = bt_keys[fc * BT_MAXKEYS + BT_T - 1];
+    let med_v = bt_vals[fc * BT_MAXKEYS + BT_T - 1];
+    let pn = bt_nkeys[par];
+
+    // Shift par's keys/children right
+    j = pn;
+    while j > ci {
+        set_at(bt_keys, par * BT_MAXKEYS + j,     bt_keys[par * BT_MAXKEYS + j - 1]);
+        set_at(bt_vals, par * BT_MAXKEYS + j,     bt_vals[par * BT_MAXKEYS + j - 1]);
+        set_at(bt_ch,   par * BT_MAXCH   + j + 1, bt_ch  [par * BT_MAXCH   + j]);
+        j -= 1;
+    }
+    set_at(bt_keys, par * BT_MAXKEYS + ci,     med_k);
+    set_at(bt_vals, par * BT_MAXKEYS + ci,     med_v);
+    set_at(bt_ch,   par * BT_MAXCH   + ci + 1, nn);
+    set_at(bt_nkeys, par, pn + 1);
+    return 0;
+}
+
+fn _bt_ins_nf(nd, k, v) {
+    // Insert (k,v) into non-full subtree rooted at nd
+    let i = bt_nkeys[nd] - 1;
+    if bt_isleaf[nd] == 1 {
+        // Shift right, find slot
+        let go = 1;
+        while go == 1 {
+            if i >= 0 {
+                if bt_keys[nd * BT_MAXKEYS + i] > k {
+                    set_at(bt_keys, nd * BT_MAXKEYS + i + 1, bt_keys[nd * BT_MAXKEYS + i]);
+                    set_at(bt_vals, nd * BT_MAXKEYS + i + 1, bt_vals[nd * BT_MAXKEYS + i]);
+                    i -= 1;
+                } else {
+                    go = 0;
+                }
+            } else {
+                go = 0;
+            }
+        }
+        set_at(bt_keys,  nd * BT_MAXKEYS + (i + 1), k);
+        set_at(bt_vals,  nd * BT_MAXKEYS + (i + 1), v);
+        set_at(bt_nkeys, nd, bt_nkeys[nd] + 1);
+    } else {
+        // Find child index
+        let go = 1;
+        while go == 1 {
+            if i >= 0 {
+                if bt_keys[nd * BT_MAXKEYS + i] > k {
+                    i -= 1;
+                } else {
+                    go = 0;
+                }
+            } else {
+                go = 0;
+            }
+        }
+        i += 1;
+        let c = bt_ch[nd * BT_MAXCH + i];
+        if bt_nkeys[c] == BT_MAXKEYS {
+            _bt_split_child(nd, i);
+            if k > bt_keys[nd * BT_MAXKEYS + i] { i += 1; }
+        }
+        _bt_ins_nf(bt_ch[nd * BT_MAXCH + i], k, v);
+    }
+    return 0;
+}
+
+fn bt_insert(k, v) {
+    if bt_nnodes == 0 {
+        let r = _bt_alloc();
+        set_at(bt_isleaf, r, 1);
+        bt_root = r;
+    }
+    let r = bt_root;
+    if bt_nkeys[r] == BT_MAXKEYS {
+        let nr = _bt_alloc();
+        set_at(bt_isleaf, nr, 0);
+        set_at(bt_nkeys,  nr, 0);
+        set_at(bt_ch, nr * BT_MAXCH + 0, r);
+        bt_root = nr;
+        _bt_split_child(nr, 0);
+        _bt_ins_nf(nr, k, v);
+    } else {
+        _bt_ins_nf(r, k, v);
+    }
+    bt_size += 1;
+    return 0;
+}
+
+fn bt_height() {
+    // Approximate height by following first child to leftmost leaf
+    let h = 1;
+    let nd = bt_root;
+    let go = 1;
+    while go == 1 {
+        if bt_isleaf[nd] == 1 {
+            go = 0;
+        } else {
+            nd = bt_ch[nd * BT_MAXCH + 0];
+            h += 1;
+        }
+    }
+    return h;
+}
+
+fn bt_size_get()  { return bt_size; }
+fn bt_node_count(){ return bt_nnodes; }
+
+fn bt_test() {
+    bt_init();
+    // Insert 12 keys to force root splits
+    let i = 1;
+    while i <= 12 {
+        bt_insert(i, i * 10);
+        i += 1;
+    }
+    let v5   = bt_search(bt_root, 5);
+    let v12  = bt_search(bt_root, 12);
+    let v1   = bt_search(bt_root, 1);
+    let miss = bt_search(bt_root, 99);
+    let h    = bt_height();
+    print("bt_test: v5=" + to_string(v5) + " v12=" + to_string(v12) + " v1=" + to_string(v1));
+    print("bt_test: miss=" + to_string(miss) + " nodes=" + to_string(bt_nnodes) + " h=" + to_string(h));
+    if v5 == 50 {
+        if v12 == 120 {
+            if v1 == 10 {
+                if miss == (0 - 1) {
+                    print("bt_test: PASS");
+                    return 1;
+                }
+            }
+        }
+    }
+    print("bt_test: FAIL");
+    return 0;
+}
+
+print("btree.hl loaded");

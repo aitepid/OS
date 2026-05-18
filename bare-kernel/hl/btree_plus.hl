@@ -1,0 +1,316 @@
+// btree_plus.hl -- B+ Tree (T=2, order 4): leaf-linked list + range queries (iter 377)
+// Buffer: 0x1B00000
+// Key difference from B-Tree: all (k,v) pairs stored in leaf nodes only
+//   Internal nodes hold keys for routing; leaves chained via btp_next[]
+// BTP_MAXNODES=64; operations: insert, point search, range query [lo, hi]
+// Range query: find leftmost leaf >= lo, walk btp_next chain until key > hi
+
+let BTP_T       = 2;
+let BTP_MAXKEYS = 3;   // 2*T - 1
+let BTP_MAXCH   = 4;   // 2*T
+let BTP_MAXN    = 64;
+
+// Node fields
+let btp_nkeys  = array(64,  0);
+let btp_isleaf = array(64,  0);
+let btp_keys   = array(192, 0);   // 64 * 3
+let btp_vals   = array(192, 0);   // 64 * 3 (leaf nodes only)
+let btp_ch     = array(256, 0);   // 64 * 4 (internal nodes)
+let btp_next   = array(64,  0);   // next leaf node id (0 = no next; 0 also = NULL sentinel)
+
+let btp_root       = 0;
+let btp_nnodes     = 0;
+let btp_size       = 0;
+let btp_first_leaf = 0;   // leftmost leaf id
+
+// Range query output (up to 32 results)
+let BTP_RQ_MAX  = 32;
+let btp_rq_keys = array(32, 0);
+let btp_rq_vals = array(32, 0);
+let btp_rq_n    = 0;
+
+// Sentinel: use node id 0 as NULL (so valid nodes start at 1)
+let BTP_NULL = 0;
+
+fn btp_init() {
+    btp_root       = BTP_NULL;
+    btp_nnodes     = 1;   // 0 is reserved as NULL
+    btp_size       = 0;
+    btp_first_leaf = BTP_NULL;
+    btp_rq_n       = 0;
+    return 0;
+}
+
+fn _btp_alloc(is_leaf) {
+    let id = btp_nnodes;
+    set_at(btp_nkeys,  id, 0);
+    set_at(btp_isleaf, id, is_leaf);
+    set_at(btp_next,   id, BTP_NULL);
+    btp_nnodes += 1;
+    return id;
+}
+
+fn btp_search(nd, k) {
+    // Returns value for key k, or -1 if not found
+    let n = btp_nkeys[nd];
+    let i = 0;
+    let go = 1;
+    while go == 1 {
+        if i < n {
+            if btp_keys[nd * BTP_MAXKEYS + i] < k {
+                i += 1;
+            } else {
+                go = 0;
+            }
+        } else {
+            go = 0;
+        }
+    }
+    if btp_isleaf[nd] == 1 {
+        // Exact match at position i
+        if i < n {
+            if btp_keys[nd * BTP_MAXKEYS + i] == k {
+                return btp_vals[nd * BTP_MAXKEYS + i];
+            }
+        }
+        return 0 - 1;
+    }
+    // Internal: descend child i
+    return btp_search(btp_ch[nd * BTP_MAXCH + i], k);
+}
+
+fn _btp_split_leaf(par, ci) {
+    // Split full leaf child btp_ch[par,ci]; push copy of median key up to par
+    let fc = btp_ch[par * BTP_MAXCH + ci];
+    let nn = _btp_alloc(1);   // new leaf
+
+    // nn gets upper half: keys/vals [T..2T-2] from fc
+    let j = 0;
+    while j < BTP_T - 1 {
+        set_at(btp_keys, nn * BTP_MAXKEYS + j, btp_keys[fc * BTP_MAXKEYS + BTP_T + j]);
+        set_at(btp_vals, nn * BTP_MAXKEYS + j, btp_vals[fc * BTP_MAXKEYS + BTP_T + j]);
+        j += 1;
+    }
+    // fc keeps lower half: T keys (indices 0..T-1)
+    set_at(btp_nkeys, nn, BTP_T - 1);
+    set_at(btp_nkeys, fc, BTP_T);
+
+    // Link leaves: fc -> nn -> fc.next
+    set_at(btp_next, nn, btp_next[fc]);
+    set_at(btp_next, fc, nn);
+
+    // Push copy of nn's first key to parent
+    let push_k = btp_keys[nn * BTP_MAXKEYS + 0];
+
+    // Shift par's keys/children right from ci
+    let pn = btp_nkeys[par];
+    j = pn;
+    while j > ci {
+        set_at(btp_keys, par * BTP_MAXKEYS + j,     btp_keys[par * BTP_MAXKEYS + j - 1]);
+        set_at(btp_ch,   par * BTP_MAXCH   + j + 1, btp_ch  [par * BTP_MAXCH   + j]);
+        j -= 1;
+    }
+    set_at(btp_keys, par * BTP_MAXKEYS + ci,     push_k);
+    set_at(btp_ch,   par * BTP_MAXCH   + ci + 1, nn);
+    set_at(btp_nkeys, par, pn + 1);
+    return 0;
+}
+
+fn _btp_split_internal(par, ci) {
+    // Split full internal child; median goes up (not copied)
+    let fc = btp_ch[par * BTP_MAXCH + ci];
+    let nn = _btp_alloc(0);
+
+    // nn gets keys [T..2T-2] from fc
+    let j = 0;
+    while j < BTP_T - 1 {
+        set_at(btp_keys, nn * BTP_MAXKEYS + j, btp_keys[fc * BTP_MAXKEYS + BTP_T + j]);
+        j += 1;
+    }
+    // nn gets children [T..2T-1] from fc
+    j = 0;
+    while j < BTP_T {
+        set_at(btp_ch, nn * BTP_MAXCH + j, btp_ch[fc * BTP_MAXCH + BTP_T + j]);
+        j += 1;
+    }
+    let med_k = btp_keys[fc * BTP_MAXKEYS + BTP_T - 1];
+    set_at(btp_nkeys, nn, BTP_T - 1);
+    set_at(btp_nkeys, fc, BTP_T - 1);
+
+    // Push median to parent
+    let pn = btp_nkeys[par];
+    j = pn;
+    while j > ci {
+        set_at(btp_keys, par * BTP_MAXKEYS + j,     btp_keys[par * BTP_MAXKEYS + j - 1]);
+        set_at(btp_ch,   par * BTP_MAXCH   + j + 1, btp_ch  [par * BTP_MAXCH   + j]);
+        j -= 1;
+    }
+    set_at(btp_keys, par * BTP_MAXKEYS + ci,     med_k);
+    set_at(btp_ch,   par * BTP_MAXCH   + ci + 1, nn);
+    set_at(btp_nkeys, par, pn + 1);
+    return 0;
+}
+
+fn _btp_ins_nf(nd, k, v) {
+    // Insert (k,v) into non-full subtree
+    let i = 0;
+    let n = btp_nkeys[nd];
+    let go = 1;
+    while go == 1 {
+        if i < n {
+            if btp_keys[nd * BTP_MAXKEYS + i] < k {
+                i += 1;
+            } else {
+                go = 0;
+            }
+        } else {
+            go = 0;
+        }
+    }
+    if btp_isleaf[nd] == 1 {
+        // Insert at position i, shift right
+        let j = n;
+        while j > i {
+            set_at(btp_keys, nd * BTP_MAXKEYS + j, btp_keys[nd * BTP_MAXKEYS + j - 1]);
+            set_at(btp_vals, nd * BTP_MAXKEYS + j, btp_vals[nd * BTP_MAXKEYS + j - 1]);
+            j -= 1;
+        }
+        set_at(btp_keys,  nd * BTP_MAXKEYS + i, k);
+        set_at(btp_vals,  nd * BTP_MAXKEYS + i, v);
+        set_at(btp_nkeys, nd, n + 1);
+    } else {
+        let c = btp_ch[nd * BTP_MAXCH + i];
+        if btp_nkeys[c] == BTP_MAXKEYS {
+            if btp_isleaf[c] == 1 {
+                _btp_split_leaf(nd, i);
+            } else {
+                _btp_split_internal(nd, i);
+            }
+            // Re-check which child after split
+            if k >= btp_keys[nd * BTP_MAXKEYS + i] { i += 1; }
+        }
+        _btp_ins_nf(btp_ch[nd * BTP_MAXCH + i], k, v);
+    }
+    return 0;
+}
+
+fn btp_insert(k, v) {
+    if btp_root == BTP_NULL {
+        let leaf = _btp_alloc(1);
+        btp_root       = leaf;
+        btp_first_leaf = leaf;
+    }
+    let r = btp_root;
+    if btp_nkeys[r] == BTP_MAXKEYS {
+        let nr = _btp_alloc(0);
+        set_at(btp_nkeys, nr, 0);
+        set_at(btp_ch, nr * BTP_MAXCH + 0, r);
+        btp_root = nr;
+        if btp_isleaf[r] == 1 {
+            _btp_split_leaf(nr, 0);
+        } else {
+            _btp_split_internal(nr, 0);
+        }
+        _btp_ins_nf(nr, k, v);
+    } else {
+        _btp_ins_nf(r, k, v);
+    }
+    btp_size += 1;
+    return 0;
+}
+
+fn btp_range(lo, hi) {
+    // Collect (k,v) pairs where lo <= k <= hi into btp_rq_*
+    btp_rq_n = 0;
+    if btp_root == BTP_NULL { return 0; }
+
+    // Find leftmost leaf with key >= lo
+    let nd = btp_root;
+    let go = 1;
+    while go == 1 {
+        if btp_isleaf[nd] == 1 {
+            go = 0;
+        } else {
+            let n = btp_nkeys[nd];
+            let i = 0;
+            let go2 = 1;
+            while go2 == 1 {
+                if i < n {
+                    if btp_keys[nd * BTP_MAXKEYS + i] < lo {
+                        i += 1;
+                    } else {
+                        go2 = 0;
+                    }
+                } else {
+                    go2 = 0;
+                }
+            }
+            nd = btp_ch[nd * BTP_MAXCH + i];
+        }
+    }
+
+    // Walk leaf chain
+    let go3 = 1;
+    while go3 == 1 {
+        if nd == BTP_NULL {
+            go3 = 0;
+        } else {
+            let n = btp_nkeys[nd];
+            let i = 0;
+            while i < n {
+                let kk = btp_keys[nd * BTP_MAXKEYS + i];
+                if kk > hi { go3 = 0; }
+                if go3 == 1 {
+                    if kk >= lo {
+                        if btp_rq_n < BTP_RQ_MAX {
+                            set_at(btp_rq_keys, btp_rq_n, kk);
+                            set_at(btp_rq_vals, btp_rq_n, btp_vals[nd * BTP_MAXKEYS + i]);
+                            btp_rq_n += 1;
+                        }
+                    }
+                }
+                i += 1;
+            }
+            if go3 == 1 {
+                nd = btp_next[nd];
+            }
+        }
+    }
+    return btp_rq_n;
+}
+
+fn btp_size_get()  { return btp_size; }
+fn btp_node_count(){ return btp_nnodes - 1; }
+
+fn btp_test() {
+    btp_init();
+    // Insert 10 pairs
+    let i = 1;
+    while i <= 10 {
+        btp_insert(i, i * 100);
+        i += 1;
+    }
+    let v5   = btp_search(btp_root, 5);
+    let v10  = btp_search(btp_root, 10);
+    let miss = btp_search(btp_root, 11);
+
+    // Range query [3, 7] should return 5 items
+    let rc   = btp_range(3, 7);
+
+    print("btp_test: v5=" + to_string(v5) + " v10=" + to_string(v10) + " miss=" + to_string(miss));
+    print("btp_test: range[3,7]=" + to_string(rc) + " size=" + to_string(btp_size));
+    if v5 == 500 {
+        if v10 == 1000 {
+            if miss == (0 - 1) {
+                if rc == 5 {
+                    print("btp_test: PASS");
+                    return 1;
+                }
+            }
+        }
+    }
+    print("btp_test: FAIL");
+    return 0;
+}
+
+print("btree_plus.hl loaded");
