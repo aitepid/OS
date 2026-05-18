@@ -112,14 +112,14 @@ fn wasm_jit_init() {
     set_at(wj_total_compiled,  0, 0);
     set_at(wj_total_hot_calls, 0, 0);
     let i = 0;
-    {
-        if i >= WJ_MAX_FUNCS { return 0; }
+    while i < WJ_MAX_FUNCS {
         set_at(wj_call_count, i, 0);
         set_at(wj_state,      i, WJ_STATE_COLD);
         set_at(wj_stub_addr,  i, 0);
         set_at(wj_stub_bytes, i, 0);
-        set_at(i, 0, i + 1);
+        i = i + 1;
     }
+    return 0;
 }
 
 fn wasm_jit_test() {
@@ -128,40 +128,40 @@ fn wasm_jit_test() {
 
     wj_register(0);
     wj_register(1);
-    if wj_func_count != 2 { set_at(pass, 0, 0); }
+    if wj_func_count != 2 { pass = 0; }
 
     // func 0: call 3 times -> still COLD (threshold=4)
     wj_tick(0);
     wj_tick(0);
     wj_tick(0);
-    if wj_is_hot(0) != 0 { set_at(pass, 0, 0); }
+    if wj_is_hot(0) != 0 { pass = 0; }
 
     // 4th call -> HOT, JIT compiled
     wj_tick(0);
-    if wj_is_hot(0) != 1 { set_at(pass, 0, 0); }
+    if wj_is_hot(0) != 1 { pass = 0; }
 
     let stub = wj_get_stub_addr(0);
     let expected_stub = WJ_CODE_BUF_BASE;   // func_id=0 -> base + 0*256
-    if stub != expected_stub { set_at(pass, 0, 0); }
+    if stub != expected_stub { pass = 0; }
 
     let sbytes = wj_get_stub_bytes(0);
-    if sbytes != 6 { set_at(pass, 0, 0); }
+    if sbytes != 6 { pass = 0; }
 
-    if wj_get_total_compiled() != 1 { set_at(pass, 0, 0); }
+    if wj_get_total_compiled() != 1 { pass = 0; }
 
     // 5th call -> already HOT, counts as hot call
     wj_tick(0);
-    if wj_get_total_hot_calls() != 1 { set_at(pass, 0, 0); }
+    if wj_get_total_hot_calls() != 1 { pass = 0; }
 
     // func 1 stays COLD
     wj_tick(1);
-    if wj_is_hot(1) != 0 { set_at(pass, 0, 0); }
+    if wj_is_hot(1) != 0 { pass = 0; }
 
     // state checks
     let s0 = wj_get_state(0);
     let s1 = wj_get_state(1);
-    if s0 != WJ_STATE_HOT  { set_at(pass, 0, 0); }
-    if s1 != WJ_STATE_COLD { set_at(pass, 0, 0); }
+    if s0 != WJ_STATE_HOT  { pass = 0; }
+    if s1 != WJ_STATE_COLD { pass = 0; }
 
     if pass == 1 { print("wasm_jit_test PASS"); }
     if pass == 0 { print("wasm_jit_test FAIL"); }

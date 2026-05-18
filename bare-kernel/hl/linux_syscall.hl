@@ -87,17 +87,18 @@ fn ls_syscall(sysno, arg0, arg1) {
     }
 
     if sysno == LS_SYS_MUNMAP {
-        let i = 0;
-        {
-            if i >= ls_map_count { set_at(i, 0, ls_map_count); }
-            if i < ls_map_count {
+        let i    = 0;
+        let done = 0;
+        while i < ls_map_count {
+            if done == 0 {
                 if ls_map_addr[i] == arg0 {
                     set_at(ls_map_used, i, 0);
-                    set_at(result, 0, 0);
-                    set_at(i, 0, ls_map_count);
+                    result = 0;
+                    done = 1;
                 }
-                if ls_map_addr[i] != arg0 { set_at(i, 0, i + 1); }
+                if done == 0 { i = i + 1; }
             }
+            if done == 1 { i = ls_map_count; }
         }
     }
 
@@ -139,11 +140,11 @@ fn ls_get_map_count()     { return ls_map_count; }
 fn ls_active_map_count() {
     let cnt = 0;
     let i   = 0;
-    {
-        if i >= ls_map_count { return cnt; }
-        if ls_map_used[i] == 1 { set_at(cnt, 0, cnt + 1); }
-        set_at(i, 0, i + 1);
+    while i < ls_map_count {
+        if ls_map_used[i] == 1 { cnt = cnt + 1; }
+        i = i + 1;
     }
+    return cnt;
 }
 
 fn linux_syscall_init() {
@@ -162,29 +163,29 @@ fn linux_syscall_test() {
     // read + write
     ls_syscall(LS_SYS_READ,  0, 512);
     ls_syscall(LS_SYS_WRITE, 1, 256);
-    if ls_get_total_reads()  != 1 { set_at(pass, 0, 0); }
-    if ls_get_total_writes() != 1 { set_at(pass, 0, 0); }
+    if ls_get_total_reads()  != 1 { pass = 0; }
+    if ls_get_total_writes() != 1 { pass = 0; }
 
     // mmap
     let mapped = ls_syscall(LS_SYS_MMAP, 0, 4096);
-    if mapped != 0x400000 { set_at(pass, 0, 0); }
-    if ls_get_map_count() != 1 { set_at(pass, 0, 0); }
+    if mapped != 0x400000 { pass = 0; }
+    if ls_get_map_count() != 1 { pass = 0; }
 
     // munmap
     ls_syscall(LS_SYS_MUNMAP, mapped, 4096);
     let active = ls_active_map_count();
-    if active != 0 { set_at(pass, 0, 0); }
+    if active != 0 { pass = 0; }
 
     // brk
     let brk1 = ls_syscall(LS_SYS_BRK, 0x500000, 0);
-    if brk1 != 0x500000 { set_at(pass, 0, 0); }
+    if brk1 != 0x500000 { pass = 0; }
 
     // exit
     ls_syscall(LS_SYS_EXIT, 42, 0);
-    if ls_get_exit_code() != 42 { set_at(pass, 0, 0); }
+    if ls_get_exit_code() != 42 { pass = 0; }
 
     let total_calls = ls_get_call_count();
-    if total_calls != 6 { set_at(pass, 0, 0); }
+    if total_calls != 6 { pass = 0; }
 
     if pass == 1 { print("linux_syscall_test PASS"); }
     if pass == 0 { print("linux_syscall_test FAIL"); }

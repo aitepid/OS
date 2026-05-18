@@ -121,65 +121,66 @@ fn wr_call(func_id) {
     let len       = wr_func_len[func_id];
     let i         = 0;
     let done      = 0;
-    {
-        if done == 1 { return wr_stack_top(); }
-        if i >= len  { return wr_stack_top(); }
+    while i < len {
+        if done == 0 {
+            let op  = wr_func_body[body_base + i];
+            let arg = wr_func_args[body_base + i];
 
-        let op  = wr_func_body[body_base + i];
-        let arg = wr_func_args[body_base + i];
+            if op == WR_OP_CONST {
+                wr_stack_push(arg);
+            }
+            if op == WR_OP_ADD {
+                let b = wr_stack_pop();
+                let a = wr_stack_pop();
+                wr_stack_push(a + b);
+            }
+            if op == WR_OP_SUB {
+                let b = wr_stack_pop();
+                let a = wr_stack_pop();
+                wr_stack_push(a - b);
+            }
+            if op == WR_OP_MUL {
+                let b = wr_stack_pop();
+                let a = wr_stack_pop();
+                wr_stack_push(a * b);
+            }
+            if op == WR_OP_EQ {
+                let b = wr_stack_pop();
+                let a = wr_stack_pop();
+                if a == b { wr_stack_push(1); }
+                if a != b { wr_stack_push(0); }
+            }
+            if op == WR_OP_LT {
+                let b = wr_stack_pop();
+                let a = wr_stack_pop();
+                if a < b { wr_stack_push(1); }
+                if a >= b { wr_stack_push(0); }
+            }
+            if op == WR_OP_GT {
+                let b = wr_stack_pop();
+                let a = wr_stack_pop();
+                if a > b { wr_stack_push(1); }
+                if a <= b { wr_stack_push(0); }
+            }
+            if op == WR_OP_DROP {
+                wr_stack_pop();
+            }
+            if op == WR_OP_RETURN {
+                done = 1;
+            }
+            if op == WR_OP_LOCAL_GET {
+                if arg < WR_MAX_LOCALS { wr_stack_push(wr_locals[arg]); }
+            }
+            if op == WR_OP_LOCAL_SET {
+                let lsv = wr_stack_pop();
+                if arg < WR_MAX_LOCALS { set_at(wr_locals, arg, lsv); }
+            }
 
-        if op == WR_OP_CONST {
-            wr_stack_push(arg);
+            if done == 0 { i = i + 1; }
+            if done == 1 { i = len; }
         }
-        if op == WR_OP_ADD {
-            let b = wr_stack_pop();
-            let a = wr_stack_pop();
-            wr_stack_push(a + b);
-        }
-        if op == WR_OP_SUB {
-            let b = wr_stack_pop();
-            let a = wr_stack_pop();
-            wr_stack_push(a - b);
-        }
-        if op == WR_OP_MUL {
-            let b = wr_stack_pop();
-            let a = wr_stack_pop();
-            wr_stack_push(a * b);
-        }
-        if op == WR_OP_EQ {
-            let b = wr_stack_pop();
-            let a = wr_stack_pop();
-            if a == b { wr_stack_push(1); }
-            if a != b { wr_stack_push(0); }
-        }
-        if op == WR_OP_LT {
-            let b = wr_stack_pop();
-            let a = wr_stack_pop();
-            if a < b { wr_stack_push(1); }
-            if a >= b { wr_stack_push(0); }
-        }
-        if op == WR_OP_GT {
-            let b = wr_stack_pop();
-            let a = wr_stack_pop();
-            if a > b { wr_stack_push(1); }
-            if a <= b { wr_stack_push(0); }
-        }
-        if op == WR_OP_DROP {
-            wr_stack_pop();
-        }
-        if op == WR_OP_RETURN {
-            set_at(done, 0, 1);
-        }
-        if op == WR_OP_LOCAL_GET {
-            if arg < WR_MAX_LOCALS { wr_stack_push(wr_locals[arg]); }
-        }
-        if op == WR_OP_LOCAL_SET {
-            let lsv = wr_stack_pop();
-            if arg < WR_MAX_LOCALS { set_at(wr_locals, arg, lsv); }
-        }
-
-        set_at(i, 0, i + 1);
     }
+    return wr_stack_top();
 }
 
 fn wr_get_call_count(func_id) {
@@ -195,13 +196,13 @@ fn wasm_runtime_init() {
     set_at(wr_sp,          0, 0);
     set_at(wr_total_calls, 0, 0);
     let i = 0;
-    {
-        if i >= WR_MAX_FUNCS { return 0; }
+    while i < WR_MAX_FUNCS {
         set_at(wr_func_len,    i, 0);
         set_at(wr_func_nlocal, i, 0);
         set_at(wr_call_count,  i, 0);
-        set_at(i, 0, i + 1);
+        i = i + 1;
     }
+    return 0;
 }
 
 fn wasm_runtime_test() {
@@ -216,7 +217,7 @@ fn wasm_runtime_test() {
     wr_emit(0, WR_OP_RETURN, 0);
 
     let r0 = wr_call(0);
-    if r0 != 30 { set_at(pass, 0, 0); }
+    if r0 != 30 { pass = 0; }
 
     // func 1: i32.const 7 + i32.const 3 + i32.mul + return  => 21
     wr_define_func(1);
@@ -226,7 +227,7 @@ fn wasm_runtime_test() {
     wr_emit(1, WR_OP_RETURN, 0);
 
     let r1 = wr_call(1);
-    if r1 != 21 { set_at(pass, 0, 0); }
+    if r1 != 21 { pass = 0; }
 
     // func 2: i32.const 5 + i32.const 5 + i32.eq + return  => 1
     wr_define_func(2);
@@ -236,18 +237,18 @@ fn wasm_runtime_test() {
     wr_emit(2, WR_OP_RETURN, 0);
 
     let r2 = wr_call(2);
-    if r2 != 1 { set_at(pass, 0, 0); }
+    if r2 != 1 { pass = 0; }
 
     // call counts
     wr_call(0);
     let cc0 = wr_get_call_count(0);
-    if cc0 != 2 { set_at(pass, 0, 0); }
+    if cc0 != 2 { pass = 0; }
 
     let total = wr_get_total_calls();
-    if total != 4 { set_at(pass, 0, 0); }
+    if total != 4 { pass = 0; }
 
     let fc = wr_get_func_count();
-    if fc != 3 { set_at(pass, 0, 0); }
+    if fc != 3 { pass = 0; }
 
     if pass == 1 { print("wasm_runtime_test PASS"); }
     if pass == 0 { print("wasm_runtime_test FAIL"); }
