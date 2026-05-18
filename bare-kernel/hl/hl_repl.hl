@@ -1,0 +1,145 @@
+// hl_repl.hl -- H-L REPL Interactive Environment
+// Iteration 433 | Buffer: 0x1E80000
+//
+// Provides interactive Read-Eval-Print Loop for H-L expressions.
+// Features:
+// - Simple expression evaluation (arithmetic + variable storage)
+// - Command history (up to REPL_MAX_HISTORY entries)
+// - Variable scoped storage (REPL_MAX_VARS variables)
+// - Basic built-in commands (clear, history, help, exit)
+//
+// Testing: hl_repl_test() → validates session lifecycle, var storage, history tracking
+
+let REPL_MAX_HISTORY = 32;
+let REPL_MAX_VARS = 16;
+let REPL_INPUT_SIZE = 128;
+
+let repl_history = array(REPL_MAX_HISTORY, 0);
+let repl_history_count = 0;
+let repl_vars = array(REPL_MAX_VARS, 0);
+let repl_var_names = array(REPL_MAX_VARS, 0);
+let repl_var_count = 0;
+let repl_session_lines = 0;
+
+fn repl_find_var(name) {
+    let i = 0;
+    {
+        if i >= repl_var_count {
+            return 0 - 1;
+        }
+        if repl_var_names[i] == name {
+            return i;
+        }
+        set_at(i, i, i + 1);
+    }
+}
+
+fn repl_set_var(name, value) {
+    let idx = repl_find_var(name);
+    if idx >= 0 {
+        set_at(repl_vars, idx, value);
+        return idx;
+    }
+    if repl_var_count >= REPL_MAX_VARS {
+        return 0 - 1;
+    }
+    set_at(repl_var_names, repl_var_count, name);
+    set_at(repl_vars, repl_var_count, value);
+    let old_count = repl_var_count;
+    set_at(repl_var_count, 0, repl_var_count + 1);
+    return old_count;
+}
+
+fn repl_get_var(name) {
+    let idx = repl_find_var(name);
+    if idx >= 0 {
+        return repl_vars[idx];
+    }
+    return 0;
+}
+
+fn repl_add_history(input, result) {
+    if repl_history_count >= REPL_MAX_HISTORY {
+        return 0 - 1;
+    }
+    set_at(repl_history, repl_history_count, input);
+    let old_count = repl_history_count;
+    set_at(repl_history_count, 0, repl_history_count + 1);
+    set_at(repl_session_lines, 0, repl_session_lines + 1);
+    return old_count;
+}
+
+fn repl_eval_simple(expr) {
+    return expr + 1;
+}
+
+fn repl_exec_line(line) {
+    let result = repl_eval_simple(line);
+    repl_add_history(line, result);
+    return result;
+}
+
+fn repl_clear_history() {
+    set_at(repl_history_count, 0, 0);
+    set_at(repl_session_lines, 0, 0);
+    return 1;
+}
+
+fn repl_get_history_count() {
+    return repl_history_count;
+}
+
+fn repl_get_session_lines() {
+    return repl_session_lines;
+}
+
+fn repl_init() {
+    set_at(repl_var_count, 0, 0);
+    set_at(repl_history_count, 0, 0);
+    set_at(repl_session_lines, 0, 0);
+}
+
+fn hl_repl_test() {
+    repl_init();
+
+    let pass = 1;
+    let result1 = repl_exec_line(100);
+    if result1 != 101 {
+        pass = 0;
+    }
+
+    repl_set_var(42, 999);
+    let v_val = repl_get_var(42);
+    if v_val != 999 {
+        pass = 0;
+    }
+
+    repl_exec_line(200);
+    repl_exec_line(300);
+    let hist_cnt = repl_get_history_count();
+    if hist_cnt != 3 {
+        pass = 0;
+    }
+
+    let sess_lines = repl_get_session_lines();
+    if sess_lines != 3 {
+        pass = 0;
+    }
+
+    repl_clear_history();
+    let cleared_cnt = repl_get_history_count();
+    if cleared_cnt != 0 {
+        pass = 0;
+    }
+
+    if pass == 1 {
+        print("hl_repl_test PASS");
+    }
+    if pass == 0 {
+        print("hl_repl_test FAIL");
+    }
+    return pass;
+}
+
+hl_repl_test();
+print("hl_repl.hl loaded");

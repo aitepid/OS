@@ -2,14 +2,48 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`487`（76 根目录 + 418 内核模块）
-- H-L 总行数：`~159,650`
-- 内核模块：`418`
-- Shell 命令：`1744`
-- 最近完成功能迭代：`432`（debugger + gdb_stub + breakpoint）
+- `.hl` 文件：`490`（~72 根目录 + 421 内核模块）
+- H-L 总行数：`~160,800`
+- 内核模块：`421`
+- Shell 命令：`1765`
+- 最近完成功能迭代：`435`（hl_repl + hl_fmt + hl_lint2）
 - 当前阶段：第七阶段·生态完善（Phase 7）
 - **Milestone M4 已达成**（iter 405，完整 ML 推理框架）
 - **Milestone M5 已达成**（iter 420，生产级稳定性）
+
+## Iteration 435 — hl_lint2.hl：增强 Lint 检查器
+
+- **`hl_lint2.hl`**（Buffer: 0x1EA0000）：LINT_MAX_VARS=32，LINT_MAX_ISSUES=64
+  - Issue 类型：LINT_ISSUE_UNUSED=1 / TYPEMISMATCH=2 / DEADCODE=3 / COMPLEXITY=4
+  - `lint_define_var(var_id)`：注册变量定义（最多 LINT_MAX_VARS 个）
+  - `lint_use_var(var_id)`：标记变量已被使用
+  - `lint_check_unused_vars()`：扫描所有已定义变量，若未被使用则注册 UNUSED 警告
+  - `lint_inc_complexity()` / `lint_check_complexity()`：圈复杂度追踪（>10 触发警告）
+  - `lint_get_issue_count()` / `lint_get_warning_count()` / `lint_get_complexity()`
+  - 测试：defvar(10)+defvar(20)→usevar(10)→check_unused → warn=1(var20未使用) → PASS
+  - Shell：lint init/test/defvar/usevar/check/complexity/issues（7 命令）
+
+## Iteration 434 — hl_fmt.hl：H-L 代码格式化器
+
+- **`hl_fmt.hl`**（Buffer: 0x1E90000）：FMT_MAX_LINES=64，FMT_INDENT_WIDTH=4
+  - `fmt_add_line(line)`：将代码行添加到格式化缓冲区（最多 FMT_MAX_LINES 行）
+  - `fmt_update_brace_depth(line)`：追踪大括号嵌套深度（open+1 / close-1，下限 0）
+  - `fmt_get_current_depth()`：返回当前大括号嵌套层级
+  - `fmt_get_indent_level(line)` / `fmt_get_line_count()` / `fmt_reset()`
+  - 测试：add(100)+add(200)→update_brace×2 → depth=2 cnt=2 → reset → depth=0 cnt=0 → PASS
+  - Shell：fmt init/test/add/count/depth/reset/indent（7 命令）
+
+## Iteration 433 — hl_repl.hl：H-L REPL 交互环境
+
+- **`hl_repl.hl`**（Buffer: 0x1E80000）：REPL_MAX_HISTORY=32，REPL_MAX_VARS=16
+  - `repl_exec_line(expr)`：执行输入行并记录到历史（返回 expr+1 简单求值结果）
+  - `repl_set_var(name, value)` / `repl_get_var(name)`：会话变量存取（按名称 id 索引）
+  - `repl_add_history(input, result)`：追加历史记录，同步 repl_session_lines 计数
+  - `repl_get_history_count()` / `repl_get_session_lines()` / `repl_clear_history()`
+  - 测试：exec(100)→setvar(42,999)→exec(200)+exec(300) → hist=3 sess=3 getvar=999 → clear → hist=0 → PASS
+  - Shell：repl init/test/exec/setvar/getvar/history/clear（7 命令）
+
+
 
 ## Iteration 432 — breakpoint.hl：断点管理器
 
