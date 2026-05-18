@@ -1,0 +1,123 @@
+// poly_inv.hl -- Polynomial Inverse via Newton Iteration (iter 349)
+// Buffer: 0x1940000
+// g = f^{-1} mod x^n. Newton: g_{k+1} = g_k*(2 - f*g_k), doubling precision.
+// All arithmetic mod p=998244353. Max PINV_N=16 coefficients. O(n^2) poly-mul.
+
+let PINV_N = 16;
+let PINV_P = 998244353;
+
+let pinv_f  = array(16, 0);
+let pinv_g  = array(16, 0);
+let pinv_t1 = array(16, 0);
+let pinv_t2 = array(16, 0);
+
+fn pinv_init() {
+    let i = 0;
+    while i < PINV_N {
+        set_at(pinv_f,  i, 0); set_at(pinv_g,  i, 0);
+        set_at(pinv_t1, i, 0); set_at(pinv_t2, i, 0);
+        i += 1;
+    }
+    return 0;
+}
+
+fn _pinv_mod(x) { return x - (x / PINV_P) * PINV_P; }
+fn _pinv_add(a, b) { let s = a + b; if s >= PINV_P { s = s - PINV_P; } return s; }
+fn _pinv_sub(a, b) { if a >= b { return a - b; } return a - b + PINV_P; }
+fn _pinv_mul(a, b) { return _pinv_mod(a * b); }
+
+fn _pinv_powmod(base, exp) {
+    let r = 1; let b = base; let e = exp;
+    while e > 0 {
+        if e - (e / 2) * 2 == 1 { r = _pinv_mul(r, b); }
+        b = _pinv_mul(b, b);
+        e = e / 2;
+    }
+    return r;
+}
+
+// Newton step: pinv_g = pinv_g * (2 - pinv_f * pinv_g) mod x^n
+fn _pinv_step(n) {
+    let i = 0;
+    while i < n { set_at(pinv_t1, i, 0); i += 1; }
+    // t1 = f * g mod x^n
+    i = 0;
+    while i < n {
+        let j = 0;
+        while j < n {
+            if i + j < n {
+                let idx = i + j;
+                set_at(pinv_t1, idx, _pinv_add(pinv_t1[idx], _pinv_mul(pinv_f[i], pinv_g[j])));
+            }
+            j += 1;
+        }
+        i += 1;
+    }
+    // t2 = 2 - t1
+    set_at(pinv_t2, 0, _pinv_sub(2, pinv_t1[0]));
+    i = 1;
+    while i < n { set_at(pinv_t2, i, _pinv_sub(0, pinv_t1[i])); i += 1; }
+    // t1 = g * t2 mod x^n (becomes new g)
+    i = 0;
+    while i < n { set_at(pinv_t1, i, 0); i += 1; }
+    i = 0;
+    while i < n {
+        let j = 0;
+        while j < n {
+            if i + j < n {
+                let idx = i + j;
+                set_at(pinv_t1, idx, _pinv_add(pinv_t1[idx], _pinv_mul(pinv_g[i], pinv_t2[j])));
+            }
+            j += 1;
+        }
+        i += 1;
+    }
+    i = 0;
+    while i < n { set_at(pinv_g, i, pinv_t1[i]); i += 1; }
+    return 0;
+}
+
+fn pinv_compute(n) {
+    let i = 0;
+    while i < PINV_N { set_at(pinv_g, i, 0); i += 1; }
+    set_at(pinv_g, 0, _pinv_powmod(pinv_f[0], PINV_P - 2));
+    let cur = 1;
+    let go = 1;
+    while go == 1 {
+        if cur >= n { go = 0; }
+        if go == 1 {
+            let nxt = cur + cur;
+            if nxt > n { nxt = n; }
+            _pinv_step(nxt);
+            cur = nxt;
+        }
+    }
+    return 0;
+}
+
+fn pinv_test() {
+    pinv_init();
+    // f = 1 + x; verify f * f^{-1} = 1 mod x^4
+    set_at(pinv_f, 0, 1);
+    set_at(pinv_f, 1, 1);
+    pinv_compute(4);
+    let ok = 1;
+    let k = 0;
+    while k < 4 {
+        let s = 0;
+        let i = 0;
+        while i <= k {
+            s = _pinv_add(s, _pinv_mul(pinv_f[i], pinv_g[k - i]));
+            i += 1;
+        }
+        if k == 0 { if s != 1 { ok = 0; } }
+        if k > 0  { if s != 0 { ok = 0; } }
+        k += 1;
+    }
+    print("pinv_test: g[0]=" + to_string(pinv_g[0]) + " g[1]=" + to_string(pinv_g[1]));
+    if ok == 1 { print("pinv_test: PASS"); return 1; }
+    print("pinv_test: FAIL");
+    return 0;
+}
+
+print("poly_inv.hl loaded");

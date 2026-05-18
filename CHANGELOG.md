@@ -2,11 +2,35 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`403`（76 根目录 + 334 内核模块）
-- H-L 总行数：`~118,800`
-- 内核模块：`334`
-- Shell 命令：`1156`
-- 最近完成功能迭代：`348`（dinic + block_cut_tree + bridge_tree）
+- `.hl` 文件：`406`（76 根目录 + 337 内核模块）
+- H-L 总行数：`~119,900`
+- 内核模块：`337`
+- Shell 命令：`1177`
+- 最近完成功能迭代：`351`（poly_inv + poly_ln_exp + poly_sqrt）
+
+## Iteration 351 — poly_sqrt.hl：多项式开根 + Horner 求值
+
+- **`poly_sqrt.hl`**（Buffer: 0x1960000）：PSQ_N=16，mod p=998244353
+  - `PSQ_INV2 = 499122177`（inv(2) mod p 预计算）
+  - `psq_sqrt(n)`：g = sqrt(f) mod x^n，O(n^2) 递推 g[k] = inv2*(f[k] - Σg[i]*g[k-i])
+  - `psq_eval(deg, val)`：Horner 法多点求值 f(val) mod p
+  - 测试：f = (1+x)^2 → sqrt = [1,1,0,0]，f(3)=16 → PASS
+
+## Iteration 350 — poly_ln_exp.hl：多项式 ln + exp
+
+- **`poly_ln_exp.hl`**（Buffer: 0x1950000）：PLE_N=8，mod p=998244353
+  - `ple_exp(n)`：g = exp(f)，f[0]=0；递推 g[k]=(1/k)*Σ i*f[i]*g[k-i]
+  - `ple_ln(n)`：g = ln(f)，f[0]=1；递推 g[k]=f[k]-(1/k)*Σ i*g[i]*f[k-i]
+  - `_ple_inv(a)`：Fermat 小定理 a^(p-2) mod p
+  - 测试：ln(exp(x)) mod x^5 = [0,1,0,0,0] → PASS
+
+## Iteration 349 — poly_inv.hl：多项式求逆（Newton 迭代）
+
+- **`poly_inv.hl`**（Buffer: 0x1940000）：PINV_N=16，mod p=998244353
+  - `pinv_compute(n)`：Newton 迭代 g_{k+1}=g_k*(2-f*g_k)，精度每次翻倍至 n
+  - `_pinv_step(n)`：单次 Newton 步，O(n^2) 多项式乘法
+  - `_pinv_powmod`：模幂，用于 f[0]^{-1} 初始化
+  - 测试：f=1+x，验证 f*g ≡ 1 mod x^4（四个系数全正确）→ PASS
 
 ## Iteration 348 — bridge_tree.hl：桥树（边双连通分量 + 桥缩点）
 

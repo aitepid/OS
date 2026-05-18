@@ -243,13 +243,16 @@ fn shell_handle(cmd) {
         serial_print("Dinic:       di init  di test  di add <u> <v> <cap>  di flow <s> <t>  di ecnt  di level <v>  di cap <e>");
         serial_print("BlockCutTree:bct init  bct test  bct add <u> <v>  bct build  bct ncut  bct nblocks  bct iscut <v>");
         serial_print("BridgeTree:  bt init  bt test  bt add <u> <v>  bt build  bt nbridges  bt ncomp  bt comp <v>");
+        serial_print("PolyInv:     pinv init  pinv test  pinv set <i> <v>  pinv inv <n>  pinv get <i>  pinv fget <i>  pinv check <n>");
+        serial_print("PolyLnExp:   ple init  ple test  ple set <i> <v>  ple exp <n>  ple ln <n>  ple get <i>  ple fget <i>");
+        serial_print("PolySqrt:    psq init  psq test  psq set <i> <v>  psq sqrt <n>  psq eval <deg> <x>  psq get <i>  psq fget <i>");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
     }
 
     if cmd == "ver" {
-        return "HicOS 6.0 -- Hilbert-Lang Kernel (334 modules, pure H-L, zero deps)";
+        return "HicOS 6.0 -- Hilbert-Lang Kernel (337 modules, pure H-L, zero deps)";
     }
 
     if cmd == "uptime" {
@@ -5794,6 +5797,111 @@ fn shell_handle_ext(cmd) {
         return "bt: comp[" + to_string(btcv) + "]=" + to_string(bt_comp[btcv]);
     }
 
+    // ── poly_inv (iter 349) ──────────────────────────────────────────────────
+    if cmd == "pinv init"  { pinv_init(); return "pinv: init"; }
+    if cmd == "pinv test"  { let pinvr = pinv_test(); return "pinv: " + to_string(pinvr); }
+    if _starts_with(cmd, "pinv set ") {
+        let pinvsargs = str_sub(cmd, 9, len(cmd));
+        let pinvssp   = _find_space(pinvsargs);
+        let pinvsi    = to_int(str_sub(pinvsargs, 0, pinvssp));
+        let pinvsv    = to_int(str_sub(pinvsargs, pinvssp + 1, len(pinvsargs)));
+        set_at(pinv_f, pinvsi, pinvsv);
+        return "pinv: f[" + to_string(pinvsi) + "]=" + to_string(pinvsv);
+    }
+    if _starts_with(cmd, "pinv inv ") {
+        let pinvn = to_int(str_sub(cmd, 9, len(cmd)));
+        pinv_compute(pinvn);
+        return "pinv: computed g=f^-1 mod x^" + to_string(pinvn);
+    }
+    if _starts_with(cmd, "pinv get ") {
+        let pinvgi = to_int(str_sub(cmd, 9, len(cmd)));
+        return "pinv: g[" + to_string(pinvgi) + "]=" + to_string(pinv_g[pinvgi]);
+    }
+    if _starts_with(cmd, "pinv fget ") {
+        let pinvfi = to_int(str_sub(cmd, 10, len(cmd)));
+        return "pinv: f[" + to_string(pinvfi) + "]=" + to_string(pinv_f[pinvfi]);
+    }
+    if _starts_with(cmd, "pinv check ") {
+        let pinvcn = to_int(str_sub(cmd, 11, len(cmd)));
+        let pinvok = 1;
+        let pinvk = 0;
+        while pinvk < pinvcn {
+            let pinvs = 0;
+            let pinvi = 0;
+            while pinvi <= pinvk {
+                pinvs = _pinv_add(pinvs, _pinv_mul(pinv_f[pinvi], pinv_g[pinvk - pinvi]));
+                pinvi += 1;
+            }
+            if pinvk == 0 { if pinvs != 1 { pinvok = 0; } }
+            if pinvk > 0  { if pinvs != 0 { pinvok = 0; } }
+            pinvk += 1;
+        }
+        return "pinv: check=" + to_string(pinvok);
+    }
+
+    // ── poly_ln_exp (iter 350) ───────────────────────────────────────────────
+    if cmd == "ple init" { ple_init(); return "ple: init"; }
+    if cmd == "ple test" { let pler = ple_test(); return "ple: " + to_string(pler); }
+    if _starts_with(cmd, "ple set ") {
+        let plesargs = str_sub(cmd, 8, len(cmd));
+        let plessp   = _find_space(plesargs);
+        let plesi    = to_int(str_sub(plesargs, 0, plessp));
+        let plesv    = to_int(str_sub(plesargs, plessp + 1, len(plesargs)));
+        set_at(ple_f, plesi, plesv);
+        return "ple: f[" + to_string(plesi) + "]=" + to_string(plesv);
+    }
+    if _starts_with(cmd, "ple exp ") {
+        let pleen = to_int(str_sub(cmd, 8, len(cmd)));
+        ple_exp(pleen);
+        return "ple: exp computed mod x^" + to_string(pleen);
+    }
+    if _starts_with(cmd, "ple ln ") {
+        let pleln = to_int(str_sub(cmd, 7, len(cmd)));
+        ple_ln(pleln);
+        return "ple: ln computed mod x^" + to_string(pleln);
+    }
+    if _starts_with(cmd, "ple get ") {
+        let plegi = to_int(str_sub(cmd, 8, len(cmd)));
+        return "ple: g[" + to_string(plegi) + "]=" + to_string(ple_g[plegi]);
+    }
+    if _starts_with(cmd, "ple fget ") {
+        let plefi = to_int(str_sub(cmd, 9, len(cmd)));
+        return "ple: f[" + to_string(plefi) + "]=" + to_string(ple_f[plefi]);
+    }
+
+    // ── poly_sqrt (iter 351) ─────────────────────────────────────────────────
+    if cmd == "psq init" { psq_init(); return "psq: init"; }
+    if cmd == "psq test" { let psqr = psq_test(); return "psq: " + to_string(psqr); }
+    if _starts_with(cmd, "psq set ") {
+        let psqsargs = str_sub(cmd, 8, len(cmd));
+        let psqssp   = _find_space(psqsargs);
+        let psqsi    = to_int(str_sub(psqsargs, 0, psqssp));
+        let psqsv    = to_int(str_sub(psqsargs, psqssp + 1, len(psqsargs)));
+        set_at(psq_f, psqsi, psqsv);
+        return "psq: f[" + to_string(psqsi) + "]=" + to_string(psqsv);
+    }
+    if _starts_with(cmd, "psq sqrt ") {
+        let psqn = to_int(str_sub(cmd, 9, len(cmd)));
+        psq_sqrt(psqn);
+        return "psq: sqrt computed mod x^" + to_string(psqn);
+    }
+    if _starts_with(cmd, "psq eval ") {
+        let psqeargs = str_sub(cmd, 9, len(cmd));
+        let psqesp   = _find_space(psqeargs);
+        let psqedeg  = to_int(str_sub(psqeargs, 0, psqesp));
+        let psqeval  = to_int(str_sub(psqeargs, psqesp + 1, len(psqeargs)));
+        let psqeres  = psq_eval(psqedeg, psqeval);
+        return "psq: eval(" + to_string(psqedeg) + "," + to_string(psqeval) + ")=" + to_string(psqeres);
+    }
+    if _starts_with(cmd, "psq get ") {
+        let psqgi = to_int(str_sub(cmd, 8, len(cmd)));
+        return "psq: g[" + to_string(psqgi) + "]=" + to_string(psq_g[psqgi]);
+    }
+    if _starts_with(cmd, "psq fget ") {
+        let psqfi = to_int(str_sub(cmd, 9, len(cmd)));
+        return "psq: f[" + to_string(psqfi) + "]=" + to_string(psq_f[psqfi]);
+    }
+
     return shell_handle(cmd);
 }
 
@@ -5805,7 +5913,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 1156 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld + lca + virtualtree + dominator + sam + manacher + eertree + bwt + lyndon + zfunction + ir + regalloc + codegen + ioring + persistseg + rollbackdsu + splaytree + mo + sqrtdecomp + cht + matrixexpo + numtheory + strhash + intervaldp + gametheory + trie + lichao + dcdp + monoqueue + segbeats + lct + quickselect + ntt + segmerge + palindromedp + knuthdp + bitset + millerrabin + pollardrho + linearbasis + geometry2d + rotcalip + halfplane + dinic + blockcuttree + bridgetree");
+print("shell.hl loaded -- 1177 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld + lca + virtualtree + dominator + sam + manacher + eertree + bwt + lyndon + zfunction + ir + regalloc + codegen + ioring + persistseg + rollbackdsu + splaytree + mo + sqrtdecomp + cht + matrixexpo + numtheory + strhash + intervaldp + gametheory + trie + lichao + dcdp + monoqueue + segbeats + lct + quickselect + ntt + segmerge + palindromedp + knuthdp + bitset + millerrabin + pollardrho + linearbasis + geometry2d + rotcalip + halfplane + dinic + blockcuttree + bridgetree + polyinv + polylnexp + polysqrt");
 
 // Main shell loop (called from kernel_init)
 
