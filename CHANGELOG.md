@@ -2,13 +2,43 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`472`（76 根目录 + 403 内核模块）
-- H-L 总行数：`~157,400`
-- 内核模块：`403`
-- Shell 命令：`1639`
-- 最近完成功能迭代：`417`（livepatch + power_mgmt + thermal）
-- 当前阶段：第六阶段·系统稳定化（Phase 6）
+- `.hl` 文件：`475`（76 根目录 + 406 内核模块）
+- H-L 总行数：`~158,200`
+- 内核模块：`406`
+- Shell 命令：`1660`
+- 最近完成功能迭代：`420`（cpufreq + hypervisor + vmx）
+- 当前阶段：第七阶段·生态完善（Phase 7）
 - **Milestone M4 已达成**（iter 405，完整 ML 推理框架）
+- **Milestone M5 已达成**（iter 420，生产级稳定性）
+
+## Iteration 420 — vmx.hl：VMX/VT-x 硬件虚拟化（Milestone M5 ✦）
+
+- **`vmx.hl`**（Buffer: 0x1DB0000）：VX_MAX_VCPUS=8
+  - VMCS 字段：VX_F_RIP=0 / VX_F_RSP=1 / VX_F_RFLAGS=2 / VX_F_CR3=3
+  - VMEXIT 类型：HLT=0 / IO=1 / RDMSR=2 / WRMSR=3 / CPUID=4
+  - `vx_vmcs_setup(vcpu, rip, rsp)`：初始化 VMCS，设置初始 RFLAGS=0x202
+  - `vx_vmlaunch(vcpu)`：模拟首次进入，产生 HLT exit
+  - `vx_vmresume(vcpu, reason)`：注入 VMEXIT，推进 RIP+1
+  - 测试：setup(0,4096,28672)→vmwrite(RFLAGS,514)→launch→resume(IO) → exits=2 reason=1 rflags=514 → PASS
+  - **✦ Milestone M5 达成：CFS+NUMA+热补丁+崩溃报告+内存分析+Hypervisor+VMX**
+
+## Iteration 419 — hypervisor.hl：基础 Hypervisor 框架
+
+- **`hypervisor.hl`**（Buffer: 0x1DA0000）：HV_MAX_VMS=4
+  - 状态：HV_STOPPED=0 / HV_RUNNING=1 / HV_PAUSED=2
+  - `hv_create_vm(vcpus, mem_mb)`：注册 VM，返回 vm_id
+  - `hv_tick(vm_id)`：仅 RUNNING 状态下递增 exit_count（模拟 VMEXIT）
+  - `hv_get_total_exits()`：所有 VM 累计退出次数
+  - 测试：create(2,256)+create(1,128)→start(0)→tick×2→pause(0)→tick×1 → s0=2 ex0=2 s1=0 tot=2 → PASS
+
+## Iteration 418 — cpufreq.hl：CPU 频率调节
+
+- **`cpufreq.hl`**（Buffer: 0x1D90000）：CF_MAX_CPUS=4，范围 800-3200 MHz
+  - 调速器：CF_GOV_PERF=0（始终最大）/ CF_GOV_POWERSAVE=1（始终最小）/ CF_GOV_ONDEMAND=2
+  - ONDEMAND：load≥80 → 3200MHz；load≥50 → 2000MHz；否则 → 800MHz
+  - `cf_adjust(cpu)`：按调速器+负载计算目标频率
+  - `cf_adjust_all()`：更新所有 CPU 频率
+  - 测试：PERF→3200；POWERSAVE→800；ONDEMAND(load=90)→3200；ONDEMAND(load=30)→800 → PASS
 
 ## Iteration 417 — thermal.hl：热量管理
 

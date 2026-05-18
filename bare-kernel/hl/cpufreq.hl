@@ -1,0 +1,114 @@
+// cpufreq.hl -- CPU Frequency Scaling (Phase 6: 系统稳定化, iter 418)
+// Buffer: 0x1D90000
+// CF_MAX_CPUS=4; governors: CF_GOV_PERF=0, CF_GOV_POWERSAVE=1, CF_GOV_ONDEMAND=2
+// Frequency range: cf_min_freq=800 MHz to cf_max_freq=3200 MHz
+// ONDEMAND: load>=80 → max; load>=50 → mid(2000); else → min
+
+let CF_MAX_CPUS     = 4;
+let CF_GOV_PERF     = 0;
+let CF_GOV_POWERSAVE = 1;
+let CF_GOV_ONDEMAND  = 2;
+let CF_MIN_FREQ     = 800;
+let CF_MAX_FREQ     = 3200;
+let CF_MID_FREQ     = 2000;   // (3200+800)/2
+
+let cf_freq    = array(4, 3200);  // current MHz per CPU
+let cf_gov     = array(4, 2);     // governor per CPU (default ONDEMAND)
+let cf_load    = array(4, 0);     // load % per CPU (0-100)
+let cf_n_cpus  = 4;
+
+fn cf_init() {
+    let i = 0;
+    while i < CF_MAX_CPUS {
+        set_at(cf_freq, i, CF_MAX_FREQ);
+        set_at(cf_gov,  i, CF_GOV_ONDEMAND);
+        set_at(cf_load, i, 0);
+        i += 1;
+    }
+    cf_n_cpus = CF_MAX_CPUS;
+    return 0;
+}
+
+fn cf_set_gov(cpu, gov) {
+    set_at(cf_gov, cpu, gov);
+    return 0;
+}
+
+fn cf_set_load(cpu, load) {
+    set_at(cf_load, cpu, load);
+    return 0;
+}
+
+fn cf_adjust(cpu) {
+    let g = cf_gov[cpu];
+    let f = CF_MAX_FREQ;
+    if g == CF_GOV_POWERSAVE { f = CF_MIN_FREQ; }
+    if g == CF_GOV_ONDEMAND {
+        let l = cf_load[cpu];
+        f = CF_MIN_FREQ;
+        if l >= 50 { f = CF_MID_FREQ; }
+        if l >= 80 { f = CF_MAX_FREQ; }
+    }
+    set_at(cf_freq, cpu, f);
+    return f;
+}
+
+fn cf_adjust_all() {
+    let i = 0;
+    while i < cf_n_cpus {
+        cf_adjust(i);
+        i += 1;
+    }
+    return 0;
+}
+
+fn cf_get_freq(cpu) { return cf_freq[cpu]; }
+fn cf_get_gov(cpu)  { return cf_gov[cpu]; }
+fn cf_get_load(cpu) { return cf_load[cpu]; }
+
+fn cf_test() {
+    cf_init();
+
+    // CPU 0: PERF → always max
+    cf_set_gov(0, CF_GOV_PERF);
+    cf_adjust(0);
+
+    // CPU 1: POWERSAVE → always min
+    cf_set_gov(1, CF_GOV_POWERSAVE);
+    cf_adjust(1);
+
+    // CPU 2: ONDEMAND + load=90 → max (>=80)
+    cf_set_gov(2, CF_GOV_ONDEMAND);
+    cf_set_load(2, 90);
+    cf_adjust(2);
+
+    // CPU 3: ONDEMAND + load=30 → min (<50)
+    cf_set_gov(3, CF_GOV_ONDEMAND);
+    cf_set_load(3, 30);
+    cf_adjust(3);
+
+    let f0 = cf_get_freq(0);   // 3200
+    let f1 = cf_get_freq(1);   // 800
+    let f2 = cf_get_freq(2);   // 3200
+    let f3 = cf_get_freq(3);   // 800
+
+    print("cf_test: f0=" + to_string(f0)
+          + " f1=" + to_string(f1)
+          + " f2=" + to_string(f2)
+          + " f3=" + to_string(f3));
+
+    if f0 == 3200 {
+        if f1 == 800 {
+            if f2 == 3200 {
+                if f3 == 800 {
+                    print("cf_test: PASS");
+                    return 1;
+                }
+            }
+        }
+    }
+    print("cf_test: FAIL");
+    return 0;
+}
+
+print("cpufreq.hl loaded");

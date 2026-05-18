@@ -1,0 +1,117 @@
+// hypervisor.hl -- Basic Hypervisor Framework (Phase 6: 系统稳定化, iter 419)
+// Buffer: 0x1DA0000
+// HV_MAX_VMS=4; VM states: HV_STOPPED=0, HV_RUNNING=1, HV_PAUSED=2
+// hv_create_vm(vcpus, mem_mb): register VM, returns vm_id
+// hv_tick(vm_id): simulate one execution tick; increments exit_count only when RUNNING
+
+let HV_MAX_VMS  = 4;
+let HV_STOPPED  = 0;
+let HV_RUNNING  = 1;
+let HV_PAUSED   = 2;
+
+let hv_vm_state   = array(4, 0);   // VM state
+let hv_vm_vcpus   = array(4, 0);   // vCPU count
+let hv_vm_mem_mb  = array(4, 0);   // memory in MB
+let hv_exit_count = array(4, 0);   // VMEXIT count per VM
+let hv_n_vms      = 0;
+let hv_total_exits = 0;
+
+fn hv_init() {
+    let i = 0;
+    while i < HV_MAX_VMS {
+        set_at(hv_vm_state,   i, HV_STOPPED);
+        set_at(hv_vm_vcpus,   i, 0);
+        set_at(hv_vm_mem_mb,  i, 0);
+        set_at(hv_exit_count, i, 0);
+        i += 1;
+    }
+    hv_n_vms       = 0;
+    hv_total_exits = 0;
+    return 0;
+}
+
+fn hv_create_vm(vcpus, mem_mb) {
+    let id = hv_n_vms;
+    set_at(hv_vm_state,  id, HV_STOPPED);
+    set_at(hv_vm_vcpus,  id, vcpus);
+    set_at(hv_vm_mem_mb, id, mem_mb);
+    set_at(hv_exit_count, id, 0);
+    hv_n_vms += 1;
+    return id;
+}
+
+fn hv_start(vm_id) {
+    set_at(hv_vm_state, vm_id, HV_RUNNING);
+    return 0;
+}
+
+fn hv_pause(vm_id) {
+    set_at(hv_vm_state, vm_id, HV_PAUSED);
+    return 0;
+}
+
+fn hv_stop(vm_id) {
+    set_at(hv_vm_state, vm_id, HV_STOPPED);
+    return 0;
+}
+
+fn hv_tick(vm_id) {
+    if hv_vm_state[vm_id] == HV_RUNNING {
+        set_at(hv_exit_count, vm_id, hv_exit_count[vm_id] + 1);
+        hv_total_exits += 1;
+    }
+    return hv_exit_count[vm_id];
+}
+
+fn hv_get_state(vm_id)  { return hv_vm_state[vm_id]; }
+fn hv_get_exits(vm_id)  { return hv_exit_count[vm_id]; }
+fn hv_get_vcpus(vm_id)  { return hv_vm_vcpus[vm_id]; }
+fn hv_get_mem(vm_id)    { return hv_vm_mem_mb[vm_id]; }
+fn hv_get_n_vms()       { return hv_n_vms; }
+fn hv_get_total_exits() { return hv_total_exits; }
+
+fn hv_test() {
+    hv_init();
+
+    // Create VM 0: 2 vCPUs, 256 MB
+    hv_create_vm(2, 256);
+    // Create VM 1: 1 vCPU, 128 MB
+    hv_create_vm(1, 128);
+
+    // Start VM 0 and tick twice
+    hv_start(0);
+    hv_tick(0);
+    hv_tick(0);
+
+    // Pause VM 0; tick should not increment
+    hv_pause(0);
+    hv_tick(0);
+
+    // VM 1 never started; tick does nothing
+    hv_tick(1);
+
+    let s0  = hv_get_state(0);    // HV_PAUSED = 2
+    let ex0 = hv_get_exits(0);    // 2 (only 2 ticks while RUNNING)
+    let s1  = hv_get_state(1);    // HV_STOPPED = 0
+    let tot = hv_get_total_exits(); // 2
+
+    print("hv_test: s0=" + to_string(s0)
+          + " ex0=" + to_string(ex0)
+          + " s1=" + to_string(s1)
+          + " tot=" + to_string(tot));
+
+    if s0 == HV_PAUSED {
+        if ex0 == 2 {
+            if s1 == HV_STOPPED {
+                if tot == 2 {
+                    print("hv_test: PASS");
+                    return 1;
+                }
+            }
+        }
+    }
+    print("hv_test: FAIL");
+    return 0;
+}
+
+print("hypervisor.hl loaded");
