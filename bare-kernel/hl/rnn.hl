@@ -1,0 +1,160 @@
+// rnn.hl -- Simple Recurrent Neural Network (Phase 5: ML深化, iter 398)
+// Buffer: 0x1C50000
+// Fixed-point: values scaled by RN_SCALE=256 (represents range ~[-1,1])
+// Architecture: h_t = tanh(W_xh * x_t + W_hh * h_{t-1} + b)
+// RN_INPUT=4 input dims, RN_HIDDEN=4 hidden units
+// tanh_fp: clamp to [-RN_SCALE, RN_SCALE] (linear approximation)
+// Indexing: W_xh[in_idx * RN_HIDDEN + hid_idx]
+
+let RN_INPUT  = 4;
+let RN_HIDDEN = 4;
+let RN_SCALE  = 256;
+
+// Weight matrices: input→hidden and hidden→hidden
+let rn_W_xh    = array(16, 0);   // RN_INPUT * RN_HIDDEN
+let rn_W_hh    = array(16, 0);   // RN_HIDDEN * RN_HIDDEN
+let rn_bias    = array(4, 0);    // bias per hidden unit
+
+// State vectors
+let rn_input      = array(4, 0);   // current input
+let rn_hidden     = array(4, 0);   // current hidden state
+let rn_new_hidden = array(4, 0);   // scratch for one-step update
+
+// Output projection (optional linear layer W_hy * h)
+let rn_W_hy    = array(4, 0);    // hidden→output (1 output unit, 4 hidden)
+let rn_output  = 0;
+
+fn rn_init() {
+    let i = 0;
+    while i < 16 {
+        set_at(rn_W_xh, i, 0);
+        set_at(rn_W_hh, i, 0);
+        i += 1;
+    }
+    let j = 0;
+    while j < RN_HIDDEN {
+        set_at(rn_bias,       j, 0);
+        set_at(rn_hidden,     j, 0);
+        set_at(rn_new_hidden, j, 0);
+        set_at(rn_input,      j, 0);
+        set_at(rn_W_hy,       j, 0);
+        j += 1;
+    }
+    rn_output = 0;
+    return 0;
+}
+
+fn rn_set_wxh(in_idx, hid_idx, val) {
+    set_at(rn_W_xh, in_idx * RN_HIDDEN + hid_idx, val);
+    return 0;
+}
+
+fn rn_set_whh(hi, hj, val) {
+    set_at(rn_W_hh, hi * RN_HIDDEN + hj, val);
+    return 0;
+}
+
+fn rn_set_bias(hid_idx, val) {
+    set_at(rn_bias, hid_idx, val);
+    return 0;
+}
+
+fn rn_set_input(k, val) {
+    set_at(rn_input, k, val);
+    return 0;
+}
+
+fn rn_get_hidden(j) { return rn_hidden[j]; }
+
+fn _rn_tanh_fp(x) {
+    if x > RN_SCALE  { return RN_SCALE; }
+    if x < 0 - RN_SCALE { return 0 - RN_SCALE; }
+    return x;
+}
+
+fn rnn_step() {
+    // Compute new_hidden[j] = tanh(Σ W_xh[k,j]*x[k]/scale + Σ W_hh[m,j]*h[m]/scale + b[j])
+    let j = 0;
+    while j < RN_HIDDEN {
+        let pre = rn_bias[j];
+        let k = 0;
+        while k < RN_INPUT {
+            pre += rn_W_xh[k * RN_HIDDEN + j] * rn_input[k] / RN_SCALE;
+            k += 1;
+        }
+        let m = 0;
+        while m < RN_HIDDEN {
+            pre += rn_W_hh[m * RN_HIDDEN + j] * rn_hidden[m] / RN_SCALE;
+            m += 1;
+        }
+        set_at(rn_new_hidden, j, _rn_tanh_fp(pre));
+        j += 1;
+    }
+    // Copy new → current
+    j = 0;
+    while j < RN_HIDDEN {
+        set_at(rn_hidden, j, rn_new_hidden[j]);
+        j += 1;
+    }
+    // Optional output projection: output = Σ W_hy[j] * h[j] / scale
+    let out = 0;
+    j = 0;
+    while j < RN_HIDDEN {
+        out += rn_W_hy[j] * rn_hidden[j] / RN_SCALE;
+        j += 1;
+    }
+    rn_output = out;
+    return rn_hidden[0];
+}
+
+fn rnn_reset() {
+    let j = 0;
+    while j < RN_HIDDEN {
+        set_at(rn_hidden, j, 0);
+        j += 1;
+    }
+    return 0;
+}
+
+fn rnn_test() {
+    rn_init();
+
+    // W_xh[0][0] = 128 (0.5): input[0] → hidden[0]
+    // W_hh[0][0] = 128 (0.5): hidden[0] → hidden[0] (recurrent)
+    rn_set_wxh(0, 0, 128);
+    rn_set_whh(0, 0, 128);
+
+    // Feed x[0] = 256 (=1.0) for all 3 steps
+    rn_set_input(0, RN_SCALE);
+
+    // Step 1: pre = 128*256/256 + 128*0/256 = 128  → tanh(128)=128
+    let h1 = rnn_step();
+
+    // Step 2: pre = 128*256/256 + 128*128/256 = 128+64=192 → tanh(192)=192
+    let h2 = rnn_step();
+
+    // Step 3: pre = 128*256/256 + 128*192/256 = 128+96=224 → tanh(224)=224
+    let h3 = rnn_step();
+
+    let hv = rn_get_hidden(0);
+
+    print("rnn_test: h1=" + to_string(h1)
+          + " h2=" + to_string(h2)
+          + " h3=" + to_string(h3)
+          + " hv=" + to_string(hv));
+
+    if h1 == 128 {
+        if h2 == 192 {
+            if h3 == 224 {
+                if hv == 224 {
+                    print("rnn_test: PASS");
+                    return 1;
+                }
+            }
+        }
+    }
+    print("rnn_test: FAIL");
+    return 0;
+}
+
+print("rnn.hl loaded");

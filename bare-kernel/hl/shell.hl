@@ -291,13 +291,16 @@ fn shell_handle(cmd) {
         serial_print("gRPC-Stream:   gs init  gs test  gs open <svc> <method> <type>  gs send <sid> <msg>  gs recv <sid>  gs close <sid>  gs status <sid>");
         serial_print("WS-Deflate:    wc init  wc test  wc connect <takeover>  wc compress <id> <data> <len>  wc decompress <id> <comp> <clen>  wc ratio <id>  wc reset <id>");
         serial_print("Conv2D:        cv init  cv test  cv setinput <r> <c> <ch> <v>  cv setkernel <oc> <ic> <kr> <kc> <v>  cv forward <in_ch> <out_ch> <ks>  cv output <r> <c> <ch>  cv info");
+        serial_print("Pooling:       pool init  pool test  pool set <r> <c> <ch> <v>  pool get <r> <c> <ch>  pool max <in_ch> <psz> <str>  pool avg <in_ch> <psz> <str>  pool info");
+        serial_print("RNN:           rnn init  rnn test  rnn wxh <i> <j> <v>  rnn whh <i> <j> <v>  rnn input <i> <v>  rnn step  rnn hidden <j>");
+        serial_print("LSTM:          lstm init  lstm test  lstm wxi <i> <j> <v>  lstm wxg <i> <j> <v>  lstm input <i> <v>  lstm step  lstm hidden <j>");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
     }
 
     if cmd == "ver" {
-        return "HicOS 6.0 -- Hilbert-Lang Kernel (382 modules, pure H-L, zero deps)";
+        return "HicOS 6.0 -- Hilbert-Lang Kernel (385 modules, pure H-L, zero deps)";
     }
 
     if cmd == "uptime" {
@@ -7479,6 +7482,137 @@ fn shell_handle_ext(cmd) {
     if cmd == "cv info" {
         return "cv: h=" + to_string(cv_output_h()) + " w=" + to_string(cv_output_w()) + " ch=" + to_string(cv_output_ch());
     }
+
+    // --- Pooling ---
+    if cmd == "pool init" { pl_init(); return "pool: init"; }
+    if cmd == "pool test" { let plr = pool_test(); return "pool: " + to_string(plr); }
+    if _starts_with(cmd, "pool set ") {
+        let plsa  = str_sub(cmd, 9, len(cmd));
+        let plss0 = _find_space(plsa);
+        let plsr  = to_int(str_sub(plsa, 0, plss0));
+        let plsa1 = str_sub(plsa, plss0 + 1, len(plsa));
+        let plss1 = _find_space(plsa1);
+        let plsc  = to_int(str_sub(plsa1, 0, plss1));
+        let plsa2 = str_sub(plsa1, plss1 + 1, len(plsa1));
+        let plss2 = _find_space(plsa2);
+        let plsch = to_int(str_sub(plsa2, 0, plss2));
+        let plsv  = to_int(str_sub(plsa2, plss2 + 1, len(plsa2)));
+        pl_set_input(plsr, plsc, plsch, plsv);
+        return "pool: input set";
+    }
+    if _starts_with(cmd, "pool get ") {
+        let plga  = str_sub(cmd, 9, len(cmd));
+        let plgs0 = _find_space(plga);
+        let plgr  = to_int(str_sub(plga, 0, plgs0));
+        let plga1 = str_sub(plga, plgs0 + 1, len(plga));
+        let plgs1 = _find_space(plga1);
+        let plgc  = to_int(str_sub(plga1, 0, plgs1));
+        let plgch = to_int(str_sub(plga1, plgs1 + 1, len(plga1)));
+        return "pool: " + to_string(pl_get_output(plgr, plgc, plgch));
+    }
+    if _starts_with(cmd, "pool max ") {
+        let plma  = str_sub(cmd, 9, len(cmd));
+        let plms0 = _find_space(plma);
+        let plmic = to_int(str_sub(plma, 0, plms0));
+        let plma1 = str_sub(plma, plms0 + 1, len(plma));
+        let plms1 = _find_space(plma1);
+        let plmps = to_int(str_sub(plma1, 0, plms1));
+        let plmst = to_int(str_sub(plma1, plms1 + 1, len(plma1)));
+        let plmn  = pool_max_forward(plmic, plmps, plmst);
+        return "pool: max elements=" + to_string(plmn);
+    }
+    if _starts_with(cmd, "pool avg ") {
+        let plaa  = str_sub(cmd, 9, len(cmd));
+        let plas0 = _find_space(plaa);
+        let plaic = to_int(str_sub(plaa, 0, plas0));
+        let plaa1 = str_sub(plaa, plas0 + 1, len(plaa));
+        let plas1 = _find_space(plaa1);
+        let plaps = to_int(str_sub(plaa1, 0, plas1));
+        let plast = to_int(str_sub(plaa1, plas1 + 1, len(plaa1)));
+        let plan  = pool_avg_forward(plaic, plaps, plast);
+        return "pool: avg elements=" + to_string(plan);
+    }
+    if cmd == "pool info" {
+        return "pool: h=" + to_string(pl_output_h()) + " w=" + to_string(pl_output_w()) + " ch=" + to_string(pl_output_ch());
+    }
+
+    // --- RNN ---
+    if cmd == "rnn init" { rn_init(); return "rnn: init"; }
+    if cmd == "rnn test" { let rnr = rnn_test(); return "rnn: " + to_string(rnr); }
+    if _starts_with(cmd, "rnn wxh ") {
+        let rnxa  = str_sub(cmd, 8, len(cmd));
+        let rnxs0 = _find_space(rnxa);
+        let rnxi  = to_int(str_sub(rnxa, 0, rnxs0));
+        let rnxa1 = str_sub(rnxa, rnxs0 + 1, len(rnxa));
+        let rnxs1 = _find_space(rnxa1);
+        let rnxj  = to_int(str_sub(rnxa1, 0, rnxs1));
+        let rnxv  = to_int(str_sub(rnxa1, rnxs1 + 1, len(rnxa1)));
+        rn_set_wxh(rnxi, rnxj, rnxv);
+        return "rnn: W_xh set";
+    }
+    if _starts_with(cmd, "rnn whh ") {
+        let rnha  = str_sub(cmd, 8, len(cmd));
+        let rnhs0 = _find_space(rnha);
+        let rnhi  = to_int(str_sub(rnha, 0, rnhs0));
+        let rnha1 = str_sub(rnha, rnhs0 + 1, len(rnha));
+        let rnhs1 = _find_space(rnha1);
+        let rnhj  = to_int(str_sub(rnha1, 0, rnhs1));
+        let rnhv  = to_int(str_sub(rnha1, rnhs1 + 1, len(rnha1)));
+        rn_set_whh(rnhi, rnhj, rnhv);
+        return "rnn: W_hh set";
+    }
+    if _starts_with(cmd, "rnn input ") {
+        let rnia  = str_sub(cmd, 10, len(cmd));
+        let rnis0 = _find_space(rnia);
+        let rnii  = to_int(str_sub(rnia, 0, rnis0));
+        let rniv  = to_int(str_sub(rnia, rnis0 + 1, len(rnia)));
+        rn_set_input(rnii, rniv);
+        return "rnn: input set";
+    }
+    if cmd == "rnn step" { let rnst = rnn_step(); return "rnn: h0=" + to_string(rnst); }
+    if _starts_with(cmd, "rnn hidden ") {
+        let rnhid = to_int(str_sub(cmd, 11, len(cmd)));
+        return "rnn: hidden[" + to_string(rnhid) + "]=" + to_string(rn_get_hidden(rnhid));
+    }
+
+    // --- LSTM ---
+    if cmd == "lstm init" { lm_init(); return "lstm: init"; }
+    if cmd == "lstm test" { let lmr = lstm_test(); return "lstm: " + to_string(lmr); }
+    if _starts_with(cmd, "lstm wxi ") {
+        let lxia  = str_sub(cmd, 9, len(cmd));
+        let lxis0 = _find_space(lxia);
+        let lxii  = to_int(str_sub(lxia, 0, lxis0));
+        let lxia1 = str_sub(lxia, lxis0 + 1, len(lxia));
+        let lxis1 = _find_space(lxia1);
+        let lxij  = to_int(str_sub(lxia1, 0, lxis1));
+        let lxiv  = to_int(str_sub(lxia1, lxis1 + 1, len(lxia1)));
+        lm_set_wxi(lxii, lxij, lxiv);
+        return "lstm: W_xi set";
+    }
+    if _starts_with(cmd, "lstm wxg ") {
+        let lxga  = str_sub(cmd, 9, len(cmd));
+        let lxgs0 = _find_space(lxga);
+        let lxgi  = to_int(str_sub(lxga, 0, lxgs0));
+        let lxga1 = str_sub(lxga, lxgs0 + 1, len(lxga));
+        let lxgs1 = _find_space(lxga1);
+        let lxgj  = to_int(str_sub(lxga1, 0, lxgs1));
+        let lxgv  = to_int(str_sub(lxga1, lxgs1 + 1, len(lxga1)));
+        lm_set_wxg(lxgi, lxgj, lxgv);
+        return "lstm: W_xg set";
+    }
+    if _starts_with(cmd, "lstm input ") {
+        let lmia  = str_sub(cmd, 11, len(cmd));
+        let lmis0 = _find_space(lmia);
+        let lmii  = to_int(str_sub(lmia, 0, lmis0));
+        let lmiv  = to_int(str_sub(lmia, lmis0 + 1, len(lmia)));
+        lm_set_input(lmii, lmiv);
+        return "lstm: input set";
+    }
+    if cmd == "lstm step" { let lmst = lstm_step(); return "lstm: h0=" + to_string(lmst); }
+    if _starts_with(cmd, "lstm hidden ") {
+        let lmhid = to_int(str_sub(cmd, 12, len(cmd)));
+        return "lstm: hidden[" + to_string(lmhid) + "]=" + to_string(lm_get_hidden(lmhid));
+    }
 }
 
 // Self-test
@@ -7489,7 +7623,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 1492 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld + lca + virtualtree + dominator + sam + manacher + eertree + bwt + lyndon + zfunction + ir + regalloc + codegen + ioring + persistseg + rollbackdsu + splaytree + mo + sqrtdecomp + cht + matrixexpo + numtheory + strhash + intervaldp + gametheory + trie + lichao + dcdp + monoqueue + segbeats + lct + quickselect + ntt + segmerge + palindromedp + knuthdp + bitset + millerrabin + pollardrho + linearbasis + geometry2d + rotcalip + halfplane + dinic + blockcuttree + bridgetree + polyinv + polylnexp + polysqrt + bitmaskdp + digitdp + brokenprofiledp + wavelettree + implicittreap + chtholly + suffixtree + bsgs + minencircle + gvn + licm + dce2 + linearscandra + regcoalesce + callingconv + typeinfer + typechecker + generics + linkerelf + linkerar + dynlinker + dwarf + perfcounter + jitstub + btree + btreeplus + lsmmemtable + wal + mvcc + transaction + indexhash + indexbtree + queryplan + dbengine + wireguard + tls13 + http3quic + doh + dht + bittorrent + opentelemetry + prometheus + grpc_stream + websocket_compression + conv2d");
+print("shell.hl loaded -- 1513 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld + lca + virtualtree + dominator + sam + manacher + eertree + bwt + lyndon + zfunction + ir + regalloc + codegen + ioring + persistseg + rollbackdsu + splaytree + mo + sqrtdecomp + cht + matrixexpo + numtheory + strhash + intervaldp + gametheory + trie + lichao + dcdp + monoqueue + segbeats + lct + quickselect + ntt + segmerge + palindromedp + knuthdp + bitset + millerrabin + pollardrho + linearbasis + geometry2d + rotcalip + halfplane + dinic + blockcuttree + bridgetree + polyinv + polylnexp + polysqrt + bitmaskdp + digitdp + brokenprofiledp + wavelettree + implicittreap + chtholly + suffixtree + bsgs + minencircle + gvn + licm + dce2 + linearscandra + regcoalesce + callingconv + typeinfer + typechecker + generics + linkerelf + linkerar + dynlinker + dwarf + perfcounter + jitstub + btree + btreeplus + lsmmemtable + wal + mvcc + transaction + indexhash + indexbtree + queryplan + dbengine + wireguard + tls13 + http3quic + doh + dht + bittorrent + opentelemetry + prometheus + grpc_stream + websocket_compression + conv2d + pooling + rnn + lstm");
 
 // Main shell loop (called from kernel_init)
 

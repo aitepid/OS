@@ -2,13 +2,41 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`451`（76 根目录 + 382 内核模块）
-- H-L 总行数：`~152,300`
-- 内核模块：`382`
-- Shell 命令：`1492`
-- 最近完成功能迭代：`396`（grpc_stream + websocket_compression + conv2d）
-- 当前阶段：第五阶段·ML深化（Phase 5，iter 396 起）
+- `.hl` 文件：`454`（76 根目录 + 385 内核模块）
+- H-L 总行数：`~153,000`
+- 内核模块：`385`
+- Shell 命令：`1513`
+- 最近完成功能迭代：`399`（pooling + rnn + lstm）
+- 当前阶段：第五阶段·ML深化（Phase 5）
 - **Milestone M3 已达成**（iter 385，完整存储引擎）
+
+## Iteration 399 — lstm.hl：LSTM 门控循环单元
+
+- **`lstm.hl`**（Buffer: 0x1C60000）：LM_INPUT=4，LM_HIDDEN=4，LM_SCALE=256
+  - 四门：i（输入门）/ f（遗忘门）/ o（输出门）/ g（细胞门）
+  - `sigmoid_fp(x) = clamp(x/2 + SCALE/2, 0, SCALE)`；`tanh_fp(x) = clamp(x, -SCALE, SCALE)`
+  - `lstm_step()`：计算所有门控值 → 更新细胞状态 c_t → 更新隐状态 h_t
+  - 权重矩阵：lm_W_xi/xf/xo/xg（输入→门）+ lm_W_hi/hf/ho/hg（隐→门）
+  - `lm_get_i_gate(j)` / `lm_get_f_gate(j)` 可读取门控值
+  - 测试：W_xi/xg/xo=SCALE，x[0]=1.0 → i=256 f=128 c1=256 h1=256 → PASS
+
+## Iteration 398 — rnn.hl：简单循环神经网络
+
+- **`rnn.hl`**（Buffer: 0x1C50000）：RN_INPUT=4，RN_HIDDEN=4，RN_SCALE=256
+  - `h_t = tanh(W_xh * x_t + W_hh * h_{t-1} + b)`
+  - `_rn_tanh_fp(x)`：clamp(x, -256, 256)（线性区近似激活）
+  - `rnn_step()`：用 rn_new_hidden 暂存避免原地更新读写冲突
+  - 可选输出投影：`rn_W_hy[j]` × h[j] / scale → `rn_output`
+  - 测试：W_xh[0][0]=128, W_hh[0][0]=128, x[0]=256 → h1=128 h2=192 h3=224 → PASS
+
+## Iteration 397 — pooling.hl：2D 最大/平均池化
+
+- **`pooling.hl`**（Buffer: 0x1C40000）：PL_MAX_CH=4，8×8 网格
+  - 输入布局与 conv2d 相同：`pl_input[ch*64 + r*8 + c]`
+  - `pool_max_forward(in_ch, pool_size, stride)`：滑动窗口取最大值
+  - `pool_avg_forward(in_ch, pool_size, stride)`：滑动窗口整除平均
+  - 输出尺寸：`h_out = (PL_MAX_H - pool_size) / stride + 1`
+  - 测试：4×4 输入(1..16)，2×2 stride=2 → max(0,0)=6 max(0,1)=8 max(1,0)=14 max(1,1)=16；avg(0,0)=3 avg(0,1)=5 → PASS
 
 ## Iteration 396 — conv2d.hl：2D 卷积层（Phase 5 ML深化开始）
 

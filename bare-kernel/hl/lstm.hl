@@ -1,0 +1,229 @@
+// lstm.hl -- LSTM Gated Recurrent Cell (Phase 5: ML深化, iter 399)
+// Buffer: 0x1C60000
+// Fixed-point: values scaled by LM_SCALE=256
+// Gates: i=input, f=forget, o=output, g=cell (tanh)
+//   i_t = sigmoid(W_xi*x + W_hi*h + b_i)
+//   f_t = sigmoid(W_xf*x + W_hf*h + b_f)
+//   o_t = sigmoid(W_xo*x + W_ho*h + b_o)
+//   g_t = tanh(W_xg*x + W_hg*h + b_g)
+//   c_t = f_t*c_{t-1}/SCALE + i_t*g_t/SCALE
+//   h_t = o_t*tanh(c_t)/SCALE
+// sigmoid_fp(x) = clamp(x/2 + SCALE/2, 0, SCALE)
+// tanh_fp(x)    = clamp(x, -SCALE, SCALE)
+// LM_INPUT=4, LM_HIDDEN=4; weight index: [in_idx*LM_HIDDEN + hid_idx]
+
+let LM_INPUT  = 4;
+let LM_HIDDEN = 4;
+let LM_SCALE  = 256;
+
+// Input→gate weight matrices (LM_INPUT * LM_HIDDEN each)
+let lm_W_xi = array(16, 0);
+let lm_W_xf = array(16, 0);
+let lm_W_xo = array(16, 0);
+let lm_W_xg = array(16, 0);
+
+// Hidden→gate weight matrices (LM_HIDDEN * LM_HIDDEN each)
+let lm_W_hi = array(16, 0);
+let lm_W_hf = array(16, 0);
+let lm_W_ho = array(16, 0);
+let lm_W_hg = array(16, 0);
+
+// Biases per gate
+let lm_b_i = array(4, 0);
+let lm_b_f = array(4, 0);
+let lm_b_o = array(4, 0);
+let lm_b_g = array(4, 0);
+
+// State
+let lm_input  = array(4, 0);
+let lm_hidden = array(4, 0);
+let lm_cell   = array(4, 0);
+
+// Gate scratch (for inspection)
+let lm_i_gate = array(4, 0);
+let lm_f_gate = array(4, 0);
+let lm_o_gate = array(4, 0);
+let lm_g_gate = array(4, 0);
+
+// Temporary new state
+let lm_new_hidden = array(4, 0);
+let lm_new_cell   = array(4, 0);
+
+fn lm_init() {
+    let i = 0;
+    while i < 16 {
+        set_at(lm_W_xi, i, 0);
+        set_at(lm_W_xf, i, 0);
+        set_at(lm_W_xo, i, 0);
+        set_at(lm_W_xg, i, 0);
+        set_at(lm_W_hi, i, 0);
+        set_at(lm_W_hf, i, 0);
+        set_at(lm_W_ho, i, 0);
+        set_at(lm_W_hg, i, 0);
+        i += 1;
+    }
+    let j = 0;
+    while j < LM_HIDDEN {
+        set_at(lm_b_i,        j, 0);
+        set_at(lm_b_f,        j, 0);
+        set_at(lm_b_o,        j, 0);
+        set_at(lm_b_g,        j, 0);
+        set_at(lm_input,      j, 0);
+        set_at(lm_hidden,     j, 0);
+        set_at(lm_cell,       j, 0);
+        set_at(lm_i_gate,     j, 0);
+        set_at(lm_f_gate,     j, 0);
+        set_at(lm_o_gate,     j, 0);
+        set_at(lm_g_gate,     j, 0);
+        set_at(lm_new_hidden, j, 0);
+        set_at(lm_new_cell,   j, 0);
+        j += 1;
+    }
+    return 0;
+}
+
+fn _lm_sig_fp(x) {
+    let v = x / 2 + LM_SCALE / 2;
+    if v < 0 { return 0; }
+    if v > LM_SCALE { return LM_SCALE; }
+    return v;
+}
+
+fn _lm_tanh_fp(x) {
+    if x > LM_SCALE  { return LM_SCALE; }
+    if x < 0 - LM_SCALE { return 0 - LM_SCALE; }
+    return x;
+}
+
+fn lm_set_wxi(in_idx, hid_idx, val) { set_at(lm_W_xi, in_idx*LM_HIDDEN+hid_idx, val); return 0; }
+fn lm_set_wxf(in_idx, hid_idx, val) { set_at(lm_W_xf, in_idx*LM_HIDDEN+hid_idx, val); return 0; }
+fn lm_set_wxo(in_idx, hid_idx, val) { set_at(lm_W_xo, in_idx*LM_HIDDEN+hid_idx, val); return 0; }
+fn lm_set_wxg(in_idx, hid_idx, val) { set_at(lm_W_xg, in_idx*LM_HIDDEN+hid_idx, val); return 0; }
+fn lm_set_whi(hi, hj, val) { set_at(lm_W_hi, hi*LM_HIDDEN+hj, val); return 0; }
+fn lm_set_whf(hi, hj, val) { set_at(lm_W_hf, hi*LM_HIDDEN+hj, val); return 0; }
+fn lm_set_who(hi, hj, val) { set_at(lm_W_ho, hi*LM_HIDDEN+hj, val); return 0; }
+fn lm_set_whg(hi, hj, val) { set_at(lm_W_hg, hi*LM_HIDDEN+hj, val); return 0; }
+
+fn lm_set_input(k, val)  { set_at(lm_input, k, val); return 0; }
+fn lm_get_hidden(j)      { return lm_hidden[j]; }
+fn lm_get_cell(j)        { return lm_cell[j]; }
+fn lm_get_i_gate(j)      { return lm_i_gate[j]; }
+fn lm_get_f_gate(j)      { return lm_f_gate[j]; }
+
+fn lstm_step() {
+    // Compute gates for each hidden unit j
+    let j = 0;
+    while j < LM_HIDDEN {
+        let pi = lm_b_i[j];
+        let pf = lm_b_f[j];
+        let po = lm_b_o[j];
+        let pg = lm_b_g[j];
+
+        // Input contributions
+        let k = 0;
+        while k < LM_INPUT {
+            let xk = lm_input[k];
+            pi += lm_W_xi[k * LM_HIDDEN + j] * xk / LM_SCALE;
+            pf += lm_W_xf[k * LM_HIDDEN + j] * xk / LM_SCALE;
+            po += lm_W_xo[k * LM_HIDDEN + j] * xk / LM_SCALE;
+            pg += lm_W_xg[k * LM_HIDDEN + j] * xk / LM_SCALE;
+            k += 1;
+        }
+
+        // Hidden (recurrent) contributions
+        let m = 0;
+        while m < LM_HIDDEN {
+            let hm = lm_hidden[m];
+            pi += lm_W_hi[m * LM_HIDDEN + j] * hm / LM_SCALE;
+            pf += lm_W_hf[m * LM_HIDDEN + j] * hm / LM_SCALE;
+            po += lm_W_ho[m * LM_HIDDEN + j] * hm / LM_SCALE;
+            pg += lm_W_hg[m * LM_HIDDEN + j] * hm / LM_SCALE;
+            m += 1;
+        }
+
+        let ig = _lm_sig_fp(pi);
+        let fg = _lm_sig_fp(pf);
+        let og = _lm_sig_fp(po);
+        let gg = _lm_tanh_fp(pg);
+
+        set_at(lm_i_gate, j, ig);
+        set_at(lm_f_gate, j, fg);
+        set_at(lm_o_gate, j, og);
+        set_at(lm_g_gate, j, gg);
+
+        // Cell update: c_new = f*c_old/scale + i*g/scale
+        let c_new = fg * lm_cell[j] / LM_SCALE + ig * gg / LM_SCALE;
+        set_at(lm_new_cell, j, c_new);
+
+        // Hidden update: h_new = o * tanh(c_new) / scale
+        set_at(lm_new_hidden, j, og * _lm_tanh_fp(c_new) / LM_SCALE);
+        j += 1;
+    }
+
+    // Commit new state
+    j = 0;
+    while j < LM_HIDDEN {
+        set_at(lm_cell,   j, lm_new_cell[j]);
+        set_at(lm_hidden, j, lm_new_hidden[j]);
+        j += 1;
+    }
+    return lm_hidden[0];
+}
+
+fn lstm_reset() {
+    let j = 0;
+    while j < LM_HIDDEN {
+        set_at(lm_hidden, j, 0);
+        set_at(lm_cell,   j, 0);
+        j += 1;
+    }
+    return 0;
+}
+
+fn lstm_test() {
+    lm_init();
+
+    // Set W_xi[0][0]=LM_SCALE (input gate fully activated by x[0])
+    // Set W_xg[0][0]=LM_SCALE (cell gate = tanh(x[0]))
+    // Set W_xo[0][0]=LM_SCALE (output gate fully activated by x[0])
+    // W_xf = 0 → forget gate = sig(0) = 128  (half-forget)
+    lm_set_wxi(0, 0, LM_SCALE);
+    lm_set_wxg(0, 0, LM_SCALE);
+    lm_set_wxo(0, 0, LM_SCALE);
+
+    // x[0] = LM_SCALE (=1.0)
+    lm_set_input(0, LM_SCALE);
+
+    // Step 1 (h=0, c=0):
+    //   i_pre = 256*256/256 = 256   → i = sig_fp(256) = 256  (=1.0)
+    //   f_pre = 0                   → f = sig_fp(0)   = 128  (=0.5)
+    //   o_pre = 256                 → o = sig_fp(256) = 256
+    //   g_pre = 256                 → g = tanh_fp(256)= 256
+    //   c_new = 128*0/256 + 256*256/256 = 0 + 256 = 256
+    //   h_new = 256 * tanh_fp(256) / 256 = 256*256/256 = 256
+    let h1 = lstm_step();
+    let c1 = lm_get_cell(0);
+    let ig = lm_get_i_gate(0);
+    let fg = lm_get_f_gate(0);
+
+    print("lstm_test: h1=" + to_string(h1)
+          + " c1=" + to_string(c1)
+          + " ig=" + to_string(ig)
+          + " fg=" + to_string(fg));
+
+    // h1=256, c1=256, ig=256 (full input gate), fg=128 (half forget)
+    if h1 == 256 {
+        if c1 == 256 {
+            if ig == 256 {
+                if fg == 128 {
+                    print("lstm_test: PASS");
+                    return 1;
+                }
+            }
+        }
+    }
+    print("lstm_test: FAIL");
+    return 0;
+}
+
+print("lstm.hl loaded");

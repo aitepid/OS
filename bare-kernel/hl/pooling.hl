@@ -1,0 +1,209 @@
+// pooling.hl -- 2D Max/Average Pooling (Phase 5: ML深化, iter 397)
+// Buffer: 0x1C40000
+// Fixed-point: values already non-negative after ReLU in conv2d pipeline
+// Input: PL_MAX_CH channels, 8×8 grid (same layout as conv2d cv_output)
+// Operations: pool_max_forward(in_ch, pool_size, stride)
+//             pool_avg_forward(in_ch, pool_size, stride)
+// Output: pl_output[ch * 64 + r * 8 + c]
+
+let PL_MAX_H     = 8;
+let PL_MAX_W     = 8;
+let PL_MAX_CH    = 4;
+let PL_MAX_POOL  = 2;
+let PL_SCALE     = 256;
+
+// Input: pl_input[ch * PL_IN_STRIDE + r * PL_MAX_W + c]
+let PL_IN_STRIDE = 64;   // PL_MAX_H * PL_MAX_W
+let pl_input     = array(256, 0);   // PL_MAX_CH * PL_MAX_H * PL_MAX_W
+
+// Output feature map (same layout)
+let pl_output    = array(256, 0);
+
+// Dimensions from last forward pass
+let pl_out_h  = 0;
+let pl_out_w  = 0;
+let pl_out_ch = 0;
+
+fn pl_init() {
+    let i = 0;
+    while i < 256 {
+        set_at(pl_input,  i, 0);
+        set_at(pl_output, i, 0);
+        i += 1;
+    }
+    pl_out_h = 0; pl_out_w = 0; pl_out_ch = 0;
+    return 0;
+}
+
+fn pl_set_input(r, c, ch, val) {
+    set_at(pl_input, ch * PL_IN_STRIDE + r * PL_MAX_W + c, val);
+    return 0;
+}
+
+fn pl_get_input(r, c, ch) {
+    return pl_input[ch * PL_IN_STRIDE + r * PL_MAX_W + c];
+}
+
+fn pl_get_output(r, c, ch) {
+    return pl_output[ch * PL_IN_STRIDE + r * PL_MAX_W + c];
+}
+
+fn pool_max_forward(in_ch, pool_size, stride) {
+    let h_out = (PL_MAX_H - pool_size) / stride + 1;
+    let w_out = (PL_MAX_W - pool_size) / stride + 1;
+    if h_out > PL_MAX_H { h_out = PL_MAX_H; }
+    if w_out > PL_MAX_W { w_out = PL_MAX_W; }
+
+    pl_out_h  = h_out;
+    pl_out_w  = w_out;
+    pl_out_ch = in_ch;
+
+    let ch = 0;
+    while ch < in_ch {
+        let or = 0;
+        while or < h_out {
+            let ow = 0;
+            while ow < w_out {
+                let ir0 = or * stride;
+                let ic0 = ow * stride;
+                let max_val = pl_get_input(ir0, ic0, ch);
+                let pr = 0;
+                while pr < pool_size {
+                    let pc = 0;
+                    while pc < pool_size {
+                        let v = pl_get_input(ir0 + pr, ic0 + pc, ch);
+                        if v > max_val { max_val = v; }
+                        pc += 1;
+                    }
+                    pr += 1;
+                }
+                set_at(pl_output, ch * PL_IN_STRIDE + or * PL_MAX_W + ow, max_val);
+                ow += 1;
+            }
+            or += 1;
+        }
+        ch += 1;
+    }
+    return h_out * w_out * in_ch;
+}
+
+fn pool_avg_forward(in_ch, pool_size, stride) {
+    let h_out = (PL_MAX_H - pool_size) / stride + 1;
+    let w_out = (PL_MAX_W - pool_size) / stride + 1;
+    if h_out > PL_MAX_H { h_out = PL_MAX_H; }
+    if w_out > PL_MAX_W { w_out = PL_MAX_W; }
+
+    pl_out_h  = h_out;
+    pl_out_w  = w_out;
+    pl_out_ch = in_ch;
+
+    let pool_area = pool_size * pool_size;
+
+    let ch = 0;
+    while ch < in_ch {
+        let or = 0;
+        while or < h_out {
+            let ow = 0;
+            while ow < w_out {
+                let ir0 = or * stride;
+                let ic0 = ow * stride;
+                let sum = 0;
+                let pr = 0;
+                while pr < pool_size {
+                    let pc = 0;
+                    while pc < pool_size {
+                        sum += pl_get_input(ir0 + pr, ic0 + pc, ch);
+                        pc += 1;
+                    }
+                    pr += 1;
+                }
+                set_at(pl_output, ch * PL_IN_STRIDE + or * PL_MAX_W + ow, sum / pool_area);
+                ow += 1;
+            }
+            or += 1;
+        }
+        ch += 1;
+    }
+    return h_out * w_out * in_ch;
+}
+
+fn pl_output_h()  { return pl_out_h; }
+fn pl_output_w()  { return pl_out_w; }
+fn pl_output_ch() { return pl_out_ch; }
+
+fn pool_test() {
+    pl_init();
+
+    // 4×4 input, 1 channel, values = r*4 + c + 1  (1..16)
+    let r = 0;
+    while r < 4 {
+        let c = 0;
+        while c < 4 {
+            pl_set_input(r, c, 0, r * 4 + c + 1);
+            c += 1;
+        }
+        r += 1;
+    }
+
+    // Max pool 2×2 stride 2 on 8×8 grid → 4×4 output
+    // Top-left 2×2 of output covers meaningful 4×4 input:
+    //   out(0,0): input (0-1)×(0-1) = {1,2,5,6}  → max=6
+    //   out(0,1): input (0-1)×(2-3) = {3,4,7,8}  → max=8
+    //   out(1,0): input (2-3)×(0-1) = {9,10,13,14}→max=14
+    //   out(1,1): input (2-3)×(2-3) = {11,12,15,16}→max=16
+    let nm = pool_max_forward(1, 2, 2);
+    let m00 = pl_get_output(0, 0, 0);
+    let m01 = pl_get_output(0, 1, 0);
+    let m10 = pl_get_output(1, 0, 0);
+    let m11 = pl_get_output(1, 1, 0);
+    let oh  = pl_output_h();
+
+    pl_init();
+    r = 0;
+    while r < 4 {
+        let c = 0;
+        while c < 4 {
+            pl_set_input(r, c, 0, r * 4 + c + 1);
+            c += 1;
+        }
+        r += 1;
+    }
+
+    // Avg pool 2×2 stride 2 → floor(sum/4):
+    //   out(0,0): (1+2+5+6)/4 = 14/4 = 3
+    //   out(0,1): (3+4+7+8)/4 = 22/4 = 5
+    let na  = pool_avg_forward(1, 2, 2);
+    let a00 = pl_get_output(0, 0, 0);
+    let a01 = pl_get_output(0, 1, 0);
+    let ow  = pl_output_w();
+
+    print("pool_test: m00=" + to_string(m00)
+          + " m01=" + to_string(m01)
+          + " m10=" + to_string(m10)
+          + " m11=" + to_string(m11)
+          + " a00=" + to_string(a00)
+          + " a01=" + to_string(a01)
+          + " oh=" + to_string(oh)
+          + " ow=" + to_string(ow));
+
+    if m00 == 6 {
+        if m01 == 8 {
+            if m10 == 14 {
+                if m11 == 16 {
+                    if a00 == 3 {
+                        if a01 == 5 {
+                            if oh == 4 {
+                                print("pool_test: PASS");
+                                return 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    print("pool_test: FAIL");
+    return 0;
+}
+
+print("pooling.hl loaded");
