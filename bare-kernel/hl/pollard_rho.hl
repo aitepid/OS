@@ -1,0 +1,116 @@
+// pollard_rho.hl -- Pollard-Rho integer factorization O(n^(1/4)) (iter 341)
+// Buffer: 0x18C0000
+// Requires miller_rabin.hl (mr_is_prime, _mr_mod) loaded first.
+// Floyd cycle detection: f(x) = (x^2 + c) mod n, try c=1..19.
+// pr_factor(n): one non-trivial factor of composite n.
+// pr_factorize(n): all prime factors in pr_factors[0..pr_fcount-1].
+
+let PR_MAX     = 32;
+let pr_factors = array(32, 0);
+let pr_stk     = array(32, 0);
+let pr_fcount  = 0;
+
+fn pr_init() { pr_fcount = 0; return 0; }
+
+fn _pr_gcd(a, b) {
+    while b != 0 {
+        let t = b;
+        b = a - (a / b) * b;
+        a = t;
+    }
+    return a;
+}
+
+fn _pr_abs(x) {
+    if x < 0 { return 0 - x; }
+    return x;
+}
+
+fn pr_factor(n) {
+    if n <= 1 { return n; }
+    if mr_is_prime(n) == 1 { return n; }
+    let nmod2 = n - (n / 2) * 2;
+    if nmod2 == 0 { return 2; }
+    let c = 1;
+    while c < 20 {
+        let x     = 2;
+        let y     = 2;
+        let d     = 1;
+        let steps = 0;
+        while d == 1 {
+            x = _mr_mod(x * x + c, n);
+            y = _mr_mod(y * y + c, n);
+            y = _mr_mod(y * y + c, n);
+            d = _pr_gcd(_pr_abs(x - y), n);
+            steps += 1;
+            if steps > 2000 { d = n; }
+        }
+        if d != n { return d; }
+        c += 1;
+    }
+    return n;
+}
+
+fn pr_factorize(n) {
+    pr_fcount = 0;
+    if n <= 1 { return 0; }
+    let top = 0;
+    set_at(pr_stk, 0, n);
+    top = 1;
+    while top > 0 {
+        top -= 1;
+        let x = pr_stk[top];
+        if x > 1 {
+            if mr_is_prime(x) == 1 {
+                set_at(pr_factors, pr_fcount, x);
+                pr_fcount += 1;
+            } else {
+                let f = pr_factor(x);
+                if f == x {
+                    set_at(pr_factors, pr_fcount, x);
+                    pr_fcount += 1;
+                } else {
+                    set_at(pr_stk, top, f);
+                    top += 1;
+                    set_at(pr_stk, top, x / f);
+                    top += 1;
+                }
+            }
+        }
+    }
+    return pr_fcount;
+}
+
+fn pr_product() {
+    let p = 1;
+    let i = 0;
+    while i < pr_fcount { p = p * pr_factors[i]; i += 1; }
+    return p;
+}
+
+fn pr_test() {
+    // 84 = 2*2*3*7 -> 4 prime factors, product = 84
+    let nc = pr_factorize(84);
+    let prod = pr_product();
+    // 997 is prime -> 1 factor = 997
+    let np = pr_factorize(997);
+    let f0 = pr_factors[0];
+    print("pr_test: factorize(84) count=" + to_string(nc) +
+          " product=" + to_string(prod) +
+          " factorize(997) count=" + to_string(np) +
+          " f[0]=" + to_string(f0));
+    if nc == 4 {
+        if prod == 84 {
+            if np == 1 {
+                if f0 == 997 {
+                    print("pr_test: PASS");
+                    return 1;
+                }
+            }
+        }
+    }
+    print("pr_test: FAIL");
+    return 0;
+}
+
+print("pollard_rho.hl loaded");

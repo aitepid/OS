@@ -2,11 +2,45 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`394`（76 根目录 + 325 内核模块）
-- H-L 总行数：`~117,100`
-- 内核模块：`325`
-- Shell 命令：`1093`
-- 最近完成功能迭代：`339`（palindrome_dp + knuth_dp + bitset_ops）
+- `.hl` 文件：`397`（76 根目录 + 328 内核模块）
+- H-L 总行数：`~117,400`
+- 内核模块：`328`
+- Shell 命令：`1114`
+- 最近完成功能迭代：`342`（miller_rabin + pollard_rho + linear_basis）
+
+## Iteration 342 — linear_basis.hl：XOR 线性基（高斯消元）
+
+- **`bare-kernel/hl/linear_basis.hl`** 新增（~100 行）
+  - LB_BITS=30，`lb_basis[30]`：第 i 位存储最高位为 i 的基向量
+  - `_lb_xor(a,b)` — 30-bit 逐位 XOR（无原生 XOR，用除法位提取）
+  - `_lb_bit(x,pos)` — 取 x 第 pos 位（幂次循环计算）
+  - `lb_insert(x)` — 高斯消元插入：从高位到低位扫描，消去已有基向量，独立则存入，返回 1；否则返回 0
+  - `lb_query_max()` — 贪心逐位尝试 XOR 当前结果与基向量，取最大值
+  - `lb_size()` — 返回线性无关基向量数
+  - 测试：插入 {1,2,3,4}：3=1⊕2 相关(0)，基={4,2,1}，max_xor=7，size=3 PASS
+  - Buffer: 0x18D0000
+
+## Iteration 341 — pollard_rho.hl：Pollard-Rho 大数因式分解
+
+- **`bare-kernel/hl/pollard_rho.hl`** 新增（~117 行）
+  - 依赖 miller_rabin.hl（`mr_is_prime`、`_mr_mod`）
+  - Floyd 循环检测：f(x)=(x²+c) mod n，c 从 1 试到 19
+  - `pr_factor(n)` — 返回 n 的一个非平凡因子；步数超 2000 或 c 耗尽则返回 n
+  - `pr_factorize(n)` — 栈式递推完全分解，结果存入 `pr_factors[0..pr_fcount-1]`
+  - `pr_product()` — 验证所有因子之积
+  - 测试：factorize(84)→4 因子,积=84；factorize(997)→1 因子,f[0]=997 PASS
+  - Buffer: 0x18C0000
+
+## Iteration 340 — miller_rabin.hl：Miller-Rabin 素性测试
+
+- **`bare-kernel/hl/miller_rabin.hl`** 新增（~121 行）
+  - 确定性版：见证者 {2,3,5,7}，对 n < 3,215,031,751 完全正确
+  - `_mr_modpow(base,exp,mod)` — 平方-乘法快速幂
+  - `_mr_witness_check(a,n,d,r)` — 单轮 Miller-Rabin 见证检测
+  - `mr_is_prime(n)` — 1=素数，0=合数（n<2/偶数快速返回，写 n-1=2^r·d 后逐证人检测）
+  - `mr_next_prime(n)` / `mr_count_primes(limit)` — 素数工具函数
+  - 测试：prime(997)=1, prime(7919)=1, comp(100)=0, comp(1001)=0, next(100)=101 PASS
+  - Buffer: 0x18B0000
 
 ## Iteration 339 — bitset_ops.hl：固定位图（AND/OR/popcount）
 
