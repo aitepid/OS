@@ -1,0 +1,209 @@
+// pass_licm.hl -- Loop-Invariant Code Motion pass (iter 362)
+// Buffer: 0x1A10000
+// Identifies loop-invariant instructions and hoists them to loop preheader
+// LICM_MAXINSTR=32, LICM_MAXLOOP=8 loops, LICM_MAXBB=16 basic blocks
+// Loop represented as: header BB + set of body BBs
+// Instruction: op, dst, src0, src1, bb (basic block index)
+// Invariant: all operands defined outside the loop (or constants)
+
+let LICM_MAXINSTR = 32;
+let LICM_MAXLOOP  = 8;
+let LICM_MAXBB    = 16;
+
+// Instructions
+let licm_op   = array(32, 0);
+let licm_dst  = array(32, 0);
+let licm_src0 = array(32, 0);  // reg or const
+let licm_src1 = array(32, 0);
+let licm_bb   = array(32, 0);  // which BB this instr belongs to
+let licm_n    = 0;
+
+// BB membership: which loop each BB belongs to (-1 = no loop)
+let licm_bb_loop = array(16, 0);
+
+// Loop definitions: header and body BBs
+let licm_lhdr  = array(8, 0);   // loop header BB
+let licm_lbody = array(64, 0);  // loop body BBs: [loop*8 + slot]
+let licm_lbsz  = array(8, 0);   // body size per loop
+let licm_ln    = 0;
+
+// Results: hoisted instructions
+let licm_hoisted    = array(32, 0);  // instr index -> 1 if hoisted
+let licm_hoist_loop = array(32, 0);  // instr -> loop it was hoisted out of
+let licm_hoist_cnt  = 0;
+
+// Defines table: dst -> bb where it's defined (to check outside-loop defs)
+let licm_def_bb = array(32, 0);
+
+fn licm_init() {
+    licm_n  = 0;
+    licm_ln = 0;
+    licm_hoist_cnt = 0;
+    let i = 0;
+    while i < LICM_MAXINSTR {
+        set_at(licm_hoisted,    i, 0);
+        set_at(licm_hoist_loop, i, 0 - 1);
+        set_at(licm_def_bb,     i, 0 - 1);
+        i += 1;
+    }
+    i = 0;
+    while i < LICM_MAXBB {
+        set_at(licm_bb_loop, i, 0 - 1);
+        i += 1;
+    }
+    i = 0;
+    while i < LICM_MAXLOOP {
+        set_at(licm_lbsz, i, 0);
+        i += 1;
+    }
+    return 0;
+}
+
+fn licm_add_instr(op, dst, src0, src1, bb) {
+    let id = licm_n;
+    set_at(licm_op,   id, op);
+    set_at(licm_dst,  id, dst);
+    set_at(licm_src0, id, src0);
+    set_at(licm_src1, id, src1);
+    set_at(licm_bb,   id, bb);
+    set_at(licm_def_bb, dst, bb);
+    licm_n += 1;
+    return id;
+}
+
+fn licm_add_loop(header) {
+    let lid = licm_ln;
+    set_at(licm_lhdr, lid, header);
+    set_at(licm_lbsz, lid, 0);
+    licm_ln += 1;
+    return lid;
+}
+
+fn licm_add_body(loop_id, bb) {
+    let sz = licm_lbsz[loop_id];
+    set_at(licm_lbody, loop_id * 8 + sz, bb);
+    set_at(licm_lbsz, loop_id, sz + 1);
+    set_at(licm_bb_loop, bb, loop_id);
+    return 0;
+}
+
+fn _licm_in_loop(bb, loop_id) {
+    // Check if bb is in the body of loop_id
+    let sz = licm_lbsz[loop_id];
+    let i = 0;
+    while i < sz {
+        if licm_lbody[loop_id * 8 + i] == bb { return 1; }
+        i += 1;
+    }
+    if licm_lhdr[loop_id] == bb { return 1; }
+    return 0;
+}
+
+fn _licm_is_invariant(instr_id, loop_id) {
+    let op   = licm_op[instr_id];
+    let src0 = licm_src0[instr_id];
+    let src1 = licm_src1[instr_id];
+
+    // Constants (op==4) are always invariant
+    if op == 4 { return 1; }
+
+    // Check src0: def_bb must be outside loop (or undefined = -1)
+    let dbb0 = licm_def_bb[src0];
+    if dbb0 != 0 - 1 {
+        if _licm_in_loop(dbb0, loop_id) == 1 {
+            // Check if the defining instruction itself is hoisted
+            let j = 0;
+            let found_hoisted = 0;
+            while j < licm_n {
+                if licm_dst[j] == src0 {
+                    if licm_hoisted[j] == 1 { found_hoisted = 1; }
+                }
+                j += 1;
+            }
+            if found_hoisted == 0 { return 0; }
+        }
+    }
+
+    // Check src1 for binary ops
+    if op != 3 {  // not a load (load uses only src0)
+        let dbb1 = licm_def_bb[src1];
+        if dbb1 != 0 - 1 {
+            if _licm_in_loop(dbb1, loop_id) == 1 {
+                let j = 0;
+                let found2 = 0;
+                while j < licm_n {
+                    if licm_dst[j] == src1 {
+                        if licm_hoisted[j] == 1 { found2 = 1; }
+                    }
+                    j += 1;
+                }
+                if found2 == 0 { return 0; }
+            }
+        }
+    }
+    return 1;
+}
+
+fn licm_run() {
+    licm_hoist_cnt = 0;
+    // For each loop, scan body instructions for invariants (iterate to fixpoint)
+    let lid = 0;
+    while lid < licm_ln {
+        let changed = 1;
+        while changed == 1 {
+            changed = 0;
+            let i = 0;
+            while i < licm_n {
+                if licm_hoisted[i] == 0 {
+                    if _licm_in_loop(licm_bb[i], lid) == 1 {
+                        if _licm_is_invariant(i, lid) == 1 {
+                            set_at(licm_hoisted, i, 1);
+                            set_at(licm_hoist_loop, i, lid);
+                            licm_hoist_cnt += 1;
+                            changed = 1;
+                        }
+                    }
+                }
+                i += 1;
+            }
+        }
+        lid += 1;
+    }
+    return licm_hoist_cnt;
+}
+
+fn licm_test() {
+    // Loop with body BB=1: r2=const 5 (invariant), r3=r2+r2 (invariant)
+    // r4=r4+r3 (variant: r4 defined in loop)
+    licm_init();
+    // BB=0: preheader; BB=1: loop body; BB=2: loop exit
+    licm_add_loop(1);
+    licm_add_body(0, 1);
+    // r2 = 5 (const, op=4, src0=5)
+    licm_add_instr(4, 2, 5, 0, 1);
+    // r3 = r2 + r2 (op=0, src0=r2, src1=r2)
+    licm_add_instr(0, 3, 2, 2, 1);
+    // r4 = r4 + r3 (variant: r4 def'd in loop)
+    licm_add_instr(0, 4, 4, 3, 1);
+    // Mark r4 as defined in loop (loop-carried)
+    set_at(licm_def_bb, 4, 1);
+    let hoisted = licm_run();
+    print("licm_test: hoisted=" + to_string(hoisted));
+    if hoisted == 2 {
+        if licm_hoisted[0] == 1 {
+            if licm_hoisted[1] == 1 {
+                if licm_hoisted[2] == 0 {
+                    print("licm_test: PASS");
+                    return 1;
+                }
+            }
+        }
+    }
+    print("licm_test: FAIL");
+    return 0;
+}
+
+fn licm_is_hoisted(instr) { return licm_hoisted[instr]; }
+fn licm_hoist_count()     { return licm_hoist_cnt; }
+
+print("pass_licm.hl loaded");

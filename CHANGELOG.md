@@ -2,11 +2,34 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`415`（76 根目录 + 346 内核模块）
-- H-L 总行数：`~121,700`
-- 内核模块：`346`
-- Shell 命令：`1240`
-- 最近完成功能迭代：`360`（suffix_tree + bsgs + min_enclosing_circle）
+- `.hl` 文件：`418`（76 根目录 + 349 内核模块）
+- H-L 总行数：`~123,500`
+- 内核模块：`349`
+- Shell 命令：`1261`
+- 最近完成功能迭代：`363`（pass_gvn + pass_licm + pass_dce2）
+
+## Iteration 363 — pass_dce2.hl：增强死代码消除（SSA Phi 节点感知）
+
+- **`pass_dce2.hl`**（Buffer: 0x1A20000）：DCE2_MAXINSTR=32，Phi 参数最多 4 个
+  - `dce2_run()`：从 store/ret/branch 根指令出发，工作列表反向传播活跃性
+  - `dce2_add_phi(dst)`：添加 Phi 节点；`dce2_phi_add_arg(i,r)` 注册 Phi 参数
+  - Phi 节点传播：所有参数寄存器均被标记为活跃
+  - 测试：5 条指令含 2 条死指令（const + mul），Phi + 加法 + ret 存活 → PASS
+
+## Iteration 362 — pass_licm.hl：循环不变量外提
+
+- **`pass_licm.hl`**（Buffer: 0x1A10000）：LICM_MAXINSTR=32，LICM_MAXLOOP=8
+  - `licm_add_loop(header)` + `licm_add_body(lid,bb)`：定义循环结构
+  - `licm_run()`：迭代至不动点，将循环体中操作数均在循环外定义的指令标记为可提升
+  - 已提升指令的操作数视作循环外定义（传递性）
+  - 测试：循环体含 const + add(均不变量) + loop-carried add → 提升 2 条 → PASS
+
+## Iteration 361 — pass_gvn.hl：全局值编号（冗余消除）
+
+- **`pass_gvn.hl`**（Buffer: 0x1A00000）：GVN_MAXINSTR=32，表达式哈希表大小 32
+  - `gvn_run()`：为每条指令分配值号；相同 (op, vn0, vn1) 的指令复用已有值号并标记 eliminated
+  - `gvn_add_instr(op,dst,src0,src1)` + 常量 op=4 的特殊去重
+  - 测试：r2=a+b; r3=a+b（冗余）; r4=r2*r3 → eliminated=1（r3 消除）→ PASS
 
 ## Iteration 360 — min_enclosing_circle.hl：最小圆覆盖（Welzl O(n)）
 

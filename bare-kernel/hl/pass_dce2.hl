@@ -1,0 +1,170 @@
+// pass_dce2.hl -- Enhanced Dead Code Elimination (SSA-based, Phi nodes) (iter 363)
+// Buffer: 0x1A20000
+// DCE2_MAXINSTR=32 instructions including Phi nodes
+// Marks instructions live via worklist propagation from "root" uses
+// op codes: 0=add,1=sub,2=mul,3=load,4=const,5=store,6=ret,7=phi,8=branch
+// Phi node: op=7, dst=result, src0..srcN from dce2_phi_args[instr*4+k]
+// "Essential": store(5), ret(6), branch(8) -> seed liveness
+
+let DCE2_MAXINSTR = 32;
+let DCE2_MAXPHI   = 4;  // max phi args per phi node
+
+let dce2_op    = array(32, 0);
+let dce2_dst   = array(32, 0);
+let dce2_src0  = array(32, 0);
+let dce2_src1  = array(32, 0);
+let dce2_n     = 0;
+
+// Phi args: dce2_phi_args[instr*4 + k] = reg, dce2_phi_argc[instr] = count
+let dce2_phi_args = array(128, 0);
+let dce2_phi_argc = array(32, 0);
+
+// Liveness
+let dce2_live     = array(32, 0);   // instr -> 1 if live
+let dce2_reg_def  = array(32, 0);   // reg -> instr that defines it (-1 if none)
+let dce2_dead_cnt = 0;
+
+// Worklist (simple array-based queue)
+let dce2_wl     = array(32, 0);
+let dce2_wl_hd  = 0;
+let dce2_wl_tl  = 0;
+
+fn dce2_init() {
+    dce2_n = 0;
+    dce2_dead_cnt = 0;
+    dce2_wl_hd = 0;
+    dce2_wl_tl = 0;
+    let i = 0;
+    while i < DCE2_MAXINSTR {
+        set_at(dce2_live,     i, 0);
+        set_at(dce2_phi_argc, i, 0);
+        set_at(dce2_reg_def,  i, 0 - 1);
+        i += 1;
+    }
+    return 0;
+}
+
+fn dce2_add_instr(op, dst, src0, src1) {
+    let id = dce2_n;
+    set_at(dce2_op,   id, op);
+    set_at(dce2_dst,  id, dst);
+    set_at(dce2_src0, id, src0);
+    set_at(dce2_src1, id, src1);
+    set_at(dce2_phi_argc, id, 0);
+    if dst >= 0 { set_at(dce2_reg_def, dst, id); }
+    dce2_n += 1;
+    return id;
+}
+
+fn dce2_add_phi(dst) {
+    let id = dce2_n;
+    set_at(dce2_op,  id, 7);
+    set_at(dce2_dst, id, dst);
+    set_at(dce2_phi_argc, id, 0);
+    set_at(dce2_reg_def, dst, id);
+    dce2_n += 1;
+    return id;
+}
+
+fn dce2_phi_add_arg(instr, reg) {
+    let k = dce2_phi_argc[instr];
+    if k < DCE2_MAXPHI {
+        set_at(dce2_phi_args, instr * 4 + k, reg);
+        set_at(dce2_phi_argc, instr, k + 1);
+    }
+    return 0;
+}
+
+fn _dce2_mark_live(instr) {
+    if instr < 0 { return 0; }
+    if instr >= dce2_n { return 0; }
+    if dce2_live[instr] == 1 { return 0; }
+    set_at(dce2_live, instr, 1);
+    // push to worklist
+    set_at(dce2_wl, dce2_wl_tl, instr);
+    dce2_wl_tl += 1;
+    return 0;
+}
+
+fn _dce2_mark_reg_live(reg) {
+    if reg < 0 { return 0; }
+    let def = dce2_reg_def[reg];
+    if def == 0 - 1 { return 0; }
+    _dce2_mark_live(def);
+    return 0;
+}
+
+fn dce2_run() {
+    dce2_wl_hd = 0;
+    dce2_wl_tl = 0;
+    // Seed: essential instructions
+    let i = 0;
+    while i < dce2_n {
+        let op = dce2_op[i];
+        if op == 5 { _dce2_mark_live(i); }  // store
+        if op == 6 { _dce2_mark_live(i); }  // ret
+        if op == 8 { _dce2_mark_live(i); }  // branch
+        i += 1;
+    }
+    // Propagate liveness
+    while dce2_wl_hd < dce2_wl_tl {
+        let cur = dce2_wl[dce2_wl_hd];
+        dce2_wl_hd += 1;
+        let op = dce2_op[cur];
+        if op == 7 {
+            // phi: mark all args
+            let k = 0;
+            while k < dce2_phi_argc[cur] {
+                _dce2_mark_reg_live(dce2_phi_args[cur * 4 + k]);
+                k += 1;
+            }
+        } else {
+            // binary/unary: mark src operands
+            _dce2_mark_reg_live(dce2_src0[cur]);
+            if op != 4 { _dce2_mark_reg_live(dce2_src1[cur]); }
+        }
+    }
+    // Count dead
+    dce2_dead_cnt = 0;
+    i = 0;
+    while i < dce2_n {
+        if dce2_live[i] == 0 { dce2_dead_cnt += 1; }
+        i += 1;
+    }
+    return dce2_dead_cnt;
+}
+
+fn dce2_test() {
+    // r1 = 1 (dead const)
+    // r2 = r0 + r0 (used by phi)
+    // r3 = phi(r0, r2)  (used by ret)
+    // r4 = r0 * r0 (dead)
+    // ret r3
+    dce2_init();
+    dce2_add_instr(4, 1, 1, 0);    // r1 = const 1 (dead)
+    dce2_add_instr(0, 2, 0, 0);    // r2 = r0+r0
+    let phi = dce2_add_phi(3);      // r3 = phi(r0, r2)
+    dce2_phi_add_arg(phi, 0);
+    dce2_phi_add_arg(phi, 2);
+    dce2_add_instr(2, 4, 0, 0);    // r4 = r0*r0 (dead)
+    dce2_add_instr(6, 0 - 1, 3, 0); // ret r3 (essential)
+    let dead = dce2_run();
+    print("dce2_test: dead=" + to_string(dead) + " live=" + to_string(dce2_n - dead));
+    if dead == 2 {
+        if dce2_live[0] == 0 {  // const dead
+            if dce2_live[3] == 0 {  // mul dead
+                if dce2_live[2] == 1 {  // phi live
+                    print("dce2_test: PASS");
+                    return 1;
+                }
+            }
+        }
+    }
+    print("dce2_test: FAIL");
+    return 0;
+}
+
+fn dce2_is_live(instr) { return dce2_live[instr]; }
+fn dce2_dead_count()   { return dce2_dead_cnt; }
+
+print("pass_dce2.hl loaded");

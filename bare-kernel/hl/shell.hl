@@ -255,13 +255,16 @@ fn shell_handle(cmd) {
         serial_print("SuffixTree:    st init <n>  st test  st build  st schar <i> <c>  st occ <plen> <c0..>  st nodes  st count");
         serial_print("BSGS:          bsgs init  bsgs test  bsgs solve <a> <b> <p>  bsgs powmod <a> <e> <p>  bsgs m  bsgs a  bsgs b  bsgs p");
         serial_print("MinEncCircle:  mec init  mec test  mec add <x> <y>  mec compute  mec cx  mec cy  mec r2  mec n");
+        serial_print("GVN:           gvn init  gvn test  gvn add <op> <dst> <s0> <s1>  gvn run  gvn vn <i>  gvn elim <i>  gvn cnt");
+        serial_print("LICM:          licm init  licm test  licm addi <op> <dst> <s0> <s1> <bb>  licm loop <hdr>  licm body <l> <bb>  licm run  licm hoisted <i>");
+        serial_print("DCE2:          dce2 init  dce2 test  dce2 add <op> <dst> <s0> <s1>  dce2 phi <dst>  dce2 parg <i> <r>  dce2 run  dce2 live <i>  dce2 dead");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
     }
 
     if cmd == "ver" {
-        return "HicOS 6.0 -- Hilbert-Lang Kernel (346 modules, pure H-L, zero deps)";
+        return "HicOS 6.0 -- Hilbert-Lang Kernel (349 modules, pure H-L, zero deps)";
     }
 
     if cmd == "uptime" {
@@ -6133,6 +6136,113 @@ fn shell_handle_ext(cmd) {
     if cmd == "mec r2"  { return "mec: r2=" + to_string(mec_cr2); }
     if cmd == "mec n"   { return "mec: n=" + to_string(mec_n); }
 
+    // --- GVN ---
+    if cmd == "gvn init" { gvn_init(); return "gvn: init"; }
+    if cmd == "gvn test" { let gvnr = gvn_test(); return "gvn: " + to_string(gvnr); }
+    if _starts_with(cmd, "gvn add ") {
+        let gvna  = str_sub(cmd, 8, len(cmd));
+        let gvns1 = _find_space(gvna);
+        let gvnop = to_int(str_sub(gvna, 0, gvns1));
+        let gvna2 = str_sub(gvna, gvns1 + 1, len(gvna));
+        let gvns2 = _find_space(gvna2);
+        let gvnds = to_int(str_sub(gvna2, 0, gvns2));
+        let gvna3 = str_sub(gvna2, gvns2 + 1, len(gvna2));
+        let gvns3 = _find_space(gvna3);
+        let gvns0 = to_int(str_sub(gvna3, 0, gvns3));
+        let gvns4 = to_int(str_sub(gvna3, gvns3 + 1, len(gvna3)));
+        let gvnid = gvn_add_instr(gvnop, gvnds, gvns0, gvns4);
+        return "gvn: added instr " + to_string(gvnid);
+    }
+    if cmd == "gvn run" { let gvnec = gvn_run(); return "gvn: eliminated=" + to_string(gvnec); }
+    if _starts_with(cmd, "gvn vn ") {
+        let gvnvi = to_int(str_sub(cmd, 7, len(cmd)));
+        return "gvn: vn[" + to_string(gvnvi) + "]=" + to_string(gvn_get_vn(gvnvi));
+    }
+    if _starts_with(cmd, "gvn elim ") {
+        let gvnei = to_int(str_sub(cmd, 9, len(cmd)));
+        return "gvn: elim[" + to_string(gvnei) + "]=" + to_string(gvn_is_elim(gvnei));
+    }
+    if cmd == "gvn cnt" { return "gvn: elim_count=" + to_string(gvn_elim_count); }
+    if cmd == "gvn n"   { return "gvn: n=" + to_string(gvn_n); }
+
+    // --- LICM ---
+    if cmd == "licm init" { licm_init(); return "licm: init"; }
+    if cmd == "licm test" { let licmr = licm_test(); return "licm: " + to_string(licmr); }
+    if _starts_with(cmd, "licm addi ") {
+        let licma  = str_sub(cmd, 10, len(cmd));
+        let licms1 = _find_space(licma);
+        let licmop = to_int(str_sub(licma, 0, licms1));
+        let licma2 = str_sub(licma, licms1 + 1, len(licma));
+        let licms2 = _find_space(licma2);
+        let licmds = to_int(str_sub(licma2, 0, licms2));
+        let licma3 = str_sub(licma2, licms2 + 1, len(licma2));
+        let licms3 = _find_space(licma3);
+        let licms0 = to_int(str_sub(licma3, 0, licms3));
+        let licma4 = str_sub(licma3, licms3 + 1, len(licma3));
+        let licms4 = _find_space(licma4);
+        let licms1b = to_int(str_sub(licma4, 0, licms4));
+        let licmbb = to_int(str_sub(licma4, licms4 + 1, len(licma4)));
+        let licmid = licm_add_instr(licmop, licmds, licms0, licms1b, licmbb);
+        return "licm: added instr " + to_string(licmid);
+    }
+    if _starts_with(cmd, "licm loop ") {
+        let licmlh = to_int(str_sub(cmd, 10, len(cmd)));
+        let licmll = licm_add_loop(licmlh);
+        return "licm: loop " + to_string(licmll) + " hdr=" + to_string(licmlh);
+    }
+    if _starts_with(cmd, "licm body ") {
+        let licmba  = str_sub(cmd, 10, len(cmd));
+        let licmbs  = _find_space(licmba);
+        let licmbl  = to_int(str_sub(licmba, 0, licmbs));
+        let licmbb2 = to_int(str_sub(licmba, licmbs + 1, len(licmba)));
+        licm_add_body(licmbl, licmbb2);
+        return "licm: body loop=" + to_string(licmbl) + " bb=" + to_string(licmbb2);
+    }
+    if cmd == "licm run" { let licmhc = licm_run(); return "licm: hoisted=" + to_string(licmhc); }
+    if _starts_with(cmd, "licm hoisted ") {
+        let licmhi = to_int(str_sub(cmd, 13, len(cmd)));
+        return "licm: hoisted[" + to_string(licmhi) + "]=" + to_string(licm_is_hoisted(licmhi));
+    }
+    if cmd == "licm cnt" { return "licm: hoist_count=" + to_string(licm_hoist_count()); }
+
+    // --- DCE2 ---
+    if cmd == "dce2 init" { dce2_init(); return "dce2: init"; }
+    if cmd == "dce2 test" { let dce2r = dce2_test(); return "dce2: " + to_string(dce2r); }
+    if _starts_with(cmd, "dce2 add ") {
+        let dcea  = str_sub(cmd, 9, len(cmd));
+        let dces1 = _find_space(dcea);
+        let dceop = to_int(str_sub(dcea, 0, dces1));
+        let dcea2 = str_sub(dcea, dces1 + 1, len(dcea));
+        let dces2 = _find_space(dcea2);
+        let dceds = to_int(str_sub(dcea2, 0, dces2));
+        let dcea3 = str_sub(dcea2, dces2 + 1, len(dcea2));
+        let dces3 = _find_space(dcea3);
+        let dces0 = to_int(str_sub(dcea3, 0, dces3));
+        let dces4 = to_int(str_sub(dcea3, dces3 + 1, len(dcea3)));
+        let dceid = dce2_add_instr(dceop, dceds, dces0, dces4);
+        return "dce2: added instr " + to_string(dceid);
+    }
+    if _starts_with(cmd, "dce2 phi ") {
+        let dcepd = to_int(str_sub(cmd, 9, len(cmd)));
+        let dcepi = dce2_add_phi(dcepd);
+        return "dce2: phi " + to_string(dcepi) + " dst=" + to_string(dcepd);
+    }
+    if _starts_with(cmd, "dce2 parg ") {
+        let dcepaa = str_sub(cmd, 10, len(cmd));
+        let dcepas = _find_space(dcepaa);
+        let dcepai = to_int(str_sub(dcepaa, 0, dcepas));
+        let dcepar = to_int(str_sub(dcepaa, dcepas + 1, len(dcepaa)));
+        dce2_phi_add_arg(dcepai, dcepar);
+        return "dce2: phi[" + to_string(dcepai) + "] arg=" + to_string(dcepar);
+    }
+    if cmd == "dce2 run" { let dcedc = dce2_run(); return "dce2: dead=" + to_string(dcedc); }
+    if _starts_with(cmd, "dce2 live ") {
+        let dceli = to_int(str_sub(cmd, 10, len(cmd)));
+        return "dce2: live[" + to_string(dceli) + "]=" + to_string(dce2_is_live(dceli));
+    }
+    if cmd == "dce2 dead" { return "dce2: dead_count=" + to_string(dce2_dead_count()); }
+    if cmd == "dce2 n"    { return "dce2: n=" + to_string(dce2_n); }
+
     return shell_handle(cmd);
 }
 
@@ -6144,7 +6254,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 1240 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld + lca + virtualtree + dominator + sam + manacher + eertree + bwt + lyndon + zfunction + ir + regalloc + codegen + ioring + persistseg + rollbackdsu + splaytree + mo + sqrtdecomp + cht + matrixexpo + numtheory + strhash + intervaldp + gametheory + trie + lichao + dcdp + monoqueue + segbeats + lct + quickselect + ntt + segmerge + palindromedp + knuthdp + bitset + millerrabin + pollardrho + linearbasis + geometry2d + rotcalip + halfplane + dinic + blockcuttree + bridgetree + polyinv + polylnexp + polysqrt + bitmaskdp + digitdp + brokenprofiledp + wavelettree + implicittreap + chtholly + suffixtree + bsgs + minencircle");
+print("shell.hl loaded -- 1261 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld + lca + virtualtree + dominator + sam + manacher + eertree + bwt + lyndon + zfunction + ir + regalloc + codegen + ioring + persistseg + rollbackdsu + splaytree + mo + sqrtdecomp + cht + matrixexpo + numtheory + strhash + intervaldp + gametheory + trie + lichao + dcdp + monoqueue + segbeats + lct + quickselect + ntt + segmerge + palindromedp + knuthdp + bitset + millerrabin + pollardrho + linearbasis + geometry2d + rotcalip + halfplane + dinic + blockcuttree + bridgetree + polyinv + polylnexp + polysqrt + bitmaskdp + digitdp + brokenprofiledp + wavelettree + implicittreap + chtholly + suffixtree + bsgs + minencircle + gvn + licm + dce2");
 
 // Main shell loop (called from kernel_init)
 

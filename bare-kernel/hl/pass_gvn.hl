@@ -1,0 +1,169 @@
+// pass_gvn.hl -- Global Value Numbering pass O(n^2) hash-based (iter 361)
+// Buffer: 0x1A00000
+// Assigns value numbers to IR instructions; eliminates redundant computations
+// GVN_MAXINSTR=32 instructions, GVN_MAXVN=32 value numbers
+// Instruction format: op(0-7), dst, src0, src1; gvn_vn[i] = value number of instr i
+// Redundant: same op+vn(src0)+vn(src1) -> reuse earlier vn, mark eliminated
+
+let GVN_MAXINSTR = 32;
+let GVN_MAXVN    = 32;
+
+// Instruction fields
+let gvn_op   = array(32, 0);   // opcode (0=add,1=sub,2=mul,3=load,4=const)
+let gvn_dst  = array(32, 0);   // destination register
+let gvn_src0 = array(32, 0);   // src0 register or const value
+let gvn_src1 = array(32, 0);   // src1 register
+let gvn_n    = 0;               // instruction count
+
+// Value number table: maps register -> vn
+let gvn_reg_vn  = array(32, 0);  // reg -> vn
+let gvn_vn      = array(32, 0);  // instr -> value number assigned
+let gvn_elim    = array(32, 0);  // instr -> 1 if eliminated
+let gvn_next_vn = 0;             // next available vn
+
+// Expression table: vn_key -> (op, vn0, vn1) for dedup
+let gvn_ek_op   = array(32, 0);
+let gvn_ek_vn0  = array(32, 0);
+let gvn_ek_vn1  = array(32, 0);
+let gvn_ek_vn   = array(32, 0);  // result vn
+let gvn_ek_n    = 0;
+
+let gvn_elim_count = 0;
+
+fn gvn_init() {
+    gvn_n = 0;
+    gvn_next_vn = 0;
+    gvn_ek_n = 0;
+    gvn_elim_count = 0;
+    let i = 0;
+    while i < GVN_MAXINSTR {
+        set_at(gvn_op,   i, 0);
+        set_at(gvn_dst,  i, 0);
+        set_at(gvn_src0, i, 0);
+        set_at(gvn_src1, i, 0);
+        set_at(gvn_vn,   i, 0);
+        set_at(gvn_elim, i, 0);
+        set_at(gvn_reg_vn, i, 0 - 1);
+        i += 1;
+    }
+    return 0;
+}
+
+fn gvn_add_instr(op, dst, src0, src1) {
+    let id = gvn_n;
+    set_at(gvn_op,   id, op);
+    set_at(gvn_dst,  id, dst);
+    set_at(gvn_src0, id, src0);
+    set_at(gvn_src1, id, src1);
+    set_at(gvn_elim, id, 0);
+    gvn_n += 1;
+    return id;
+}
+
+fn _gvn_lookup_expr(op, vn0, vn1) {
+    // Returns existing vn if found, else -1
+    let i = 0;
+    while i < gvn_ek_n {
+        if gvn_ek_op[i] == op {
+            if gvn_ek_vn0[i] == vn0 {
+                if gvn_ek_vn1[i] == vn1 {
+                    return gvn_ek_vn[i];
+                }
+            }
+        }
+        i += 1;
+    }
+    return 0 - 1;
+}
+
+fn _gvn_insert_expr(op, vn0, vn1, result_vn) {
+    let id = gvn_ek_n;
+    set_at(gvn_ek_op,  id, op);
+    set_at(gvn_ek_vn0, id, vn0);
+    set_at(gvn_ek_vn1, id, vn1);
+    set_at(gvn_ek_vn,  id, result_vn);
+    gvn_ek_n += 1;
+    return 0;
+}
+
+fn gvn_run() {
+    gvn_elim_count = 0;
+    let i = 0;
+    while i < gvn_n {
+        let op   = gvn_op[i];
+        let dst  = gvn_dst[i];
+        let src0 = gvn_src0[i];
+        let src1 = gvn_src1[i];
+
+        if op == 4 {
+            // const: assign new vn unless another reg already has same const value
+            let found_vn = 0 - 1;
+            let j = 0;
+            while j < gvn_ek_n {
+                if gvn_ek_op[j] == 4 {
+                    if gvn_ek_vn0[j] == src0 {
+                        found_vn = gvn_ek_vn[j];
+                    }
+                }
+                j += 1;
+            }
+            if found_vn != 0 - 1 {
+                set_at(gvn_vn, i, found_vn);
+                set_at(gvn_reg_vn, dst, found_vn);
+                set_at(gvn_elim, i, 1);
+                gvn_elim_count += 1;
+            } else {
+                let nvn = gvn_next_vn;
+                gvn_next_vn += 1;
+                set_at(gvn_vn, i, nvn);
+                set_at(gvn_reg_vn, dst, nvn);
+                _gvn_insert_expr(4, src0, 0, nvn);
+            }
+        } else {
+            // binary op: get vns of src operands
+            let vn0 = gvn_reg_vn[src0];
+            let vn1 = gvn_reg_vn[src1];
+            if vn0 == 0 - 1 { vn0 = src0; }
+            if vn1 == 0 - 1 { vn1 = src1; }
+            let existing = _gvn_lookup_expr(op, vn0, vn1);
+            if existing != 0 - 1 {
+                set_at(gvn_vn, i, existing);
+                set_at(gvn_reg_vn, dst, existing);
+                set_at(gvn_elim, i, 1);
+                gvn_elim_count += 1;
+            } else {
+                let nvn2 = gvn_next_vn;
+                gvn_next_vn += 1;
+                set_at(gvn_vn, i, nvn2);
+                set_at(gvn_reg_vn, dst, nvn2);
+                _gvn_insert_expr(op, vn0, vn1, nvn2);
+            }
+        }
+        i += 1;
+    }
+    return gvn_elim_count;
+}
+
+fn gvn_test() {
+    // Sequence: r1=a+b; r2=a+b; r3=r1*r2 -> r2 is redundant (same as r1)
+    // op: 0=add, 2=mul; regs: a=0,b=1,r1=2,r2=3,r3=4
+    gvn_init();
+    gvn_add_instr(0, 2, 0, 1);  // r2 = a+b
+    gvn_add_instr(0, 3, 0, 1);  // r3 = a+b  (redundant)
+    gvn_add_instr(2, 4, 2, 3);  // r4 = r2*r3
+    let elim = gvn_run();
+    print("gvn_test: eliminated=" + to_string(elim) + " vns=" + to_string(gvn_next_vn));
+    if elim == 1 {
+        if gvn_elim[1] == 1 {
+            print("gvn_test: PASS");
+            return 1;
+        }
+    }
+    print("gvn_test: FAIL");
+    return 0;
+}
+
+fn gvn_get_vn(instr)  { return gvn_vn[instr]; }
+fn gvn_is_elim(instr) { return gvn_elim[instr]; }
+
+print("pass_gvn.hl loaded");
