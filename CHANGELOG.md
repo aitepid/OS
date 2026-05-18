@@ -2,11 +2,46 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`388`（76 根目录 + 319 内核模块）
-- H-L 总行数：`~114,600`
-- 内核模块：`319`
-- Shell 命令：`1050`
-- 最近完成功能迭代：`333`（monotone_queue + seg_beats + link_cut_tree）
+- `.hl` 文件：`391`（76 根目录 + 322 内核模块）
+- H-L 总行数：`~115,900`
+- 内核模块：`322`
+- Shell 命令：`1071`
+- 最近完成功能迭代：`336`（quickselect + ntt + seg_merge）
+
+## Iteration 336 — seg_merge.hl：稀疏线段树合并
+
+- **`bare-kernel/hl/seg_merge.hl`** 新增（~100 行）
+  - 动态开点稀疏线段树，坐标域 [0,63]，节点池 SM_POOL=512
+  - `sm_update(root,lo,hi,pos,val)` — 插入权值，路径上动态分配节点
+  - `sm_query(root,lo,hi,l,r)` — 区间权值和查询 O(log n)
+  - `sm_merge(u,v,lo,hi)` — 破坏性合并两棵树（复用 u 的节点）O(重叠节点数)
+  - `sm_roots[32]` — 多棵树根数组，支持 shell 命令独立操作
+  - 测试：树0(pos3+5,pos10+4)，树1(pos7+3,pos10+5)，合并后总和=17，区间[5,15]=12
+  - Buffer: 0x1870000
+
+## Iteration 335 — ntt.hl：数论变换（NTT mod 998244353）
+
+- **`bare-kernel/hl/ntt.hl`** 新增（~130 行）
+  - MOD=998244353=119×2²³+1，原根 g=3
+  - 无 `%` 运算符：取模用 `v - (v/MOD)*MOD`；无 XOR/AND：位提取用算术
+  - `_ntt_mod(v)` / `_ntt_mpow(base,exp)` — 模运算与快速幂
+  - `_ntt_get/_ntt_set` 通过 `ntt_cur`（0=a,1=b,2=c）调度数组访问（规避数组传参限制）
+  - `_ntt_run(n,inv)` — 蝴蝶变换（位逆序置换 + 迭代 DIT）
+  - `ntt_multiply(na,nb)` — 多项式卷积：补零到 2 的幂，NTT→逐点乘→INTT
+  - 测试：[1,2,3]×[4,5,6]=[4,13,28,27,18] PASS
+  - Buffer: 0x1860000
+
+## Iteration 334 — quickselect.hl：QuickSelect + QuickSort
+
+- **`bare-kernel/hl/quickselect.hl`** 新增（~80 行）
+  - Lomuto 分区，末位元素为基准，1-indexed k（0-based 数组下标）
+  - `_qs_part(lo,hi)` — Lomuto 划分，返回 pivot 最终位置
+  - `_qs_sel(lo,hi,k)` — 递归 QuickSelect，O(n) 期望
+  - `qs_kth(k)` — 第 k 小元素（0-indexed）
+  - `_qs_sort(lo,hi)` / `qs_sort()` — 递归 QuickSort，O(n log n) 期望
+  - QS_MAX=64，数据存于 `qs_data[64]`，`qs_n` 设置有效长度
+  - 测试：[7,2,1,6,5,3,4,8] kth(3)=4，sort→sorted[0]=1,sorted[7]=8 PASS
+  - Buffer: 0x1850000
 
 ## Iteration 333 — link_cut_tree.hl：Link-Cut Tree（动态森林路径查询）
 

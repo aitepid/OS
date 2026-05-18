@@ -1,0 +1,89 @@
+// quickselect.hl -- QuickSelect k-th smallest + QuickSort (iter 334)
+// Buffer: 0x1850000
+// Lomuto partition, last-element pivot.
+// qs_kth(k): k-th smallest in qs_data[0..qs_n-1] (0-indexed), O(n) expected.
+// qs_sort(): in-place sort, O(n log n) expected.
+
+let QS_MAX  = 64;
+let qs_data = array(64, 0);
+let qs_n    = 0;
+
+fn _qs_swap(i, j) {
+    let t = qs_data[i];
+    set_at(qs_data, i, qs_data[j]);
+    set_at(qs_data, j, t);
+    return 0;
+}
+
+fn _qs_part(lo, hi) {
+    let piv = qs_data[hi];
+    let i   = lo;
+    let j   = lo;
+    while j < hi {
+        if qs_data[j] <= piv {
+            _qs_swap(i, j);
+            i += 1;
+        }
+        j += 1;
+    }
+    _qs_swap(i, hi);
+    return i;
+}
+
+fn _qs_sel(lo, hi, k) {
+    if lo >= hi { return qs_data[lo]; }
+    let p = _qs_part(lo, hi);
+    if p == k   { return qs_data[p]; }
+    if k < p    { return _qs_sel(lo, p - 1, k); }
+    return _qs_sel(p + 1, hi, k);
+}
+
+fn qs_kth(k) {
+    if qs_n == 0 { return -1; }
+    return _qs_sel(0, qs_n - 1, k);
+}
+
+fn _qs_sort(lo, hi) {
+    if lo >= hi { return 0; }
+    let p = _qs_part(lo, hi);
+    _qs_sort(lo, p - 1);
+    _qs_sort(p + 1, hi);
+    return 0;
+}
+
+fn qs_sort() {
+    if qs_n <= 1 { return 0; }
+    _qs_sort(0, qs_n - 1);
+    return 0;
+}
+
+fn qs_test() {
+    qs_n = 8;
+    set_at(qs_data, 0, 7);
+    set_at(qs_data, 1, 2);
+    set_at(qs_data, 2, 1);
+    set_at(qs_data, 3, 6);
+    set_at(qs_data, 4, 5);
+    set_at(qs_data, 5, 3);
+    set_at(qs_data, 6, 4);
+    set_at(qs_data, 7, 8);
+    let k3 = qs_kth(3);
+    qs_sort();
+    let s0 = qs_data[0];
+    let s7 = qs_data[7];
+    print("qs_test: kth(3)=" + to_string(k3) +
+          " sorted[0]=" + to_string(s0) +
+          " sorted[7]=" + to_string(s7));
+    if k3 == 4 {
+        if s0 == 1 {
+            if s7 == 8 {
+                print("qs_test: PASS");
+                return 1;
+            }
+        }
+    }
+    print("qs_test: FAIL");
+    return 0;
+}
+
+print("quickselect.hl loaded");

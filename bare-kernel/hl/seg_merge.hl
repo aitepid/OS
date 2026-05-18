@@ -1,0 +1,99 @@
+// seg_merge.hl -- Sparse Segment Tree Merge (iter 336)
+// Buffer: 0x1870000
+// SM_XMAX=64 coordinate range [0,63]. Node pool size SM_POOL=512.
+// Node 0 = null. sm_cnt starts at 1.
+// sm_update(root,lo,hi,pos,val): add val at position pos.
+// sm_query(root,lo,hi,l,r): range sum query [l,r].
+// sm_merge(u,v,lo,hi): merge two trees destructively (reuses u's nodes).
+
+let SM_XMAX  = 64;
+let SM_POOL  = 512;
+
+let sm_lc  = array(512, 0);
+let sm_rc  = array(512, 0);
+let sm_sum = array(512, 0);
+let sm_cnt = 1;          // next free node (0 = null)
+
+let sm_roots = array(32, 0);
+
+fn sm_new() {
+    let id = sm_cnt;
+    sm_cnt += 1;
+    set_at(sm_lc,  id, 0);
+    set_at(sm_rc,  id, 0);
+    set_at(sm_sum, id, 0);
+    return id;
+}
+
+fn sm_update(root, lo, hi, pos, val) {
+    if root == 0 { root = sm_new(); }
+    set_at(sm_sum, root, sm_sum[root] + val);
+    if lo == hi { return root; }
+    let mid = (lo + hi) / 2;
+    if pos <= mid {
+        set_at(sm_lc, root, sm_update(sm_lc[root], lo, mid, pos, val));
+    } else {
+        set_at(sm_rc, root, sm_update(sm_rc[root], mid + 1, hi, pos, val));
+    }
+    return root;
+}
+
+fn sm_query(root, lo, hi, l, r) {
+    if root == 0 { return 0; }
+    if l <= lo {
+        if hi <= r { return sm_sum[root]; }
+    }
+    let mid = (lo + hi) / 2;
+    let res = 0;
+    if l <= mid { res += sm_query(sm_lc[root], lo, mid, l, r); }
+    if r > mid  { res += sm_query(sm_rc[root], mid + 1, hi, l, r); }
+    return res;
+}
+
+fn sm_merge(u, v, lo, hi) {
+    if u == 0 { return v; }
+    if v == 0 { return u; }
+    set_at(sm_sum, u, sm_sum[u] + sm_sum[v]);
+    if lo == hi { return u; }
+    let mid = (lo + hi) / 2;
+    set_at(sm_lc, u, sm_merge(sm_lc[u], sm_lc[v], lo, mid));
+    set_at(sm_rc, u, sm_merge(sm_rc[u], sm_rc[v], mid + 1, hi));
+    return u;
+}
+
+fn sm_test() {
+    sm_cnt = 1;
+    let r0 = 0;
+    let r1 = 0;
+    // tree 0: insert pos 3 val 5, pos 10 val 4
+    r0 = sm_update(r0, 0, SM_XMAX - 1, 3,  5);
+    r0 = sm_update(r0, 0, SM_XMAX - 1, 10, 4);
+    // tree 1: insert pos 7 val 3, pos 10 val 5
+    r1 = sm_update(r1, 0, SM_XMAX - 1, 7,  3);
+    r1 = sm_update(r1, 0, SM_XMAX - 1, 10, 5);
+    // query before merge
+    let q0 = sm_query(r0, 0, SM_XMAX - 1, 0, 63);
+    let q1 = sm_query(r1, 0, SM_XMAX - 1, 0, 63);
+    // merge
+    let rm = sm_merge(r0, r1, 0, SM_XMAX - 1);
+    let qm = sm_query(rm, 0, SM_XMAX - 1, 0, 63);
+    let qp = sm_query(rm, 0, SM_XMAX - 1, 5, 15);
+    print("sm_test: sum0=" + to_string(q0) +
+          " sum1=" + to_string(q1) +
+          " merged=" + to_string(qm) +
+          " range[5,15]=" + to_string(qp));
+    if q0 == 9 {
+        if q1 == 8 {
+            if qm == 17 {
+                if qp == 12 {
+                    print("sm_test: PASS");
+                    return 1;
+                }
+            }
+        }
+    }
+    print("sm_test: FAIL");
+    return 0;
+}
+
+print("seg_merge.hl loaded");
