@@ -1,0 +1,292 @@
+// dns_over_https.hl -- DNS over HTTPS (DoH, RFC 8484) client (iter 389)
+// Buffer: 0x1BC0000
+// DOH_MAXQ=16 pending queries, DOH_CACHE=32 cached responses
+// DNS record types: A=1 AAAA=28 CNAME=5 MX=15 TXT=16
+// Wire format: 2-byte QID + flags + QDCOUNT + ANCOUNT + labels + RDATA
+// Transport: HTTPS POST to /dns-query with application/dns-message
+
+let DOH_MAXQ      = 16;
+let DOH_CACHE     = 32;
+let DOH_MAXSERVER = 4;
+
+// Record types
+let DOH_A     = 1;
+let DOH_CNAME = 5;
+let DOH_MX    = 15;
+let DOH_TXT   = 16;
+let DOH_AAAA  = 28;
+
+// Query states
+let DOH_Q_FREE      = 0;
+let DOH_Q_PENDING   = 1;
+let DOH_Q_RESOLVED  = 2;
+let DOH_Q_NXDOMAIN  = 3;
+let DOH_Q_ERROR     = 4;
+
+// DNS response codes
+let DOH_RCODE_OK      = 0;
+let DOH_RCODE_NXDOMAIN= 3;
+let DOH_RCODE_SERVFAIL= 2;
+let DOH_RCODE_REFUSED = 5;
+
+// Per-query fields
+let doh_qstate   = array(16, 0);   // query state
+let doh_qid      = array(16, 0);   // DNS QID
+let doh_qname    = array(16, 0);   // domain hash (simplified)
+let doh_qtype    = array(16, 0);   // record type
+let doh_rcode    = array(16, 0);   // response code
+let doh_rdata    = array(16, 0);   // resolved value (IP as integer)
+let doh_rttl     = array(16, 0);   // response TTL
+let doh_n_queries = 0;
+
+// Response cache
+let doh_cache_key = array(32, 0);  // domain hash
+let doh_cache_val = array(32, 0);  // rdata value
+let doh_cache_ttl = array(32, 0);  // remaining TTL ticks
+let doh_cache_typ = array(32, 0);  // record type
+let doh_cache_used= array(32, 0);  // 1=valid
+let doh_cache_lru = array(32, 0);  // LRU counter
+let doh_cache_n   = 0;
+let doh_lru_clock = 0;
+
+// Server table
+let doh_server_hash = array(4, 0);  // server URL hash
+let doh_n_servers   = 0;
+let doh_active_srv  = 0;
+
+// Wire format buffer
+let DOH_WIRE_MAX = 64;
+let doh_wire     = array(64, 0);   // DNS wire bytes
+let doh_wire_len = 0;
+
+fn doh_init() {
+    let i = 0;
+    while i < DOH_MAXQ {
+        set_at(doh_qstate, i, DOH_Q_FREE);
+        set_at(doh_qid,    i, 0);
+        set_at(doh_qname,  i, 0);
+        set_at(doh_qtype,  i, 0);
+        set_at(doh_rcode,  i, 0);
+        set_at(doh_rdata,  i, 0);
+        set_at(doh_rttl,   i, 0);
+        i += 1;
+    }
+    while i < DOH_CACHE {
+        set_at(doh_cache_used, i - DOH_MAXQ, 0);
+        i += 1;
+    }
+    doh_n_queries  = 0;
+    doh_cache_n    = 0;
+    doh_lru_clock  = 0;
+    doh_n_servers  = 0;
+    doh_active_srv = 0;
+    // Default DoH servers
+    set_at(doh_server_hash, 0, 8888);    // 8.8.8.8 (Google)
+    set_at(doh_server_hash, 1, 11111);   // 1.1.1.1 (Cloudflare)
+    doh_n_servers = 2;
+    return 0;
+}
+
+fn doh_set_server(url_hash) {
+    if doh_n_servers < DOH_MAXSERVER {
+        set_at(doh_server_hash, doh_n_servers, url_hash);
+        doh_n_servers += 1;
+    }
+    return doh_n_servers - 1;
+}
+
+fn _doh_build_wire(qname_hash, qtype) {
+    // Build minimal DNS wire format query
+    // Header: QID(2) + flags(2) + QDCOUNT=1(2) + 0s(6)
+    let qid = doh_n_queries * 7 + 1;
+    set_at(doh_wire, 0,  qid / 256);
+    set_at(doh_wire, 1,  qid - (qid / 256) * 256);
+    set_at(doh_wire, 2,  1);   // QR=0 OPCODE=0 RD=1
+    set_at(doh_wire, 3,  0);
+    set_at(doh_wire, 4,  0); set_at(doh_wire, 5, 1);  // QDCOUNT=1
+    set_at(doh_wire, 6,  0); set_at(doh_wire, 7, 0);  // ANCOUNT=0
+    set_at(doh_wire, 8,  0); set_at(doh_wire, 9, 0);  // NSCOUNT=0
+    set_at(doh_wire, 10, 0); set_at(doh_wire, 11, 0); // ARCOUNT=0
+    // QNAME: encode qname_hash as 2-label name (<high>.<low>.doha)
+    let hi = qname_hash / 256;
+    let lo = qname_hash - hi * 256;
+    set_at(doh_wire, 12, 2);   // label len=2
+    set_at(doh_wire, 13, hi);
+    set_at(doh_wire, 14, lo);
+    set_at(doh_wire, 15, 4);   // label "doha"
+    set_at(doh_wire, 16, 100); set_at(doh_wire, 17, 111); // d=100, o=111
+    set_at(doh_wire, 18, 104); set_at(doh_wire, 19, 97);  // h=104, a=97
+    set_at(doh_wire, 20, 0);   // root label
+    set_at(doh_wire, 21, 0); set_at(doh_wire, 22, qtype);  // QTYPE
+    set_at(doh_wire, 23, 0); set_at(doh_wire, 24, 1);      // QCLASS=IN
+    doh_wire_len = 25;
+    return qid;
+}
+
+fn _doh_cache_lookup(qname_hash, qtype) {
+    // Check cache; returns rdata value or -1
+    let i = 0;
+    while i < doh_cache_n {
+        if doh_cache_used[i] == 1 {
+            if doh_cache_key[i] == qname_hash {
+                if doh_cache_typ[i] == qtype {
+                    if doh_cache_ttl[i] > 0 {
+                        set_at(doh_lru_clock, 0, doh_lru_clock + 1);
+                        set_at(doh_cache_lru, i, doh_lru_clock);
+                        return doh_cache_val[i];
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    return 0 - 1;
+}
+
+fn _doh_cache_insert(qname_hash, qtype, val, ttl) {
+    // Evict LRU if full
+    let slot = doh_cache_n;
+    if doh_cache_n >= DOH_CACHE {
+        // Find LRU slot
+        let min_lru = doh_cache_lru[0];
+        slot = 0;
+        let i = 1;
+        while i < DOH_CACHE {
+            if doh_cache_lru[i] < min_lru {
+                min_lru = doh_cache_lru[i];
+                slot = i;
+            }
+            i += 1;
+        }
+    } else {
+        doh_cache_n += 1;
+    }
+    set_at(doh_cache_key,  slot, qname_hash);
+    set_at(doh_cache_typ,  slot, qtype);
+    set_at(doh_cache_val,  slot, val);
+    set_at(doh_cache_ttl,  slot, ttl);
+    set_at(doh_cache_used, slot, 1);
+    doh_lru_clock += 1;
+    set_at(doh_cache_lru,  slot, doh_lru_clock);
+    return slot;
+}
+
+fn _doh_simulate_response(qname_hash, qtype) {
+    // Simulate DNS response: rdata = (qname_hash * qtype + 1) mod 65521
+    let v = qname_hash * qtype + 1;
+    let p = 65521;
+    return v - (v / p) * p;
+}
+
+fn doh_query(qname_hash, qtype) {
+    // Check cache first
+    let cached = _doh_cache_lookup(qname_hash, qtype);
+    if cached != 0 - 1 {
+        return cached;
+    }
+    // Build wire query
+    let qid = _doh_build_wire(qname_hash, qtype);
+    // Find free query slot
+    let slot = doh_n_queries - (doh_n_queries / DOH_MAXQ) * DOH_MAXQ;
+    set_at(doh_qstate, slot, DOH_Q_PENDING);
+    set_at(doh_qid,    slot, qid);
+    set_at(doh_qname,  slot, qname_hash);
+    set_at(doh_qtype,  slot, qtype);
+    doh_n_queries += 1;
+
+    // Simulate HTTPS POST to DoH server and receive response
+    let rdata = _doh_simulate_response(qname_hash, qtype);
+    set_at(doh_qstate, slot, DOH_Q_RESOLVED);
+    set_at(doh_rcode,  slot, DOH_RCODE_OK);
+    set_at(doh_rdata,  slot, rdata);
+    set_at(doh_rttl,   slot, 300);  // TTL=300s
+
+    // Cache the result
+    _doh_cache_insert(qname_hash, qtype, rdata, 300);
+    return rdata;
+}
+
+fn doh_flush() {
+    // Invalidate all cache entries
+    let i = 0;
+    while i < doh_cache_n {
+        set_at(doh_cache_used, i, 0);
+        i += 1;
+    }
+    doh_cache_n = 0;
+    return 0;
+}
+
+fn doh_tick() {
+    // Decrement TTLs; expire zero-TTL entries
+    let i = 0;
+    let expired = 0;
+    while i < doh_cache_n {
+        if doh_cache_used[i] == 1 {
+            if doh_cache_ttl[i] > 0 {
+                set_at(doh_cache_ttl, i, doh_cache_ttl[i] - 1);
+            } else {
+                set_at(doh_cache_used, i, 0);
+                expired += 1;
+            }
+        }
+        i += 1;
+    }
+    return expired;
+}
+
+fn doh_cache_size() {
+    let i = 0;
+    let n = 0;
+    while i < doh_cache_n {
+        if doh_cache_used[i] == 1 { n += 1; }
+        i += 1;
+    }
+    return n;
+}
+
+fn doh_test() {
+    doh_init();
+
+    // Query A record for domain hash=1234
+    let r1 = doh_query(1234, DOH_A);
+
+    // Same query again → cache hit
+    let r2 = doh_query(1234, DOH_A);
+
+    // Different query: AAAA for domain hash=5678
+    let r3 = doh_query(5678, DOH_AAAA);
+
+    let csz = doh_cache_size();
+
+    // Cache flush
+    doh_flush();
+    let csz2 = doh_cache_size();
+
+    // After flush, new query re-resolves
+    let r4 = doh_query(1234, DOH_A);
+
+    print("doh_test: r1=" + to_string(r1)
+          + " r2=" + to_string(r2)
+          + " r3=" + to_string(r3)
+          + " cache=" + to_string(csz)
+          + " flush=" + to_string(csz2)
+          + " r4=" + to_string(r4));
+
+    if r1 == r2 {
+        if r3 != r1 {
+            if csz == 2 {
+                if csz2 == 0 {
+                    if r4 == r1 {
+                        print("doh_test: PASS");
+                        return 1;
+                    }
+                }
+            }
+        }
+    }
+    print("doh_test: FAIL");
+    return 0;
+}
+
+print("dns_over_https.hl loaded");

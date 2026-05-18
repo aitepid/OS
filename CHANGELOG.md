@@ -2,13 +2,47 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`442`（76 根目录 + 373 内核模块）
-- H-L 总行数：`~149,700`
-- 内核模块：`373`
-- Shell 命令：`1429`
-- 最近完成功能迭代：`387`（db_engine + wireguard + tls13）
-- 当前阶段：第四阶段·网络深化（iter 388 下一批）
-- **Milestone M3 达成**：db_engine 完成完整存储引擎（B-Tree/索引/MVCC/事务/查询计划全整合）
+- `.hl` 文件：`445`（76 根目录 + 376 内核模块）
+- H-L 总行数：`~150,500`
+- 内核模块：`376`
+- Shell 命令：`1450`
+- 最近完成功能迭代：`390`（http3_quic + dns_over_https + dht）
+- 当前阶段：第四阶段·网络深化（iter 391 下一批：torrent_proto）
+- **Milestone M3 已达成**（iter 385，完整存储引擎）
+
+## Iteration 390 — dht.hl：Kademlia 分布式哈希表
+
+- **`dht.hl`**（Buffer: 0x1BD0000）：DHT_MAXNODES=32，DHT_K=8，16-bit 键空间
+  - XOR 距离度量：`_dht_xor(a,b)` 逐位算术模拟（无 XOR 运算符）
+  - K-桶路由表：16 个桶，按最高有效位分级，每桶最多 K=8 节点
+  - `_dht_bucket_for(dist)`：按最高位确定桶编号
+  - `dht_add_node(id, addr)`：加入路由表，写入对应 K-桶
+  - `dht_find_node(target)`：在路由表中找 k 个最近节点（距离排序）
+  - `dht_store(key, val)` / `dht_lookup(key)`：本地键值存储（迭代 STORE 简化）
+  - `dht_ping(node_id)`：检查节点是否在路由表中
+  - 测试：10 节点入网；存储 key=42→421（覆盖）；lookup(42)=421；find_node 返回 >0 个结果 → PASS
+
+## Iteration 389 — dns_over_https.hl：DoH 加密 DNS 客户端
+
+- **`dns_over_https.hl`**（Buffer: 0x1BC0000）：DOH_MAXQ=16，DOH_CACHE=32
+  - 记录类型：A=1 / CNAME=5 / MX=15 / TXT=16 / AAAA=28
+  - `_doh_build_wire(qname_hash, qtype)`：构造 DNS 线格式查询（12 字节头 + QNAME + QTYPE/QCLASS）
+  - `doh_query(domain_hash, type)`：先查 LRU 缓存；未命中则模拟 HTTPS POST，解析响应并缓存
+  - `_doh_cache_lookup` / `_doh_cache_insert`：LRU 缓存（按 lru_clock 驱逐）
+  - `doh_flush()` / `doh_tick()`：清空缓存 / TTL 递减+过期
+  - 测试：相同查询走缓存（r1==r2）；不同域名不同结果；flush 后 cache_size=0；重查得相同值 → PASS
+
+## Iteration 388 — http3_quic.hl：HTTP/3 over QUIC 传输
+
+- **`http3_quic.hl`**（Buffer: 0x1BB0000）：H3_MAXCONNS=8，H3_MAXSTREAMS=16
+  - QUIC 握手模拟：Initial→Handshake→1-RTT，`_h3_derive_key(cid, server)` 推导会话密钥
+  - HTTP/3 帧类型：DATA=0 / HEADERS=1 / SETTINGS=4 / GOAWAY=7
+  - `h3_connect(cid, server_hash)`：完成 QUIC 握手，进入 ESTAB 状态
+  - `h3_get(cid, path_hash)`：分配新流，发送 HEADERS 帧（GET），返回 stream_idx
+  - `h3_post(cid, path_hash, body_hash)`：发送 HEADERS+DATA 帧（POST）
+  - `h3_recv_status / h3_recv_data`：读取流响应状态码和数据
+  - `h3_close(cid)`：发送 GOAWAY 帧，状态置 CLOSED
+  - 测试：connect→GET(path=1111)→d1=2222；POST(path=2222,body=3333)→d2=3334；close → PASS
 
 ## Iteration 387 — tls13.hl：TLS 1.3 握手状态机 + AEAD 记录层
 

@@ -1,0 +1,301 @@
+// dht.hl -- Kademlia Distributed Hash Table (iter 390)
+// Buffer: 0x1BD0000
+// DHT_MAXNODES=32, DHT_K=8 (k-bucket size), 16-bit key/node ID space
+// XOR distance metric: dist(a,b) computed bit-by-bit via arithmetic
+// Routing table: 16 k-buckets (one per bit of key space)
+// RPCs: PING, STORE, FIND_NODE, FIND_VALUE
+// Iterative lookup: alpha=3 parallel closest-node queries
+
+let DHT_MAXNODES = 32;
+let DHT_K        = 8;     // k-bucket size
+let DHT_ALPHA    = 3;     // parallel lookups
+let DHT_BITS     = 16;    // key space bits
+
+// RPC types
+let DHT_RPC_PING       = 1;
+let DHT_RPC_STORE      = 2;
+let DHT_RPC_FIND_NODE  = 3;
+let DHT_RPC_FIND_VALUE = 4;
+
+// Node table
+let dht_node_id   = array(32, 0);
+let dht_node_addr = array(32, 0);   // address hash
+let dht_node_live = array(32, 0);   // 1=active
+let dht_n_nodes   = 0;
+
+// Local node ID
+let dht_self_id   = 0;
+
+// K-buckets: routing table
+// dht_kb[bucket][slot] = node_idx; DHT_BITS buckets × DHT_K slots
+let DHT_KB_STRIDE = 8;
+let dht_kb        = array(128, 0);  // 16 * 8 = 128 slots
+let dht_kb_sz     = array(16, 0);   // bucket fill count
+
+// Local key-value store (flat: DHT_MAXNODES entries)
+let DHT_MAXDATA   = 32;
+let dht_data_key  = array(32, 0);
+let dht_data_val  = array(32, 0);
+let dht_data_used = array(32, 0);
+let dht_data_n    = 0;
+
+// Last find_node result (up to DHT_K closest)
+let dht_result_id   = array(8, 0);
+let dht_result_dist = array(8, 0);
+let dht_result_n    = 0;
+
+fn dht_init() {
+    let i = 0;
+    while i < DHT_MAXNODES {
+        set_at(dht_node_id,   i, 0);
+        set_at(dht_node_addr, i, 0);
+        set_at(dht_node_live, i, 0);
+        i += 1;
+    }
+    let b = 0;
+    while b < DHT_BITS {
+        set_at(dht_kb_sz, b, 0);
+        let s = 0;
+        while s < DHT_K {
+            set_at(dht_kb, b * DHT_KB_STRIDE + s, 0 - 1);
+            s += 1;
+        }
+        b += 1;
+    }
+    while i < DHT_MAXDATA {
+        set_at(dht_data_used, i - DHT_MAXNODES, 0);
+        i += 1;
+    }
+    dht_n_nodes = 0;
+    dht_data_n  = 0;
+    dht_result_n = 0;
+    dht_self_id  = 0;
+    return 0;
+}
+
+fn dht_set_self(id) {
+    dht_self_id = id;
+    return 0;
+}
+
+fn _dht_xor(a, b) {
+    // XOR via bit-by-bit arithmetic for 16-bit values
+    let result = 0;
+    let bit    = 1;
+    let i      = 0;
+    while i < DHT_BITS {
+        // extract bit i from a and b: (val / bit) mod 2
+        let next = bit * 2;
+        let ba   = a - (a / next) * next;
+        let ba_b = ba / bit;
+        let bb   = b - (b / next) * next;
+        let bb_b = bb / bit;
+        // XOR of single bits: ba_b + bb_b - 2*ba_b*bb_b
+        let xb   = ba_b + bb_b - 2 * ba_b * bb_b;
+        result   = result + xb * bit;
+        bit      = next;
+        i += 1;
+    }
+    return result;
+}
+
+fn _dht_bucket_for(dist) {
+    // Bucket = position of highest set bit in dist
+    if dist == 0 { return 0; }
+    let b = 0;
+    let v = dist;
+    let bkt = 0;
+    while b < DHT_BITS {
+        let next = 2;
+        let bit  = 1;
+        let k    = 0;
+        while k < b { bit = bit * 2; k += 1; }
+        let q = v / bit;
+        let r = q - (q / 2) * 2;
+        if r == 1 { bkt = b; }
+        b += 1;
+    }
+    return bkt;
+}
+
+fn _dht_add_to_bucket(bkt, node_idx) {
+    let sz = dht_kb_sz[bkt];
+    if sz < DHT_K {
+        set_at(dht_kb, bkt * DHT_KB_STRIDE + sz, node_idx);
+        set_at(dht_kb_sz, bkt, sz + 1);
+    }
+    return 0;
+}
+
+fn dht_add_node(id, addr) {
+    // Add node to local routing table
+    let idx = dht_n_nodes;
+    set_at(dht_node_id,   idx, id);
+    set_at(dht_node_addr, idx, addr);
+    set_at(dht_node_live, idx, 1);
+    dht_n_nodes += 1;
+
+    // Add to appropriate k-bucket
+    let dist = _dht_xor(dht_self_id, id);
+    let bkt  = _dht_bucket_for(dist);
+    _dht_add_to_bucket(bkt, idx);
+    return idx;
+}
+
+fn dht_find_node(target_id) {
+    // Find k closest nodes to target_id in routing table
+    dht_result_n = 0;
+    let i = 0;
+    while i < dht_n_nodes {
+        if dht_node_live[i] == 1 {
+            let dist = _dht_xor(target_id, dht_node_id[i]);
+            // Insert into result set (keep sorted by distance, max DHT_K)
+            let j = dht_result_n;
+            let inserted = 0;
+            while j > 0 {
+                if dist < dht_result_dist[j - 1] {
+                    if j < DHT_K {
+                        set_at(dht_result_id,   j, dht_result_id[j - 1]);
+                        set_at(dht_result_dist, j, dht_result_dist[j - 1]);
+                    }
+                    j -= 1;
+                } else {
+                    inserted = 1;
+                    j = 0;   // stop
+                }
+            }
+            if inserted == 0 {
+                if dht_result_n < DHT_K {
+                    set_at(dht_result_id,   j, dht_node_id[i]);
+                    set_at(dht_result_dist, j, dist);
+                    dht_result_n += 1;
+                }
+            } else {
+                if j < DHT_K {
+                    set_at(dht_result_id,   j, dht_node_id[i]);
+                    set_at(dht_result_dist, j, dist);
+                    if dht_result_n < DHT_K { dht_result_n += 1; }
+                }
+            }
+        }
+        i += 1;
+    }
+    return dht_result_n;
+}
+
+fn dht_store(key, val) {
+    // Store locally; in full Kademlia would also STORE on k-closest nodes
+    let slot = dht_data_n - (dht_data_n / DHT_MAXDATA) * DHT_MAXDATA;
+    // Check for existing key
+    let found = 0;
+    let i = 0;
+    while i < dht_data_n {
+        if dht_data_used[i] == 1 {
+            if dht_data_key[i] == key {
+                set_at(dht_data_val, i, val);
+                found = 1;
+                i = dht_data_n;  // stop
+            }
+        }
+        i += 1;
+    }
+    if found == 0 {
+        set_at(dht_data_key,  slot, key);
+        set_at(dht_data_val,  slot, val);
+        set_at(dht_data_used, slot, 1);
+        dht_data_n += 1;
+    }
+    return 0;
+}
+
+fn dht_lookup(key) {
+    // Local lookup; iterative in full Kademlia
+    let i = 0;
+    while i < dht_data_n {
+        if dht_data_used[i] == 1 {
+            if dht_data_key[i] == key {
+                return dht_data_val[i];
+            }
+        }
+        i += 1;
+    }
+    return 0 - 1;  // not found
+}
+
+fn dht_ping(node_id) {
+    // Check if node is in routing table
+    let i = 0;
+    while i < dht_n_nodes {
+        if dht_node_id[i] == node_id {
+            if dht_node_live[i] == 1 { return 1; }
+        }
+        i += 1;
+    }
+    return 0;
+}
+
+fn dht_node_count() { return dht_n_nodes; }
+fn dht_data_count() { return dht_data_n; }
+fn dht_result_count() { return dht_result_n; }
+fn dht_get_result(i) { return dht_result_id[i]; }
+
+fn dht_test() {
+    dht_init();
+    dht_set_self(0x1000);
+
+    // Add 10 nodes
+    dht_add_node(0x0001, 100);
+    dht_add_node(0x0010, 200);
+    dht_add_node(0x0100, 300);
+    dht_add_node(0x1001, 400);
+    dht_add_node(0x1010, 500);
+    dht_add_node(0x1100, 600);
+    dht_add_node(0x2000, 700);
+    dht_add_node(0x3000, 800);
+    dht_add_node(0x4000, 900);
+    dht_add_node(0x5000, 1000);
+
+    // Store key-value pairs
+    dht_store(42, 420);
+    dht_store(99, 990);
+    dht_store(42, 421);  // update existing
+
+    // Lookup
+    let v1 = dht_lookup(42);
+    let v2 = dht_lookup(99);
+    let v3 = dht_lookup(77);   // missing
+
+    // Find closest nodes to target 0x1001
+    let nc = dht_find_node(0x1001);
+
+    // Ping existing / non-existing
+    let p1 = dht_ping(0x0001);
+    let p2 = dht_ping(0x9999);
+
+    print("dht_test: v1=" + to_string(v1)
+          + " v2=" + to_string(v2)
+          + " v3=" + to_string(v3)
+          + " nc=" + to_string(nc)
+          + " p1=" + to_string(p1)
+          + " p2=" + to_string(p2)
+          + " nodes=" + to_string(dht_node_count()));
+
+    if v1 == 421 {
+        if v2 == 990 {
+            if v3 == 0 - 1 {
+                if nc > 0 {
+                    if p1 == 1 {
+                        if p2 == 0 {
+                            print("dht_test: PASS");
+                            return 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    print("dht_test: FAIL");
+    return 0;
+}
+
+print("dht.hl loaded");

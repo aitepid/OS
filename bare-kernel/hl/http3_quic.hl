@@ -1,0 +1,244 @@
+// http3_quic.hl -- HTTP/3 over QUIC transport simulation (iter 388)
+// Buffer: 0x1BB0000
+// QUIC (RFC 9000) + HTTP/3 (RFC 9114) minimal implementation
+// H3_MAXCONNS=8, H3_MAXSTREAMS=16; states: IDLE/CONNECTING/ESTAB/CLOSING/CLOSED
+// QUIC packet simulation: connection ID + packet number + stream framing
+// HTTP/3 frames: DATA=0 HEADERS=1 SETTINGS=4 GOAWAY=7
+
+let H3_MAXCONNS   = 8;
+let H3_MAXSTREAMS = 16;
+let H3_MAXDATA    = 64;
+
+// Connection states
+let H3_IDLE       = 0;
+let H3_CONNECTING = 1;
+let H3_ESTAB      = 2;
+let H3_CLOSING    = 3;
+let H3_CLOSED     = 4;
+
+// HTTP/3 frame types
+let H3_FRAME_DATA     = 0;
+let H3_FRAME_HEADERS  = 1;
+let H3_FRAME_SETTINGS = 4;
+let H3_FRAME_GOAWAY   = 7;
+
+// HTTP/3 status codes (simplified)
+let H3_STATUS_200 = 200;
+let H3_STATUS_404 = 404;
+let H3_STATUS_500 = 500;
+
+// QUIC connection fields
+let h3_state      = array(8, 0);
+let h3_cid        = array(8, 0);    // connection ID
+let h3_pkt_num    = array(8, 0);    // current packet number
+let h3_server     = array(8, 0);    // server address hash
+let h3_next_stream= array(8, 0);    // next stream ID to allocate (client = 0,4,8...)
+
+// Per-stream state (flat: conn*16 + stream_idx)
+let H3_ST_IDLE     = 0;
+let H3_ST_OPEN     = 1;
+let H3_ST_HALF_CL  = 2;
+let H3_ST_CLOSED   = 3;
+
+let h3s_state     = array(128, 0);  // H3_MAXCONNS * H3_MAXSTREAMS
+let h3s_id        = array(128, 0);  // stream ID
+let h3s_status    = array(128, 0);  // HTTP response status
+let h3s_data      = array(128, 0);  // response data (simplified to one value)
+
+// QUIC crypto key (simplified HKDF)
+let h3_key        = array(8, 0);
+let h3_n_conns    = 0;
+
+// Packet buffer (last sent/received packet per connection, 5 fields)
+let H3_PKT_STRIDE = 5;
+let h3_pkt        = array(40, 0);   // [pkt_num, stream_id, frame_type, status, data]
+
+fn h3_init() {
+    let i = 0;
+    while i < H3_MAXCONNS {
+        set_at(h3_state,       i, H3_IDLE);
+        set_at(h3_cid,         i, 0);
+        set_at(h3_pkt_num,     i, 0);
+        set_at(h3_server,      i, 0);
+        set_at(h3_next_stream, i, 0);
+        set_at(h3_key,         i, 0);
+        let si = 0;
+        while si < H3_MAXSTREAMS {
+            set_at(h3s_state,  i * H3_MAXSTREAMS + si, H3_ST_IDLE);
+            set_at(h3s_id,     i * H3_MAXSTREAMS + si, 0);
+            set_at(h3s_status, i * H3_MAXSTREAMS + si, 0);
+            set_at(h3s_data,   i * H3_MAXSTREAMS + si, 0);
+            si += 1;
+        }
+        i += 1;
+    }
+    h3_n_conns = 0;
+    return 0;
+}
+
+fn _h3_derive_key(cid, server) {
+    // Simulate QUIC initial key derivation (HKDF-SHA256 approximation)
+    let v = cid * 31 + server * 17 + 7;
+    let p = 65521;
+    return v - (v / p) * p;
+}
+
+fn _h3_alloc_stream(cid) {
+    // Client-initiated bidirectional streams: IDs 0, 4, 8, ...
+    let sidx = h3_next_stream[cid];
+    let slot  = cid * H3_MAXSTREAMS + sidx;
+    set_at(h3s_state, slot, H3_ST_OPEN);
+    set_at(h3s_id,    slot, sidx * 4);  // stream_id = idx * 4 for bidi client
+    set_at(h3_next_stream, cid, sidx + 1);
+    return sidx;
+}
+
+fn h3_connect(cid, server_hash) {
+    // QUIC handshake: Initial → Handshake → 1-RTT
+    set_at(h3_cid,    cid, cid * 1000 + server_hash);
+    set_at(h3_server, cid, server_hash);
+    set_at(h3_state,  cid, H3_CONNECTING);
+
+    // Derive 1-RTT key
+    let key = _h3_derive_key(cid, server_hash);
+    set_at(h3_key, cid, key);
+
+    // Simulate CRYPTO + SETTINGS frame exchange
+    set_at(h3_pkt_num, cid, 1);
+    set_at(h3_state,   cid, H3_ESTAB);
+    if h3_n_conns <= cid { h3_n_conns = cid + 1; }
+    return H3_ESTAB;
+}
+
+fn h3_get(cid, path_hash) {
+    // Send HTTP/3 HEADERS frame (GET request) on new stream
+    if h3_state[cid] != H3_ESTAB { return 0 - 1; }
+    let sidx  = _h3_alloc_stream(cid);
+    let slot  = cid * H3_MAXSTREAMS + sidx;
+    let pn    = h3_pkt_num[cid];
+
+    // Encrypt path_hash with key: ct = (path_hash + key + pn) mod 65521
+    let key = h3_key[cid];
+    let ct  = path_hash + key + pn;
+    let p   = 65521;
+    ct = ct - (ct / p) * p;
+
+    let pb = cid * H3_PKT_STRIDE;
+    set_at(h3_pkt, pb,     pn);
+    set_at(h3_pkt, pb + 1, h3s_id[slot]);
+    set_at(h3_pkt, pb + 2, H3_FRAME_HEADERS);
+    set_at(h3_pkt, pb + 3, ct);
+    set_at(h3_pkt, pb + 4, 0);
+
+    set_at(h3_pkt_num, cid, pn + 1);
+
+    // Simulate server response: status=200, data=path_hash*2
+    set_at(h3s_status, slot, H3_STATUS_200);
+    set_at(h3s_data,   slot, path_hash * 2);
+    set_at(h3s_state,  slot, H3_ST_HALF_CL);
+    return sidx;
+}
+
+fn h3_post(cid, path_hash, body_hash) {
+    // Send HEADERS + DATA frames for POST
+    if h3_state[cid] != H3_ESTAB { return 0 - 1; }
+    let sidx  = _h3_alloc_stream(cid);
+    let slot  = cid * H3_MAXSTREAMS + sidx;
+    let pn    = h3_pkt_num[cid];
+    let key   = h3_key[cid];
+
+    let ct = path_hash + body_hash + key + pn;
+    let p  = 65521;
+    ct = ct - (ct / p) * p;
+
+    let pb = cid * H3_PKT_STRIDE;
+    set_at(h3_pkt, pb,     pn);
+    set_at(h3_pkt, pb + 1, h3s_id[slot]);
+    set_at(h3_pkt, pb + 2, H3_FRAME_DATA);
+    set_at(h3_pkt, pb + 3, ct);
+    set_at(h3_pkt, pb + 4, body_hash);
+
+    set_at(h3_pkt_num, cid, pn + 2);  // HEADERS + DATA = 2 packets
+
+    set_at(h3s_status, slot, H3_STATUS_200);
+    set_at(h3s_data,   slot, body_hash + 1);
+    set_at(h3s_state,  slot, H3_ST_HALF_CL);
+    return sidx;
+}
+
+fn h3_recv_status(cid, sidx) {
+    // Read response status for a stream
+    let slot = cid * H3_MAXSTREAMS + sidx;
+    return h3s_status[slot];
+}
+
+fn h3_recv_data(cid, sidx) {
+    let slot = cid * H3_MAXSTREAMS + sidx;
+    return h3s_data[slot];
+}
+
+fn h3_close(cid) {
+    // Send GOAWAY frame
+    if h3_state[cid] == H3_IDLE { return 0; }
+    let pb = cid * H3_PKT_STRIDE;
+    set_at(h3_pkt, pb,     h3_pkt_num[cid]);
+    set_at(h3_pkt, pb + 1, 0);
+    set_at(h3_pkt, pb + 2, H3_FRAME_GOAWAY);
+    set_at(h3_pkt, pb + 3, h3_next_stream[cid]);
+    set_at(h3_pkt, pb + 4, 0);
+    set_at(h3_state, cid, H3_CLOSED);
+    return 0;
+}
+
+fn h3_conn_state(cid) { return h3_state[cid]; }
+fn h3_stream_count(cid) { return h3_next_stream[cid]; }
+fn h3_pkt_count(cid) { return h3_pkt_num[cid]; }
+
+fn h3_test() {
+    h3_init();
+
+    // Connect to server hash=4242
+    let st = h3_connect(0, 4242);
+
+    // GET /index (path_hash=1111)
+    let s1 = h3_get(0, 1111);
+    let r1 = h3_recv_status(0, s1);
+    let d1 = h3_recv_data(0, s1);
+
+    // POST /submit (path=2222, body=3333)
+    let s2 = h3_post(0, 2222, 3333);
+    let r2 = h3_recv_status(0, s2);
+    let d2 = h3_recv_data(0, s2);
+
+    // Close
+    h3_close(0);
+    let final_st = h3_conn_state(0);
+
+    print("h3_test: conn_state=" + to_string(st)
+          + " s1=" + to_string(s1)
+          + " r1=" + to_string(r1)
+          + " d1=" + to_string(d1)
+          + " s2=" + to_string(s2)
+          + " r2=" + to_string(r2)
+          + " d2=" + to_string(d2)
+          + " closed=" + to_string(final_st));
+
+    if st == H3_ESTAB {
+        if r1 == H3_STATUS_200 {
+            if d1 == 2222 {
+                if r2 == H3_STATUS_200 {
+                    if d2 == 3334 {
+                        if final_st == H3_CLOSED {
+                            print("h3_test: PASS");
+                            return 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    print("h3_test: FAIL");
+    return 0;
+}
+
+print("http3_quic.hl loaded");
