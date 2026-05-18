@@ -1,47 +1,47 @@
 // posix_compat.hl -- POSIX Extension Compatibility Layer
 // Iteration 436 | Buffer: 0x1EB0000
 //
-// Provides POSIX-compatible signal/process/IO interface stubs.
+// Provides POSIX-compatible signal/process/IO interface.
 // Features:
 // - Signal registration and delivery (POSIX signals 1-31)
 // - Process group / session tracking
 // - POSIX IO flags (O_RDONLY / O_WRONLY / O_RDWR / O_CREAT / O_TRUNC)
-// - waitpid / kill / getpid / getppid stubs
+// - waitpid / kill / getpid / getppid
 //
 // Testing: posix_compat_test() → validates signal dispatch, process tracking
 
 let PC_MAX_SIGNALS = 32;
 let PC_MAX_PROCS   = 16;
 
-let PC_SIG_NONE    = 0;
-let PC_SIG_HUP     = 1;
-let PC_SIG_INT     = 2;
-let PC_SIG_QUIT    = 3;
-let PC_SIG_KILL    = 9;
-let PC_SIG_TERM    = 15;
-let PC_SIG_CHLD    = 17;
-let PC_SIG_CONT    = 18;
-let PC_SIG_STOP    = 19;
+let PC_SIG_NONE = 0;
+let PC_SIG_HUP  = 1;
+let PC_SIG_INT  = 2;
+let PC_SIG_QUIT = 3;
+let PC_SIG_KILL = 9;
+let PC_SIG_TERM = 15;
+let PC_SIG_CHLD = 17;
+let PC_SIG_CONT = 18;
+let PC_SIG_STOP = 19;
 
-let PC_O_RDONLY    = 0;
-let PC_O_WRONLY    = 1;
-let PC_O_RDWR      = 2;
-let PC_O_CREAT     = 64;
-let PC_O_TRUNC     = 512;
+let PC_O_RDONLY = 0;
+let PC_O_WRONLY = 1;
+let PC_O_RDWR   = 2;
+let PC_O_CREAT  = 64;
+let PC_O_TRUNC  = 512;
 
 // Signal handler table: handler_id per signal (0 = SIG_DFL)
-let pc_sig_handlers  = array(PC_MAX_SIGNALS, 0);
-let pc_sig_pending   = array(PC_MAX_SIGNALS, 0);
-let pc_sig_count     = 0;
+let pc_sig_handlers = array(PC_MAX_SIGNALS, 0);
+let pc_sig_pending  = array(PC_MAX_SIGNALS, 0);
+let pc_sig_count    = 0;
 
 // Process table
-let pc_proc_pid      = array(PC_MAX_PROCS, 0);
-let pc_proc_ppid     = array(PC_MAX_PROCS, 0);
-let pc_proc_pgid     = array(PC_MAX_PROCS, 0);
-let pc_proc_status   = array(PC_MAX_PROCS, 0);  // 0=running 1=stopped 2=zombie
-let pc_proc_count    = 0;
+let pc_proc_pid    = array(PC_MAX_PROCS, 0);
+let pc_proc_ppid   = array(PC_MAX_PROCS, 0);
+let pc_proc_pgid   = array(PC_MAX_PROCS, 0);
+let pc_proc_status = array(PC_MAX_PROCS, 0);  // 0=running 1=stopped 2=zombie
+let pc_proc_count  = 0;
 
-let pc_next_pid      = 100;
+let pc_next_pid = 100;
 
 fn pc_sigaction(signum, handler_id) {
     if signum <= 0 { return 0 - 1; }
@@ -54,7 +54,7 @@ fn pc_raise(signum) {
     if signum <= 0 { return 0 - 1; }
     if signum >= PC_MAX_SIGNALS { return 0 - 1; }
     set_at(pc_sig_pending, signum, 1);
-    set_at(pc_sig_count, 0, pc_sig_count + 1);
+    pc_sig_count = pc_sig_count + 1;
     return signum;
 }
 
@@ -85,8 +85,8 @@ fn pc_fork() {
     set_at(pc_proc_ppid,   idx, pc_next_pid - 1);
     set_at(pc_proc_pgid,   idx, child);
     set_at(pc_proc_status, idx, 0);
-    set_at(pc_next_pid,    0,   pc_next_pid + 1);
-    set_at(pc_proc_count,  0,   pc_proc_count + 1);
+    pc_next_pid   = pc_next_pid + 1;
+    pc_proc_count = pc_proc_count + 1;
     return child;
 }
 
@@ -106,69 +106,90 @@ fn pc_kill(pid, signum) {
     return pc_raise(signum);
 }
 
+// Search all process slots for matching pid; mark it zombie and return pid.
 fn pc_waitpid(pid) {
     let i = 0;
-    {
-        if i >= pc_proc_count { return 0 - 1; }
+    while i < pc_proc_count {
         if pc_proc_pid[i] == pid {
             set_at(pc_proc_status, i, 2);
             return pid;
         }
-        set_at(i, 0, i + 1);
+        i = i + 1;
     }
+    return 0 - 1;
 }
 
+// Count processes currently in running state (status == 0).
 fn pc_proc_count_running() {
     let cnt = 0;
-    let i = 0;
-    {
-        if i >= pc_proc_count { return cnt; }
-        if pc_proc_status[i] == 0 { set_at(cnt, 0, cnt + 1); }
-        set_at(i, 0, i + 1);
+    let i   = 0;
+    while i < pc_proc_count {
+        if pc_proc_status[i] == 0 { cnt = cnt + 1; }
+        i = i + 1;
     }
+    return cnt;
 }
 
 fn posix_compat_init() {
-    set_at(pc_proc_count, 0, 0);
-    set_at(pc_sig_count,  0, 0);
-    set_at(pc_next_pid,   0, 100);
+    pc_proc_count = 0;
+    pc_sig_count  = 0;
+    pc_next_pid   = 100;
     let i = 0;
-    {
-        if i >= PC_MAX_SIGNALS { return 0; }
+    while i < PC_MAX_SIGNALS {
         set_at(pc_sig_handlers, i, 0);
         set_at(pc_sig_pending,  i, 0);
-        set_at(i, 0, i + 1);
+        i = i + 1;
     }
+    let j = 0;
+    while j < PC_MAX_PROCS {
+        set_at(pc_proc_pid,    j, 0);
+        set_at(pc_proc_ppid,   j, 0);
+        set_at(pc_proc_pgid,   j, 0);
+        set_at(pc_proc_status, j, 0);
+        j = j + 1;
+    }
+    return 0;
 }
 
 fn posix_compat_test() {
     posix_compat_init();
     let pass = 1;
 
-    // signal registration + raise
+    // Signal registration + raise
     pc_sigaction(PC_SIG_INT, 42);
     let h = pc_gethandler(PC_SIG_INT);
-    if h != 42 { set_at(pass, 0, 0); }
+    if h != 42 { pass = 0; }
 
     pc_raise(PC_SIG_INT);
     let pend = pc_signal_pending(PC_SIG_INT);
-    if pend != 1 { set_at(pass, 0, 0); }
+    if pend != 1 { pass = 0; }
 
     pc_signal_clear(PC_SIG_INT);
     let pend2 = pc_signal_pending(PC_SIG_INT);
-    if pend2 != 0 { set_at(pass, 0, 0); }
+    if pend2 != 0 { pass = 0; }
 
-    // process fork + wait
+    // Process fork + wait
     let pid1 = pc_fork();
     let pid2 = pc_fork();
-    if pc_proc_count != 2 { set_at(pass, 0, 0); }
+    if pc_proc_count != 2 { pass = 0; }
 
     let running = pc_proc_count_running();
-    if running != 2 { set_at(pass, 0, 0); }
+    if running != 2 { pass = 0; }
 
     pc_waitpid(pid1);
     let running2 = pc_proc_count_running();
-    if running2 != 1 { set_at(pass, 0, 0); }
+    if running2 != 1 { pass = 0; }
+
+    // kill routes through pc_raise — verify signal pending
+    pc_kill(pid2, PC_SIG_TERM);
+    let term_pend = pc_signal_pending(PC_SIG_TERM);
+    if term_pend != 1 { pass = 0; }
+
+    print("posix_compat_test: h=" + to_string(h)
+          + " pend=" + to_string(pend)
+          + " running=" + to_string(running)
+          + " running2=" + to_string(running2)
+          + " term_pend=" + to_string(term_pend));
 
     if pass == 1 { print("posix_compat_test PASS"); }
     if pass == 0 { print("posix_compat_test FAIL"); }
