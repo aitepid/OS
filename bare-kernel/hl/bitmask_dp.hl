@@ -1,0 +1,116 @@
+// bitmask_dp.hl -- Bitmask DP: TSP via state compression (iter 352)
+// Buffer: 0x1970000
+// BDM_N=5 cities; BDM_FULL=31=(1<<5)-1
+// dp[mask*N+v] = min cost to visit cities in `mask`, ending at city v
+// Init: dp[1][0]=0; forward transitions over increasing masks
+// Answer: min over v of dp[FULL][v] + dist[v][0]
+
+let BDM_N    = 5;
+let BDM_FULL = 31;          // (1<<5)-1
+let BDM_INF  = 999999999;
+
+let bdm_dist = array(25, 0);   // BDM_N * BDM_N: dist[u*N+v]
+let bdm_dp   = array(160, 0);  // 32 * BDM_N: dp[mask*N+v]
+
+fn _bdm_pow2(k) {
+    let r = 1;
+    let i = 0;
+    while i < k { r = r * 2; i += 1; }
+    return r;
+}
+
+fn bdm_init() {
+    let i = 0;
+    while i < 25 { set_at(bdm_dist, i, BDM_INF); i += 1; }
+    let i2 = 0;
+    while i2 < 160 { set_at(bdm_dp, i2, BDM_INF); i2 += 1; }
+    return 0;
+}
+
+fn bdm_set_dist(u, v, w) {
+    set_at(bdm_dist, u * BDM_N + v, w);
+    return 0;
+}
+
+fn bdm_get_dp(mask, v) {
+    return bdm_dp[mask * BDM_N + v];
+}
+
+fn bdm_tsp() {
+    let i = 0;
+    while i < 160 { set_at(bdm_dp, i, BDM_INF); i += 1; }
+    set_at(bdm_dp, 1 * BDM_N + 0, 0);
+    let mask = 0;
+    while mask <= BDM_FULL {
+        let u = 0;
+        while u < BDM_N {
+            let bu = mask / _bdm_pow2(u);
+            let bu_bit = bu - (bu / 2) * 2;
+            if bu_bit == 1 {
+                let dpv = bdm_dp[mask * BDM_N + u];
+                if dpv < BDM_INF {
+                    let v = 0;
+                    while v < BDM_N {
+                        let bv = mask / _bdm_pow2(v);
+                        let bv_bit = bv - (bv / 2) * 2;
+                        if bv_bit == 0 {
+                            let nm = mask + _bdm_pow2(v);
+                            let d = bdm_dist[u * BDM_N + v];
+                            if d < BDM_INF {
+                                let nc = dpv + d;
+                                let old = bdm_dp[nm * BDM_N + v];
+                                if nc < old { set_at(bdm_dp, nm * BDM_N + v, nc); }
+                            }
+                        }
+                        v += 1;
+                    }
+                }
+            }
+            u += 1;
+        }
+        mask += 1;
+    }
+    let ans = BDM_INF;
+    let v2 = 0;
+    while v2 < BDM_N {
+        let dv = bdm_dp[BDM_FULL * BDM_N + v2];
+        let back = bdm_dist[v2 * BDM_N + 0];
+        if dv < BDM_INF {
+            if back < BDM_INF {
+                let tot = dv + back;
+                if tot < ans { ans = tot; }
+            }
+        }
+        v2 += 1;
+    }
+    return ans;
+}
+
+fn bdm_test() {
+    bdm_init();
+    // 5-city chain: 0-1-2-3-4-0 = 1+2+3+4+5 = 15; all other edges = 100
+    let i = 0;
+    while i < BDM_N {
+        let j = 0;
+        while j < BDM_N {
+            if i != j { bdm_set_dist(i, j, 100); }
+            j += 1;
+        }
+        i += 1;
+    }
+    bdm_set_dist(0, 1, 1); bdm_set_dist(1, 0, 1);
+    bdm_set_dist(1, 2, 2); bdm_set_dist(2, 1, 2);
+    bdm_set_dist(2, 3, 3); bdm_set_dist(3, 2, 3);
+    bdm_set_dist(3, 4, 4); bdm_set_dist(4, 3, 4);
+    bdm_set_dist(4, 0, 5); bdm_set_dist(0, 4, 5);
+    let ans = bdm_tsp();
+    print("bdm_test: tsp=" + to_string(ans));
+    if ans == 15 {
+        print("bdm_test: PASS");
+        return 1;
+    }
+    print("bdm_test: FAIL");
+    return 0;
+}
+
+print("bitmask_dp.hl loaded");

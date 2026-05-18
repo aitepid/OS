@@ -1,0 +1,101 @@
+// broken_profile_dp.hl -- Broken Profile DP: domino tiling count (iter 354)
+// Buffer: 0x1990000
+// BPD_H=2 rows (fixed); column-by-column DP with bitmask profile
+// dp[mask] = ways to tile all columns so far, with mask indicating which rows
+//   of the next column are pre-filled by horizontal dominoes extending right
+// _bpd_fill(row, old_mask, new_mask): recursive column filler (reads bpd_dp_src)
+// bpd_count(w): count tilings of 2xw grid; 2x4 = 5 (Fibonacci)
+
+let BPD_H       = 2;
+let BPD_MAXMASK = 4;   // 2^BPD_H
+let BPD_W       = 4;   // default width for bpd_count reference
+
+let bpd_dp      = array(4, 0);
+let bpd_next    = array(4, 0);
+let bpd_col_last = 0;   // 1 when processing the last column (no rightward dominoes)
+let bpd_dp_src   = 0;   // value of dp[old_mask] threaded into _bpd_fill
+
+fn _bpd_pow2(k) {
+    if k == 0 { return 1; }
+    return 2;
+}
+
+fn _bpd_bit(mask, r) {
+    let shifted = mask / _bpd_pow2(r);
+    return shifted - (shifted / 2) * 2;
+}
+
+fn bpd_init() {
+    let i = 0;
+    while i < BPD_MAXMASK { set_at(bpd_dp, i, 0); set_at(bpd_next, i, 0); i += 1; }
+    bpd_col_last = 0;
+    bpd_dp_src = 0;
+    return 0;
+}
+
+fn _bpd_fill(row, old_mask, new_mask) {
+    if row == BPD_H {
+        let do_add = 1;
+        if bpd_col_last == 1 { if new_mask != 0 { do_add = 0; } }
+        if do_add == 1 {
+            set_at(bpd_next, new_mask, bpd_next[new_mask] + bpd_dp_src);
+        }
+        return 0;
+    }
+    let bc = _bpd_bit(old_mask, row);
+    if bc == 1 {
+        _bpd_fill(row + 1, old_mask, new_mask);
+    } else {
+        // Option 1: horizontal domino extends into next column
+        if bpd_col_last == 0 {
+            _bpd_fill(row + 1, old_mask, new_mask + _bpd_pow2(row));
+        }
+        // Option 2: vertical domino covers (row, row+1)
+        if row + 1 < BPD_H {
+            let bn = _bpd_bit(old_mask, row + 1);
+            if bn == 0 {
+                _bpd_fill(row + 2, old_mask, new_mask);
+            }
+        }
+    }
+    return 0;
+}
+
+fn bpd_count(w) {
+    let i = 0;
+    while i < BPD_MAXMASK { set_at(bpd_dp, i, 0); i += 1; }
+    set_at(bpd_dp, 0, 1);
+    let c = 0;
+    while c < w {
+        let j = 0;
+        while j < BPD_MAXMASK { set_at(bpd_next, j, 0); j += 1; }
+        if c == w - 1 { bpd_col_last = 1; } else { bpd_col_last = 0; }
+        let m = 0;
+        while m < BPD_MAXMASK {
+            if bpd_dp[m] > 0 {
+                bpd_dp_src = bpd_dp[m];
+                _bpd_fill(0, m, 0);
+            }
+            m += 1;
+        }
+        let k = 0;
+        while k < BPD_MAXMASK { set_at(bpd_dp, k, bpd_next[k]); k += 1; }
+        c += 1;
+    }
+    return bpd_dp[0];
+}
+
+fn bpd_test() {
+    bpd_init();
+    // 2x4 grid: 5 tilings (Fibonacci F(5)=5)
+    let ans = bpd_count(4);
+    print("bpd_test: 2x4 tilings=" + to_string(ans));
+    if ans == 5 {
+        print("bpd_test: PASS");
+        return 1;
+    }
+    print("bpd_test: FAIL");
+    return 0;
+}
+
+print("broken_profile_dp.hl loaded");

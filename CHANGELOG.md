@@ -2,11 +2,35 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`406`（76 根目录 + 337 内核模块）
+- `.hl` 文件：`409`（76 根目录 + 340 内核模块）
 - H-L 总行数：`~119,900`
-- 内核模块：`337`
-- Shell 命令：`1177`
-- 最近完成功能迭代：`351`（poly_inv + poly_ln_exp + poly_sqrt）
+- 内核模块：`340`
+- Shell 命令：`1198`
+- 最近完成功能迭代：`354`（bitmask_dp + digit_dp + broken_profile_dp）
+
+## Iteration 354 — broken_profile_dp.hl：轮廓线 DP（骨牌铺砌）
+
+- **`broken_profile_dp.hl`**（Buffer: 0x1990000）：BPD_H=2 行固定，列扫 DP
+  - `bpd_count(w)`：统计 2×w 网格 1×2 骨牌铺满方案数
+  - `_bpd_fill(row, old_mask, new_mask)`：递归填列；读全局 `bpd_dp_src`
+  - `bpd_col_last`：最后一列禁止向右延伸水平骨牌
+  - 测试：2×4 → 5 种（Fibonacci F(5)）→ PASS
+
+## Iteration 353 — digit_dp.hl：数位 DP（数字和等于目标值计数）
+
+- **`digit_dp.hl`**（Buffer: 0x1980000）：DDM_MAXD=8，DDM_MAXS=36
+  - `ddm_solve(n, target)`：统计 [0..n] 中十进制数字和等于 target 的整数个数
+  - 逐位 DP：状态 dp[sum][tight]，按 MSB→LSB 逐层迭代
+  - `_ddm_extract(n)`：十进制拆位写入 ddm_lim（MSB 优先）
+  - 测试：[0..20] sum=2 → {2, 11, 20} → 3 → PASS
+
+## Iteration 352 — bitmask_dp.hl：状压 DP（TSP）
+
+- **`bitmask_dp.hl`**（Buffer: 0x1970000）：BDM_N=5，BDM_FULL=31
+  - `bdm_tsp()`：最小哈密顿回路 O(2^N·N²)；dp[mask·N+v] = 访问 mask 中城市且末在 v 的最小代价
+  - `_bdm_pow2(k)`：2^k（无位运算版）；位提取用 `bu-(bu/2)*2`
+  - `bdm_set_dist(u,v,w)` / `bdm_get_dp(mask,v)`：外部设置与查询接口
+  - 测试：5 城链 0-1-2-3-4-0，边权 1+2+3+4+5=15，其余边=100 → 最优 15 → PASS
 
 ## Iteration 351 — poly_sqrt.hl：多项式开根 + Horner 求值
 

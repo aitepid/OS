@@ -246,13 +246,16 @@ fn shell_handle(cmd) {
         serial_print("PolyInv:     pinv init  pinv test  pinv set <i> <v>  pinv inv <n>  pinv get <i>  pinv fget <i>  pinv check <n>");
         serial_print("PolyLnExp:   ple init  ple test  ple set <i> <v>  ple exp <n>  ple ln <n>  ple get <i>  ple fget <i>");
         serial_print("PolySqrt:    psq init  psq test  psq set <i> <v>  psq sqrt <n>  psq eval <deg> <x>  psq get <i>  psq fget <i>");
+        serial_print("BitmaskDP:   bdm init  bdm test  bdm dist <u> <v> <w>  bdm tsp  bdm get <mask> <v>  bdm n  bdm full");
+        serial_print("DigitDP:     ddm init  ddm test  ddm count <n> <target>  ddm nd  ddm lim <i>  ddm maxs  ddm maxd");
+        serial_print("BrokenProf:  bpd init  bpd test  bpd count <w>  bpd dp <mask>  bpd h  bpd w  bpd maxmask");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
     }
 
     if cmd == "ver" {
-        return "HicOS 6.0 -- Hilbert-Lang Kernel (337 modules, pure H-L, zero deps)";
+        return "HicOS 6.0 -- Hilbert-Lang Kernel (340 modules, pure H-L, zero deps)";
     }
 
     if cmd == "uptime" {
@@ -5902,6 +5905,66 @@ fn shell_handle_ext(cmd) {
         return "psq: f[" + to_string(psqfi) + "]=" + to_string(psq_f[psqfi]);
     }
 
+    // --- BitmaskDP ---
+    if cmd == "bdm init" { bdm_init(); return "bdm: init"; }
+    if cmd == "bdm test" { let bdmr = bdm_test(); return "bdm: " + to_string(bdmr); }
+    if _starts_with(cmd, "bdm dist ") {
+        let bdma = str_sub(cmd, 9, len(cmd));
+        let bdms1 = _find_space(bdma);
+        let bdmu  = to_int(str_sub(bdma, 0, bdms1));
+        let bdma2 = str_sub(bdma, bdms1 + 1, len(bdma));
+        let bdms2 = _find_space(bdma2);
+        let bdmv  = to_int(str_sub(bdma2, 0, bdms2));
+        let bdmw  = to_int(str_sub(bdma2, bdms2 + 1, len(bdma2)));
+        bdm_set_dist(bdmu, bdmv, bdmw);
+        return "bdm: dist[" + to_string(bdmu) + "][" + to_string(bdmv) + "]=" + to_string(bdmw);
+    }
+    if cmd == "bdm tsp" { let bdmans = bdm_tsp(); return "bdm: tsp=" + to_string(bdmans); }
+    if _starts_with(cmd, "bdm get ") {
+        let bdmga = str_sub(cmd, 8, len(cmd));
+        let bdmgs = _find_space(bdmga);
+        let bdmgm = to_int(str_sub(bdmga, 0, bdmgs));
+        let bdmgv = to_int(str_sub(bdmga, bdmgs + 1, len(bdmga)));
+        return "bdm: dp[" + to_string(bdmgm) + "][" + to_string(bdmgv) + "]=" + to_string(bdm_get_dp(bdmgm, bdmgv));
+    }
+    if cmd == "bdm n" { return "bdm: N=" + to_string(BDM_N); }
+    if cmd == "bdm full" { return "bdm: FULL=" + to_string(BDM_FULL); }
+
+    // --- DigitDP ---
+    if cmd == "ddm init" { ddm_init(); return "ddm: init"; }
+    if cmd == "ddm test" { let ddmr = ddm_test(); return "ddm: " + to_string(ddmr); }
+    if _starts_with(cmd, "ddm count ") {
+        let ddmca = str_sub(cmd, 10, len(cmd));
+        let ddmcs = _find_space(ddmca);
+        let ddmcn = to_int(str_sub(ddmca, 0, ddmcs));
+        let ddmct = to_int(str_sub(ddmca, ddmcs + 1, len(ddmca)));
+        let ddmcr = ddm_solve(ddmcn, ddmct);
+        return "ddm: count[0.." + to_string(ddmcn) + "] sum=" + to_string(ddmct) + " -> " + to_string(ddmcr);
+    }
+    if cmd == "ddm nd" { return "ddm: nd=" + to_string(ddm_nd); }
+    if _starts_with(cmd, "ddm lim ") {
+        let ddmli = to_int(str_sub(cmd, 8, len(cmd)));
+        return "ddm: lim[" + to_string(ddmli) + "]=" + to_string(ddm_lim[ddmli]);
+    }
+    if cmd == "ddm maxs" { return "ddm: MAXS=" + to_string(DDM_MAXS); }
+    if cmd == "ddm maxd" { return "ddm: MAXD=" + to_string(DDM_MAXD); }
+
+    // --- BrokenProfileDP ---
+    if cmd == "bpd init" { bpd_init(); return "bpd: init"; }
+    if cmd == "bpd test" { let bpdr = bpd_test(); return "bpd: " + to_string(bpdr); }
+    if _starts_with(cmd, "bpd count ") {
+        let bpdcw = to_int(str_sub(cmd, 10, len(cmd)));
+        let bpdca = bpd_count(bpdcw);
+        return "bpd: 2x" + to_string(bpdcw) + " tilings=" + to_string(bpdca);
+    }
+    if _starts_with(cmd, "bpd dp ") {
+        let bpddm = to_int(str_sub(cmd, 7, len(cmd)));
+        return "bpd: dp[" + to_string(bpddm) + "]=" + to_string(bpd_dp[bpddm]);
+    }
+    if cmd == "bpd h" { return "bpd: H=" + to_string(BPD_H); }
+    if cmd == "bpd w" { return "bpd: W=" + to_string(BPD_W); }
+    if cmd == "bpd maxmask" { return "bpd: MAXMASK=" + to_string(BPD_MAXMASK); }
+
     return shell_handle(cmd);
 }
 
@@ -5913,7 +5976,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 1177 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld + lca + virtualtree + dominator + sam + manacher + eertree + bwt + lyndon + zfunction + ir + regalloc + codegen + ioring + persistseg + rollbackdsu + splaytree + mo + sqrtdecomp + cht + matrixexpo + numtheory + strhash + intervaldp + gametheory + trie + lichao + dcdp + monoqueue + segbeats + lct + quickselect + ntt + segmerge + palindromedp + knuthdp + bitset + millerrabin + pollardrho + linearbasis + geometry2d + rotcalip + halfplane + dinic + blockcuttree + bridgetree + polyinv + polylnexp + polysqrt");
+print("shell.hl loaded -- 1198 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld + lca + virtualtree + dominator + sam + manacher + eertree + bwt + lyndon + zfunction + ir + regalloc + codegen + ioring + persistseg + rollbackdsu + splaytree + mo + sqrtdecomp + cht + matrixexpo + numtheory + strhash + intervaldp + gametheory + trie + lichao + dcdp + monoqueue + segbeats + lct + quickselect + ntt + segmerge + palindromedp + knuthdp + bitset + millerrabin + pollardrho + linearbasis + geometry2d + rotcalip + halfplane + dinic + blockcuttree + bridgetree + polyinv + polylnexp + polysqrt + bitmaskdp + digitdp + brokenprofiledp");
 
 // Main shell loop (called from kernel_init)
 
