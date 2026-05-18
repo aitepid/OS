@@ -2,13 +2,18 @@
 // Iteration 434 | Buffer: 0x1E90000
 //
 // Formats H-L code according to style guidelines.
-// Features:
-// - Indentation normalization (4-space standard)
-// - Line length tracking
-// - Brace alignment checking
-// - Whitespace cleanup
 //
-// Testing: hl_fmt_test() → validates formatting rules, indentation levels
+// Line integer encoding convention:
+//   units digit  = open-brace count  on that line
+//   tens digit   = close-brace count on that line
+//   hundreds digit = indent level (in FMT_INDENT_WIDTH units)
+//
+// Example: line id 1   = "1 open brace, depth neutral"
+//          line id 10  = "1 close brace"
+//          line id 100 = "indent level 1, no braces"
+//          line id 211 = "indent level 2, 1 open, 1 close"
+//
+// Testing: hl_fmt_test() => validates formatting rules, indentation levels
 
 let FMT_MAX_LINES = 64;
 let FMT_MAX_LINE_LEN = 128;
@@ -19,21 +24,21 @@ let fmt_line_count = 0;
 let fmt_max_line_len = 0;
 let fmt_brace_depth = 0;
 
+// Return the indent level encoded in the hundreds digit of `line`.
+// Indent level N means the line has N * FMT_INDENT_WIDTH leading spaces.
 fn fmt_get_indent_level(line) {
-    let spaces = 0;
-    let i = 0;
-    {
-        if i >= 32 {
-            return spaces / FMT_INDENT_WIDTH;
-        }
-        spaces = spaces + 1;
-        set_at(i, 0, i + 1);
+    let hundreds = (line / 100) - (line / 1000) * 10;
+    if hundreds < 0 {
+        return 0;
     }
-    return spaces / FMT_INDENT_WIDTH;
+    return hundreds;
 }
 
+// Strip brace-count digits, keeping only the indent portion.
+// E.g. fmt_normalize_line(211) = 200 (indent=2, braces cleared).
 fn fmt_normalize_line(line) {
-    return line;
+    let indent_part = (line / 100) * 100;
+    return indent_part;
 }
 
 fn fmt_add_line(line) {
@@ -46,16 +51,26 @@ fn fmt_add_line(line) {
     return old_count;
 }
 
+// Count open braces encoded in the units digit of `line`.
 fn fmt_count_braces_open(line) {
-    return 1;
+    let units = line - (line / 10) * 10;
+    if units < 0 {
+        return 0;
+    }
+    return units;
 }
 
+// Count close braces encoded in the tens digit of `line`.
 fn fmt_count_braces_close(line) {
-    return 1;
+    let tens = (line / 10) - (line / 100) * 10;
+    if tens < 0 {
+        return 0;
+    }
+    return tens;
 }
 
 fn fmt_update_brace_depth(line) {
-    let open_cnt = fmt_count_braces_open(line);
+    let open_cnt  = fmt_count_braces_open(line);
     let close_cnt = fmt_count_braces_close(line);
     set_at(fmt_brace_depth, 0, fmt_brace_depth + open_cnt);
     let temp = fmt_brace_depth - close_cnt;
@@ -89,27 +104,45 @@ fn hl_fmt_test() {
     fmt_init();
 
     let pass = 1;
-    fmt_add_line(100);
-    fmt_add_line(200);
+
+    // Test line counting
+    fmt_add_line(1);    // line with 1 open brace (units=1)
+    fmt_add_line(1);    // another open-brace line
     let ln_cnt = fmt_get_line_count();
     if ln_cnt != 2 {
         pass = 0;
     }
 
-    fmt_update_brace_depth(100);
+    // Test brace depth accumulation: each line has 1 open, 0 close
+    fmt_update_brace_depth(1);
     let depth1 = fmt_get_current_depth();
     if depth1 != 1 {
         pass = 0;
     }
 
-    fmt_update_brace_depth(200);
+    fmt_update_brace_depth(1);
     let depth2 = fmt_get_current_depth();
     if depth2 != 2 {
         pass = 0;
     }
 
+    // Test close brace reduces depth: line 10 = tens digit 1 = 1 close brace
+    fmt_update_brace_depth(10);
+    let depth3 = fmt_get_current_depth();
+    if depth3 != 1 {
+        pass = 0;
+    }
+
+    // Test floor at 0: two close braces when depth=1 -> floor to 0
+    fmt_update_brace_depth(20);
+    let depth4 = fmt_get_current_depth();
+    if depth4 != 0 {
+        pass = 0;
+    }
+
+    // Test reset
     fmt_reset();
-    let reset_cnt = fmt_get_line_count();
+    let reset_cnt   = fmt_get_line_count();
     let reset_depth = fmt_get_current_depth();
     if reset_cnt != 0 {
         pass = 0;
@@ -118,8 +151,25 @@ fn hl_fmt_test() {
         pass = 0;
     }
 
+    // Test indent level extraction: line 200 => hundreds digit = 2
     let indent_lv = fmt_get_indent_level(200);
-    if indent_lv < 0 {
+    if indent_lv != 2 {
+        pass = 0;
+    }
+
+    // Test normalize_line: 211 => strip units+tens => 200
+    let norm = fmt_normalize_line(211);
+    if norm != 200 {
+        pass = 0;
+    }
+
+    // Test open/close brace counting directly
+    let ob = fmt_count_braces_open(3);
+    if ob != 3 {
+        pass = 0;
+    }
+    let cb = fmt_count_braces_close(50);
+    if cb != 5 {
         pass = 0;
     }
 

@@ -3,35 +3,58 @@
 //
 // Provides interactive Read-Eval-Print Loop for H-L expressions.
 // Features:
-// - Simple expression evaluation (arithmetic + variable storage)
+// - Command-based expression evaluation (arithmetic + variable storage)
 // - Command history (up to REPL_MAX_HISTORY entries)
 // - Variable scoped storage (REPL_MAX_VARS variables)
-// - Basic built-in commands (clear, history, help, exit)
 //
-// Testing: hl_repl_test() → validates session lifecycle, var storage, history tracking
+// Evaluation model (integer-encoded commands):
+//   Set repl_cmd + repl_arg0 + repl_arg1 + repl_var_id, then call repl_exec_line.
+//   REPL_CMD_LITERAL = 0 : result = repl_arg0
+//   REPL_CMD_ADD     = 1 : result = repl_arg0 + repl_arg1
+//   REPL_CMD_SUB     = 2 : result = repl_arg0 - repl_arg1
+//   REPL_CMD_MUL     = 3 : result = repl_arg0 * repl_arg1
+//   REPL_CMD_DIV     = 4 : result = repl_arg0 / repl_arg1
+//   REPL_CMD_NEG     = 5 : result = 0 - repl_arg0
+//   REPL_CMD_LET     = 6 : store repl_arg0 in var repl_var_id; result = repl_arg0
+//   REPL_CMD_GET     = 7 : result = get_var(repl_var_id)
+//
+// Testing: hl_repl_test() => validates eval dispatch, var storage, history
 
 let REPL_MAX_HISTORY = 32;
-let REPL_MAX_VARS = 16;
-let REPL_INPUT_SIZE = 128;
+let REPL_MAX_VARS    = 16;
+let REPL_INPUT_SIZE  = 128;
 
-let repl_history = array(REPL_MAX_HISTORY, 0);
+let REPL_CMD_LITERAL = 0;
+let REPL_CMD_ADD     = 1;
+let REPL_CMD_SUB     = 2;
+let REPL_CMD_MUL     = 3;
+let REPL_CMD_DIV     = 4;
+let REPL_CMD_NEG     = 5;
+let REPL_CMD_LET     = 6;
+let REPL_CMD_GET     = 7;
+
+let repl_history       = array(REPL_MAX_HISTORY, 0);
 let repl_history_count = 0;
-let repl_vars = array(REPL_MAX_VARS, 0);
-let repl_var_names = array(REPL_MAX_VARS, 0);
-let repl_var_count = 0;
+let repl_vars          = array(REPL_MAX_VARS, 0);
+let repl_var_names     = array(REPL_MAX_VARS, 0);
+let repl_var_count     = 0;
 let repl_session_lines = 0;
 
+// Current evaluation context (caller sets before repl_exec_line)
+let repl_cmd    = 0;
+let repl_arg0   = 0;
+let repl_arg1   = 0;
+let repl_var_id = 0;
+
 fn repl_find_var(name) {
-    let i = 0;
-    {
-        if i >= repl_var_count {
-            return 0 - 1;
-        }
+    let i = array(1, 0);
+    while i < repl_var_count {
         if repl_var_names[i] == name {
             return i;
         }
-        set_at(i, i, i + 1);
+        set_at(i, 0, i + 1);
     }
+    return 0 - 1;
 }
 
 fn repl_set_var(name, value) {
@@ -58,6 +81,51 @@ fn repl_get_var(name) {
     return 0;
 }
 
+// Prepare evaluation context before calling repl_exec_line or repl_eval_simple.
+fn repl_prepare(cmd, a0, a1) {
+    set_at(repl_cmd,  0, cmd);
+    set_at(repl_arg0, 0, a0);
+    set_at(repl_arg1, 0, a1);
+}
+
+// Set the variable ID for LET / GET commands.
+fn repl_set_varid(vid) {
+    set_at(repl_var_id, 0, vid);
+}
+
+// Evaluate the current command context.  `line_id` is recorded in history.
+fn repl_eval_simple(line_id) {
+    if repl_cmd == REPL_CMD_LITERAL {
+        return repl_arg0;
+    }
+    if repl_cmd == REPL_CMD_ADD {
+        return repl_arg0 + repl_arg1;
+    }
+    if repl_cmd == REPL_CMD_SUB {
+        return repl_arg0 - repl_arg1;
+    }
+    if repl_cmd == REPL_CMD_MUL {
+        return repl_arg0 * repl_arg1;
+    }
+    if repl_cmd == REPL_CMD_DIV {
+        if repl_arg1 == 0 {
+            return 0 - 1;
+        }
+        return repl_arg0 / repl_arg1;
+    }
+    if repl_cmd == REPL_CMD_NEG {
+        return 0 - repl_arg0;
+    }
+    if repl_cmd == REPL_CMD_LET {
+        repl_set_var(repl_var_id, repl_arg0);
+        return repl_arg0;
+    }
+    if repl_cmd == REPL_CMD_GET {
+        return repl_get_var(repl_var_id);
+    }
+    return 0 - 1;
+}
+
 fn repl_add_history(input, result) {
     if repl_history_count >= REPL_MAX_HISTORY {
         return 0 - 1;
@@ -69,13 +137,9 @@ fn repl_add_history(input, result) {
     return old_count;
 }
 
-fn repl_eval_simple(expr) {
-    return expr + 1;
-}
-
-fn repl_exec_line(line) {
-    let result = repl_eval_simple(line);
-    repl_add_history(line, result);
+fn repl_exec_line(line_id) {
+    let result = repl_eval_simple(line_id);
+    repl_add_history(line_id, result);
     return result;
 }
 
@@ -94,38 +158,92 @@ fn repl_get_session_lines() {
 }
 
 fn repl_init() {
-    set_at(repl_var_count, 0, 0);
+    set_at(repl_var_count,     0, 0);
     set_at(repl_history_count, 0, 0);
     set_at(repl_session_lines, 0, 0);
+    set_at(repl_cmd,           0, REPL_CMD_LITERAL);
+    set_at(repl_arg0,          0, 0);
+    set_at(repl_arg1,          0, 0);
+    set_at(repl_var_id,        0, 0);
 }
 
 fn hl_repl_test() {
     repl_init();
-
     let pass = 1;
-    let result1 = repl_exec_line(100);
-    if result1 != 101 {
+
+    // REPL_CMD_LITERAL: return arg0 unchanged
+    repl_prepare(REPL_CMD_LITERAL, 42, 0);
+    let lit_result = repl_exec_line(0);
+    if lit_result != 42 {
         pass = 0;
     }
 
-    repl_set_var(42, 999);
-    let v_val = repl_get_var(42);
-    if v_val != 999 {
+    // REPL_CMD_ADD: 15 + 25 = 40
+    repl_prepare(REPL_CMD_ADD, 15, 25);
+    let add_result = repl_exec_line(1);
+    if add_result != 40 {
         pass = 0;
     }
 
-    repl_exec_line(200);
-    repl_exec_line(300);
+    // REPL_CMD_SUB: 100 - 37 = 63
+    repl_prepare(REPL_CMD_SUB, 100, 37);
+    let sub_result = repl_exec_line(2);
+    if sub_result != 63 {
+        pass = 0;
+    }
+
+    // REPL_CMD_MUL: 6 * 7 = 42
+    repl_prepare(REPL_CMD_MUL, 6, 7);
+    let mul_result = repl_exec_line(3);
+    if mul_result != 42 {
+        pass = 0;
+    }
+
+    // REPL_CMD_DIV: 100 / 4 = 25
+    repl_prepare(REPL_CMD_DIV, 100, 4);
+    let div_result = repl_exec_line(4);
+    if div_result != 25 {
+        pass = 0;
+    }
+
+    // REPL_CMD_NEG: -(10) = -10
+    repl_prepare(REPL_CMD_NEG, 10, 0);
+    let neg_result = repl_exec_line(5);
+    if neg_result != 0 - 10 {
+        pass = 0;
+    }
+
+    // REPL_CMD_LET / REPL_CMD_GET: store 999 in var 42, then retrieve it
+    repl_prepare(REPL_CMD_LET, 999, 0);
+    repl_set_varid(42);
+    repl_exec_line(6);
+    repl_prepare(REPL_CMD_GET, 0, 0);
+    repl_set_varid(42);
+    let get_result = repl_exec_line(7);
+    if get_result != 999 {
+        pass = 0;
+    }
+
+    // Direct repl_set_var / repl_get_var still work
+    repl_set_var(77, 1234);
+    let direct_val = repl_get_var(77);
+    if direct_val != 1234 {
+        pass = 0;
+    }
+
+    // History should have 8 entries (one per repl_exec_line call above)
     let hist_cnt = repl_get_history_count();
-    if hist_cnt != 3 {
+    if hist_cnt != 8 {
         pass = 0;
     }
 
+    // session_lines equals history count
     let sess_lines = repl_get_session_lines();
-    if sess_lines != 3 {
+    if sess_lines != 8 {
         pass = 0;
     }
 
+    // Clear history
     repl_clear_history();
     let cleared_cnt = repl_get_history_count();
     if cleared_cnt != 0 {

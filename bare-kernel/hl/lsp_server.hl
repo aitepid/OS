@@ -1,18 +1,58 @@
 // lsp_server.hl -- Language Server Protocol Server (Phase 7: 生态与自举完善, iter 427)
 // Buffer: 0x1E20000
-// LSP stub: open/close documents, accumulate per-doc diagnostics
-// LS_MAX_DOCS=8, LS_MAX_DIAGS=16; ls_diags flat [doc_idx*16 + diag_i]
-// Shell: ls init/test/open/close/diag/diagcount/ndocs (7 commands)
+//
+// Full LSP request dispatch layer on top of document/diagnostic tracking.
+//
+// Method IDs (integer-encoded LSP methods):
+//   LSP_M_OPEN        = 0  (textDocument/didOpen)
+//   LSP_M_CLOSE       = 1  (textDocument/didClose)
+//   LSP_M_COMPLETION  = 2  (textDocument/completion)
+//   LSP_M_HOVER       = 3  (textDocument/hover)
+//   LSP_M_DIAGNOSTICS = 4  (textDocument/publishDiagnostics)
+//   LSP_M_DEFINITION  = 5  (textDocument/definition)
+//   LSP_M_REFERENCES  = 6  (textDocument/references)
+//
+// Request result encoding:
+//   OPEN/CLOSE       → slot index (0+) or -1 on error
+//   COMPLETION       → doc_id * 1000 + col  (synthetic completion token)
+//   HOVER            → doc_id * 1000 + line (hover position token)
+//   DIAGNOSTICS      → diagnostic count for doc
+//   DEFINITION       → line * 1000 + col    (definition location token)
+//   REFERENCES       → reference count (doc_id used as reference target)
+//
+// LS_MAX_DOCS=8, LS_MAX_DIAGS=16, LS_MAX_REQS=32
+// Shell: ls init/test/open/close/diag/diagcount/ndocs/req/reqcount (9 commands)
 
 let LS_MAX_DOCS  = 8;
 let LS_MAX_DIAGS = 16;
+let LS_MAX_REQS  = 32;
 
+let LSP_M_OPEN        = 0;
+let LSP_M_CLOSE       = 1;
+let LSP_M_COMPLETION  = 2;
+let LSP_M_HOVER       = 3;
+let LSP_M_DIAGNOSTICS = 4;
+let LSP_M_DEFINITION  = 5;
+let LSP_M_REFERENCES  = 6;
+
+// Document table
 let ls_doc_id         = array(8, 0);    // document IDs
 let ls_doc_version    = array(8, 0);    // document versions
 let ls_doc_open       = array(8, 0);    // 1=open, 0=closed
 let ls_doc_diag_count = array(8, 0);    // diagnostics per doc
 let ls_diags          = array(128, 0);  // ls_diags[doc_idx * LS_MAX_DIAGS + i]
 let ls_n_docs         = 0;
+
+// Request log
+let ls_req_method = array(32, 0);
+let ls_req_doc    = array(32, 0);
+let ls_req_line   = array(32, 0);
+let ls_req_col    = array(32, 0);
+let ls_req_result = array(32, 0);
+let ls_n_reqs     = 0;
+
+// Reference count table per document (for LSP_M_REFERENCES)
+let ls_ref_count = array(8, 0);
 
 fn ls_init() {
     let i = 0;
@@ -21,6 +61,7 @@ fn ls_init() {
         set_at(ls_doc_version,    i, 0);
         set_at(ls_doc_open,       i, 0);
         set_at(ls_doc_diag_count, i, 0);
+        set_at(ls_ref_count,      i, 0);
         i += 1;
     }
     let j = 0;
@@ -28,7 +69,17 @@ fn ls_init() {
         set_at(ls_diags, j, 0);
         j += 1;
     }
+    let k = 0;
+    while k < LS_MAX_REQS {
+        set_at(ls_req_method, k, 0);
+        set_at(ls_req_doc,    k, 0);
+        set_at(ls_req_line,   k, 0);
+        set_at(ls_req_col,    k, 0);
+        set_at(ls_req_result, k, 0);
+        k += 1;
+    }
     ls_n_docs = 0;
+    ls_n_reqs = 0;
     return 0;
 }
 
@@ -54,6 +105,7 @@ fn ls_open(doc_id, version) {
     set_at(ls_doc_version,    slot, version);
     set_at(ls_doc_open,       slot, 1);
     set_at(ls_doc_diag_count, slot, 0);
+    set_at(ls_ref_count,      slot, 0);
     ls_n_docs += 1;
     return slot;
 }
@@ -90,44 +142,150 @@ fn ls_get_diag(doc_id, i) {
 
 fn ls_ndocs() { return ls_n_docs; }
 
+// Add a reference to doc, bump its ref count
+fn ls_add_ref(doc_id) {
+    let idx = ls_find(doc_id);
+    if idx < 0 { return 0 - 1; }
+    set_at(ls_ref_count, idx, ls_ref_count[idx] + 1);
+    return ls_ref_count[idx];
+}
+
+fn ls_get_ref_count(doc_id) {
+    let idx = ls_find(doc_id);
+    if idx < 0 { return 0 - 1; }
+    return ls_ref_count[idx];
+}
+
+// --- LSP Request Dispatcher ---
+
+// Log a request and return its slot index.
+fn _ls_log_req(method, doc_id, line, col, result) {
+    if ls_n_reqs >= LS_MAX_REQS { return 0 - 1; }
+    let slot = ls_n_reqs;
+    set_at(ls_req_method, slot, method);
+    set_at(ls_req_doc,    slot, doc_id);
+    set_at(ls_req_line,   slot, line);
+    set_at(ls_req_col,    slot, col);
+    set_at(ls_req_result, slot, result);
+    ls_n_reqs = ls_n_reqs + 1;
+    return slot;
+}
+
+// Dispatch an LSP request; log it; return integer-encoded result.
+fn lsp_handle_request(method_id, doc_id, line, col) {
+    let result = 0 - 1;
+
+    if method_id == LSP_M_OPEN {
+        result = ls_open(doc_id, 1);
+    }
+    if method_id == LSP_M_CLOSE {
+        result = ls_close(doc_id);
+    }
+    if method_id == LSP_M_COMPLETION {
+        // Completion: encode position as doc_id*1000+col
+        let idx = ls_find(doc_id);
+        if idx >= 0 {
+            result = doc_id * 1000 + col;
+        }
+    }
+    if method_id == LSP_M_HOVER {
+        // Hover: encode position as doc_id*1000+line
+        let idx2 = ls_find(doc_id);
+        if idx2 >= 0 {
+            result = doc_id * 1000 + line;
+        }
+    }
+    if method_id == LSP_M_DIAGNOSTICS {
+        result = ls_get_diag_count(doc_id);
+    }
+    if method_id == LSP_M_DEFINITION {
+        // Definition: encode as line*1000+col (uses same doc)
+        let idx3 = ls_find(doc_id);
+        if idx3 >= 0 {
+            result = line * 1000 + col;
+        }
+    }
+    if method_id == LSP_M_REFERENCES {
+        result = ls_add_ref(doc_id);
+    }
+
+    _ls_log_req(method_id, doc_id, line, col, result);
+    return result;
+}
+
+fn lsp_get_req_count() { return ls_n_reqs; }
+
+fn lsp_get_req_result(req_idx) {
+    if req_idx >= ls_n_reqs { return 0 - 1; }
+    return ls_req_result[req_idx];
+}
+
 fn ls_test() {
     ls_init();
+    let pass = 1;
+
+    // Open two documents
     ls_open(1, 1);
     ls_open(2, 1);
     ls_add_diag(1, 100);
     ls_add_diag(1, 200);
     ls_add_diag(2, 300);
 
-    let nd   = ls_ndocs();          // 2
-    let dc1  = ls_get_diag_count(1);// 2
-    let dc2  = ls_get_diag_count(2);// 1
-    let d10  = ls_get_diag(1, 0);   // 100
-    let d11  = ls_get_diag(1, 1);   // 200
-    let d20  = ls_get_diag(2, 0);   // 300
+    let nd  = ls_ndocs();
+    let dc1 = ls_get_diag_count(1);
+    let dc2 = ls_get_diag_count(2);
+    let d10 = ls_get_diag(1, 0);
+    let d11 = ls_get_diag(1, 1);
+    let d20 = ls_get_diag(2, 0);
+
+    if nd  != 2   { pass = 0; }
+    if dc1 != 2   { pass = 0; }
+    if dc2 != 1   { pass = 0; }
+    if d10 != 100 { pass = 0; }
+    if d11 != 200 { pass = 0; }
+    if d20 != 300 { pass = 0; }
+
+    // Test lsp_handle_request dispatch
+    // COMPLETION for doc=1, line=5, col=12 → 1*1000+12 = 1012
+    let comp = lsp_handle_request(LSP_M_COMPLETION, 1, 5, 12);
+    if comp != 1012 { pass = 0; }
+
+    // HOVER for doc=2, line=10, col=3 → 2*1000+10 = 2010
+    let hover = lsp_handle_request(LSP_M_HOVER, 2, 10, 3);
+    if hover != 2010 { pass = 0; }
+
+    // DIAGNOSTICS for doc=1 → 2
+    let diags = lsp_handle_request(LSP_M_DIAGNOSTICS, 1, 0, 0);
+    if diags != 2 { pass = 0; }
+
+    // DEFINITION for doc=1, line=7, col=4 → 7*1000+4 = 7004
+    let defn = lsp_handle_request(LSP_M_DEFINITION, 1, 7, 4);
+    if defn != 7004 { pass = 0; }
+
+    // REFERENCES for doc=2 twice → ref_count = 2
+    lsp_handle_request(LSP_M_REFERENCES, 2, 0, 0);
+    let refs = lsp_handle_request(LSP_M_REFERENCES, 2, 0, 0);
+    if refs != 2 { pass = 0; }
+
+    // CLOSE doc=1
+    let closed = lsp_handle_request(LSP_M_CLOSE, 1, 0, 0);
+    if closed < 0 { pass = 0; }
+
+    let req_cnt = lsp_get_req_count();   // 6 requests dispatched
+
+    if req_cnt != 6 { pass = 0; }
 
     print("ls_test: nd=" + to_string(nd)
-          + " dc1=" + to_string(dc1)
-          + " dc2=" + to_string(dc2)
-          + " d10=" + to_string(d10)
-          + " d11=" + to_string(d11)
-          + " d20=" + to_string(d20));
+          + " comp=" + to_string(comp)
+          + " hover=" + to_string(hover)
+          + " diags=" + to_string(diags)
+          + " defn=" + to_string(defn)
+          + " refs=" + to_string(refs)
+          + " reqs=" + to_string(req_cnt));
 
-    if nd == 2 {
-        if dc1 == 2 {
-            if dc2 == 1 {
-                if d10 == 100 {
-                    if d11 == 200 {
-                        if d20 == 300 {
-                            print("ls_test: PASS");
-                            return 1;
-                        }
-                    }
-                }
-            }
-        }
-    }
-    print("ls_test: FAIL");
-    return 0;
+    if pass == 1 { print("ls_test: PASS"); }
+    if pass == 0 { print("ls_test: FAIL"); }
+    return pass;
 }
 
 print("lsp_server.hl loaded");

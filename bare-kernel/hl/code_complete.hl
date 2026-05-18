@@ -1,28 +1,62 @@
 // code_complete.hl -- H-L Code Completion Engine (Phase 7: 生态与自举完善, iter 429)
 // Buffer: 0x1E40000
-// Ranks completion candidates by score; cc_get_best() returns highest-score item
-// CC_MAX_ITEMS=32; CC_TYPE_FN=0, CC_TYPE_VAR=1, CC_TYPE_KEYWORD=2
-// Shell: cc init/test/add/best/score/find/count (7 commands)
+//
+// Symbol table with prefix matching and context-aware completion.
+//
+// Item registration: cc_add(item_id, type, score) — core table
+// Symbol registration: cc_register_symbol(name_id, kind, prefix_key, score)
+//   prefix_key = first_char*256 + second_char  (2-char prefix integer)
+//
+// Prefix matching:
+//   cc_match_prefix(prefix_key) — scan symbol table for items with matching
+//   prefix, populate cc_match_buf, return match count
+//   cc_get_match(i) — return i-th match item_id
+//   cc_get_matches_count() — number of matches found
+//
+// Context kind:
+//   cc_get_context_kind(col) — estimate completion type from cursor column
+//     col < 4   → CC_TYPE_KEYWORD  (start of line, expecting keyword)
+//     4 <= col < 10 → CC_TYPE_FN   (inside expression, expecting fn name)
+//     col >= 10  → CC_TYPE_VAR     (argument position)
+//
+// CC_MAX_ITEMS=32, CC_MAX_MATCHES=16
+// CC_TYPE_FN=0, CC_TYPE_VAR=1, CC_TYPE_KEYWORD=2
+// Shell: cc init/test/add/best/score/find/count/reg/match/context (10 cmds)
 
-let CC_MAX_ITEMS    = 32;
+let CC_MAX_ITEMS   = 32;
+let CC_MAX_MATCHES = 16;
+
 let CC_TYPE_FN      = 0;
 let CC_TYPE_VAR     = 1;
 let CC_TYPE_KEYWORD = 2;
 
-let cc_item_id    = array(32, 0);   // completion item IDs
-let cc_item_type  = array(32, 0);   // CC_TYPE_*
-let cc_item_score = array(32, 0);   // relevance score (higher = better)
-let cc_n_items    = 0;
+// Core item table
+let cc_item_id     = array(32, 0);
+let cc_item_type   = array(32, 0);
+let cc_item_score  = array(32, 0);
+let cc_item_prefix = array(32, 0);   // 2-char prefix key: ch1*256+ch2
+let cc_n_items     = 0;
 
-fn cc_init() {
+// Match buffer (populated by cc_match_prefix)
+let cc_match_buf   = array(16, 0);
+let cc_n_matches   = 0;
+
+fn code_cmp_init() {
     let i = 0;
     while i < CC_MAX_ITEMS {
-        set_at(cc_item_id,    i, 0);
-        set_at(cc_item_type,  i, 0);
-        set_at(cc_item_score, i, 0);
+        set_at(cc_item_id,     i, 0);
+        set_at(cc_item_type,   i, 0);
+        set_at(cc_item_score,  i, 0);
+        set_at(cc_item_prefix, i, 0);
         i += 1;
     }
-    cc_n_items = 0;
+    let j = 0;
+    while j < CC_MAX_MATCHES {
+        set_at(cc_match_buf, j, 0);
+        j += 1;
+    }
+    cc_n_items   = 0;
+    cc_n_matches = 0;
     return 0;
 }
 
@@ -35,6 +69,7 @@ fn cc_find(item_id) {
     return 0 - 1;
 }
 
+// Core add: item_id, type, score (prefix_key defaults to 0)
 fn cc_add(item_id, item_type, score) {
     let idx = cc_find(item_id);
     if idx >= 0 {
@@ -44,9 +79,29 @@ fn cc_add(item_id, item_type, score) {
     }
     if cc_n_items >= CC_MAX_ITEMS { return 0 - 1; }
     let slot = cc_n_items;
-    set_at(cc_item_id,    slot, item_id);
-    set_at(cc_item_type,  slot, item_type);
-    set_at(cc_item_score, slot, score);
+    set_at(cc_item_id,     slot, item_id);
+    set_at(cc_item_type,   slot, item_type);
+    set_at(cc_item_score,  slot, score);
+    set_at(cc_item_prefix, slot, 0);
+    cc_n_items += 1;
+    return slot;
+}
+
+// Extended register: item_id, type, prefix_key (ch1*256+ch2), score
+fn cc_register_symbol(item_id, item_type, prefix_key, score) {
+    let idx = cc_find(item_id);
+    if idx >= 0 {
+        set_at(cc_item_type,   idx, item_type);
+        set_at(cc_item_score,  idx, score);
+        set_at(cc_item_prefix, idx, prefix_key);
+        return idx;
+    }
+    if cc_n_items >= CC_MAX_ITEMS { return 0 - 1; }
+    let slot = cc_n_items;
+    set_at(cc_item_id,     slot, item_id);
+    set_at(cc_item_type,   slot, item_type);
+    set_at(cc_item_score,  slot, score);
+    set_at(cc_item_prefix, slot, prefix_key);
     cc_n_items += 1;
     return slot;
 }
@@ -74,42 +129,124 @@ fn cc_get_best() {
 
 fn cc_count() { return cc_n_items; }
 
+// Scan all symbols for matching prefix_key; populate cc_match_buf sorted by
+// descending score (insertion sort).  Returns match count.
+fn cc_match_prefix(prefix_key) {
+    cc_n_matches = 0;
+    let i = 0;
+    while i < cc_n_items {
+        if cc_item_prefix[i] == prefix_key {
+            if cc_n_matches < CC_MAX_MATCHES {
+                // Insertion-sort by score descending
+                let new_id  = cc_item_id[i];
+                let new_sc  = cc_item_score[i];
+                let ins_pos = cc_n_matches;
+                let j = 0;
+                while j < cc_n_matches {
+                    if new_sc > cc_item_score[cc_find(cc_match_buf[j])] {
+                        ins_pos = j;
+                        j = cc_n_matches + 1;   // break
+                    }
+                    if j < cc_n_matches { j = j + 1; }
+                }
+                // Shift elements right to make room
+                let k = cc_n_matches;
+                while k > ins_pos {
+                    set_at(cc_match_buf, k, cc_match_buf[k - 1]);
+                    k = k - 1;
+                }
+                set_at(cc_match_buf, ins_pos, new_id);
+                cc_n_matches = cc_n_matches + 1;
+            }
+        }
+        i += 1;
+    }
+    return cc_n_matches;
+}
+
+fn cc_get_match(i) {
+    if i < 0           { return 0 - 1; }
+    if i >= cc_n_matches { return 0 - 1; }
+    return cc_match_buf[i];
+}
+
+fn cc_get_matches_count() { return cc_n_matches; }
+
+// Estimate completion type from cursor column position.
+fn cc_get_context_kind(col) {
+    if col < 4  { return CC_TYPE_KEYWORD; }
+    if col < 10 { return CC_TYPE_FN; }
+    return CC_TYPE_VAR;
+}
+
 fn cc_test() {
-    cc_init();
+    code_cmp_init();
+    let pass = 1;
+
+    // Core interface test
     cc_add(10, CC_TYPE_FN,      80);
     cc_add(20, CC_TYPE_VAR,     95);
     cc_add(30, CC_TYPE_KEYWORD, 60);
 
-    let cnt  = cc_count();       // 3
-    let best = cc_get_best();    // 20 (score=95)
-    let s10  = cc_get_score(10); // 80
-    let s30  = cc_get_score(30); // 60
-    let fi   = cc_find(10);      // >=0
-    let miss = cc_find(99);      // -1
+    let cnt  = cc_count();
+    let best = cc_get_best();
+    let s10  = cc_get_score(10);
+    let s30  = cc_get_score(30);
+    let fi   = cc_find(10);
+    let miss = cc_find(99);
+
+    if cnt  != 3     { pass = 0; }
+    if best != 20    { pass = 0; }
+    if s10  != 80    { pass = 0; }
+    if s30  != 60    { pass = 0; }
+    if fi   < 0      { pass = 0; }
+    if miss >= 0     { pass = 0; }
+
+    // Prefix matching test
+    code_cmp_init();
+    // prefix_key for "re" → 'r'=114, 'e'=101 → 114*256+101 = 29285
+    let pk_re = 114 * 256 + 101;   // 29285: "re" prefix → return/ref/etc.
+    // prefix_key for "fn" → 'f'=102, 'n'=110 → 102*256+110 = 26222
+    let pk_fn = 102 * 256 + 110;   // 26222: "fn" prefix
+
+    cc_register_symbol(101, CC_TYPE_FN,      pk_re, 90);   // "return"-like, score 90
+    cc_register_symbol(102, CC_TYPE_FN,      pk_re, 70);   // "ref"-like, score 70
+    cc_register_symbol(103, CC_TYPE_KEYWORD, pk_fn, 85);   // "fn"-like, score 85
+    cc_register_symbol(104, CC_TYPE_VAR,     pk_re, 80);   // another "re"-prefix, score 80
+
+    let mc = cc_match_prefix(pk_re);   // should find items 101, 104, 102 (sorted by score)
+    if mc != 3 { pass = 0; }
+
+    let m0 = cc_get_match(0);   // highest score: 101 (score=90)
+    let m1 = cc_get_match(1);   // next: 104 (score=80)
+    let m2 = cc_get_match(2);   // lowest: 102 (score=70)
+    if m0 != 101 { pass = 0; }
+    if m1 != 104 { pass = 0; }
+    if m2 != 102 { pass = 0; }
+
+    let mc_fn = cc_match_prefix(pk_fn);   // should find only item 103
+    if mc_fn != 1 { pass = 0; }
+    if cc_get_match(0) != 103 { pass = 0; }
+
+    // Context kind test
+    let k0 = cc_get_context_kind(0);    // col=0 → CC_TYPE_KEYWORD (0)
+    let k5 = cc_get_context_kind(5);    // col=5 → CC_TYPE_FN (0)
+    let k15 = cc_get_context_kind(15);  // col=15 → CC_TYPE_VAR (1)
+    if k0  != CC_TYPE_KEYWORD { pass = 0; }
+    if k5  != CC_TYPE_FN      { pass = 0; }
+    if k15 != CC_TYPE_VAR     { pass = 0; }
 
     print("cc_test: cnt=" + to_string(cnt)
           + " best=" + to_string(best)
-          + " s10=" + to_string(s10)
-          + " s30=" + to_string(s30)
-          + " fi=" + to_string(fi)
-          + " miss=" + to_string(miss));
+          + " mc=" + to_string(mc)
+          + " m0=" + to_string(m0)
+          + " m1=" + to_string(m1)
+          + " k0=" + to_string(k0)
+          + " k15=" + to_string(k15));
 
-    if cnt == 3 {
-        if best == 20 {
-            if s10 == 80 {
-                if s30 == 60 {
-                    if fi >= 0 {
-                        if miss == 0 - 1 {
-                            print("cc_test: PASS");
-                            return 1;
-                        }
-                    }
-                }
-            }
-        }
-    }
-    print("cc_test: FAIL");
-    return 0;
+    if pass == 1 { print("cc_test: PASS"); }
+    if pass == 0 { print("cc_test: FAIL"); }
+    return pass;
 }
 
 print("code_complete.hl loaded");

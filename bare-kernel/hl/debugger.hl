@@ -1,22 +1,75 @@
 // debugger.hl -- H-L Built-in Debugger (Phase 7: 生态与自举完善, iter 430)
 // Buffer: 0x1E50000
-// Debug sessions: attach, step (RIP+1 per step), continue; track step counts
-// DBG_MAX_SESSIONS=4; DBG_STOPPED=0, DBG_RUNNING=1, DBG_STEP=2
-// Shell: dbg init/test/attach/step/cont/rip/steps (7 commands)
+//
+// Debug sessions with instruction-length-aware stepping and 16-reg file.
+// DBG_MAX_SESSIONS=4; DBG_MAX_REGS=16 (r0=RAX..r15=R15 mapped)
+// DBG_STOPPED=0, DBG_RUNNING=1, DBG_STEP=2
+//
+// Opcode-length table (dbg_opcode_lens[class]):
+//   class = opcode_byte / 16  (0..15)
+//   Encodes representative x86_64 instruction byte lengths per opcode row.
+//   Caller calls dbg_decode_len(opcode) to get step size, then
+//   dbg_set_step_size(session_id, size) before dbg_step().
+//
+// Register IDs: 0=RAX 1=RCX 2=RDX 3=RBX 4=RSP 5=RBP 6=RSI 7=RDI
+//               8=R8  9=R9  10=R10 11=R11 12=R12 13=R13 14=R14 15=R15
+//
+// Shell: dbg init/test/attach/step/cont/rip/steps/reg/wreg (9 commands)
 
 let DBG_MAX_SESSIONS = 4;
+let DBG_MAX_REGS     = 16;
 let DBG_STOPPED      = 0;
 let DBG_RUNNING      = 1;
 let DBG_STEP         = 2;
+
+// Opcode-length table: 16 entries, one per opcode row (opcode / 16)
+// x86_64 representative lengths per row:
+//   0x00-0x0F: ADD/OR  family → 2  (class 0)
+//   0x10-0x1F: ADC/SBB family → 2  (class 1)
+//   0x20-0x2F: AND     family → 2  (class 2)
+//   0x30-0x3F: XOR/CMP family → 2  (class 3)
+//   0x40-0x4F: REX prefix     → 1  (class 4, consumed transparently)
+//   0x50-0x5F: PUSH/POP       → 1  (class 5)
+//   0x60-0x6F: misc/PUSHA     → 1  (class 6)
+//   0x70-0x7F: Jcc short      → 2  (class 7)
+//   0x80-0x8F: MOV/TEST/XCHG  → 3  (class 8)
+//   0x90-0x9F: NOP/XCHG/CBW   → 1  (class 9)
+//   0xA0-0xAF: MOV moffs      → 3  (class 10)
+//   0xB0-0xBF: MOV imm8/imm32 → 3  (class 11)
+//   0xC0-0xCF: RET/ENTER/INT  → 1  (class 12)
+//   0xD0-0xDF: Shift/FXXX     → 2  (class 13)
+//   0xE0-0xEF: LOOP/CALL/JMP  → 2  (class 14)
+//   0xF0-0xFF: LOCK/HLT/misc  → 1  (class 15)
+let dbg_opcode_lens = array(16, 0);
 
 let dbg_session_id    = array(4, 0);
 let dbg_session_state = array(4, 0);
 let dbg_session_rip   = array(4, 0);
 let dbg_session_rsp   = array(4, 0);
 let dbg_step_count    = array(4, 0);
+let dbg_step_size     = array(4, 1);   // per-session next-step byte count (default 1)
+let dbg_reg_file      = array(64, 0);  // 4 sessions × 16 regs, flat: session*16+reg_id
 let dbg_n_sessions    = 0;
 
 fn dbg_init() {
+    // Populate opcode-length table
+    set_at(dbg_opcode_lens,  0, 2);
+    set_at(dbg_opcode_lens,  1, 2);
+    set_at(dbg_opcode_lens,  2, 2);
+    set_at(dbg_opcode_lens,  3, 2);
+    set_at(dbg_opcode_lens,  4, 1);
+    set_at(dbg_opcode_lens,  5, 1);
+    set_at(dbg_opcode_lens,  6, 1);
+    set_at(dbg_opcode_lens,  7, 2);
+    set_at(dbg_opcode_lens,  8, 3);
+    set_at(dbg_opcode_lens,  9, 1);
+    set_at(dbg_opcode_lens, 10, 3);
+    set_at(dbg_opcode_lens, 11, 3);
+    set_at(dbg_opcode_lens, 12, 1);
+    set_at(dbg_opcode_lens, 13, 2);
+    set_at(dbg_opcode_lens, 14, 2);
+    set_at(dbg_opcode_lens, 15, 1);
+
     let i = 0;
     while i < DBG_MAX_SESSIONS {
         set_at(dbg_session_id,    i, 0);
@@ -24,10 +77,24 @@ fn dbg_init() {
         set_at(dbg_session_rip,   i, 0);
         set_at(dbg_session_rsp,   i, 0);
         set_at(dbg_step_count,    i, 0);
+        set_at(dbg_step_size,     i, 1);
         i += 1;
+    }
+    let j = 0;
+    while j < 64 {
+        set_at(dbg_reg_file, j, 0);
+        j += 1;
     }
     dbg_n_sessions = 0;
     return 0;
+}
+
+// Return instruction byte length for the given opcode byte.
+fn dbg_decode_len(opcode) {
+    let class = opcode / 16;
+    if class < 0  { return 1; }
+    if class > 15 { return 1; }
+    return dbg_opcode_lens[class];
 }
 
 fn _dbg_find(session_id) {
@@ -54,16 +121,30 @@ fn dbg_attach(session_id, rip, rsp) {
     set_at(dbg_session_rsp,   slot, rsp);
     set_at(dbg_session_state, slot, DBG_STOPPED);
     set_at(dbg_step_count,    slot, 0);
+    set_at(dbg_step_size,     slot, 1);
     dbg_n_sessions += 1;
     return slot;
 }
 
+// Set the byte length of the next instruction to step over (caller supplies
+// this from opcode decode or from dbg_decode_len).
+fn dbg_set_step_size(session_id, size) {
+    let idx = _dbg_find(session_id);
+    if idx < 0 { return 0 - 1; }
+    set_at(dbg_step_size, idx, size);
+    return size;
+}
+
+// Advance RIP by the configured step size, increment step counter.
 fn dbg_step(session_id) {
     let idx = _dbg_find(session_id);
     if idx < 0 { return 0 - 1; }
-    set_at(dbg_session_rip,   idx, dbg_session_rip[idx] + 1);
+    let sz = dbg_step_size[idx];
+    set_at(dbg_session_rip,   idx, dbg_session_rip[idx] + sz);
     set_at(dbg_step_count,    idx, dbg_step_count[idx] + 1);
     set_at(dbg_session_state, idx, DBG_STEP);
+    // Reset step size to 1 after each step (caller must re-set for next insn)
+    set_at(dbg_step_size, idx, 1);
     return dbg_session_rip[idx];
 }
 
@@ -92,33 +173,85 @@ fn dbg_get_state(session_id) {
     return dbg_session_state[idx];
 }
 
+// Register access: reg_id 0-15 maps to RAX..R15.
+fn dbg_read_reg(session_id, reg_id) {
+    let idx = _dbg_find(session_id);
+    if idx < 0       { return 0 - 1; }
+    if reg_id < 0    { return 0 - 1; }
+    if reg_id >= DBG_MAX_REGS { return 0 - 1; }
+    return dbg_reg_file[idx * DBG_MAX_REGS + reg_id];
+}
+
+fn dbg_write_reg(session_id, reg_id, val) {
+    let idx = _dbg_find(session_id);
+    if idx < 0       { return 0 - 1; }
+    if reg_id < 0    { return 0 - 1; }
+    if reg_id >= DBG_MAX_REGS { return 0 - 1; }
+    set_at(dbg_reg_file, idx * DBG_MAX_REGS + reg_id, val);
+    return val;
+}
+
 fn dbg_test() {
     dbg_init();
+    let pass = 1;
+
     dbg_attach(1, 4096, 32768);
 
+    // Step 1: opcode 0x89 → class 8 → len=3
+    let len1 = dbg_decode_len(137);   // 0x89=137, class=8, len=3
+    if len1 != 3 { pass = 0; }
+    dbg_set_step_size(1, len1);
     dbg_step(1);
+    let rip1 = dbg_get_rip(1);       // 4096 + 3 = 4099
+    if rip1 != 4099 { pass = 0; }
+
+    // Step 2: opcode 0x50 → class 5 → len=1
+    let len2 = dbg_decode_len(80);    // 0x50=80, class=5, len=1
+    if len2 != 1 { pass = 0; }
+    dbg_set_step_size(1, len2);
     dbg_step(1);
+    let rip2 = dbg_get_rip(1);       // 4099 + 1 = 4100
+    if rip2 != 4100 { pass = 0; }
 
-    let rip   = dbg_get_rip(1);    // 4098
-    let steps = dbg_get_steps(1);  // 2
+    // Step 3: opcode 0x74 → class 7 → len=2 (Jcc short)
+    let len3 = dbg_decode_len(116);   // 0x74=116, class=7, len=2
+    if len3 != 2 { pass = 0; }
+    dbg_set_step_size(1, len3);
+    dbg_step(1);
+    let rip3 = dbg_get_rip(1);       // 4100 + 2 = 4102
+    if rip3 != 4102 { pass = 0; }
 
+    let steps = dbg_get_steps(1);    // 3 steps total
+    if steps != 3 { pass = 0; }
+
+    // Continue → state=DBG_RUNNING
     dbg_continue(1);
-    let state = dbg_get_state(1);  // 1=DBG_RUNNING
+    let state = dbg_get_state(1);
+    if state != DBG_RUNNING { pass = 0; }
 
-    print("dbg_test: rip=" + to_string(rip)
+    // Register file: write RAX=0xDEAD (r0), RBX=0xBEEF (r3)
+    dbg_write_reg(1, 0, 57005);   // 0xDEAD = 57005
+    dbg_write_reg(1, 3, 48879);   // 0xBEEF = 48879
+    let rax = dbg_read_reg(1, 0);
+    let rbx = dbg_read_reg(1, 3);
+    if rax != 57005 { pass = 0; }
+    if rbx != 48879 { pass = 0; }
+
+    print("dbg_test: rip1=" + to_string(rip1)
+          + " rip2=" + to_string(rip2)
+          + " rip3=" + to_string(rip3)
           + " steps=" + to_string(steps)
-          + " state=" + to_string(state));
+          + " state=" + to_string(state)
+          + " rax=" + to_string(rax)
+          + " rbx=" + to_string(rbx));
 
-    if rip == 4098 {
-        if steps == 2 {
-            if state == DBG_RUNNING {
-                print("dbg_test: PASS");
-                return 1;
-            }
-        }
+    if pass == 1 {
+        print("dbg_test: PASS");
     }
-    print("dbg_test: FAIL");
-    return 0;
+    if pass == 0 {
+        print("dbg_test: FAIL");
+    }
+    return pass;
 }
 
 print("debugger.hl loaded");

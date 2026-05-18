@@ -631,10 +631,16 @@ fn shell_handle_ext(cmd) {
         return "hicos";
     }
     if cmd == "history" {
-        return "(history is handled in kernel.bin shell loop)";
+        let sess = repl_get_session_lines();
+        let hist = repl_get_history_count();
+        return "Session lines: " + to_string(sess) + "  History entries: " + to_string(hist) + "/" + to_string(REPL_MAX_HISTORY);
     }
     if cmd == "netstat" {
-        return "(netstat is handled in kernel.bin native dispatch)";
+        let sopen = socket_count;
+        let smax  = SOCKET_MAX;
+        let ip0 = my_ip[0]; let ip1 = my_ip[1];
+        let ip2 = my_ip[2]; let ip3 = my_ip[3];
+        return "Sockets: " + to_string(sopen) + "/" + to_string(smax) + "  eth0: " + to_string(ip0) + "." + to_string(ip1) + "." + to_string(ip2) + "." + to_string(ip3);
     }
     if cmd == "lsusb" {
         return "USB: XHCI host, " + to_string(xhci_max_ports) + " ports";
@@ -742,9 +748,6 @@ fn shell_handle_ext(cmd) {
     }
     if cmd == "dmesg" {
         return dmesg(20);
-    }
-    if cmd == "mixer" {
-        return mixer_status();
     }
     if cmd == "ip6" {
         return "IPv6 link-local: fe80::" + to_string(ipv6_our_addr[8]) + to_string(ipv6_our_addr[15]);
@@ -1315,7 +1318,7 @@ fn shell_handle_ext(cmd) {
         return "irc[" + to_string(id) + "] JOIN " + chan;
     }
     if str_starts_with(cmd, "irc say ") {
-        let args = str_sub(cmd, 8, len(args));
+        let args = str_sub(cmd, 8, len(cmd));
         let sp1 = str_find(args, " ");
         if sp1 < 0 { return "Usage: irc say <id> <target> <msg>"; }
         let id = parse_int(str_sub(args, 0, sp1));
@@ -1551,11 +1554,6 @@ fn shell_handle_ext(cmd) {
         svc_status(name);
         return "";
     }
-    if cmd == "uptime" {
-        let ticks = get_ticks();
-        let secs = ticks / 100;
-        return "up " + to_string(secs / 60) + "m " + to_string(secs % 60) + "s";
-    }
     if cmd == "kinfo" {
         hicos_kernel_info();
         return "";
@@ -1656,10 +1654,6 @@ fn shell_handle_ext(cmd) {
         let wc = watch_count;
         let qc = evt_count;
         print("inotify: instances=" + to_string(ic) + " watches=" + to_string(wc) + " queued_events=" + to_string(qc));
-        return "";
-    }
-    if cmd == "pty" {
-        print(pty_status());
         return "";
     }
     if str_starts_with(cmd, "pty ") {
