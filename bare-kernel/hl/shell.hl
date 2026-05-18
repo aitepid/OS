@@ -273,13 +273,16 @@ fn shell_handle(cmd) {
         serial_print("BTree:         bt init  bt test  bt insert <k> <v>  bt search <k>  bt size  bt nodes  bt height");
         serial_print("BPlusTree:     btp init  btp test  btp insert <k> <v>  btp search <k>  btp range <lo> <hi>  btp rqn  btp rqk <i>  btp size  btp nodes");
         serial_print("LSMMemtable:   lsm init  lsm test  lsm put <k> <v>  lsm get <k>  lsm flush  lsm ssget <k>  lsm compact  lsm size  lsm sssize  lsm seq");
+        serial_print("WAL:           wal init  wal test  wal begin <txid>  wal write <txid> <k> <v>  wal commit <txid>  wal abort <txid>  wal ckpt  wal replay  wal nrecs  wal redo");
+        serial_print("MVCC:          mvcc init  mvcc test  mvcc write <k> <v> <ts>  mvcc read <k> <ts>  mvcc vacuum <horizon>  mvcc tick  mvcc nver  mvcc nlive");
+        serial_print("Transaction:   tx init  tx test  tx begin  tx write <slot> <k> <v>  tx read <slot> <k>  tx commit <slot>  tx abort <slot>  tx status <slot>  tx active");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
     }
 
     if cmd == "ver" {
-        return "HicOS 6.0 -- Hilbert-Lang Kernel (364 modules, pure H-L, zero deps)";
+        return "HicOS 6.0 -- Hilbert-Lang Kernel (367 modules, pure H-L, zero deps)";
     }
 
     if cmd == "uptime" {
@@ -6761,6 +6764,110 @@ fn shell_handle_ext(cmd) {
     if cmd == "lsm sssize"  { return "lsm: ss_n=" + to_string(lsm_ss_size()); }
     if cmd == "lsm seq"     { return "lsm: seq="  + to_string(lsm_seq_num()); }
 
+    // --- WAL ---
+    if cmd == "wal init" { wal_init(); return "wal: init"; }
+    if cmd == "wal test" { let walr = wal_test(); return "wal: " + to_string(walr); }
+    if _starts_with(cmd, "wal begin ") {
+        let wabt = to_int(str_sub(cmd, 10, len(cmd)));
+        let wabl = wal_begin(wabt);
+        return "wal: BEGIN txid=" + to_string(wabt) + " lsn=" + to_string(wabl);
+    }
+    if _starts_with(cmd, "wal write ") {
+        let wawa  = str_sub(cmd, 10, len(cmd));
+        let waws0 = _find_space(wawa);
+        let wawt  = to_int(str_sub(wawa, 0, waws0));
+        let wawa1 = str_sub(wawa, waws0 + 1, len(wawa));
+        let waws1 = _find_space(wawa1);
+        let wawk  = to_int(str_sub(wawa1, 0, waws1));
+        let wawv  = to_int(str_sub(wawa1, waws1 + 1, len(wawa1)));
+        let wawl  = wal_write(wawt, wawk, wawv);
+        return "wal: WRITE lsn=" + to_string(wawl);
+    }
+    if _starts_with(cmd, "wal commit ") {
+        let wact = to_int(str_sub(cmd, 11, len(cmd)));
+        let wacl = wal_commit(wact);
+        return "wal: COMMIT txid=" + to_string(wact) + " lsn=" + to_string(wacl);
+    }
+    if _starts_with(cmd, "wal abort ") {
+        let waat = to_int(str_sub(cmd, 10, len(cmd)));
+        let waal = wal_abort(waat);
+        return "wal: ABORT txid=" + to_string(waat) + " lsn=" + to_string(waal);
+    }
+    if cmd == "wal ckpt"   { let wckl = wal_checkpoint(); return "wal: CHECKPOINT lsn=" + to_string(wckl); }
+    if cmd == "wal replay" { let wrn = wal_replay(wal_checkpoint_lsn); return "wal: redo=" + to_string(wrn); }
+    if cmd == "wal nrecs"  { return "wal: n=" + to_string(wal_rec_count()); }
+    if cmd == "wal redo"   { return "wal: redo_n=" + to_string(wal_redo_count()); }
+
+    // --- MVCC ---
+    if cmd == "mvcc init" { mvcc_init(); return "mvcc: init"; }
+    if cmd == "mvcc test" { let mvr = mvcc_test(); return "mvcc: " + to_string(mvr); }
+    if _starts_with(cmd, "mvcc write ") {
+        let mvwa  = str_sub(cmd, 11, len(cmd));
+        let mvws0 = _find_space(mvwa);
+        let mvwk  = to_int(str_sub(mvwa, 0, mvws0));
+        let mvwa1 = str_sub(mvwa, mvws0 + 1, len(mvwa));
+        let mvws1 = _find_space(mvwa1);
+        let mvwv  = to_int(str_sub(mvwa1, 0, mvws1));
+        let mvwts = to_int(str_sub(mvwa1, mvws1 + 1, len(mvwa1)));
+        let mvwid = mvcc_write(mvwk, mvwv, mvwts);
+        return "mvcc: wrote ver=" + to_string(mvwid);
+    }
+    if _starts_with(cmd, "mvcc read ") {
+        let mvra  = str_sub(cmd, 10, len(cmd));
+        let mvrs  = _find_space(mvra);
+        let mvrk  = to_int(str_sub(mvra, 0, mvrs));
+        let mvrts = to_int(str_sub(mvra, mvrs + 1, len(mvra)));
+        let mvrv  = mvcc_read(mvrk, mvrts);
+        return "mvcc: read k=" + to_string(mvrk) + "@" + to_string(mvrts) + "=" + to_string(mvrv);
+    }
+    if _starts_with(cmd, "mvcc vacuum ") {
+        let mvvh = to_int(str_sub(cmd, 12, len(cmd)));
+        let mvvr = mvcc_vacuum(mvvh);
+        return "mvcc: vacuumed=" + to_string(mvvr);
+    }
+    if cmd == "mvcc tick"  { let mvt = mvcc_tick(); return "mvcc: clock=" + to_string(mvt); }
+    if cmd == "mvcc nver"  { return "mvcc: ver_n="  + to_string(mvcc_ver_count()); }
+    if cmd == "mvcc nlive" { return "mvcc: live_n=" + to_string(mvcc_live_count()); }
+
+    // --- Transaction ---
+    if cmd == "tx init" { tx_init(); return "tx: init"; }
+    if cmd == "tx test" { let txr = tx_test(); return "tx: " + to_string(txr); }
+    if cmd == "tx begin" { let tbs = tx_begin(); return "tx: slot=" + to_string(tbs) + " snap=" + to_string(tx_snap_ts[tbs]); }
+    if _starts_with(cmd, "tx write ") {
+        let txwa  = str_sub(cmd, 9, len(cmd));
+        let txws0 = _find_space(txwa);
+        let txwsl = to_int(str_sub(txwa, 0, txws0));
+        let txwa1 = str_sub(txwa, txws0 + 1, len(txwa));
+        let txws1 = _find_space(txwa1);
+        let txwk  = to_int(str_sub(txwa1, 0, txws1));
+        let txwv  = to_int(str_sub(txwa1, txws1 + 1, len(txwa1)));
+        tx_write(txwsl, txwk, txwv);
+        return "tx: write slot=" + to_string(txwsl) + " k=" + to_string(txwk);
+    }
+    if _starts_with(cmd, "tx read ") {
+        let txra  = str_sub(cmd, 8, len(cmd));
+        let txrs  = _find_space(txra);
+        let txrsl = to_int(str_sub(txra, 0, txrs));
+        let txrk  = to_int(str_sub(txra, txrs + 1, len(txra)));
+        let txrv  = tx_read(txrsl, txrk);
+        return "tx: read slot=" + to_string(txrsl) + " k=" + to_string(txrk) + "=" + to_string(txrv);
+    }
+    if _starts_with(cmd, "tx commit ") {
+        let txcsl = to_int(str_sub(cmd, 10, len(cmd)));
+        let txcts = tx_commit(txcsl);
+        return "tx: commit slot=" + to_string(txcsl) + " cts=" + to_string(txcts);
+    }
+    if _starts_with(cmd, "tx abort ") {
+        let txasl = to_int(str_sub(cmd, 9, len(cmd)));
+        tx_abort(txasl);
+        return "tx: aborted slot=" + to_string(txasl);
+    }
+    if _starts_with(cmd, "tx status ") {
+        let txssl = to_int(str_sub(cmd, 10, len(cmd)));
+        return "tx: status[" + to_string(txssl) + "]=" + to_string(tx_status(txssl));
+    }
+    if cmd == "tx active" { return "tx: active=" + to_string(tx_active_count()); }
+
     return shell_handle(cmd);
 }
 
@@ -6772,7 +6879,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 1366 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld + lca + virtualtree + dominator + sam + manacher + eertree + bwt + lyndon + zfunction + ir + regalloc + codegen + ioring + persistseg + rollbackdsu + splaytree + mo + sqrtdecomp + cht + matrixexpo + numtheory + strhash + intervaldp + gametheory + trie + lichao + dcdp + monoqueue + segbeats + lct + quickselect + ntt + segmerge + palindromedp + knuthdp + bitset + millerrabin + pollardrho + linearbasis + geometry2d + rotcalip + halfplane + dinic + blockcuttree + bridgetree + polyinv + polylnexp + polysqrt + bitmaskdp + digitdp + brokenprofiledp + wavelettree + implicittreap + chtholly + suffixtree + bsgs + minencircle + gvn + licm + dce2 + linearscandra + regcoalesce + callingconv + typeinfer + typechecker + generics + linkerelf + linkerar + dynlinker + dwarf + perfcounter + jitstub + btree + btreeplus + lsmmemtable");
+print("shell.hl loaded -- 1387 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld + lca + virtualtree + dominator + sam + manacher + eertree + bwt + lyndon + zfunction + ir + regalloc + codegen + ioring + persistseg + rollbackdsu + splaytree + mo + sqrtdecomp + cht + matrixexpo + numtheory + strhash + intervaldp + gametheory + trie + lichao + dcdp + monoqueue + segbeats + lct + quickselect + ntt + segmerge + palindromedp + knuthdp + bitset + millerrabin + pollardrho + linearbasis + geometry2d + rotcalip + halfplane + dinic + blockcuttree + bridgetree + polyinv + polylnexp + polysqrt + bitmaskdp + digitdp + brokenprofiledp + wavelettree + implicittreap + chtholly + suffixtree + bsgs + minencircle + gvn + licm + dce2 + linearscandra + regcoalesce + callingconv + typeinfer + typechecker + generics + linkerelf + linkerar + dynlinker + dwarf + perfcounter + jitstub + btree + btreeplus + lsmmemtable + wal + mvcc + transaction");
 
 // Main shell loop (called from kernel_init)
 

@@ -1,0 +1,236 @@
+// transaction.hl -- Transaction API: ACID wrapper over WAL + MVCC (iter 381)
+// Buffer: 0x1B40000
+// TX_MAX=16 concurrent transactions; states: IDLE=0 ACTIVE=1 COMMITTED=2 ABORTED=3
+// Write buffer: staged writes per txn (committed atomically to WAL+MVCC on commit)
+// Conflict detection: write-write conflict check on commit (optimistic concurrency)
+// Read: delegates to mvcc_read with txn's snapshot timestamp
+
+let TX_MAX       = 16;
+let TX_IDLE      = 0;
+let TX_ACTIVE    = 1;
+let TX_COMMITTED = 2;
+let TX_ABORTED   = 3;
+
+// Transaction table
+let tx_state    = array(16, 0);   // state per slot
+let tx_snap_ts  = array(16, 0);   // snapshot timestamp assigned at begin
+let tx_commit_ts= array(16, 0);   // commit timestamp (set at commit)
+let tx_wb_start = array(16, 0);   // write buffer start index
+let tx_wb_len   = array(16, 0);   // write buffer entry count
+
+// Write buffer (all txns share one array; each txn has a contiguous slice)
+let TX_WB_MAX = 128;
+let tx_wb_key = array(128, 0);
+let tx_wb_val = array(128, 0);
+let tx_wb_txid= array(128, 0);   // owning txn slot
+let tx_wb_n   = 0;               // total entries across all active txns
+
+// Global txn counter (for WAL txn ids)
+let tx_next_id = 1;
+
+fn tx_init() {
+    let i = 0;
+    while i < TX_MAX {
+        set_at(tx_state,     i, TX_IDLE);
+        set_at(tx_snap_ts,   i, 0);
+        set_at(tx_commit_ts, i, 0);
+        set_at(tx_wb_start,  i, 0);
+        set_at(tx_wb_len,    i, 0);
+        i += 1;
+    }
+    tx_wb_n    = 0;
+    tx_next_id = 1;
+    return 0;
+}
+
+fn tx_begin() {
+    // Find free slot
+    let slot = 0 - 1;
+    let i = 0;
+    let go = 1;
+    while go == 1 {
+        if i < TX_MAX {
+            if tx_state[i] == TX_IDLE {
+                slot = i;
+                go = 0;
+            } else {
+                i += 1;
+            }
+        } else {
+            go = 0;
+        }
+    }
+    if slot == (0 - 1) { return 0 - 1; }   // no free slot
+
+    let snap = mvcc_begin_tx(slot);   // assigns snapshot timestamp
+    let txid = tx_next_id;
+    tx_next_id += 1;
+
+    set_at(tx_state,    slot, TX_ACTIVE);
+    set_at(tx_snap_ts,  slot, snap);
+    set_at(tx_wb_start, slot, tx_wb_n);
+    set_at(tx_wb_len,   slot, 0);
+
+    // WAL: log BEGIN
+    wal_begin(txid);
+
+    return slot;
+}
+
+fn tx_write(slot, key, val) {
+    if tx_state[slot] != TX_ACTIVE { return 0 - 1; }
+    if tx_wb_n >= TX_WB_MAX { return 0 - 1; }
+
+    // Stage write in buffer
+    let idx = tx_wb_n;
+    set_at(tx_wb_key,  idx, key);
+    set_at(tx_wb_val,  idx, val);
+    set_at(tx_wb_txid, idx, slot);
+    tx_wb_n += 1;
+    set_at(tx_wb_len, slot, tx_wb_len[slot] + 1);
+
+    // WAL: log WRITE (using snap_ts as surrogate txid in WAL)
+    wal_write(tx_snap_ts[slot], key, val);
+    return 0;
+}
+
+fn tx_read(slot, key) {
+    if tx_state[slot] != TX_ACTIVE { return 0 - 1; }
+    // Read with snapshot isolation from MVCC
+    return mvcc_read(key, tx_snap_ts[slot]);
+}
+
+fn _tx_check_ww_conflict(slot) {
+    // Check if any key this txn wants to write was written by a concurrent committed txn
+    // after our snapshot timestamp (write-write conflict)
+    let snap = tx_snap_ts[slot];
+    let start = tx_wb_start[slot];
+    let len   = tx_wb_len[slot];
+    let conflict = 0;
+    let i = start;
+    while i < start + len {
+        let k = tx_wb_key[i];
+        // Check if any other committed txn with commit_ts > snap wrote the same key
+        let j = 0;
+        while j < TX_MAX {
+            if j != slot {
+                if tx_state[j] == TX_COMMITTED {
+                    if tx_commit_ts[j] > snap {
+                        // Check if txn j wrote key k
+                        let jstart = tx_wb_start[j];
+                        let jlen   = tx_wb_len[j];
+                        let ji = jstart;
+                        while ji < jstart + jlen {
+                            if tx_wb_key[ji] == k { conflict = 1; }
+                            ji += 1;
+                        }
+                    }
+                }
+            }
+            j += 1;
+        }
+        i += 1;
+    }
+    return conflict;
+}
+
+fn tx_commit(slot) {
+    if tx_state[slot] != TX_ACTIVE { return 0 - 1; }
+
+    // Write-write conflict check (optimistic)
+    if _tx_check_ww_conflict(slot) == 1 {
+        tx_abort(slot);
+        return 0 - 1;
+    }
+
+    // Assign commit timestamp
+    let cts = mvcc_tick();
+    set_at(tx_commit_ts, slot, cts);
+
+    // Apply writes to MVCC store
+    let start = tx_wb_start[slot];
+    let len   = tx_wb_len[slot];
+    let i = start;
+    while i < start + len {
+        mvcc_write(tx_wb_key[i], tx_wb_val[i], cts);
+        i += 1;
+    }
+
+    // WAL: log COMMIT
+    wal_commit(tx_snap_ts[slot]);
+
+    // Update state
+    set_at(tx_state, slot, TX_COMMITTED);
+    mvcc_end_tx(slot);
+    return cts;
+}
+
+fn tx_abort(slot) {
+    if tx_state[slot] != TX_ACTIVE { return 0 - 1; }
+    // WAL: log ABORT
+    wal_abort(tx_snap_ts[slot]);
+    // Discard write buffer (just mark slot idle; entries stay but are unreferenced)
+    set_at(tx_state, slot, TX_ABORTED);
+    mvcc_end_tx(slot);
+    return 0;
+}
+
+fn tx_active_count() {
+    let c = 0;
+    let i = 0;
+    while i < TX_MAX {
+        if tx_state[i] == TX_ACTIVE { c += 1; }
+        i += 1;
+    }
+    return c;
+}
+
+fn tx_status(slot) { return tx_state[slot]; }
+
+fn tx_test() {
+    // Reset all subsystems
+    wal_init();
+    mvcc_init();
+    tx_init();
+
+    // Txn A: write key=1 val=100, commit
+    let tA = tx_begin();
+    tx_write(tA, 1, 100);
+    tx_write(tA, 2, 200);
+    let ctsA = tx_commit(tA);
+
+    // Txn B: read key=1 (should see val=100 after A commits)
+    let tB = tx_begin();
+    let rB1 = tx_read(tB, 1);
+    let rB2 = tx_read(tB, 2);
+    // Write key=1 val=101, commit
+    tx_write(tB, 1, 101);
+    let ctsB = tx_commit(tB);
+
+    // Txn C: read key=1 (should see val=101 after B commits)
+    let tC = tx_begin();
+    let rC1 = tx_read(tC, 1);
+    tx_abort(tC);
+
+    // Check WAL redo
+    let rn = wal_replay(1);
+
+    print("tx_test: rB1=" + to_string(rB1) + " rB2=" + to_string(rB2) + " rC1=" + to_string(rC1));
+    print("tx_test: ctsA=" + to_string(ctsA) + " ctsB=" + to_string(ctsB));
+    print("tx_test: wal_redo=" + to_string(rn) + " mvcc_live=" + to_string(mvcc_live_count()));
+
+    // rB1 should see txn A's commit: val=100
+    // rC1 should see txn B's commit: val=101
+    if rB1 == 100 {
+        if rC1 == 101 {
+            if rn >= 3 {
+                print("tx_test: PASS");
+                return 1;
+            }
+        }
+    }
+    print("tx_test: FAIL");
+    return 0;
+}
+
+print("transaction.hl loaded");

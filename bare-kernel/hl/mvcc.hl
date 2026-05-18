@@ -1,0 +1,195 @@
+// mvcc.hl -- Multi-Version Concurrency Control: snapshot isolation (iter 380)
+// Buffer: 0x1B30000
+// MV_MAXVER=64 total version records; MV_NULL=0 sentinel timestamp
+// Each version: (key, val, xmin, xmax) where xmin=creating txn ts, xmax=deleting txn ts
+// Snapshot isolation: a txn with snapshot ts=S sees version v iff xmin<=S and (xmax==0 or xmax>S)
+// mvcc_write: inserts new version (xmin=ts, xmax=0); optionally closes previous version
+// mvcc_vacuum: removes versions where xmax>0 and xmax <= vacuum_horizon
+
+let MV_MAXVER = 64;
+let MV_NULL   = 0;    // sentinel for "no timestamp" / infinity
+
+// Version arrays
+let mv_key  = array(64, 0);
+let mv_val  = array(64, 0);
+let mv_xmin = array(64, 0);   // snapshot at which version was created
+let mv_xmax = array(64, 0);   // snapshot at which version was deleted (0 = still live)
+let mv_live = array(64, 0);   // 1 = present (not vacuumed)
+let mv_n    = 0;
+
+// Global timestamp counter
+let mv_clock = 0;
+
+// Active transaction snapshot timestamps (parallel to tx module)
+let MV_MAXTX = 16;
+let mv_tx_snap = array(16, 0);   // snapshot ts per txn slot (0 = no txn)
+
+fn mvcc_init() {
+    mv_n     = 0;
+    mv_clock = 0;
+    let i = 0;
+    while i < MV_MAXTX {
+        set_at(mv_tx_snap, i, 0);
+        i += 1;
+    }
+    return 0;
+}
+
+fn mvcc_tick() {
+    // Advance global clock; return new timestamp
+    mv_clock += 1;
+    return mv_clock;
+}
+
+fn mvcc_begin_tx(slot) {
+    // Assign snapshot timestamp to txn slot
+    let ts = mvcc_tick();
+    set_at(mv_tx_snap, slot, ts);
+    return ts;
+}
+
+fn mvcc_end_tx(slot) {
+    set_at(mv_tx_snap, slot, 0);
+    return 0;
+}
+
+fn mvcc_write(key, val, xmin_ts) {
+    // Insert a new version visible from xmin_ts onwards
+    // Close any previous live version of the same key
+    let i = 0;
+    while i < mv_n {
+        if mv_live[i] == 1 {
+            if mv_key[i] == key {
+                if mv_xmax[i] == MV_NULL {
+                    set_at(mv_xmax, i, xmin_ts);   // close old version
+                }
+            }
+        }
+        i += 1;
+    }
+    // Append new version
+    if mv_n >= MV_MAXVER { return 0 - 1; }
+    let id = mv_n;
+    set_at(mv_key,  id, key);
+    set_at(mv_val,  id, val);
+    set_at(mv_xmin, id, xmin_ts);
+    set_at(mv_xmax, id, MV_NULL);
+    set_at(mv_live, id, 1);
+    mv_n += 1;
+    return id;
+}
+
+fn mvcc_read(key, snap_ts) {
+    // Return value of key visible at snap_ts, or -1 if not found
+    // Scan newest-first to return latest valid version
+    let best_val  = 0 - 1;
+    let best_xmin = 0;
+    let i = 0;
+    while i < mv_n {
+        if mv_live[i] == 1 {
+            if mv_key[i] == key {
+                let xmin = mv_xmin[i];
+                let xmax = mv_xmax[i];
+                // Visible if xmin <= snap_ts AND (xmax == 0 OR xmax > snap_ts)
+                let vis = 0;
+                if xmin <= snap_ts {
+                    if xmax == MV_NULL {
+                        vis = 1;
+                    } else {
+                        if xmax > snap_ts { vis = 1; }
+                    }
+                }
+                if vis == 1 {
+                    // Take the version with the largest xmin (most recent creation)
+                    if xmin > best_xmin {
+                        best_xmin = xmin;
+                        best_val  = mv_val[i];
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    return best_val;
+}
+
+fn mvcc_vacuum(horizon) {
+    // Remove (mark dead) versions with xmax > 0 and xmax <= horizon
+    let removed = 0;
+    let i = 0;
+    while i < mv_n {
+        if mv_live[i] == 1 {
+            if mv_xmax[i] != MV_NULL {
+                if mv_xmax[i] <= horizon {
+                    set_at(mv_live, i, 0);
+                    removed += 1;
+                }
+            }
+        }
+        i += 1;
+    }
+    return removed;
+}
+
+fn mvcc_ver_count()  { return mv_n; }
+fn mvcc_live_count() {
+    let c = 0;
+    let i = 0;
+    while i < mv_n {
+        if mv_live[i] == 1 { c += 1; }
+        i += 1;
+    }
+    return c;
+}
+
+fn mvcc_test() {
+    mvcc_init();
+
+    // Txn A (snap ts=1): write key=5 val=50
+    let tsA = mvcc_begin_tx(0);   // ts=1
+    mvcc_write(5, 50, tsA);
+
+    // Txn B (snap ts=2): write key=5 val=55 (newer version)
+    let tsB = mvcc_begin_tx(1);   // ts=2
+    mvcc_write(5, 55, tsB);
+
+    // Txn C (snap ts=3): write key=7 val=70
+    let tsC = mvcc_begin_tx(2);   // ts=3
+    mvcc_write(7, 70, tsC);
+
+    // Read key=5 at snapshot ts=1 -> should see val=50 (version created at ts=1)
+    let r1 = mvcc_read(5, 1);
+    // Read key=5 at snapshot ts=2 -> should see val=55 (version created at ts=2)
+    let r2 = mvcc_read(5, 2);
+    // Read key=5 at snapshot ts=3 -> should see val=55 (still current)
+    let r3 = mvcc_read(5, 3);
+    // Read key=7 at snapshot ts=2 -> miss (created at ts=3)
+    let r4 = mvcc_read(7, 2);
+    // Read key=7 at snapshot ts=3 -> val=70
+    let r5 = mvcc_read(7, 3);
+
+    print("mvcc_test: r1=" + to_string(r1) + " r2=" + to_string(r2) + " r3=" + to_string(r3));
+    print("mvcc_test: r4=" + to_string(r4) + " r5=" + to_string(r5));
+    print("mvcc_test: vers=" + to_string(mvcc_ver_count()) + " live=" + to_string(mvcc_live_count()));
+
+    // Vacuum: remove versions with xmax <= 2 (old ver of key=5 closed at ts=2)
+    let vac = mvcc_vacuum(2);
+    print("mvcc_test: vacuumed=" + to_string(vac) + " live_after=" + to_string(mvcc_live_count()));
+
+    if r1 == 50 {
+        if r2 == 55 {
+            if r4 == (0 - 1) {
+                if r5 == 70 {
+                    if vac == 1 {
+                        print("mvcc_test: PASS");
+                        return 1;
+                    }
+                }
+            }
+        }
+    }
+    print("mvcc_test: FAIL");
+    return 0;
+}
+
+print("mvcc.hl loaded");

@@ -1,0 +1,172 @@
+// wal.hl -- Write-Ahead Log: durability + crash recovery (iter 379)
+// Buffer: 0x1B20000
+// WAL_MAXRECS=64 log records; LSN = monotone Log Sequence Number (1-based)
+// Record types: BEGIN=1 WRITE=2 COMMIT=3 ABORT=4 CHECKPOINT=5
+// Each record: (lsn, type, txn_id, key, val, checksum)
+// checksum = (lsn + type + txn_id + key + val) mod 65536
+// Replay: scan from checkpoint_lsn, redo WRITE for committed txns, undo aborted
+
+let WAL_MAXRECS    = 64;
+let WAL_BEGIN      = 1;
+let WAL_WRITE      = 2;
+let WAL_COMMIT     = 3;
+let WAL_ABORT      = 4;
+let WAL_CHECKPOINT = 5;
+
+// Log record fields (parallel arrays)
+let wal_lsn   = array(64, 0);
+let wal_type  = array(64, 0);
+let wal_txid  = array(64, 0);
+let wal_key   = array(64, 0);
+let wal_val   = array(64, 0);
+let wal_csum  = array(64, 0);
+
+let wal_n              = 0;    // number of records written
+let wal_lsn_next       = 1;   // next LSN to assign
+let wal_checkpoint_lsn = 0;   // last checkpoint LSN (0 = none)
+
+// Replay output: committed writes (key-val pairs)
+let WAL_REDO_MAX = 32;
+let wal_redo_keys = array(32, 0);
+let wal_redo_vals = array(32, 0);
+let wal_redo_n    = 0;
+
+fn wal_init() {
+    wal_n              = 0;
+    wal_lsn_next       = 1;
+    wal_checkpoint_lsn = 0;
+    wal_redo_n         = 0;
+    return 0;
+}
+
+fn _wal_checksum(lsn, tp, txid, k, v) {
+    let s = lsn + tp + txid + k + v;
+    return s - (s / 65536) * 65536;
+}
+
+fn wal_append(tp, txid, k, v) {
+    if wal_n >= WAL_MAXRECS { return 0 - 1; }
+    let idx = wal_n;
+    let lsn = wal_lsn_next;
+    set_at(wal_lsn,  idx, lsn);
+    set_at(wal_type, idx, tp);
+    set_at(wal_txid, idx, txid);
+    set_at(wal_key,  idx, k);
+    set_at(wal_val,  idx, v);
+    set_at(wal_csum, idx, _wal_checksum(lsn, tp, txid, k, v));
+    wal_n        += 1;
+    wal_lsn_next += 1;
+    return lsn;
+}
+
+fn wal_begin(txid)  { return wal_append(WAL_BEGIN,  txid, 0, 0); }
+fn wal_write(txid, k, v) { return wal_append(WAL_WRITE, txid, k, v); }
+fn wal_commit(txid) { return wal_append(WAL_COMMIT, txid, 0, 0); }
+fn wal_abort(txid)  { return wal_append(WAL_ABORT,  txid, 0, 0); }
+
+fn wal_checkpoint() {
+    // Record a checkpoint at the current tail LSN
+    let lsn = wal_append(WAL_CHECKPOINT, 0, 0, 0);
+    wal_checkpoint_lsn = lsn;
+    return lsn;
+}
+
+fn wal_verify(idx) {
+    // Returns 1 if checksum matches, 0 if corrupted
+    let expected = _wal_checksum(wal_lsn[idx], wal_type[idx],
+                                  wal_txid[idx], wal_key[idx], wal_val[idx]);
+    if wal_csum[idx] == expected { return 1; }
+    return 0;
+}
+
+fn wal_replay(from_lsn) {
+    // Collect committed WAL writes with LSN >= from_lsn
+    // Two-pass: pass1 find committed txns; pass2 collect their WRITEs
+    wal_redo_n = 0;
+
+    // Pass 1: mark committed txns
+    let committed = array(64, 0);   // txid -> 1 if committed
+    let i = 0;
+    while i < wal_n {
+        if wal_lsn[i] >= from_lsn {
+            if wal_verify(i) == 1 {
+                if wal_type[i] == WAL_COMMIT {
+                    let txid = wal_txid[i];
+                    if txid < 64 { set_at(committed, txid, 1); }
+                }
+            }
+        }
+        i += 1;
+    }
+
+    // Pass 2: redo WRITEs of committed txns
+    i = 0;
+    while i < wal_n {
+        if wal_lsn[i] >= from_lsn {
+            if wal_verify(i) == 1 {
+                if wal_type[i] == WAL_WRITE {
+                    let txid = wal_txid[i];
+                    if txid < 64 {
+                        if committed[txid] == 1 {
+                            if wal_redo_n < WAL_REDO_MAX {
+                                set_at(wal_redo_keys, wal_redo_n, wal_key[i]);
+                                set_at(wal_redo_vals, wal_redo_n, wal_val[i]);
+                                wal_redo_n += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    return wal_redo_n;
+}
+
+fn wal_rec_count()  { return wal_n; }
+fn wal_redo_count() { return wal_redo_n; }
+fn wal_last_lsn()   { return wal_lsn_next - 1; }
+
+fn wal_test() {
+    wal_init();
+
+    // Txn 1: begin + 2 writes + commit
+    wal_begin(1);
+    wal_write(1, 10, 100);
+    wal_write(1, 20, 200);
+    wal_commit(1);
+
+    // Txn 2: begin + 1 write + abort (should NOT appear in replay)
+    wal_begin(2);
+    wal_write(2, 30, 300);
+    wal_abort(2);
+
+    // Txn 3: begin + 1 write + commit
+    wal_begin(3);
+    wal_write(3, 40, 400);
+    wal_commit(3);
+
+    // Checkpoint
+    let ckpt = wal_checkpoint();
+
+    let n = wal_rec_count();
+    let rn = wal_replay(1);   // replay from LSN 1
+
+    print("wal_test: records=" + to_string(n) + " ckpt_lsn=" + to_string(ckpt));
+    print("wal_test: redo_n=" + to_string(rn) + " redo[0].key=" + to_string(wal_redo_keys[0]));
+
+    // Expect redo=3 (txn1: k=10,20; txn3: k=40); aborted txn2 excluded
+    let v0ok = wal_verify(0);
+    if rn == 3 {
+        if v0ok == 1 {
+            if wal_redo_keys[0] == 10 {
+                print("wal_test: PASS");
+                return 1;
+            }
+        }
+    }
+    print("wal_test: FAIL");
+    return 0;
+}
+
+print("wal.hl loaded");

@@ -2,12 +2,40 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`433`（76 根目录 + 364 内核模块）
-- H-L 总行数：`~139,500`
-- 内核模块：`364`
-- Shell 命令：`1366`
-- 最近完成功能迭代：`378`（btree + btree_plus + lsm_memtable）
-- **Milestone M2 已达成**（iter 375）；当前进行第三阶段·存储引擎
+- `.hl` 文件：`436`（76 根目录 + 367 内核模块）
+- H-L 总行数：`~144,200`
+- 内核模块：`367`
+- Shell 命令：`1387`
+- 最近完成功能迭代：`381`（wal + mvcc + transaction）
+- 当前阶段：第三阶段·存储引擎（iter 379–385）
+
+## Iteration 381 — transaction.hl：ACID 事务 API
+
+- **`transaction.hl`**（Buffer: 0x1B40000）：TX_MAX=16，TX_WB_MAX=128
+  - `tx_begin()`：分配槽位，调用 `mvcc_begin_tx` 获取快照时间戳，WAL 写 BEGIN
+  - `tx_write(slot, k, v)`：写缓冲暂存 + WAL WRITE；延迟应用至 MVCC
+  - `tx_read(slot, k)`：快照隔离读（委托 `mvcc_read(k, snap_ts)`）
+  - `tx_commit(slot)`：写写冲突检测（乐观并发）→ 分配 commit_ts → 批量 `mvcc_write` → WAL COMMIT
+  - `tx_abort(slot)`：WAL ABORT，丢弃写缓冲
+  - 测试：txnA 写 k=1,2 提交；txnB 读到 100，写 k=1=101 提交；txnC 读到 101 → PASS
+
+## Iteration 380 — mvcc.hl：多版本并发控制
+
+- **`mvcc.hl`**（Buffer: 0x1B30000）：MV_MAXVER=64
+  - 版本字段：(key, val, xmin, xmax, live)；xmax=0 表示版本仍活跃
+  - `mvcc_write(k, v, ts)`：关闭同 key 旧版本（设 xmax=ts），插入新版本（xmin=ts, xmax=0）
+  - `mvcc_read(k, snap_ts)`：可见条件 `xmin≤snap_ts AND (xmax==0 OR xmax>snap_ts)`，取最大 xmin
+  - `mvcc_vacuum(horizon)`：清除 xmax≤horizon 的版本（dead tuple）
+  - 测试：ts=1 写 k=5→50, ts=2 写 k=5→55；read(5,1)=50, read(5,2)=55；vacuum 回收 1 条 → PASS
+
+## Iteration 379 — wal.hl：预写日志
+
+- **`wal.hl`**（Buffer: 0x1B20000）：WAL_MAXRECS=64，LSN 从 1 单调递增
+  - 记录字段：(lsn, type, txid, key, val, checksum)；checksum = sum mod 65536
+  - 支持记录类型：BEGIN / WRITE / COMMIT / ABORT / CHECKPOINT
+  - `wal_replay(from_lsn)`：两遍扫描——第一遍收集已提交 txid，第二遍 redo 其 WRITE
+  - `wal_verify(idx)`：校验 checksum，保障日志完整性
+  - 测试：txn1(提交) + txn2(abort) + txn3(提交) → replay=3 条（排除 abort） → PASS
 
 ## Iteration 378 — lsm_memtable.hl：LSM MemTable 排序写缓冲
 
