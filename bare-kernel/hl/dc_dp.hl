@@ -1,0 +1,102 @@
+// dc_dp.hl -- Divide-and-Conquer DP optimization (iter 330)
+// Buffer: 0x1810000
+// 1D/1D DP layer: dp[j] = min_{0<=i<j}(dc_prev[i] + cost(i,j))
+// cost(i,j) = (j-i)^2 satisfies quadrangle inequality => opt points monotone.
+// Recursive D&C reduces O(n^2) per layer to O(n log n).
+
+let DC_MAX = 32;
+let DC_INF = 999999;
+
+let dc_dp   = array(32, 0);   // output dp values for current layer
+let dc_prev = array(32, 0);   // input layer (caller sets dc_prev before dc_run)
+let dc_opt  = array(32, 0);   // optimal split points (for inspection)
+let dc_n    = 8;
+
+fn dc_init() {
+    dc_n = 8;
+    let i = 0;
+    while i < DC_MAX {
+        set_at(dc_dp,   i, 0);
+        set_at(dc_prev, i, 0);
+        set_at(dc_opt,  i, 0);
+        i += 1;
+    }
+    return 0;
+}
+
+fn _dc_cost(i, j) {
+    let d = j - i;
+    return d * d;
+}
+
+fn _dc_solve(lo, hi, opt_lo, opt_hi) {
+    if lo > hi { return 0; }
+    let mid    = (lo + hi) / 2;
+    let best   = DC_INF;
+    let best_k = opt_lo;
+    let k_hi   = opt_hi;
+    if mid - 1 < k_hi { k_hi = mid - 1; }
+    let k = opt_lo;
+    while k <= k_hi {
+        let val = dc_prev[k] + _dc_cost(k, mid);
+        if val < best {
+            best   = val;
+            best_k = k;
+        }
+        k += 1;
+    }
+    set_at(dc_dp,  mid, best);
+    set_at(dc_opt, mid, best_k);
+    _dc_solve(lo,      mid - 1, opt_lo,  best_k);
+    _dc_solve(mid + 1, hi,      best_k,  opt_hi);
+    return 0;
+}
+
+fn dc_run(n) {
+    dc_n = n;
+    let i = 0;
+    while i < n {
+        set_at(dc_dp,  i, DC_INF);
+        set_at(dc_opt, i, 0);
+        i += 1;
+    }
+    set_at(dc_dp, 0, dc_prev[0]);
+    _dc_solve(1, n - 1, 0, n - 2);
+    return dc_dp[n - 1];
+}
+
+fn dc_test() {
+    dc_init();
+    // Base layer: dc_prev[i] = i*i
+    // dp[j] = min(dc_prev[i] + (j-i)^2) for i=0..j-1
+    // Expected: dp=[0,1,2,5,8] for n=5
+    let n = 5;
+    let i = 0;
+    while i < n {
+        set_at(dc_prev, i, i * i);
+        i += 1;
+    }
+    dc_run(n);
+    let dp1 = dc_dp[1];
+    let dp2 = dc_dp[2];
+    let dp3 = dc_dp[3];
+    let dp4 = dc_dp[4];
+    print("dc_test: dp[1]=" + to_string(dp1) +
+          " dp[2]=" + to_string(dp2) +
+          " dp[3]=" + to_string(dp3) +
+          " dp[4]=" + to_string(dp4));
+    if dp1 == 1 {
+        if dp2 == 2 {
+            if dp3 == 5 {
+                if dp4 == 8 {
+                    print("dc_test: PASS");
+                    return 1;
+                }
+            }
+        }
+    }
+    print("dc_test: FAIL");
+    return 0;
+}
+
+print("dc_dp.hl loaded");

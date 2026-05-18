@@ -2,13 +2,73 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`379`（73 根目录 + 310 内核模块）
-- H-L 总行数：`~112,200`
-- 内核模块：`310`
-- Shell 命令：`984`
-- 最近完成功能迭代：`324`（convex_hull_trick + matrix_expo + number_theory）
+- `.hl` 文件：`385`（76 根目录 + 316 内核模块）
+- H-L 总行数：`~113,800`
+- 内核模块：`316`
+- Shell 命令：`1025`
+- 最近完成功能迭代：`330`（trie + li_chao_tree + dc_dp）
 
-## Iteration 324 — number_theory.hl：数论工具箱
+## Iteration 330 — dc_dp.hl：Divide-and-Conquer DP 优化
+
+- **`bare-kernel/hl/dc_dp.hl`** 新增（~90 行）
+  - `_dc_cost(i,j)` — 代价函数 (j-i)²，满足四边形不等式
+  - `_dc_solve(lo,hi,opt_lo,opt_hi)` — 递归 D&C：mid 处枚举最优分割点，向左右子区间传播单调约束
+  - `dc_run(n)` — 从 dc_prev[] 计算一层 dp[]，返回 dp[n-1]；O(n log n)
+  - 测试：dc_prev[i]=i²，n=5 → dp=[0,1,2,5,8]，opt 单调非降
+  - Buffer: 0x1810000
+
+## Iteration 329 — li_chao_tree.hl：Li Chao 树（最小直线查询）
+
+- **`bare-kernel/hl/li_chao_tree.hl`** 新增（~110 行）
+  - `lc_add_line(m,b)` — 插入直线 y=mx+b，内部 `_lc_add` 递归在中点比较交换
+  - `lc_query(x)` — 查询所有直线在 x 处的最小值，O(log n)
+  - `lc_eval(node,x)` — 节点直线求值，无直线返回 LC_INF=999999
+  - 线段树覆盖 x∈[0,63]，LC_SZ=256 节点（1-indexed）
+  - 测试：直线 (3,0)+(1,4)+(-1,10) → q(0)=0, q(2)=6, q(5)=5
+  - Buffer: 0x1800000
+
+## Iteration 328 — trie.hl：前缀字典树
+
+- **`bare-kernel/hl/trie.hl`** 新增（~100 行）
+  - `tr_insert(wlen)` — 插入 tr_word[0..wlen-1]，沿路更新 tr_cnt[]（前缀计数）
+  - `tr_search(wlen)` — 精确匹配，返回单词出现次数（tr_end[]）
+  - `tr_prefix(plen)` — 前缀计数，返回经过该前缀节点的总插入次数
+  - 字母表 0-9（TR_ALPHA=10），最多 TR_MAX=128 节点，tr_child[node×10+c]=-1 表示无子
+  - 测试：insert [1,2,3]×2 + [1,2,4]×1 → search(123)=2, prefix(12)=3, search(124)=1, prefix(1)=3
+  - Buffer: 0x17F0000
+
+## Iteration 327 — game_theory.hl：博弈论（Sprague-Grundy + Nim）
+
+- **`bare-kernel/hl/game_theory.hl`** 新增（~120 行）
+  - `sg_compute(n)` — 计算 sg_memo[0..n]，移动集合 {1,2,3}，MEX of 3 前驱
+  - `_gt_mex3(v1,v2,v3)` — 从 0 起找第一个不在 {v1,v2,v3} 中的值（-1 表示缺失）
+  - `_gt_xor2(a,b)` — 纯算术 XOR 模拟，逐位提取（aa-(aa/2)*2），O(bits)
+  - `gt_nim_winner()` — XOR 所有 gt_piles[0..gt_npiles-1]，非零则先手胜
+  - 测试：sg[4]=0, sg[7]=3, xor(3,5)=6, nim([3,5,7])=winner=1
+  - Buffer: 0x17D0000
+
+## Iteration 326 — interval_dp.hl：区间 DP（矩阵链乘）
+
+- **`bare-kernel/hl/interval_dp.hl`** 新增（~100 行）
+  - `idp_matchain(n)` — n 个矩阵链乘最优括号，O(n³) 区间 DP
+  - 自底向上：按长度填充 dp[i][j]，枚举分割点 k
+  - `dp[i][j] = min(dp[i][k] + dp[k+1][j] + dims[i]*dims[k+1]*dims[j+1])`
+  - IDP_MAX=16 步长，IDP_INF=999999，最多 16 矩阵
+  - 测试：n=3, dims=[1,2,3,4] → dp[0][1]=6, dp[1][2]=24, opt=18
+  - Buffer: 0x17C0000
+
+## Iteration 325 — string_hash.hl：多项式滚动哈希
+
+- **`bare-kernel/hl/string_hash.hl`** 新增（~100 行）
+  - `sh_build(n)` — 构建前缀哈希 sh_hash[] + 幂次 sh_pow[]，O(n)
+  - `sh_query(l,r)` — O(1) 子串哈希：h[r+1] - pow[r-l+1]*h[l] (mod SH_MOD)
+  - `sh_prep_pat(n)` — 计算模式哈希 sh_pat_h，用于 Rabin-Karp
+  - `sh_find()` — 线性扫描匹配，返回首次出现位置（-1 未找到）
+  - SH_BASE=31，SH_MOD=100003；负数哈希加 MOD 修正
+  - 测试：text=[1,2,3,2,3,4], pat=[2,3] → find()=1
+  - Buffer: 0x17B8000
+
+
 
 - **`bare-kernel/hl/number_theory.hl`** 新增（~130 行）
   - `nt_gcd_ext(a,b)` — 扩展欧几里得，设全局 nt_gcd/nt_x/nt_y（ax+by=gcd）

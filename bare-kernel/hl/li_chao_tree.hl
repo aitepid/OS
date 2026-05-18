@@ -1,0 +1,113 @@
+// li_chao_tree.hl -- Li Chao segment tree: minimum-line query (iter 329)
+// Buffer: 0x1800000
+// Segment tree over x in [0, LC_XMAX). Each node stores one line y = m*x + b.
+// lc_add_line(m,b): insert line; lc_query(x): minimum y over all lines at x.
+// Add O(log n), Query O(log n).
+
+let LC_XMAX = 64;
+let LC_INF  = 999999;
+let LC_SZ   = 256;   // 4 * LC_XMAX segment-tree nodes (1-indexed)
+
+let lc_m    = array(256, 0);
+let lc_b    = array(256, 0);
+let lc_has  = array(256, 0);
+let lc_cnt  = 0;
+
+fn lc_init() {
+    lc_cnt = 0;
+    let i  = 0;
+    while i < LC_SZ {
+        set_at(lc_m,   i, 0);
+        set_at(lc_b,   i, 0);
+        set_at(lc_has, i, 0);
+        i += 1;
+    }
+    return 0;
+}
+
+fn lc_eval(node, x) {
+    if lc_has[node] == 0 { return LC_INF; }
+    return lc_m[node] * x + lc_b[node];
+}
+
+fn _lc_add(node, lo, hi, m, b) {
+    if lo > hi { return 0; }
+    let mid = (lo + hi) / 2;
+    if lc_has[node] == 0 {
+        set_at(lc_m,   node, m);
+        set_at(lc_b,   node, b);
+        set_at(lc_has, node, 1);
+        lc_cnt += 1;
+        return 0;
+    }
+    let cur_mid   = lc_eval(node, mid);
+    let new_mid   = m * mid + b;
+    let mut ins_m = m;
+    let mut ins_b = b;
+    if new_mid < cur_mid {
+        let old_m = lc_m[node];
+        let old_b = lc_b[node];
+        set_at(lc_m, node, ins_m);
+        set_at(lc_b, node, ins_b);
+        ins_m = old_m;
+        ins_b = old_b;
+    }
+    if lo == hi { return 0; }
+    let cur_lo = lc_m[node] * lo + lc_b[node];
+    let ins_lo = ins_m * lo + ins_b;
+    if ins_lo < cur_lo {
+        _lc_add(node * 2, lo, mid, ins_m, ins_b);
+    } else {
+        _lc_add(node * 2 + 1, mid + 1, hi, ins_m, ins_b);
+    }
+    return 0;
+}
+
+fn lc_add_line(m, b) {
+    _lc_add(1, 0, LC_XMAX - 1, m, b);
+    return 0;
+}
+
+fn _lc_query(node, lo, hi, x) {
+    let best = lc_eval(node, x);
+    if lo == hi { return best; }
+    let mid = (lo + hi) / 2;
+    let sub = LC_INF;
+    if x <= mid {
+        sub = _lc_query(node * 2, lo, mid, x);
+    } else {
+        sub = _lc_query(node * 2 + 1, mid + 1, hi, x);
+    }
+    if sub < best { return sub; }
+    return best;
+}
+
+fn lc_query(x) {
+    return _lc_query(1, 0, LC_XMAX - 1, x);
+}
+
+fn lc_test() {
+    lc_init();
+    // Same lines as CHT test: (3,0) (1,4) (-1,10)
+    lc_add_line(3,  0);
+    lc_add_line(1,  4);
+    lc_add_line(-1, 10);
+    let q0 = lc_query(0);
+    let q2 = lc_query(2);
+    let q5 = lc_query(5);
+    print("lc_test: q(0)=" + to_string(q0) +
+          " q(2)=" + to_string(q2) +
+          " q(5)=" + to_string(q5));
+    if q0 == 0 {
+        if q2 == 6 {
+            if q5 == 5 {
+                print("lc_test: PASS");
+                return 1;
+            }
+        }
+    }
+    print("lc_test: FAIL");
+    return 0;
+}
+
+print("li_chao_tree.hl loaded");

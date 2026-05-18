@@ -1,0 +1,123 @@
+// trie.hl -- Prefix Trie: insert / search / prefix-count (iter 328)
+// Buffer: 0x17F0000
+// Alphabet: digits 0-9 (TR_ALPHA=10); words stored in tr_word[] as integers.
+// Supports up to TR_MAX=128 nodes; tr_child[node*10+c] = child node (-1 = absent).
+
+let TR_ALPHA = 10;
+let TR_MAX   = 128;
+
+let tr_child = array(1280, -1);   // tr_child[node * TR_ALPHA + c]
+let tr_end   = array(128,  0);    // word-end count at node
+let tr_cnt   = array(128,  0);    // prefix-pass count through node
+let tr_sz    = 1;                  // node 0 = root; next free = 1
+let tr_word  = array(32, 0);      // current word buffer (digit values 0-9)
+let tr_wlen  = 0;                  // current word length
+
+fn tr_init() {
+    tr_sz   = 1;
+    tr_wlen = 0;
+    let i = 0;
+    while i < TR_MAX {
+        set_at(tr_end, i, 0);
+        set_at(tr_cnt, i, 0);
+        i += 1;
+    }
+    i = 0;
+    while i < 1280 {
+        set_at(tr_child, i, -1);
+        i += 1;
+    }
+    i = 0;
+    while i < 32 {
+        set_at(tr_word, i, 0);
+        i += 1;
+    }
+    return 0;
+}
+
+fn tr_insert(wlen) {
+    let node = 0;
+    let i    = 0;
+    while i < wlen {
+        let c   = tr_word[i];
+        let idx = node * TR_ALPHA + c;
+        if tr_child[idx] == -1 {
+            if tr_sz < TR_MAX {
+                set_at(tr_child, idx, tr_sz);
+                tr_sz += 1;
+            }
+        }
+        node = tr_child[idx];
+        set_at(tr_cnt, node, tr_cnt[node] + 1);
+        i += 1;
+    }
+    set_at(tr_end, node, tr_end[node] + 1);
+    return 0;
+}
+
+fn tr_search(wlen) {
+    let node = 0;
+    let i    = 0;
+    while i < wlen {
+        let c   = tr_word[i];
+        let idx = node * TR_ALPHA + c;
+        if tr_child[idx] == -1 { return 0; }
+        node = tr_child[idx];
+        i += 1;
+    }
+    return tr_end[node];
+}
+
+fn tr_prefix(plen) {
+    let node = 0;
+    let i    = 0;
+    while i < plen {
+        let c   = tr_word[i];
+        let idx = node * TR_ALPHA + c;
+        if tr_child[idx] == -1 { return 0; }
+        node = tr_child[idx];
+        i += 1;
+    }
+    return tr_cnt[node];
+}
+
+fn tr_test() {
+    tr_init();
+    // Insert [1,2,3], [1,2,4], [1,2,3] again
+    set_at(tr_word, 0, 1);
+    set_at(tr_word, 1, 2);
+    set_at(tr_word, 2, 3);
+    tr_insert(3);
+    set_at(tr_word, 2, 4);
+    tr_insert(3);
+    set_at(tr_word, 2, 3);
+    tr_insert(3);
+    // search([1,2,3]) == 2
+    set_at(tr_word, 2, 3);
+    let s123 = tr_search(3);
+    // prefix([1,2]) == 3
+    let p12  = tr_prefix(2);
+    // search([1,2,4]) == 1
+    set_at(tr_word, 2, 4);
+    let s124 = tr_search(3);
+    // prefix([1]) == 3
+    let p1   = tr_prefix(1);
+    print("tr_test: search(123)=" + to_string(s123) +
+          " prefix(12)=" + to_string(p12) +
+          " search(124)=" + to_string(s124) +
+          " prefix(1)=" + to_string(p1));
+    if s123 == 2 {
+        if p12 == 3 {
+            if s124 == 1 {
+                if p1 == 3 {
+                    print("tr_test: PASS");
+                    return 1;
+                }
+            }
+        }
+    }
+    print("tr_test: FAIL");
+    return 0;
+}
+
+print("trie.hl loaded");
