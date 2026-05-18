@@ -249,13 +249,16 @@ fn shell_handle(cmd) {
         serial_print("BitmaskDP:   bdm init  bdm test  bdm dist <u> <v> <w>  bdm tsp  bdm get <mask> <v>  bdm n  bdm full");
         serial_print("DigitDP:     ddm init  ddm test  ddm count <n> <target>  ddm nd  ddm lim <i>  ddm maxs  ddm maxd");
         serial_print("BrokenProf:  bpd init  bpd test  bpd count <w>  bpd dp <mask>  bpd h  bpd w  bpd maxmask");
+        serial_print("WaveletTree: wvr init  wvr test  wvr set <i> <v>  wvr build <n>  wvr kth <ql> <qr> <k>  wvr n  wvr cnt <l> <i>");
+        serial_print("ImplicitTreap: it init  it test  it insert <pos> <v>  it rev <l> <r>  it kth <k>  it sz  it rng");
+        serial_print("ChthollyTree:  odt init <n> <v>  odt test  odt assign <l> <r> <v>  odt sum <l> <r>  odt n  odt get <i>  odt maxpos");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
     }
 
     if cmd == "ver" {
-        return "HicOS 6.0 -- Hilbert-Lang Kernel (340 modules, pure H-L, zero deps)";
+        return "HicOS 6.0 -- Hilbert-Lang Kernel (343 modules, pure H-L, zero deps)";
     }
 
     if cmd == "uptime" {
@@ -5965,6 +5968,103 @@ fn shell_handle_ext(cmd) {
     if cmd == "bpd w" { return "bpd: W=" + to_string(BPD_W); }
     if cmd == "bpd maxmask" { return "bpd: MAXMASK=" + to_string(BPD_MAXMASK); }
 
+    // --- WaveletTree ---
+    if cmd == "wvr init" { wvr_init(); return "wvr: init"; }
+    if cmd == "wvr test" { let wvrr = wvr_test(); return "wvr: " + to_string(wvrr); }
+    if _starts_with(cmd, "wvr set ") {
+        let wvrsa = str_sub(cmd, 8, len(cmd));
+        let wvrss = _find_space(wvrsa);
+        let wvrsi = to_int(str_sub(wvrsa, 0, wvrss));
+        let wvrsv = to_int(str_sub(wvrsa, wvrss + 1, len(wvrsa)));
+        wvr_set(wvrsi, wvrsv);
+        return "wvr: arr[" + to_string(wvrsi) + "]=" + to_string(wvrsv);
+    }
+    if _starts_with(cmd, "wvr build ") {
+        let wvrbn = to_int(str_sub(cmd, 10, len(cmd)));
+        wvr_build(wvrbn);
+        return "wvr: built n=" + to_string(wvrbn);
+    }
+    if _starts_with(cmd, "wvr kth ") {
+        let wvrka  = str_sub(cmd, 8, len(cmd));
+        let wvrks1 = _find_space(wvrka);
+        let wvrkql = to_int(str_sub(wvrka, 0, wvrks1));
+        let wvrka2 = str_sub(wvrka, wvrks1 + 1, len(wvrka));
+        let wvrks2 = _find_space(wvrka2);
+        let wvrkqr = to_int(str_sub(wvrka2, 0, wvrks2));
+        let wvrkk  = to_int(str_sub(wvrka2, wvrks2 + 1, len(wvrka2)));
+        let wvrkr  = wvr_kth(wvrkql, wvrkqr, wvrkk);
+        return "wvr: kth[" + to_string(wvrkql) + ".." + to_string(wvrkqr) + "]," + to_string(wvrkk) + "=" + to_string(wvrkr);
+    }
+    if cmd == "wvr n" { return "wvr: n=" + to_string(wvr_n); }
+    if _starts_with(cmd, "wvr cnt ") {
+        let wvrca  = str_sub(cmd, 8, len(cmd));
+        let wvrcs  = _find_space(wvrca);
+        let wvrcl  = to_int(str_sub(wvrca, 0, wvrcs));
+        let wvrci  = to_int(str_sub(wvrca, wvrcs + 1, len(wvrca)));
+        return "wvr: cnt[" + to_string(wvrcl) + "][" + to_string(wvrci) + "]=" + to_string(wvr_cnt[wvrcl * 9 + wvrci]);
+    }
+
+    // --- ImplicitTreap ---
+    if cmd == "it init" { it_init(); return "it: init"; }
+    if cmd == "it test" { let itr = it_test(); return "it: " + to_string(itr); }
+    if _starts_with(cmd, "it insert ") {
+        let itia  = str_sub(cmd, 10, len(cmd));
+        let itis  = _find_space(itia);
+        let itipos = to_int(str_sub(itia, 0, itis));
+        let itiv   = to_int(str_sub(itia, itis + 1, len(itia)));
+        it_insert(itipos, itiv);
+        return "it: inserted " + to_string(itiv) + " at " + to_string(itipos);
+    }
+    if _starts_with(cmd, "it rev ") {
+        let itra  = str_sub(cmd, 7, len(cmd));
+        let itrs  = _find_space(itra);
+        let itrl  = to_int(str_sub(itra, 0, itrs));
+        let itrr  = to_int(str_sub(itra, itrs + 1, len(itra)));
+        it_reverse(itrl, itrr);
+        return "it: reversed [" + to_string(itrl) + ".." + to_string(itrr) + "]";
+    }
+    if _starts_with(cmd, "it kth ") {
+        let itkk = to_int(str_sub(cmd, 7, len(cmd)));
+        return "it: kth(" + to_string(itkk) + ")=" + to_string(it_kth(itkk));
+    }
+    if cmd == "it sz"  { return "it: sz=" + to_string(it_sz()); }
+    if cmd == "it rng" { return "it: rng=" + to_string(it_rng); }
+
+    // --- ChthollyTree ---
+    if _starts_with(cmd, "odt init ") {
+        let odtia  = str_sub(cmd, 9, len(cmd));
+        let odtis  = _find_space(odtia);
+        let odtin  = to_int(str_sub(odtia, 0, odtis));
+        let odtiv  = to_int(str_sub(odtia, odtis + 1, len(odtia)));
+        odt_init(odtin, odtiv);
+        return "odt: init n=" + to_string(odtin) + " val=" + to_string(odtiv);
+    }
+    if cmd == "odt test" { let odtr = odt_test(); return "odt: " + to_string(odtr); }
+    if _starts_with(cmd, "odt assign ") {
+        let odtaa  = str_sub(cmd, 11, len(cmd));
+        let odtas1 = _find_space(odtaa);
+        let odtal  = to_int(str_sub(odtaa, 0, odtas1));
+        let odtaa2 = str_sub(odtaa, odtas1 + 1, len(odtaa));
+        let odtas2 = _find_space(odtaa2);
+        let odtar  = to_int(str_sub(odtaa2, 0, odtas2));
+        let odtav  = to_int(str_sub(odtaa2, odtas2 + 1, len(odtaa2)));
+        odt_assign(odtal, odtar, odtav);
+        return "odt: assign [" + to_string(odtal) + ".." + to_string(odtar) + "]=" + to_string(odtav);
+    }
+    if _starts_with(cmd, "odt sum ") {
+        let odtsa  = str_sub(cmd, 8, len(cmd));
+        let odtss  = _find_space(odtsa);
+        let odtsl  = to_int(str_sub(odtsa, 0, odtss));
+        let odtsr  = to_int(str_sub(odtsa, odtss + 1, len(odtsa)));
+        return "odt: sum[" + to_string(odtsl) + ".." + to_string(odtsr) + "]=" + to_string(odt_sum(odtsl, odtsr));
+    }
+    if cmd == "odt n" { return "odt: n=" + to_string(odt_n); }
+    if _starts_with(cmd, "odt get ") {
+        let odtgi = to_int(str_sub(cmd, 8, len(cmd)));
+        return "odt: [" + to_string(odt_l[odtgi]) + ".." + to_string(odt_r[odtgi]) + "]=" + to_string(odt_v[odtgi]);
+    }
+    if cmd == "odt maxpos" { return "odt: maxpos=" + to_string(odt_maxpos); }
+
     return shell_handle(cmd);
 }
 
@@ -5976,7 +6076,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 1198 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld + lca + virtualtree + dominator + sam + manacher + eertree + bwt + lyndon + zfunction + ir + regalloc + codegen + ioring + persistseg + rollbackdsu + splaytree + mo + sqrtdecomp + cht + matrixexpo + numtheory + strhash + intervaldp + gametheory + trie + lichao + dcdp + monoqueue + segbeats + lct + quickselect + ntt + segmerge + palindromedp + knuthdp + bitset + millerrabin + pollardrho + linearbasis + geometry2d + rotcalip + halfplane + dinic + blockcuttree + bridgetree + polyinv + polylnexp + polysqrt + bitmaskdp + digitdp + brokenprofiledp");
+print("shell.hl loaded -- 1219 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld + lca + virtualtree + dominator + sam + manacher + eertree + bwt + lyndon + zfunction + ir + regalloc + codegen + ioring + persistseg + rollbackdsu + splaytree + mo + sqrtdecomp + cht + matrixexpo + numtheory + strhash + intervaldp + gametheory + trie + lichao + dcdp + monoqueue + segbeats + lct + quickselect + ntt + segmerge + palindromedp + knuthdp + bitset + millerrabin + pollardrho + linearbasis + geometry2d + rotcalip + halfplane + dinic + blockcuttree + bridgetree + polyinv + polylnexp + polysqrt + bitmaskdp + digitdp + brokenprofiledp + wavelettree + implicittreap + chtholly");
 
 // Main shell loop (called from kernel_init)
 

@@ -1,0 +1,165 @@
+// implicit_treap.hl -- Implicit Treap: sequence ops + lazy range reverse (iter 356)
+// Buffer: 0x19B0000
+// Node pool: indices 1..IT_MAXN-1; 0 = null sentinel
+// _it_split(t,k): first k nodes -> it_sl, rest -> it_sr  (globals, no multi-return)
+// _it_merge(l,r): merge two treaps by priority; returns root
+// it_reverse(l,r): flip [l..r] via lazy rev flag propagated in _it_push
+// Test: build [1..5], kth(1)=1; reverse [0..4] -> kth(1)=5
+
+let IT_MAXN = 33;   // node 0 = null; 1..32 = real nodes
+
+let it_size = array(33, 0);
+let it_pri  = array(33, 0);
+let it_lc   = array(33, 0);
+let it_rc   = array(33, 0);
+let it_val  = array(33, 0);
+let it_rev  = array(33, 0);
+let it_pool = 1;
+let it_root = 0;
+let it_rng  = 12345;
+let it_sl   = 0;
+let it_sr   = 0;
+
+fn _it_rand() {
+    let tmp = it_rng * 1664525 + 1013904223;
+    let M   = 268435456;
+    it_rng  = tmp - (tmp / M) * M;
+    return it_rng;
+}
+
+fn _it_upd(t) {
+    if t == 0 { return 0; }
+    set_at(it_size, t, 1 + it_size[it_lc[t]] + it_size[it_rc[t]]);
+    return 0;
+}
+
+fn _it_push(t) {
+    if t == 0 { return 0; }
+    if it_rev[t] == 1 {
+        let tmp = it_lc[t];
+        set_at(it_lc, t, it_rc[t]);
+        set_at(it_rc, t, tmp);
+        if it_lc[t] != 0 { set_at(it_rev, it_lc[t], 1 - it_rev[it_lc[t]]); }
+        if it_rc[t] != 0 { set_at(it_rev, it_rc[t], 1 - it_rev[it_rc[t]]); }
+        set_at(it_rev, t, 0);
+    }
+    return 0;
+}
+
+fn it_new(v) {
+    let t = it_pool;
+    it_pool += 1;
+    set_at(it_val,  t, v);
+    set_at(it_pri,  t, _it_rand());
+    set_at(it_size, t, 1);
+    set_at(it_lc,   t, 0);
+    set_at(it_rc,   t, 0);
+    set_at(it_rev,  t, 0);
+    return t;
+}
+
+fn _it_merge(l, r) {
+    if l == 0 { return r; }
+    if r == 0 { return l; }
+    _it_push(l);
+    _it_push(r);
+    if it_pri[l] > it_pri[r] {
+        set_at(it_rc, l, _it_merge(it_rc[l], r));
+        _it_upd(l);
+        return l;
+    } else {
+        set_at(it_lc, r, _it_merge(l, it_lc[r]));
+        _it_upd(r);
+        return r;
+    }
+}
+
+fn _it_split(t, k) {
+    if t == 0 { it_sl = 0; it_sr = 0; return 0; }
+    _it_push(t);
+    let ls = it_size[it_lc[t]];
+    if k <= ls {
+        _it_split(it_lc[t], k);
+        set_at(it_lc, t, it_sr);
+        _it_upd(t);
+        it_sr = t;
+    } else {
+        _it_split(it_rc[t], k - ls - 1);
+        set_at(it_rc, t, it_sl);
+        _it_upd(t);
+        it_sl = t;
+    }
+    return 0;
+}
+
+fn it_init() {
+    let i = 0;
+    while i < IT_MAXN {
+        set_at(it_size, i, 0); set_at(it_pri, i, 0);
+        set_at(it_lc, i, 0);   set_at(it_rc, i, 0);
+        set_at(it_val, i, 0);  set_at(it_rev, i, 0);
+        i += 1;
+    }
+    it_pool = 1;
+    it_root = 0;
+    it_rng  = 12345;
+    it_sl   = 0;
+    it_sr   = 0;
+    return 0;
+}
+
+fn it_insert(pos, v) {
+    _it_split(it_root, pos);
+    let nl = it_sl;
+    let nr = it_sr;
+    let nd = it_new(v);
+    let tmp = _it_merge(nl, nd);
+    it_root = _it_merge(tmp, nr);
+    return 0;
+}
+
+fn it_reverse(l, r) {
+    _it_split(it_root, r + 1);
+    let c  = it_sr;
+    let ab = it_sl;
+    _it_split(ab, l);
+    let a = it_sl;
+    let d = it_sr;
+    if d != 0 { set_at(it_rev, d, 1 - it_rev[d]); }
+    let tmp = _it_merge(a, d);
+    it_root = _it_merge(tmp, c);
+    return 0;
+}
+
+fn _it_kth(t, k) {
+    _it_push(t);
+    let ls = it_size[it_lc[t]];
+    if k <= ls { return _it_kth(it_lc[t], k); }
+    if k == ls + 1 { return it_val[t]; }
+    return _it_kth(it_rc[t], k - ls - 1);
+}
+
+fn it_kth(k) { return _it_kth(it_root, k); }
+fn it_sz()   { return it_size[it_root]; }
+
+fn it_test() {
+    it_init();
+    // Build sequence [1,2,3,4,5]
+    let i = 0;
+    while i < 5 { it_insert(i, i + 1); i += 1; }
+    let v1 = it_kth(1);
+    // Reverse [0..4] -> [5,4,3,2,1]
+    it_reverse(0, 4);
+    let v2 = it_kth(1);
+    print("it_test: before=" + to_string(v1) + " after_rev=" + to_string(v2));
+    if v1 == 1 {
+        if v2 == 5 {
+            print("it_test: PASS");
+            return 1;
+        }
+    }
+    print("it_test: FAIL");
+    return 0;
+}
+
+print("implicit_treap.hl loaded");

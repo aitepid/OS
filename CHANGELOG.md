@@ -2,11 +2,35 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`409`（76 根目录 + 340 内核模块）
+- `.hl` 文件：`412`（76 根目录 + 343 内核模块）
 - H-L 总行数：`~119,900`
-- 内核模块：`340`
-- Shell 命令：`1198`
-- 最近完成功能迭代：`354`（bitmask_dp + digit_dp + broken_profile_dp）
+- 内核模块：`343`
+- Shell 命令：`1219`
+- 最近完成功能迭代：`357`（wavelet_tree_range + implicit_treap + chtholly_tree）
+
+## Iteration 357 — chtholly_tree.hl：珂朵莉树（ODT，区间推平）
+
+- **`chtholly_tree.hl`**（Buffer: 0x19C0000）：ODT_MAXN=16 段
+  - `odt_split_at(pos)`：确保 pos 为某段开始位置；O(n) 向右移动
+  - `odt_assign(l,r,v)`：将 [l..r] 所有段合并为单段 (l,r,v)；O(n)
+  - `odt_sum(l,r)`：区间 [l..r] 的段值 × 长度加权求和
+  - 测试：[0..7]=0; assign [2..5]=3; sum=12, n=3 → PASS
+
+## Iteration 356 — implicit_treap.hl：隐式 Treap（序列操作 + 懒翻转）
+
+- **`implicit_treap.hl`**（Buffer: 0x19B0000）：IT_MAXN=33 节点
+  - `_it_split(t,k)`：前 k 个 → it_sl，其余 → it_sr（全局双出参）
+  - `_it_merge(l,r)`：按优先级合并，返回根
+  - `_it_push(t)`：传播懒翻转标记（交换子节点 + 翻转子节点标记）
+  - `it_reverse(l,r)`：三次 split/merge 实现区间翻转 O(log n)
+  - 测试：build [1..5]，kth(1)=1；reverse [0..4] → kth(1)=5 → PASS
+
+## Iteration 355 — wavelet_tree_range.hl：静态 Wavelet Tree（区间第 k 小）
+
+- **`wavelet_tree_range.hl`**（Buffer: 0x19A0000）：WVR_N=8，WVR_LOG=3，值域 [0,7]
+  - `wvr_build(n)`：逐层提取位，记录 cnt[level][i] = [0..i-1] 中向左走的前缀数
+  - `wvr_kth(ql,qr,k)`：用 cnt 前缀差二分值域，O(log V) 查询
+  - 测试：arr=[3,1,4,1]；kth(0..3,2)=1，kth(0..3,3)=3 → PASS
 
 ## Iteration 354 — broken_profile_dp.hl：轮廓线 DP（骨牌铺砌）
 

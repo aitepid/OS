@@ -1,0 +1,117 @@
+// chtholly_tree.hl -- Chtholly Tree (ODT): interval assign + range query (iter 357)
+// Buffer: 0x19C0000
+// Sorted intervals (l,r,v); odt_split_at(pos) ensures pos starts a new interval
+// odt_assign(l,r,v): collapse all intervals in [l..r] to single (l,r,v); O(n) worst
+// odt_sum(l,r): sum of values over [l..r] with interval lengths as multipliers
+// Test: init [0..7]=0; assign [2..5]=3; sum [0..7] = 12
+
+let ODT_MAXN  = 16;
+let odt_l     = array(16, 0);
+let odt_r     = array(16, 0);
+let odt_v     = array(16, 0);
+let odt_n     = 0;
+let odt_maxpos = 0;
+
+fn odt_init(n, val) {
+    odt_n = 1;
+    set_at(odt_l, 0, 0);
+    set_at(odt_r, 0, n - 1);
+    set_at(odt_v, 0, val);
+    odt_maxpos = n - 1;
+    return 0;
+}
+
+fn odt_split_at(pos) {
+    // Ensure pos starts its own interval; return its index
+    let i = 0;
+    let result = 0 - 1;
+    let go = 1;
+    while go == 1 {
+        if i >= odt_n { go = 0; }
+        if go == 1 {
+            if odt_l[i] == pos { result = i; go = 0; }
+        }
+        if go == 1 {
+            if odt_l[i] < pos {
+                if odt_r[i] >= pos {
+                    let j = odt_n - 1;
+                    while j >= i + 1 {
+                        set_at(odt_l, j + 1, odt_l[j]);
+                        set_at(odt_r, j + 1, odt_r[j]);
+                        set_at(odt_v, j + 1, odt_v[j]);
+                        j -= 1;
+                    }
+                    set_at(odt_l, i + 1, pos);
+                    set_at(odt_r, i + 1, odt_r[i]);
+                    set_at(odt_v, i + 1, odt_v[i]);
+                    set_at(odt_r, i, pos - 1);
+                    odt_n += 1;
+                    result = i + 1;
+                    go = 0;
+                }
+            }
+            if go == 1 { i += 1; }
+        }
+    }
+    return result;
+}
+
+fn odt_assign(l, r, v) {
+    if r < odt_maxpos { odt_split_at(r + 1); }
+    let li = odt_split_at(l);
+    let cnt = 0;
+    let i = li;
+    let go = 1;
+    while go == 1 {
+        if i >= odt_n  { go = 0; }
+        if go == 1 { if odt_l[i] > r { go = 0; } }
+        if go == 1 { cnt += 1; i += 1; }
+    }
+    set_at(odt_l, li, l);
+    set_at(odt_r, li, r);
+    set_at(odt_v, li, v);
+    let rm = cnt - 1;
+    if rm > 0 {
+        let j = li + 1;
+        while j < odt_n - rm {
+            set_at(odt_l, j, odt_l[j + rm]);
+            set_at(odt_r, j, odt_r[j + rm]);
+            set_at(odt_v, j, odt_v[j + rm]);
+            j += 1;
+        }
+        odt_n -= rm;
+    }
+    return 0;
+}
+
+fn odt_sum(l, r) {
+    let total = 0;
+    let i = 0;
+    while i < odt_n {
+        let lo = odt_l[i];
+        let hi = odt_r[i];
+        if lo < l { lo = l; }
+        if hi > r { hi = r; }
+        if lo <= hi { total += odt_v[i] * (hi - lo + 1); }
+        i += 1;
+    }
+    return total;
+}
+
+fn odt_test() {
+    // [0..7]=0; assign [2..5]=3; sum [0..7] = 0*2 + 3*4 + 0*2 = 12
+    odt_init(8, 0);
+    odt_assign(2, 5, 3);
+    let s = odt_sum(0, 7);
+    print("odt_test: sum=" + to_string(s) + " n=" + to_string(odt_n));
+    if s == 12 {
+        if odt_n == 3 {
+            print("odt_test: PASS");
+            return 1;
+        }
+    }
+    print("odt_test: FAIL");
+    return 0;
+}
+
+print("chtholly_tree.hl loaded");
