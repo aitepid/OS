@@ -1,0 +1,244 @@
+// type_infer.hl -- Hindley-Milner type inference Algorithm W (iter 367)
+// Buffer: 0x1A60000
+// TI_MAXNODES=32 AST nodes, TI_MAXTVARS=32 type variables
+// Types: 0=Int, 1=Bool, 2=TVar(id), 3=Fun(arg,ret) stored in ti_fun_arg/ret
+// Unification: union-find on type variables with occurs check
+// Algorithm W: Var->instantiate, Lam->fresh tvar, App->unify
+
+let TI_MAXNODES = 32;
+let TI_MAXTVARS = 32;
+
+// Type representation
+let TI_INT  = 0;
+let TI_BOOL = 1;
+let TI_TVAR = 2;
+let TI_FUN  = 3;
+
+// Type variable union-find: ti_tv_kind[v]=0(free) or 1(bound to type)
+let ti_tv_kind  = array(32, 0);   // 0=free, 1=bound-tvar, 2=bound-concrete
+let ti_tv_ref   = array(32, 0);   // tvar -> bound tvar or type index
+let ti_tv_n     = 0;              // next fresh tvar
+
+// Concrete type storage (for FUN types): ti_fun_arg[i], ti_fun_ret[i]
+// A type is encoded as: kind*100 + id
+// TVar(v) = 200+v, Int = 0, Bool = 1, Fun(a,r) = 300+i where ti_fun_arg[i]=a, ti_fun_ret[i]=r
+let ti_fun_arg = array(32, 0);
+let ti_fun_ret = array(32, 0);
+let ti_fun_n   = 0;
+
+// AST nodes: kind(0=Var,1=Lam,2=App,3=Lit_int,4=Lit_bool), field0, field1
+// Var: field0=name_id; Lam: field0=param_name, field1=body
+// App: field0=func, field1=arg; Lit_int/bool: no fields
+let ti_nd_kind  = array(32, 0);
+let ti_nd_f0    = array(32, 0);
+let ti_nd_f1    = array(32, 0);
+let ti_nd_n     = 0;
+
+// Inferred type per node
+let ti_nd_type  = array(32, 0);
+
+// Environment: name_id -> type (stack-based, ti_env_depth slots)
+let ti_env_name = array(32, 0);
+let ti_env_type = array(32, 0);
+let ti_env_n    = 0;
+
+// Error flag
+let ti_error    = 0;
+let ti_error_msg = 0;  // error node id
+
+fn ti_init() {
+    ti_tv_n   = 0;
+    ti_fun_n  = 0;
+    ti_nd_n   = 0;
+    ti_env_n  = 0;
+    ti_error  = 0;
+    let i = 0;
+    while i < TI_MAXTVARS {
+        set_at(ti_tv_kind, i, 0);
+        set_at(ti_tv_ref,  i, 0);
+        i += 1;
+    }
+    return 0;
+}
+
+fn _ti_fresh() {
+    let v = ti_tv_n;
+    set_at(ti_tv_kind, v, 0);
+    ti_tv_n += 1;
+    return 200 + v;   // TVar encoding
+}
+
+fn _ti_fun(arg, ret) {
+    let id = ti_fun_n;
+    set_at(ti_fun_arg, id, arg);
+    set_at(ti_fun_ret, id, ret);
+    ti_fun_n += 1;
+    return 300 + id;  // Fun encoding
+}
+
+fn _ti_resolve(t) {
+    // Follow TVar chain to find representative type
+    let go = 1;
+    while go == 1 {
+        if t < 200 { go = 0; }   // concrete Int or Bool
+        if go == 1 {
+            if t >= 300 { go = 0; }  // Fun type
+            if go == 1 {
+                // TVar: t = 200+v
+                let v = t - 200;
+                if ti_tv_kind[v] == 0 { go = 0; }  // free
+                else { t = ti_tv_ref[v]; }
+            }
+        }
+    }
+    return t;
+}
+
+fn _ti_occurs(v, t) {
+    // Does TVar v occur in type t?
+    let rt = _ti_resolve(t);
+    if rt == 200 + v { return 1; }
+    if rt >= 300 {
+        let id = rt - 300;
+        if _ti_occurs(v, ti_fun_arg[id]) == 1 { return 1; }
+        if _ti_occurs(v, ti_fun_ret[id]) == 1 { return 1; }
+    }
+    return 0;
+}
+
+fn _ti_unify(s, t) {
+    if ti_error == 1 { return 0; }
+    let rs = _ti_resolve(s);
+    let rt = _ti_resolve(t);
+    if rs == rt { return 0; }
+    // Both concrete and different
+    if rs < 200 {
+        if rt < 200 {
+            ti_error = 1;
+            return 0;
+        }
+    }
+    // rs is TVar
+    if rs >= 200 {
+        if rs < 300 {
+            let v = rs - 200;
+            if _ti_occurs(v, rt) == 1 { ti_error = 1; return 0; }
+            set_at(ti_tv_kind, v, 1);
+            set_at(ti_tv_ref,  v, rt);
+            return 0;
+        }
+    }
+    // rt is TVar
+    if rt >= 200 {
+        if rt < 300 {
+            let v = rt - 200;
+            if _ti_occurs(v, rs) == 1 { ti_error = 1; return 0; }
+            set_at(ti_tv_kind, v, 1);
+            set_at(ti_tv_ref,  v, rs);
+            return 0;
+        }
+    }
+    // Both Fun
+    if rs >= 300 {
+        if rt >= 300 {
+            let ids = rs - 300;
+            let idr = rt - 300;
+            _ti_unify(ti_fun_arg[ids], ti_fun_arg[idr]);
+            _ti_unify(ti_fun_ret[ids], ti_fun_ret[idr]);
+            return 0;
+        }
+    }
+    // Fun vs concrete: error
+    ti_error = 1;
+    return 0;
+}
+
+fn _ti_env_lookup(name) {
+    let i = ti_env_n - 1;
+    while i >= 0 {
+        if ti_env_name[i] == name { return ti_env_type[i]; }
+        i -= 1;
+    }
+    return 0 - 1;
+}
+
+fn _ti_env_push(name, typ) {
+    set_at(ti_env_name, ti_env_n, name);
+    set_at(ti_env_type, ti_env_n, typ);
+    ti_env_n += 1;
+    return 0;
+}
+
+fn ti_add_node(kind, f0, f1) {
+    let id = ti_nd_n;
+    set_at(ti_nd_kind, id, kind);
+    set_at(ti_nd_f0,   id, f0);
+    set_at(ti_nd_f1,   id, f1);
+    ti_nd_n += 1;
+    return id;
+}
+
+fn _ti_infer(node) {
+    if ti_error == 1 { return 0; }
+    let k = ti_nd_kind[node];
+    let f0 = ti_nd_f0[node];
+    let f1 = ti_nd_f1[node];
+    let t = 0;
+
+    if k == 3 { t = TI_INT;  }   // Lit_int
+    if k == 4 { t = TI_BOOL; }   // Lit_bool
+    if k == 0 {
+        // Var: lookup
+        t = _ti_env_lookup(f0);
+        if t == 0 - 1 { t = _ti_fresh(); }
+    }
+    if k == 1 {
+        // Lam: fresh tvar for param, infer body
+        let ptype = _ti_fresh();
+        _ti_env_push(f0, ptype);
+        let btype = 0;
+        btype = _ti_infer(f1);
+        ti_env_n -= 1;
+        t = _ti_fun(ptype, btype);
+    }
+    if k == 2 {
+        // App: infer func and arg, unify func with (arg -> fresh)
+        let ftype = _ti_infer(f0);
+        let atype = _ti_infer(f1);
+        let rtype = _ti_fresh();
+        _ti_unify(ftype, _ti_fun(atype, rtype));
+        t = rtype;
+    }
+    set_at(ti_nd_type, node, t);
+    return t;
+}
+
+fn ti_run(root) {
+    ti_error = 0;
+    let t = _ti_infer(root);
+    return t;
+}
+
+fn ti_get_type(node) { return _ti_resolve(ti_nd_type[node]); }
+
+fn ti_test() {
+    // Test: (lambda x. x) 42
+    // Expected: Int
+    ti_init();
+    let lit  = ti_add_node(3, 0, 0);      // 42 : Int
+    let lam  = ti_add_node(1, 5, lit);    // \x. 42  (x=name 5)
+    let app  = ti_add_node(2, lam, lit);  // (\x.42) 42
+    let t    = ti_run(app);
+    let rt   = _ti_resolve(t);
+    print("ti_test: app type=" + to_string(rt) + " error=" + to_string(ti_error));
+    if ti_error == 0 {
+        if rt == TI_INT {
+            print("ti_test: PASS");
+            return 1;
+        }
+    }
+    print("ti_test: FAIL");
+    return 0;
+}
+
+print("type_infer.hl loaded");

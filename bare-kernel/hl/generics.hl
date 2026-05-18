@@ -1,0 +1,157 @@
+// generics.hl -- Generic parameterization via monomorphization (iter 369)
+// Buffer: 0x1A80000
+// GN_MAXTEMPL=16 generic templates, GN_MAXINST=32 monomorphized instances
+// Template: name_id + param count + body (encoded as op-sequence index range)
+// Instantiation: substitute type params -> generate specialized copy
+// Body ops: GN_MAXOPS=64 per template; op(0=add,1=sub,2=mul,3=eq,4=ret,5=param_ref)
+// Type params bound at instantiation: gn_targs[inst*4+k] = concrete type
+
+let GN_MAXTEMPL = 16;
+let GN_MAXINST  = 32;
+let GN_MAXOPS   = 64;
+let GN_MAXPARAMS = 4;
+
+// Template definitions
+let gn_tmpl_name   = array(16, 0);  // template name id
+let gn_tmpl_nparams= array(16, 0);  // number of type params
+let gn_tmpl_op_off = array(16, 0);  // offset into gn_ops
+let gn_tmpl_op_len = array(16, 0);  // number of ops
+let gn_tmpl_n      = 0;
+
+// Op body storage (shared across all templates)
+// Each op: kind(0-5), field0, field1, field2
+let gn_op_kind = array(64, 0);
+let gn_op_f0   = array(64, 0);
+let gn_op_f1   = array(64, 0);
+let gn_op_f2   = array(64, 0);
+let gn_op_n    = 0;
+
+// Instantiation table
+let gn_inst_tmpl  = array(32, 0);    // instance -> template id
+let gn_inst_targs = array(128, 0);   // [inst*4+k] = type arg k
+let gn_inst_n     = 0;
+
+// Instantiated ops: parallel arrays to gn_op_* with substituted types
+let gn_iop_kind   = array(64, 0);
+let gn_iop_f0     = array(64, 0);
+let gn_iop_f1     = array(64, 0);
+let gn_iop_f2     = array(64, 0);
+// Per-instance op range
+let gn_inst_op_off = array(32, 0);
+let gn_inst_op_len = array(32, 0);
+let gn_iop_n       = 0;
+
+// Type constants for generic args
+let GN_INT   = 0;
+let GN_BOOL  = 1;
+let GN_FLOAT = 2;
+let GN_TPARAM = 10;  // TPARAM+k = type param k
+
+fn gn_init() {
+    gn_tmpl_n = 0;
+    gn_op_n   = 0;
+    gn_inst_n = 0;
+    gn_iop_n  = 0;
+    return 0;
+}
+
+fn gn_begin_template(name_id, nparams) {
+    let id = gn_tmpl_n;
+    set_at(gn_tmpl_name,    id, name_id);
+    set_at(gn_tmpl_nparams, id, nparams);
+    set_at(gn_tmpl_op_off,  id, gn_op_n);
+    set_at(gn_tmpl_op_len,  id, 0);
+    gn_tmpl_n += 1;
+    return id;
+}
+
+fn gn_add_op(tmpl_id, kind, f0, f1, f2) {
+    let oid = gn_op_n;
+    set_at(gn_op_kind, oid, kind);
+    set_at(gn_op_f0,   oid, f0);
+    set_at(gn_op_f1,   oid, f1);
+    set_at(gn_op_f2,   oid, f2);
+    gn_op_n += 1;
+    set_at(gn_tmpl_op_len, tmpl_id, gn_tmpl_op_len[tmpl_id] + 1);
+    return oid;
+}
+
+fn _gn_subst_type(typ, inst_id) {
+    // If typ == GN_TPARAM+k, substitute with gn_inst_targs[inst_id*4+k]
+    if typ >= GN_TPARAM {
+        let k = typ - GN_TPARAM;
+        return gn_inst_targs[inst_id * 4 + k];
+    }
+    return typ;
+}
+
+fn gn_instantiate(tmpl_id, t0, t1, t2, t3) {
+    let iid = gn_inst_n;
+    set_at(gn_inst_tmpl, iid, tmpl_id);
+    set_at(gn_inst_targs, iid * 4 + 0, t0);
+    set_at(gn_inst_targs, iid * 4 + 1, t1);
+    set_at(gn_inst_targs, iid * 4 + 2, t2);
+    set_at(gn_inst_targs, iid * 4 + 3, t3);
+    gn_inst_n += 1;
+
+    // Monomorphize: copy ops with type substitution
+    let off = gn_tmpl_op_off[tmpl_id];
+    let len = gn_tmpl_op_len[tmpl_id];
+    set_at(gn_inst_op_off, iid, gn_iop_n);
+    set_at(gn_inst_op_len, iid, len);
+
+    let i = 0;
+    while i < len {
+        let src = off + i;
+        let dst = gn_iop_n;
+        set_at(gn_iop_kind, dst, gn_op_kind[src]);
+        // Substitute type fields: f2 typically holds the type annotation
+        set_at(gn_iop_f0,   dst, gn_op_f0[src]);
+        set_at(gn_iop_f1,   dst, gn_op_f1[src]);
+        set_at(gn_iop_f2,   dst, _gn_subst_type(gn_op_f2[src], iid));
+        gn_iop_n += 1;
+        i += 1;
+    }
+    return iid;
+}
+
+fn gn_get_inst_op_type(inst_id, op_idx) {
+    let base = gn_inst_op_off[inst_id];
+    return gn_iop_f2[base + op_idx];
+}
+
+fn gn_test() {
+    // Template "identity<T>": param_ref T -> ret T
+    // op0: param_ref, dst=0, src=0, type=TPARAM+0
+    // op1: ret, src=0, type=TPARAM+0
+    // Instantiate with T=Int: op0.type=0(Int), op1.type=0(Int)
+    // Instantiate with T=Bool: op0.type=1(Bool), op1.type=1(Bool)
+    gn_init();
+    let tmpl = gn_begin_template(1, 1);
+    gn_add_op(tmpl, 5, 0, 0, GN_TPARAM + 0);   // param_ref, type=T0
+    gn_add_op(tmpl, 4, 0, 0, GN_TPARAM + 0);   // ret, type=T0
+
+    let i1 = gn_instantiate(tmpl, GN_INT,  0, 0, 0);
+    let i2 = gn_instantiate(tmpl, GN_BOOL, 0, 0, 0);
+
+    let t1_0 = gn_get_inst_op_type(i1, 0);
+    let t1_1 = gn_get_inst_op_type(i1, 1);
+    let t2_0 = gn_get_inst_op_type(i2, 0);
+    print("gn_test: id<Int> op0.type=" + to_string(t1_0) + " op1.type=" + to_string(t1_1));
+    print("gn_test: id<Bool> op0.type=" + to_string(t2_0));
+    if t1_0 == GN_INT {
+        if t1_1 == GN_INT {
+            if t2_0 == GN_BOOL {
+                print("gn_test: PASS");
+                return 1;
+            }
+        }
+    }
+    print("gn_test: FAIL");
+    return 0;
+}
+
+fn gn_tmpl_count() { return gn_tmpl_n; }
+fn gn_inst_count() { return gn_inst_n; }
+
+print("generics.hl loaded");

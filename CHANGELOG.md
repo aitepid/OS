@@ -2,11 +2,37 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`421`（76 根目录 + 352 内核模块）
-- H-L 总行数：`~126,000`
-- 内核模块：`352`
-- Shell 命令：`1282`
-- 最近完成功能迭代：`366`（regalloc_linear_scan + regalloc_coalesce + calling_conv）
+- `.hl` 文件：`424`（76 根目录 + 355 内核模块）
+- H-L 总行数：`~128,600`
+- 内核模块：`355`
+- Shell 命令：`1303`
+- 最近完成功能迭代：`369`（type_infer + type_checker + generics）
+
+## Iteration 369 — generics.hl：泛型单态化展开
+
+- **`generics.hl`**（Buffer: 0x1A80000）：GN_MAXTEMPL=16，GN_MAXINST=32
+  - `gn_begin_template(name, nparams)` + `gn_add_op(tmpl, kind, f0, f1, f2)`：定义泛型模板
+  - 类型参数编码：`GN_TPARAM+k`（k 为参数索引，具体类型 0=Int/1=Bool/2=Float）
+  - `gn_instantiate(tmpl, t0..t3)`：展开模板；`_gn_subst_type` 替换类型参数
+  - 每次实例化生成独立 op 序列（`gn_iop_*`），存储替换后的类型注解
+  - 测试：`identity<T>` 实例化为 `<Int>` 和 `<Bool>`，op 类型分别正确替换 → PASS
+
+## Iteration 368 — type_checker.hl：类型检查器（诊断报告）
+
+- **`type_checker.hl`**（Buffer: 0x1A70000）：TC_MAXNODES=32，TC_MAXERRS=8
+  - 类型标签：Int=0，Bool=1，Str=2，Float=3，Unknown=4，Error=5
+  - 检查规则：算术运算需 Int，逻辑运算需 Bool，等价比较需相同类型，ret 需匹配声明返回类型
+  - `tc_run()`：逐语句检查，收集错误至 `tc_err_node/exp/got`
+  - 测试：`z=x+x`（ok）; `w=y&&z`（z 为 Int 非 Bool → 错）; `ret z`（Int 非 Bool → 错）→ 2 错误 → PASS
+
+## Iteration 367 — type_infer.hl：Hindley-Milner 类型推断
+
+- **`type_infer.hl`**（Buffer: 0x1A60000）：TI_MAXNODES=32，TI_MAXTVARS=32
+  - 类型编码：Int=0，Bool=1，TVar(v)=200+v，Fun(a,r)=300+id
+  - `_ti_unify(s,t)`：union-find 合一；含出现检查（occur check）防止无限类型
+  - `_ti_infer(node)`：Algorithm W 核心递归；Var/Lam/App/Lit 四种节点
+  - `ti_run(root)`：从根推断，返回最终类型（经 `_ti_resolve` 展开）
+  - 测试：`(\x.42) 42` → 应用类型 = Int → PASS
 
 ## Iteration 366 — calling_conv.hl：System V AMD64 调用约定
 
