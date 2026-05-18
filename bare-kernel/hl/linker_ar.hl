@@ -1,0 +1,163 @@
+// linker_ar.hl -- Static archive (.a) parser and incremental linker (iter 371)
+// Buffer: 0x1AA0000
+// AR_MAXMEMBERS=16 archive members, AR_MAXSYMS=64 symbol index entries
+// Models GNU ar format: magic + member headers + symbol index (/ member)
+// Each member: name, size, offset; symbol index maps sym_name -> member index
+// Incremental linking: select only members that satisfy undefined references
+
+let AR_MAXMEMBERS = 16;
+let AR_MAXSYMS    = 64;
+
+// Archive magic: "!<arch>\n" (simplified: just track member count)
+let AR_MAGIC = 8;   // length of "!<arch>\n"
+
+// Member table
+let ar_mem_name   = array(16, 0);   // name id
+let ar_mem_size   = array(16, 0);   // member size in bytes
+let ar_mem_offset = array(16, 0);   // byte offset in archive
+let ar_mem_n      = 0;
+
+// Symbol index: sym_name -> member
+let ar_sym_name   = array(64, 0);
+let ar_sym_member = array(64, 0);   // which member defines this symbol
+let ar_sym_n      = 0;
+
+// Undefined references (needed by the program)
+let ar_undef_name = array(64, 0);
+let ar_undef_n    = 0;
+
+// Selected members after incremental link
+let ar_selected   = array(16, 0);   // member index -> 1 if selected
+let ar_selected_n = 0;
+
+// Virtual archive file offset cursor
+let ar_cur_offset = 0;
+
+fn ar_init() {
+    ar_mem_n      = 0;
+    ar_sym_n      = 0;
+    ar_undef_n    = 0;
+    ar_selected_n = 0;
+    ar_cur_offset = AR_MAGIC;
+    let i = 0;
+    while i < AR_MAXMEMBERS {
+        set_at(ar_selected, i, 0);
+        i += 1;
+    }
+    return 0;
+}
+
+fn ar_add_member(name_id, size) {
+    let id = ar_mem_n;
+    set_at(ar_mem_name,   id, name_id);
+    set_at(ar_mem_size,   id, size);
+    // Each member preceded by 60-byte header
+    set_at(ar_mem_offset, id, ar_cur_offset + 60);
+    ar_cur_offset += 60 + size;
+    // Pad to even
+    let rem = size - (size / 2) * 2;
+    if rem == 1 { ar_cur_offset += 1; }
+    ar_mem_n += 1;
+    return id;
+}
+
+fn ar_add_symbol(sym_name_id, member_id) {
+    let id = ar_sym_n;
+    set_at(ar_sym_name,   id, sym_name_id);
+    set_at(ar_sym_member, id, member_id);
+    ar_sym_n += 1;
+    return id;
+}
+
+fn ar_add_undef(sym_name_id) {
+    set_at(ar_undef_name, ar_undef_n, sym_name_id);
+    ar_undef_n += 1;
+    return 0;
+}
+
+fn _ar_find_sym(name_id) {
+    // Returns member index that defines name_id, or -1
+    let i = 0;
+    while i < ar_sym_n {
+        if ar_sym_name[i] == name_id { return ar_sym_member[i]; }
+        i += 1;
+    }
+    return 0 - 1;
+}
+
+fn ar_link() {
+    // Incremental link: for each undef, find providing member and select it
+    // Repeat until no new members selected (transitive deps)
+    ar_selected_n = 0;
+    let changed = 1;
+    while changed == 1 {
+        changed = 0;
+        let i = 0;
+        while i < ar_undef_n {
+            let m = _ar_find_sym(ar_undef_name[i]);
+            if m != 0 - 1 {
+                if ar_selected[m] == 0 {
+                    set_at(ar_selected, m, 1);
+                    ar_selected_n += 1;
+                    changed = 1;
+                }
+            }
+            i += 1;
+        }
+    }
+    return ar_selected_n;
+}
+
+fn ar_total_size() {
+    // Total bytes contributed by selected members
+    let total = 0;
+    let i = 0;
+    while i < ar_mem_n {
+        if ar_selected[i] == 1 { total += ar_mem_size[i]; }
+        i += 1;
+    }
+    return total;
+}
+
+fn ar_test() {
+    // Archive: 3 members
+    //   m0 (libmath.o, 128B): defines sym 10 (sqrt), sym 11 (pow)
+    //   m1 (libstr.o, 64B):   defines sym 20 (strlen), sym 21 (strcpy)
+    //   m2 (libnet.o, 256B):  defines sym 30 (send), sym 31 (recv)
+    // Undefs: sqrt(10), strlen(20) -> should select m0 + m1 only
+    ar_init();
+    ar_add_member(100, 128);   // m0
+    ar_add_member(101, 64);    // m1
+    ar_add_member(102, 256);   // m2
+    ar_add_symbol(10, 0);
+    ar_add_symbol(11, 0);
+    ar_add_symbol(20, 1);
+    ar_add_symbol(21, 1);
+    ar_add_symbol(30, 2);
+    ar_add_symbol(31, 2);
+    ar_add_undef(10);   // need sqrt
+    ar_add_undef(20);   // need strlen
+    let sel = ar_link();
+    let tsz = ar_total_size();
+    print("ar_test: selected=" + to_string(sel) + " total_size=" + to_string(tsz));
+    if sel == 2 {
+        if ar_selected[0] == 1 {
+            if ar_selected[1] == 1 {
+                if ar_selected[2] == 0 {
+                    if tsz == 192 {
+                        print("ar_test: PASS");
+                        return 1;
+                    }
+                }
+            }
+        }
+    }
+    print("ar_test: FAIL");
+    return 0;
+}
+
+fn ar_is_selected(member_id) { return ar_selected[member_id]; }
+fn ar_member_count()         { return ar_mem_n; }
+fn ar_sym_count()            { return ar_sym_n; }
+
+print("linker_ar.hl loaded");

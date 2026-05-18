@@ -1,0 +1,211 @@
+// linker_elf.hl -- ELF64 output: sections, symbol table, relocations (iter 370)
+// Buffer: 0x1A90000
+// Models ELF64 layout: file header + section headers + symbol table + relocs
+// ELF_MAXSECTS=8 sections, ELF_MAXSYMS=32 symbols, ELF_MAXRELS=32 relocations
+// Sections: .text(1) .data(2) .bss(3) .symtab(4) .strtab(5) .rela.text(6)
+// Produces: virtual byte offset of each section, symbol resolved addresses
+
+let ELF_MAXSECTS = 8;
+let ELF_MAXSYMS  = 32;
+let ELF_MAXRELS  = 32;
+
+// ELF64 constants
+let ELF_MAGIC0   = 127;   // 0x7F
+let ELF_MAGIC1   = 69;    // 'E'
+let ELF_MAGIC2   = 76;    // 'L'
+let ELF_MAGIC3   = 70;    // 'F'
+let ELF_CLASS64  = 2;
+let ELF_LE       = 1;
+let ELF_ET_EXEC  = 2;
+let ELF_ET_REL   = 1;
+let ELF_EM_X86_64 = 62;
+
+// Section types
+let SHT_NULL     = 0;
+let SHT_PROGBITS = 1;
+let SHT_SYMTAB   = 2;
+let SHT_STRTAB   = 3;
+let SHT_RELA     = 4;
+let SHT_NOBITS   = 8;   // .bss
+
+// Symbol binding/type
+let STB_LOCAL    = 0;
+let STB_GLOBAL   = 1;
+let STT_NOTYPE   = 0;
+let STT_FUNC     = 2;
+let STT_OBJECT   = 1;
+
+// Section table
+let elf_sh_name    = array(8, 0);   // name offset in strtab
+let elf_sh_type    = array(8, 0);
+let elf_sh_flags   = array(8, 0);
+let elf_sh_addr    = array(8, 0);   // virtual address
+let elf_sh_offset  = array(8, 0);   // file offset
+let elf_sh_size    = array(8, 0);   // size in bytes
+let elf_sh_n       = 0;
+
+// Symbol table
+let elf_sym_name   = array(32, 0);  // name id (offset in strtab)
+let elf_sym_value  = array(32, 0);  // address
+let elf_sym_size   = array(32, 0);
+let elf_sym_bind   = array(32, 0);
+let elf_sym_type   = array(32, 0);
+let elf_sym_sect   = array(32, 0);  // section index
+let elf_sym_n      = 0;
+
+// Relocation table (.rela.text)
+let elf_rel_offset = array(32, 0);  // offset in section
+let elf_rel_sym    = array(32, 0);  // symbol index
+let elf_rel_type   = array(32, 0);  // R_X86_64_PLT32=4, R_X86_64_32=10
+let elf_rel_addend = array(32, 0);
+let elf_rel_n      = 0;
+
+// Section size inputs
+let elf_text_size  = 0;
+let elf_data_size  = 0;
+let elf_bss_size   = 0;
+
+// Layout result
+let elf_file_size  = 0;
+let elf_entry_addr = 0;
+
+fn elf_init() {
+    elf_sh_n    = 0;
+    elf_sym_n   = 0;
+    elf_rel_n   = 0;
+    elf_text_size = 0;
+    elf_data_size = 0;
+    elf_bss_size  = 0;
+    elf_file_size = 0;
+    elf_entry_addr = 0;
+    return 0;
+}
+
+fn elf_set_section_size(text, data, bss) {
+    elf_text_size = text;
+    elf_data_size = data;
+    elf_bss_size  = bss;
+    return 0;
+}
+
+fn elf_add_symbol(name_id, value, size, bind, typ, sect) {
+    let id = elf_sym_n;
+    set_at(elf_sym_name,  id, name_id);
+    set_at(elf_sym_value, id, value);
+    set_at(elf_sym_size,  id, size);
+    set_at(elf_sym_bind,  id, bind);
+    set_at(elf_sym_type,  id, typ);
+    set_at(elf_sym_sect,  id, sect);
+    elf_sym_n += 1;
+    return id;
+}
+
+fn elf_add_rela(offset, sym, rtype, addend) {
+    let id = elf_rel_n;
+    set_at(elf_rel_offset, id, offset);
+    set_at(elf_rel_sym,    id, sym);
+    set_at(elf_rel_type,   id, rtype);
+    set_at(elf_rel_addend, id, addend);
+    elf_rel_n += 1;
+    return id;
+}
+
+fn elf_layout() {
+    // File layout (all offsets virtual, 8-byte aligned):
+    // 0x000: ELF header (64 bytes)
+    // 0x040: .text
+    // align: .data
+    // (no file bytes for .bss)
+    // .symtab: 24 bytes per symbol (ELF64 Sym64)
+    // .rela.text: 24 bytes per entry (Elf64_Rela)
+    // section header table: 64 bytes per section
+
+    let ELF_HDR   = 64;
+    let SYM_SZ    = 24;
+    let RELA_SZ   = 24;
+    let SHDR_SZ   = 64;
+
+    let off = ELF_HDR;
+
+    // .text
+    set_at(elf_sh_type,   0, SHT_PROGBITS);
+    set_at(elf_sh_offset, 0, off);
+    set_at(elf_sh_addr,   0, 0x400000 + off);
+    set_at(elf_sh_size,   0, elf_text_size);
+    off += elf_text_size;
+
+    // .data
+    set_at(elf_sh_type,   1, SHT_PROGBITS);
+    set_at(elf_sh_offset, 1, off);
+    set_at(elf_sh_addr,   1, 0x400000 + off);
+    set_at(elf_sh_size,   1, elf_data_size);
+    off += elf_data_size;
+
+    // .bss (no file bytes)
+    set_at(elf_sh_type,   2, SHT_NOBITS);
+    set_at(elf_sh_offset, 2, off);
+    set_at(elf_sh_addr,   2, 0x400000 + off);
+    set_at(elf_sh_size,   2, elf_bss_size);
+
+    // .symtab
+    set_at(elf_sh_type,   3, SHT_SYMTAB);
+    set_at(elf_sh_offset, 3, off);
+    set_at(elf_sh_size,   3, elf_sym_n * SYM_SZ);
+    off += elf_sym_n * SYM_SZ;
+
+    // .rela.text
+    set_at(elf_sh_type,   4, SHT_RELA);
+    set_at(elf_sh_offset, 4, off);
+    set_at(elf_sh_size,   4, elf_rel_n * RELA_SZ);
+    off += elf_rel_n * RELA_SZ;
+
+    elf_sh_n = 5;
+
+    // Section header table at end
+    let shoff = off;
+    off += ELF_MAXSECTS * SHDR_SZ;
+    elf_file_size = off;
+
+    // Entry = start of .text
+    elf_entry_addr = elf_sh_addr[0];
+
+    return elf_file_size;
+}
+
+fn elf_resolve_symbol(name_id) {
+    // Returns virtual address of symbol with given name_id
+    let i = 0;
+    while i < elf_sym_n {
+        if elf_sym_name[i] == name_id { return elf_sym_value[i]; }
+        i += 1;
+    }
+    return 0 - 1;
+}
+
+fn elf_test() {
+    // .text=256B, .data=64B, .bss=128B
+    // 2 symbols: _start(text,0,32), mydata(data,0,8)
+    // 1 reloc: call at offset 10 -> sym 1, R_PLT32, addend -4
+    elf_init();
+    elf_set_section_size(256, 64, 128);
+    elf_add_symbol(1, 0x400040, 32, STB_GLOBAL, STT_FUNC,   0);
+    elf_add_symbol(2, 0x400140, 8,  STB_GLOBAL, STT_OBJECT, 1);
+    elf_add_rela(10, 0, 4, 0 - 4);
+    let fsz = elf_layout();
+    // entry should be 0x400040, file_size > 0
+    print("elf_test: entry=0x" + to_string(elf_entry_addr) + " file_sz=" + to_string(fsz));
+    if elf_entry_addr == 0x400040 {
+        if fsz > 256 {
+            print("elf_test: PASS");
+            return 1;
+        }
+    }
+    print("elf_test: FAIL");
+    return 0;
+}
+
+fn elf_get_section_offset(idx) { return elf_sh_offset[idx]; }
+fn elf_get_section_size(idx)   { return elf_sh_size[idx]; }
+fn elf_get_sym_value(idx)      { return elf_sym_value[idx]; }
+
+print("linker_elf.hl loaded");

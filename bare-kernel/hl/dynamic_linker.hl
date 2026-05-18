@@ -1,0 +1,145 @@
+// dynamic_linker.hl -- PLT/GOT dynamic linking, .so basics (iter 372)
+// Buffer: 0x1AB0000
+// DL_MAXSYMS=32 imported symbols, DL_MAXLIBS=8 shared libraries
+// Models: GOT (Global Offset Table), PLT (Procedure Linkage Table) stubs
+// Lazy binding: first call -> PLT stub -> dynamic linker resolves -> patches GOT
+// GOT layout: [0]=&_DYNAMIC [1]=link_map [2]=_dl_runtime_resolve + imported syms
+// PLT entry: 6 bytes JMP [GOT+offset] + push reloc_idx + JMP PLT[0]
+
+let DL_MAXSYMS = 32;
+let DL_MAXLIBS  = 8;
+
+// Shared library table
+let dl_lib_name   = array(8, 0);    // library name id
+let dl_lib_base   = array(8, 0);    // load base address (simulated)
+let dl_lib_n      = 0;
+
+// Import symbol table
+let dl_sym_name   = array(32, 0);   // symbol name id
+let dl_sym_lib    = array(32, 0);   // which library
+let dl_sym_addr   = array(32, 0);   // resolved address (0 = unresolved)
+let dl_sym_got    = array(32, 0);   // GOT slot index
+let dl_sym_plt    = array(32, 0);   // PLT stub offset
+let dl_sym_n      = 0;
+
+// GOT base and PLT base (virtual)
+let DL_GOT_BASE   = 0x601000;
+let DL_PLT_BASE   = 0x400500;
+let DL_PLT_ENTRY  = 16;   // bytes per PLT entry
+let DL_GOT_ENTRY  = 8;    // bytes per GOT slot
+
+// GOT reserved slots: 0=_DYNAMIC, 1=link_map, 2=_dl_runtime_resolve
+let DL_GOT_RESERVED = 3;
+
+// Resolved symbol count
+let dl_resolved_n = 0;
+
+fn dl_init() {
+    dl_lib_n      = 0;
+    dl_sym_n      = 0;
+    dl_resolved_n = 0;
+    return 0;
+}
+
+fn dl_add_library(name_id, base_addr) {
+    let id = dl_lib_n;
+    set_at(dl_lib_name, id, name_id);
+    set_at(dl_lib_base, id, base_addr);
+    dl_lib_n += 1;
+    return id;
+}
+
+fn dl_add_import(sym_name_id, lib_id) {
+    let id = dl_sym_n;
+    set_at(dl_sym_name, id, sym_name_id);
+    set_at(dl_sym_lib,  id, lib_id);
+    set_at(dl_sym_addr, id, 0);   // unresolved
+    // GOT slot: reserved(3) + id
+    set_at(dl_sym_got, id, DL_GOT_BASE + (DL_GOT_RESERVED + id) * DL_GOT_ENTRY);
+    // PLT stub: PLT[0]=resolver, PLT[id+1]=stub
+    set_at(dl_sym_plt, id, DL_PLT_BASE + (id + 1) * DL_PLT_ENTRY);
+    dl_sym_n += 1;
+    return id;
+}
+
+fn dl_resolve(sym_id, sym_offset_in_lib) {
+    // Simulates lazy binding: compute symbol address from lib base + offset
+    let lib = dl_sym_lib[sym_id];
+    let addr = dl_lib_base[lib] + sym_offset_in_lib;
+    set_at(dl_sym_addr, sym_id, addr);
+    dl_resolved_n += 1;
+    return addr;
+}
+
+fn dl_resolve_all() {
+    // Resolve all imports with a deterministic offset (sym_id * 0x100)
+    let i = 0;
+    while i < dl_sym_n {
+        if dl_sym_addr[i] == 0 {
+            let off = (i + 1) * 256;  // 0x100 per symbol
+            dl_resolve(i, off);
+        }
+        i += 1;
+    }
+    return dl_resolved_n;
+}
+
+fn dl_got_addr(sym_id) {
+    return dl_sym_got[sym_id];
+}
+
+fn dl_plt_addr(sym_id) {
+    return dl_sym_plt[sym_id];
+}
+
+fn dl_is_resolved(sym_id) {
+    if dl_sym_addr[sym_id] != 0 { return 1; }
+    return 0;
+}
+
+fn dl_lookup(sym_name_id) {
+    // Returns resolved address for named symbol, or 0 if unresolved
+    let i = 0;
+    while i < dl_sym_n {
+        if dl_sym_name[i] == sym_name_id { return dl_sym_addr[i]; }
+        i += 1;
+    }
+    return 0;
+}
+
+fn dl_test() {
+    // libc.so at 0x7f000000: import printf(sym 1), malloc(sym 2), free(sym 3)
+    // After resolve_all: printf=0x7f000100, malloc=0x7f000200, free=0x7f000300
+    dl_init();
+    let libc = dl_add_library(50, 0x7f000000);
+    let s_printf = dl_add_import(1, libc);
+    let s_malloc = dl_add_import(2, libc);
+    let s_free   = dl_add_import(3, libc);
+    let res = dl_resolve_all();
+    let printf_addr = dl_sym_addr[s_printf];
+    let malloc_addr = dl_sym_addr[s_malloc];
+    let free_addr   = dl_sym_addr[s_free];
+    print("dl_test: resolved=" + to_string(res));
+    print("dl_test: printf=0x" + to_string(printf_addr) + " malloc=0x" + to_string(malloc_addr));
+    // PLT stubs
+    let plt0 = dl_plt_addr(s_printf);
+    let got0 = dl_got_addr(s_printf);
+    print("dl_test: printf PLT=0x" + to_string(plt0) + " GOT=0x" + to_string(got0));
+    if res == 3 {
+        if printf_addr == 0x7f000100 {
+            if malloc_addr == 0x7f000200 {
+                if plt0 == DL_PLT_BASE + DL_PLT_ENTRY {
+                    print("dl_test: PASS");
+                    return 1;
+                }
+            }
+        }
+    }
+    print("dl_test: FAIL");
+    return 0;
+}
+
+fn dl_sym_count() { return dl_sym_n; }
+fn dl_lib_count() { return dl_lib_n; }
+
+print("dynamic_linker.hl loaded");

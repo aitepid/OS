@@ -2,11 +2,37 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`424`（76 根目录 + 355 内核模块）
-- H-L 总行数：`~128,600`
-- 内核模块：`355`
-- Shell 命令：`1303`
-- 最近完成功能迭代：`369`（type_infer + type_checker + generics）
+- `.hl` 文件：`427`（76 根目录 + 358 内核模块）
+- H-L 总行数：`~131,200`
+- 内核模块：`358`
+- Shell 命令：`1324`
+- 最近完成功能迭代：`372`（linker_elf + linker_ar + dynamic_linker）
+
+## Iteration 372 — dynamic_linker.hl：PLT/GOT 动态链接
+
+- **`dynamic_linker.hl`**（Buffer: 0x1AB0000）：DL_MAXSYMS=32，DL_MAXLIBS=8
+  - `dl_add_library(name,base)` + `dl_add_import(sym,lib)`：注册共享库与导入符号
+  - GOT slot = `GOT_BASE + (3+id)*8`；PLT stub = `PLT_BASE + (id+1)*16`（前 3 个 GOT 项保留）
+  - `dl_resolve(sym,offset)`：懒绑定模拟——lib_base + offset 写入 GOT
+  - `dl_resolve_all()`：批量解析所有未解决符号
+  - 测试：libc.so 导入 printf/malloc/free → 全解析，地址 = 0x7f000100/200/300 → PASS
+
+## Iteration 371 — linker_ar.hl：静态归档增量链接
+
+- **`linker_ar.hl`**（Buffer: 0x1AA0000）：AR_MAXMEMBERS=16，AR_MAXSYMS=64
+  - `ar_add_member(name,size)` / `ar_add_symbol(sym,member)`：构建归档符号索引
+  - `ar_add_undef(sym)` / `ar_link()`：增量链接——仅选取满足 undef 引用的成员，迭代至不动点
+  - `ar_total_size()`：被选成员字节总量
+  - 测试：3 个成员，undef sqrt+strlen → 选中 m0+m1，总大小 192 字节 → PASS
+
+## Iteration 370 — linker_elf.hl：ELF64 输出布局
+
+- **`linker_elf.hl`**（Buffer: 0x1A90000）：ELF_MAXSECTS=8，ELF_MAXSYMS=32，ELF_MAXRELS=32
+  - `elf_set_section_size(text,data,bss)` / `elf_layout()`：计算各节文件偏移与虚拟地址
+  - 节序：.text → .data → .bss(nobits) → .symtab → .rela.text → section header table
+  - `elf_add_symbol(name,value,size,bind,type,sect)`：添加符号表条目
+  - `elf_add_rela(offset,sym,type,addend)`：添加重定位条目
+  - 测试：text=256 data=64 bss=128，entry=0x400040，file_size>256 → PASS
 
 ## Iteration 369 — generics.hl：泛型单态化展开
 
