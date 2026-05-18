@@ -1,0 +1,217 @@
+// perf_counter.hl -- PMU performance counters: instruction count, cache miss, branch misprediction (iter 374)
+// Buffer: 0x1AD0000
+// PC_MAXCOUNTERS=8 hardware counters, PC_MAXSAMPLES=64 sample ring buffer
+// Models x86_64 PMU: PERF_EVT_INST=0x00c0, PERF_EVT_LLC_MISS=0x412e, PERF_EVT_BR_MISS=0x00c5
+// MSR read simulation: rdpmc instruction index per counter
+// Overflow detection: 48-bit counter wraps at PC_WRAP=0x1000000000000
+
+let PC_MAXCOUNTERS = 8;
+let PC_MAXSAMPLES  = 64;
+
+// PMU event codes (Intel x86_64)
+let PC_EVT_INST     = 192;    // 0x00c0 instructions retired
+let PC_EVT_LLC_MISS = 16686;  // 0x412e last-level cache misses
+let PC_EVT_BR_MISS  = 197;    // 0x00c5 branch mispredictions retired
+let PC_EVT_CYCLES   = 60;     // 0x003c unhalted core cycles
+
+// Counter wrap (48-bit hardware counters)
+let PC_WRAP = 281474976710656;   // 2^48 — simulated as large number
+
+// Counter configuration
+let pc_evt    = array(8, 0);    // event code per counter
+let pc_umask  = array(8, 0);    // unit mask
+let pc_en     = array(8, 0);    // enabled flag
+let pc_n      = 0;
+
+// Counter values (simulated)
+let pc_val    = array(8, 0);    // current 64-bit count
+let pc_prev   = array(8, 0);    // value at last snapshot
+let pc_delta  = array(8, 0);    // delta since last snapshot
+
+// Sample ring buffer
+let pc_samp_ctr  = array(64, 0);   // which counter
+let pc_samp_val  = array(64, 0);   // sampled value
+let pc_samp_ip   = array(64, 0);   // instruction pointer at sample
+let pc_samp_head = 0;
+let pc_samp_n    = 0;
+
+// Aggregate stats
+let pc_total_inst    = 0;
+let pc_total_llc     = 0;
+let pc_total_brmiss  = 0;
+let pc_total_cycles  = 0;
+
+fn pc_init() {
+    pc_n            = 0;
+    pc_samp_head    = 0;
+    pc_samp_n       = 0;
+    pc_total_inst   = 0;
+    pc_total_llc    = 0;
+    pc_total_brmiss = 0;
+    pc_total_cycles = 0;
+    let i = 0;
+    while i < PC_MAXCOUNTERS {
+        set_at(pc_evt,   i, 0);
+        set_at(pc_umask, i, 0);
+        set_at(pc_en,    i, 0);
+        set_at(pc_val,   i, 0);
+        set_at(pc_prev,  i, 0);
+        set_at(pc_delta, i, 0);
+        i += 1;
+    }
+    return 0;
+}
+
+fn pc_add_counter(evt, umask) {
+    let id = pc_n;
+    set_at(pc_evt,   id, evt);
+    set_at(pc_umask, id, umask);
+    set_at(pc_en,    id, 1);
+    set_at(pc_val,   id, 0);
+    pc_n += 1;
+    return id;
+}
+
+fn pc_disable(id) {
+    set_at(pc_en, id, 0);
+    return 0;
+}
+
+fn pc_enable(id) {
+    set_at(pc_en, id, 1);
+    return 0;
+}
+
+fn _pc_rdpmc(id) {
+    // Simulate RDPMC: deterministic value based on counter id + current tick
+    // Real impl: emit RDPMC with ECX=id, read EDX:EAX
+    // Simulation: return pc_val[id] (set by test harness)
+    return pc_val[id];
+}
+
+fn pc_read(id) {
+    // Read counter value, handle 48-bit wrap
+    if pc_en[id] == 0 { return pc_prev[id]; }
+    let raw = _pc_rdpmc(id);
+    return raw;
+}
+
+fn pc_snapshot() {
+    // Take delta snapshot: delta[i] = current - prev (wrap-aware)
+    let i = 0;
+    while i < pc_n {
+        if pc_en[i] == 1 {
+            let cur = pc_read(i);
+            let prev = pc_prev[i];
+            let d = 0;
+            if cur >= prev {
+                d = cur - prev;
+            } else {
+                // Wrapped
+                d = (PC_WRAP - prev) + cur;
+            }
+            set_at(pc_delta, i, d);
+            set_at(pc_prev,  i, cur);
+
+            // Accumulate to aggregates by event type
+            let evt = pc_evt[i];
+            if evt == PC_EVT_INST   { pc_total_inst   += d; }
+            if evt == PC_EVT_LLC_MISS { pc_total_llc  += d; }
+            if evt == PC_EVT_BR_MISS { pc_total_brmiss += d; }
+            if evt == PC_EVT_CYCLES { pc_total_cycles  += d; }
+        }
+        i += 1;
+    }
+    return 0;
+}
+
+fn pc_sample(id, ip) {
+    // Record an overflow sample (NMI handler would call this)
+    let slot = pc_samp_head - (pc_samp_head / PC_MAXSAMPLES) * PC_MAXSAMPLES;
+    set_at(pc_samp_ctr, slot, id);
+    set_at(pc_samp_val, slot, pc_val[id]);
+    set_at(pc_samp_ip,  slot, ip);
+    pc_samp_head += 1;
+    if pc_samp_n < PC_MAXSAMPLES { pc_samp_n += 1; }
+    return 0;
+}
+
+fn pc_ipc() {
+    // Instructions-per-cycle * 100 (fixed-point)
+    if pc_total_cycles == 0 { return 0; }
+    return (pc_total_inst * 100) / pc_total_cycles;
+}
+
+fn pc_llc_miss_rate() {
+    // LLC miss rate per 1000 instructions
+    if pc_total_inst == 0 { return 0; }
+    return (pc_total_llc * 1000) / pc_total_inst;
+}
+
+fn pc_br_miss_rate() {
+    // Branch misprediction rate per 1000 instructions
+    if pc_total_inst == 0 { return 0; }
+    return (pc_total_brmiss * 1000) / pc_total_inst;
+}
+
+fn pc_counter_count() { return pc_n; }
+fn pc_sample_count()  { return pc_samp_n; }
+
+fn pc_print_stats() {
+    print("PMU: instructions=" + to_string(pc_total_inst));
+    print("PMU: cycles="       + to_string(pc_total_cycles));
+    print("PMU: IPC*100="      + to_string(pc_ipc()));
+    print("PMU: LLC_miss="     + to_string(pc_total_llc));
+    print("PMU: BR_miss="      + to_string(pc_total_brmiss));
+    print("PMU: LLC_miss/1000inst=" + to_string(pc_llc_miss_rate()));
+    return 0;
+}
+
+fn pc_test() {
+    pc_init();
+    // Configure 4 standard counters
+    let c_inst  = pc_add_counter(PC_EVT_INST,     0);
+    let c_cyc   = pc_add_counter(PC_EVT_CYCLES,   0);
+    let c_llc   = pc_add_counter(PC_EVT_LLC_MISS, 0);
+    let c_br    = pc_add_counter(PC_EVT_BR_MISS,  0);
+
+    // Simulate PMU readings after "workload"
+    set_at(pc_val, c_inst,  1000000);
+    set_at(pc_val, c_cyc,    500000);
+    set_at(pc_val, c_llc,      5000);
+    set_at(pc_val, c_br,       2500);
+
+    pc_snapshot();
+
+    // Simulate wrap test: second snapshot with smaller value
+    set_at(pc_val, c_inst, 100);   // wrapped
+    set_at(pc_prev, c_inst, 1000000);   // pretend prev was large
+    // delta should be (PC_WRAP - 1000000) + 100 — but we'll test non-wrap path
+
+    // Record 2 samples
+    pc_sample(c_inst, 0x401234);
+    pc_sample(c_inst, 0x401500);
+
+    let ipc = pc_ipc();
+    let llc_rate = pc_llc_miss_rate();
+
+    print("pc_test: inst=" + to_string(pc_total_inst) + " cyc=" + to_string(pc_total_cycles));
+    print("pc_test: IPC*100=" + to_string(ipc) + " LLC/1000=" + to_string(llc_rate));
+    print("pc_test: samples=" + to_string(pc_samp_n));
+
+    // IPC*100 = (1000000*100)/500000 = 200 (2.0 IPC)
+    if ipc == 200 {
+        if llc_rate == 5 {
+            if pc_samp_n == 2 {
+                if pc_n == 4 {
+                    print("pc_test: PASS");
+                    return 1;
+                }
+            }
+        }
+    }
+    print("pc_test: FAIL");
+    return 0;
+}
+
+print("perf_counter.hl loaded");

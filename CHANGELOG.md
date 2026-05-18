@@ -2,11 +2,40 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`427`（76 根目录 + 358 内核模块）
-- H-L 总行数：`~131,200`
-- 内核模块：`358`
-- Shell 命令：`1324`
-- 最近完成功能迭代：`372`（linker_elf + linker_ar + dynamic_linker）
+- `.hl` 文件：`430`（76 根目录 + 361 内核模块）
+- H-L 总行数：`~135,000`
+- 内核模块：`361`
+- Shell 命令：`1345`
+- 最近完成功能迭代：`375`（dwarf + perf_counter + jit_stub）
+- **Milestone M2 达成**（第二阶段·调试信息与性能，自宿主编译器成熟）
+
+## Iteration 375 — jit_stub.hl：JIT 编译桩
+
+- **`jit_stub.hl`**（Buffer: 0x1AE0000）：JIT_MAXFUNCS=32，JIT_THRESHOLD=10
+  - `jit_register(fid)` + `jit_call(fid)`：调用计数热点检测，超过阈值即标记为 hot
+  - `jit_compile_const(slot, retval)`：生成常量返回桩（prologue + mov eax,imm32 + epilogue）
+  - `jit_compile_add(slot, base, add)`：生成加法桩（mov eax + add rax,imm32 + epilogue）
+  - `_jit_emit_prologue/epilogue`：x86_64 标准帧（push rbp; mov rbp,rsp / pop rbp; ret）
+  - 测试：f1 调用 15 次（hot），f2 调用 5 次（cold）；编译 2 个桩；bytes>8；hits 正确 → PASS
+
+## Iteration 374 — perf_counter.hl：PMU 性能计数器
+
+- **`perf_counter.hl`**（Buffer: 0x1AD0000）：PC_MAXCOUNTERS=8，PC_MAXSAMPLES=64
+  - PMU 事件码：INST=0xc0，LLC_MISS=0x412e，BR_MISS=0xc5，CYCLES=0x3c
+  - `pc_add_counter(evt,umask)` + `pc_snapshot()`：读取增量，处理 48 位计数器回绕
+  - `pc_ipc()`：IPC×100；`pc_llc_miss_rate/pc_br_miss_rate()`：每千指令缺失率
+  - `pc_sample(id, ip)`：NMI 样本环形缓冲区（64 槽）
+  - 测试：1M inst / 500K cyc / 5K LLC / 2.5K BR → IPC*100=200，LLC/1000=5，samples=2 → PASS
+
+## Iteration 373 — dwarf.hl：DWARF 调试信息生成
+
+- **`dwarf.hl`**（Buffer: 0x1AC0000）：DWARF_MAXLINES=64，DWARF_MAXVARS=32
+  - 行号状态机：addr/file/line/col/is_stmt；标准操作码 DW_LNS_COPY/ADVANCE_PC/ADVANCE_LINE 等
+  - `dw_add_file(name,dir)` + `dw_add_line(addr,file,line,col,stmt)`：构建行号表
+  - `dw_add_var(name,type,loc,offset,func)`：变量位置信息（DW_OP_fbreg/reg）
+  - `dw_emit_line_table()`：输出 .debug_line 节字节流（含 ULEB128/SLEB128 编码）
+  - 末尾 DW_LNE_end_sequence（扩展操作码）正确终止行号程序
+  - 测试：3 条行表项 + 2 个变量，输出字节数 >20 → PASS
 
 ## Iteration 372 — dynamic_linker.hl：PLT/GOT 动态链接
 

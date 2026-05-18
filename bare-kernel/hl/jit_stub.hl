@@ -1,0 +1,230 @@
+// jit_stub.hl -- JIT compilation framework: hot-path detection + small function JIT (iter 375)
+// Buffer: 0x1AE0000
+// JIT_MAXFUNCS=32 tracked functions, JIT_THRESHOLD=10 calls before JIT compile
+// JIT_MAXCODE=256 bytes emitted x86_64 machine code per stub
+// Hot detection: call counter per function, trigger at threshold
+// Stub emit: prologue (push rbp; mov rbp,rsp) + body stubs + epilogue (pop rbp; ret)
+// x86_64 encoding: REX prefix + opcodes for mov reg,imm64 / add / ret
+
+let JIT_MAXFUNCS  = 32;
+let JIT_MAXCODE   = 256;
+let JIT_THRESHOLD = 10;
+
+// Function tracking table
+let jit_func_id    = array(32, 0);    // function id (name hash)
+let jit_call_cnt   = array(32, 0);    // call count
+let jit_compiled   = array(32, 0);    // 1 = JIT stub exists
+let jit_stub_off   = array(32, 0);    // offset in jit_code buffer
+let jit_func_n     = 0;
+
+// JIT code buffer (simulated emitted bytes)
+let jit_code    = array(256, 0);
+let jit_code_n  = 0;
+
+// Stats
+let jit_total_compiled = 0;
+let jit_total_calls    = 0;
+let jit_total_hits     = 0;   // calls routed to JIT stub
+
+// x86_64 opcodes (single-byte or common sequences)
+let JIT_REX_W    = 72;    // 0x48 REX.W prefix
+let JIT_PUSH_RBP = 85;    // 0x55
+let JIT_POP_RBP  = 93;    // 0x5D
+let JIT_RET      = 195;   // 0xC3
+let JIT_MOV_RBP  = 137;   // 0x89 (MOV r/m, r)
+let JIT_MOV_RM   = 141;   // 0x8D LEA
+let JIT_ADD_RAX  = 5;     // 0x05 ADD eax,imm32
+let JIT_XOR_RAX  = 49;    // 0x31 XOR r/m,r (zero rax)
+let JIT_NOP      = 144;   // 0x90
+
+fn jit_init() {
+    jit_func_n          = 0;
+    jit_code_n          = 0;
+    jit_total_compiled  = 0;
+    jit_total_calls     = 0;
+    jit_total_hits      = 0;
+    let i = 0;
+    while i < JIT_MAXFUNCS {
+        set_at(jit_func_id,  i, 0);
+        set_at(jit_call_cnt, i, 0);
+        set_at(jit_compiled, i, 0);
+        set_at(jit_stub_off, i, 0);
+        i += 1;
+    }
+    return 0;
+}
+
+fn jit_register(func_id) {
+    // Register a new function for JIT tracking
+    let slot = jit_func_n;
+    set_at(jit_func_id,  slot, func_id);
+    set_at(jit_call_cnt, slot, 0);
+    set_at(jit_compiled, slot, 0);
+    set_at(jit_stub_off, slot, 0);
+    jit_func_n += 1;
+    return slot;
+}
+
+fn jit_lookup(func_id) {
+    // Returns slot index or -1 (0-1) if not found
+    let i = 0;
+    while i < jit_func_n {
+        if jit_func_id[i] == func_id { return i; }
+        i += 1;
+    }
+    return 0 - 1;
+}
+
+fn _jit_emit(byte_val) {
+    if jit_code_n < JIT_MAXCODE {
+        set_at(jit_code, jit_code_n, byte_val);
+        jit_code_n += 1;
+    }
+    return 0;
+}
+
+fn _jit_emit_prologue() {
+    // push rbp; mov rbp, rsp
+    _jit_emit(JIT_PUSH_RBP);        // push rbp
+    _jit_emit(JIT_REX_W);           // REX.W
+    _jit_emit(JIT_MOV_RBP);         // MOV r/m64, r64
+    _jit_emit(229);                 // ModRM: 11_101_100 = rbp <- rsp
+    return 0;
+}
+
+fn _jit_emit_epilogue() {
+    // pop rbp; ret
+    _jit_emit(JIT_POP_RBP);
+    _jit_emit(JIT_RET);
+    return 0;
+}
+
+fn _jit_emit_mov_rax_imm32(imm) {
+    // mov eax, imm32 (zero-extends to rax)
+    // B8+rd, imm32
+    _jit_emit(184);                 // 0xB8 MOV EAX, imm32
+    // imm32 little-endian 4 bytes
+    _jit_emit(imm - (imm / 256) * 256);
+    _jit_emit((imm / 256) - (imm / 256 / 256) * 256);
+    _jit_emit((imm / 65536) - (imm / 65536 / 256) * 256);
+    _jit_emit((imm / 16777216) - (imm / 16777216 / 256) * 256);
+    return 0;
+}
+
+fn _jit_emit_add_rax_imm32(imm) {
+    // REX.W + ADD rax, imm32 (sign-extended)
+    _jit_emit(JIT_REX_W);           // REX.W
+    _jit_emit(5);                   // ADD rax, imm32 opcode
+    _jit_emit(imm - (imm / 256) * 256);
+    _jit_emit((imm / 256) - (imm / 256 / 256) * 256);
+    _jit_emit((imm / 65536) - (imm / 65536 / 256) * 256);
+    _jit_emit((imm / 16777216) - (imm / 16777216 / 256) * 256);
+    return 0;
+}
+
+fn jit_compile_const(slot, retval) {
+    // Emit stub: prologue + mov eax,retval + epilogue (constant-returning function)
+    if jit_code_n + 16 > JIT_MAXCODE { return 0; }
+    let start = jit_code_n;
+    set_at(jit_stub_off, slot, start);
+    _jit_emit_prologue();
+    _jit_emit_mov_rax_imm32(retval);
+    _jit_emit_epilogue();
+    set_at(jit_compiled, slot, 1);
+    jit_total_compiled += 1;
+    return jit_code_n - start;   // bytes emitted
+}
+
+fn jit_compile_add(slot, base_val, add_val) {
+    // Emit stub: prologue + mov eax,base + add rax,add_val + epilogue
+    if jit_code_n + 24 > JIT_MAXCODE { return 0; }
+    let start = jit_code_n;
+    set_at(jit_stub_off, slot, start);
+    _jit_emit_prologue();
+    _jit_emit_mov_rax_imm32(base_val);
+    _jit_emit_add_rax_imm32(add_val);
+    _jit_emit_epilogue();
+    set_at(jit_compiled, slot, 1);
+    jit_total_compiled += 1;
+    return jit_code_n - start;
+}
+
+fn jit_call(func_id) {
+    // Simulate calling a function; increment counter; if hot and compiled, route to stub
+    let slot = jit_lookup(func_id);
+    if slot == (0 - 1) { return 0; }
+    jit_total_calls += 1;
+    let cnt = jit_call_cnt[slot] + 1;
+    set_at(jit_call_cnt, slot, cnt);
+    if jit_compiled[slot] == 1 {
+        jit_total_hits += 1;
+        return jit_stub_off[slot];   // "address" of JIT stub
+    }
+    return 0 - 1;   // not yet compiled
+}
+
+fn jit_is_hot(slot) {
+    if jit_call_cnt[slot] >= JIT_THRESHOLD { return 1; }
+    return 0;
+}
+
+fn jit_func_count()    { return jit_func_n; }
+fn jit_compiled_count(){ return jit_total_compiled; }
+fn jit_hit_count()     { return jit_total_hits; }
+
+fn jit_test() {
+    jit_init();
+
+    // Register two functions
+    let f1 = jit_register(1001);   // func id 1001
+    let f2 = jit_register(1002);   // func id 1002
+
+    // Simulate 15 calls to f1 (hot), 5 calls to f2 (cold)
+    let i = 0;
+    while i < 15 {
+        jit_call(1001);
+        i += 1;
+    }
+    i = 0;
+    while i < 5 {
+        jit_call(1002);
+        i += 1;
+    }
+
+    // f1 is hot — compile a const stub returning 42
+    let hot1 = jit_is_hot(f1);
+    let bytes1 = jit_compile_const(f1, 42);
+
+    // f2 is cold — compile an add stub returning 10+5
+    let hot2 = jit_is_hot(f2);
+    let bytes2 = jit_compile_add(f2, 10, 5);
+
+    // Now calls to f1 route to stub
+    let stub1 = jit_call(1001);
+
+    print("jit_test: f1_calls=" + to_string(jit_call_cnt[f1]));
+    print("jit_test: f1_hot=" + to_string(hot1) + " bytes=" + to_string(bytes1));
+    print("jit_test: f2_hot=" + to_string(hot2) + " bytes=" + to_string(bytes2));
+    print("jit_test: stub1_offset=" + to_string(stub1));
+    print("jit_test: total_compiled=" + to_string(jit_total_compiled));
+    print("jit_test: code_bytes=" + to_string(jit_code_n));
+
+    // stub1 should be 0 (first stub at offset 0)
+    // bytes1 = 4(prologue) + 5(mov eax,imm32) + 2(epilogue) = 11
+    if hot1 == 1 {
+        if hot2 == 0 {
+            if jit_total_compiled == 2 {
+                if bytes1 > 8 {
+                    if stub1 == 0 {
+                        print("jit_test: PASS");
+                        return 1;
+                    }
+                }
+            }
+        }
+    }
+    print("jit_test: FAIL");
+    return 0;
+}
+
+print("jit_stub.hl loaded");

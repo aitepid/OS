@@ -267,13 +267,16 @@ fn shell_handle(cmd) {
         serial_print("LinkerELF:     elf init  elf test  elf setsz <txt> <dat> <bss>  elf sym <n> <v> <sz> <b> <t> <s>  elf rela <off> <sym> <rt> <add>  elf layout  elf entry  elf fsz");
         serial_print("LinkerAR:      ar init  ar test  ar mem <name> <size>  ar sym <sname> <mid>  ar undef <sname>  ar link  ar sel <mid>  ar tsz  ar nm  ar ns");
         serial_print("DynLinker:     dl init  dl test  dl lib <name> <base>  dl import <sym> <lib>  dl resolve <sid> <off>  dl resolveall  dl got <sid>  dl plt <sid>  dl addr <sym>  dl ns  dl nl");
+        serial_print("DWARF:         dw init  dw test  dw addfile <name> <dir>  dw addline <addr> <file> <line> <col>  dw addvar <name> <type> <loc> <off> <func>  dw emit  dw lines  dw vars  dw outsz");
+        serial_print("PerfCounter:   pc init  pc test  pc add <evt> <umask>  pc snap  pc ipc  pc llcrate  pc brrate  pc total  pc stats  pc samples");
+        serial_print("JITStub:       jit init  jit test  jit reg <fid>  jit call <fid>  jit hot <slot>  jit compconst <slot> <retval>  jit compadd <slot> <base> <add>  jit nc  jit nhits  jit sz");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
     }
 
     if cmd == "ver" {
-        return "HicOS 6.0 -- Hilbert-Lang Kernel (358 modules, pure H-L, zero deps)";
+        return "HicOS 6.0 -- Hilbert-Lang Kernel (361 modules, pure H-L, zero deps)";
     }
 
     if cmd == "uptime" {
@@ -6570,6 +6573,112 @@ fn shell_handle_ext(cmd) {
     if cmd == "dl ns" { return "dl: sym_n=" + to_string(dl_sym_count()); }
     if cmd == "dl nl" { return "dl: lib_n=" + to_string(dl_lib_count()); }
 
+    // --- DWARF ---
+    if cmd == "dw init" { dw_init(); return "dw: init"; }
+    if cmd == "dw test" { let dwr = dw_test(); return "dw: " + to_string(dwr); }
+    if _starts_with(cmd, "dw addfile ") {
+        let dwfa  = str_sub(cmd, 11, len(cmd));
+        let dwfs  = _find_space(dwfa);
+        let dwfn  = to_int(str_sub(dwfa, 0, dwfs));
+        let dwfd  = to_int(str_sub(dwfa, dwfs + 1, len(dwfa)));
+        let dwfid = dw_add_file(dwfn, dwfd);
+        return "dw: file " + to_string(dwfid);
+    }
+    if _starts_with(cmd, "dw addline ") {
+        let dwla  = str_sub(cmd, 11, len(cmd));
+        let dwls0 = _find_space(dwla);
+        let dwlad = to_int(str_sub(dwla, 0, dwls0));
+        let dwla1 = str_sub(dwla, dwls0 + 1, len(dwla));
+        let dwls1 = _find_space(dwla1);
+        let dwlfi = to_int(str_sub(dwla1, 0, dwls1));
+        let dwla2 = str_sub(dwla1, dwls1 + 1, len(dwla1));
+        let dwls2 = _find_space(dwla2);
+        let dwlln = to_int(str_sub(dwla2, 0, dwls2));
+        let dwlco = to_int(str_sub(dwla2, dwls2 + 1, len(dwla2)));
+        let dwlid = dw_add_line(dwlad, dwlfi, dwlln, dwlco, 1);
+        return "dw: line " + to_string(dwlid);
+    }
+    if _starts_with(cmd, "dw addvar ") {
+        let dwva  = str_sub(cmd, 10, len(cmd));
+        let dwvs0 = _find_space(dwva);
+        let dwvnm = to_int(str_sub(dwva, 0, dwvs0));
+        let dwva1 = str_sub(dwva, dwvs0 + 1, len(dwva));
+        let dwvs1 = _find_space(dwva1);
+        let dwvtp = to_int(str_sub(dwva1, 0, dwvs1));
+        let dwva2 = str_sub(dwva1, dwvs1 + 1, len(dwva1));
+        let dwvs2 = _find_space(dwva2);
+        let dwvlk = to_int(str_sub(dwva2, 0, dwvs2));
+        let dwva3 = str_sub(dwva2, dwvs2 + 1, len(dwva2));
+        let dwvs3 = _find_space(dwva3);
+        let dwvof = to_int(str_sub(dwva3, 0, dwvs3));
+        let dwvfu = to_int(str_sub(dwva3, dwvs3 + 1, len(dwva3)));
+        let dwvid = dw_add_var(dwvnm, dwvtp, dwvlk, dwvof, dwvfu);
+        return "dw: var " + to_string(dwvid);
+    }
+    if cmd == "dw emit"  { let dwsz = dw_emit_line_table(); return "dw: debug_line=" + to_string(dwsz) + "B"; }
+    if cmd == "dw lines" { return "dw: lines=" + to_string(dw_line_count()); }
+    if cmd == "dw vars"  { return "dw: vars="  + to_string(dw_var_count()); }
+    if cmd == "dw outsz" { return "dw: out="   + to_string(dw_out_size()) + "B"; }
+
+    // --- PerfCounter ---
+    if cmd == "pc init" { pc_init(); return "pc: init"; }
+    if cmd == "pc test" { let pcr = pc_test(); return "pc: " + to_string(pcr); }
+    if _starts_with(cmd, "pc add ") {
+        let pca  = str_sub(cmd, 7, len(cmd));
+        let pcs  = _find_space(pca);
+        let pcev = to_int(str_sub(pca, 0, pcs));
+        let pcum = to_int(str_sub(pca, pcs + 1, len(pca)));
+        let pcid = pc_add_counter(pcev, pcum);
+        return "pc: counter " + to_string(pcid) + " evt=" + to_string(pcev);
+    }
+    if cmd == "pc snap"    { pc_snapshot(); return "pc: snapshot taken"; }
+    if cmd == "pc ipc"     { return "pc: IPC*100=" + to_string(pc_ipc()); }
+    if cmd == "pc llcrate" { return "pc: LLC/1000inst=" + to_string(pc_llc_miss_rate()); }
+    if cmd == "pc brrate"  { return "pc: BR/1000inst="  + to_string(pc_br_miss_rate()); }
+    if cmd == "pc total"   { return "pc: inst=" + to_string(pc_total_inst) + " cyc=" + to_string(pc_total_cycles); }
+    if cmd == "pc stats"   { pc_print_stats(); return "pc: stats printed"; }
+    if cmd == "pc samples" { return "pc: samples=" + to_string(pc_sample_count()); }
+
+    // --- JITStub ---
+    if cmd == "jit init" { jit_init(); return "jit: init"; }
+    if cmd == "jit test" { let jitr = jit_test(); return "jit: " + to_string(jitr); }
+    if _starts_with(cmd, "jit reg ") {
+        let jitri = to_int(str_sub(cmd, 8, len(cmd)));
+        let jitrs = jit_register(jitri);
+        return "jit: registered fid=" + to_string(jitri) + " slot=" + to_string(jitrs);
+    }
+    if _starts_with(cmd, "jit call ") {
+        let jitci = to_int(str_sub(cmd, 9, len(cmd)));
+        let jitcr = jit_call(jitci);
+        return "jit: call fid=" + to_string(jitci) + " ret=" + to_string(jitcr);
+    }
+    if _starts_with(cmd, "jit hot ") {
+        let jiths = to_int(str_sub(cmd, 8, len(cmd)));
+        return "jit: hot=" + to_string(jit_is_hot(jiths));
+    }
+    if _starts_with(cmd, "jit compconst ") {
+        let jitca  = str_sub(cmd, 14, len(cmd));
+        let jitcs  = _find_space(jitca);
+        let jitcsl = to_int(str_sub(jitca, 0, jitcs));
+        let jitcrv = to_int(str_sub(jitca, jitcs + 1, len(jitca)));
+        let jitcby = jit_compile_const(jitcsl, jitcrv);
+        return "jit: compiled const slot=" + to_string(jitcsl) + " bytes=" + to_string(jitcby);
+    }
+    if _starts_with(cmd, "jit compadd ") {
+        let jitaa  = str_sub(cmd, 12, len(cmd));
+        let jitas0 = _find_space(jitaa);
+        let jitasl = to_int(str_sub(jitaa, 0, jitas0));
+        let jitaa1 = str_sub(jitaa, jitas0 + 1, len(jitaa));
+        let jitas1 = _find_space(jitaa1);
+        let jitabv = to_int(str_sub(jitaa1, 0, jitas1));
+        let jitaav = to_int(str_sub(jitaa1, jitas1 + 1, len(jitaa1)));
+        let jitaby = jit_compile_add(jitasl, jitabv, jitaav);
+        return "jit: compiled add slot=" + to_string(jitasl) + " bytes=" + to_string(jitaby);
+    }
+    if cmd == "jit nc"    { return "jit: compiled=" + to_string(jit_compiled_count()); }
+    if cmd == "jit nhits" { return "jit: hits="     + to_string(jit_hit_count()); }
+    if cmd == "jit sz"    { return "jit: code_bytes=" + to_string(jit_code_n); }
+
     return shell_handle(cmd);
 }
 
@@ -6581,7 +6690,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 1324 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld + lca + virtualtree + dominator + sam + manacher + eertree + bwt + lyndon + zfunction + ir + regalloc + codegen + ioring + persistseg + rollbackdsu + splaytree + mo + sqrtdecomp + cht + matrixexpo + numtheory + strhash + intervaldp + gametheory + trie + lichao + dcdp + monoqueue + segbeats + lct + quickselect + ntt + segmerge + palindromedp + knuthdp + bitset + millerrabin + pollardrho + linearbasis + geometry2d + rotcalip + halfplane + dinic + blockcuttree + bridgetree + polyinv + polylnexp + polysqrt + bitmaskdp + digitdp + brokenprofiledp + wavelettree + implicittreap + chtholly + suffixtree + bsgs + minencircle + gvn + licm + dce2 + linearscandra + regcoalesce + callingconv + typeinfer + typechecker + generics + linkerelf + linkerar + dynlinker");
+print("shell.hl loaded -- 1345 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld + lca + virtualtree + dominator + sam + manacher + eertree + bwt + lyndon + zfunction + ir + regalloc + codegen + ioring + persistseg + rollbackdsu + splaytree + mo + sqrtdecomp + cht + matrixexpo + numtheory + strhash + intervaldp + gametheory + trie + lichao + dcdp + monoqueue + segbeats + lct + quickselect + ntt + segmerge + palindromedp + knuthdp + bitset + millerrabin + pollardrho + linearbasis + geometry2d + rotcalip + halfplane + dinic + blockcuttree + bridgetree + polyinv + polylnexp + polysqrt + bitmaskdp + digitdp + brokenprofiledp + wavelettree + implicittreap + chtholly + suffixtree + bsgs + minencircle + gvn + licm + dce2 + linearscandra + regcoalesce + callingconv + typeinfer + typechecker + generics + linkerelf + linkerar + dynlinker + dwarf + perfcounter + jitstub");
 
 // Main shell loop (called from kernel_init)
 
