@@ -2,14 +2,42 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`460`（76 根目录 + 391 内核模块）
-- H-L 总行数：`~154,500`
-- 内核模块：`391`
-- Shell 命令：`1555`
-- 最近完成功能迭代：`405`（embedding + model_serialize + gpu_inference）
-- 当前阶段：第五阶段·ML深化（Phase 5）
-- **Milestone M3 已达成**（iter 385，完整存储引擎）
+- `.hl` 文件：`463`（76 根目录 + 394 内核模块）
+- H-L 总行数：`~155,200`
+- 内核模块：`394`
+- Shell 命令：`1576`
+- 最近完成功能迭代：`408`（scheduler_cfs + numa_alloc + ftrace）
+- 当前阶段：第六阶段·系统稳定化（Phase 6）
 - **Milestone M4 已达成**（iter 405，完整 ML 推理框架）
+
+## Iteration 408 — ftrace.hl：函数追踪框架
+
+- **`ftrace.hl`**（Buffer: 0x1CF0000）：FT_BUF_SIZE=64，FT_MAX_FUNCS=32
+  - 事件类型：FT_ENTRY=0 / FT_EXIT=1；每事件存 type + func_id + timestamp + depth
+  - `ft_enter(func_id)`：记录 ENTRY 事件后递增调用深度
+  - `ft_exit(func_id)`：递减调用深度后记录 EXIT 事件
+  - 环形缓冲区：`ft_head = (ft_head+1) - (ft_head+1)/FT_BUF_SIZE*FT_BUF_SIZE`（无 % 实现 mod）
+  - `ft_flush()`：重置缓冲区、深度、时间戳
+  - 测试：enter(1)→enter(2)→exit(2)→exit(1) → n=4 t0=0 f0=1 d1=1 t2=1 d3=0 → PASS
+
+## Iteration 407 — numa_alloc.hl：NUMA 感知内存分配器
+
+- **`numa_alloc.hl`**（Buffer: 0x1CE0000）：NA_MAX_NODES=4，NA_POOL_SIZE=16 块/节点
+  - `na_pool[node * NA_POOL_SIZE + idx]`：平铺存储，0=空闲，1=已用
+  - `_na_alloc_from(node)`：扫描节点池，返回编码地址 node×100 + slot（-1=OOM）
+  - `na_alloc()`：优先从当前 NUMA 节点分配，失败后 fallback 到其他节点
+  - `na_free(node, idx)`：释放指定节点的指定槽
+  - `na_node_free_count(node)`：统计节点空闲块数
+  - 测试：node0 分配 3 块 / node1 分配 2 块 → f0=13 f1=14；释放后 f0b=14 → PASS
+
+## Iteration 406 — scheduler_cfs.hl：CFS 完全公平调度器
+
+- **`scheduler_cfs.hl`**（Buffer: 0x1CD0000）：CFS_MAX_TASKS=16，CFS_SCALE=256
+  - `vruntime += elapsed * CFS_SCALE / weight`（权重越高，vruntime 增长越慢）
+  - `sc_add_task(weight)`：注册任务（weight=512 高优先级，256 普通，128 低优先级）
+  - `sc_tick(elapsed)`：更新当前任务 vruntime
+  - `sc_pick_next()`：返回 vruntime 最小的活跃任务 id
+  - 测试：task0(w=256) tick 10→vr=10；task1(w=512) tick 10→vr=5；pick_next=1 → PASS
 
 ## Iteration 405 — gpu_inference.hl：GPU 加速推理（Milestone M4 ✦）
 

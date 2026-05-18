@@ -1,0 +1,138 @@
+// numa_alloc.hl -- NUMA-Aware Memory Allocator (Phase 6: 系统稳定化, iter 407)
+// Buffer: 0x1CE0000
+// NA_MAX_NODES=4, NA_POOL_SIZE=16 blocks per node
+// na_pool[node * NA_POOL_SIZE + idx]: 0=free, 1=used
+// na_alloc(): allocate from current NUMA node first, fallback to others
+// Encoded address: node*100 + slot_index
+
+let NA_MAX_NODES = 4;
+let NA_POOL_SIZE = 16;
+
+let na_pool        = array(64, 0);   // NA_MAX_NODES * NA_POOL_SIZE
+let na_node_allocs = array(4,  0);   // alloc count per node
+let na_node_frees  = array(4,  0);   // free count per node
+let na_current_node = 0;
+let na_total_allocs = 0;
+let na_total_frees  = 0;
+
+fn na_init() {
+    let i = 0;
+    while i < 64 {
+        set_at(na_pool, i, 0);
+        i += 1;
+    }
+    i = 0;
+    while i < NA_MAX_NODES {
+        set_at(na_node_allocs, i, 0);
+        set_at(na_node_frees,  i, 0);
+        i += 1;
+    }
+    na_current_node = 0;
+    na_total_allocs = 0;
+    na_total_frees  = 0;
+    return 0;
+}
+
+fn na_set_node(node) {
+    na_current_node = node;
+    return 0;
+}
+
+fn _na_alloc_from(node) {
+    let base = node * NA_POOL_SIZE;
+    let i = 0;
+    while i < NA_POOL_SIZE {
+        if na_pool[base + i] == 0 {
+            set_at(na_pool, base + i, 1);
+            set_at(na_node_allocs, node, na_node_allocs[node] + 1);
+            na_total_allocs += 1;
+            return node * 100 + i;
+        }
+        i += 1;
+    }
+    return 0 - 1;
+}
+
+fn na_alloc() {
+    let result = _na_alloc_from(na_current_node);
+    if result >= 0 { return result; }
+    let n = 0;
+    while n < NA_MAX_NODES {
+        if n != na_current_node {
+            result = _na_alloc_from(n);
+            if result >= 0 { return result; }
+        }
+        n += 1;
+    }
+    return 0 - 1;
+}
+
+fn na_free(node, idx) {
+    let base = node * NA_POOL_SIZE;
+    if na_pool[base + idx] == 1 {
+        set_at(na_pool, base + idx, 0);
+        set_at(na_node_frees, node, na_node_frees[node] + 1);
+        na_total_frees += 1;
+    }
+    return 0;
+}
+
+fn na_node_free_count(node) {
+    let base = node * NA_POOL_SIZE;
+    let cnt = 0;
+    let i = 0;
+    while i < NA_POOL_SIZE {
+        if na_pool[base + i] == 0 { cnt += 1; }
+        i += 1;
+    }
+    return cnt;
+}
+
+fn na_get_allocs()      { return na_total_allocs; }
+fn na_get_frees()       { return na_total_frees; }
+fn na_get_cur_node()    { return na_current_node; }
+
+fn na_test() {
+    na_init();
+
+    // Alloc 3 blocks from node 0
+    na_set_node(0);
+    let b0 = na_alloc();   // node 0, slot 0 → addr 0
+    let b1 = na_alloc();   // node 0, slot 1 → addr 1
+    let b2 = na_alloc();   // node 0, slot 2 → addr 2
+
+    // Alloc 2 blocks from node 1
+    na_set_node(1);
+    let b3 = na_alloc();   // node 1, slot 0 → addr 100
+    let b4 = na_alloc();   // node 1, slot 1 → addr 101
+
+    let f0 = na_node_free_count(0);   // 16 - 3 = 13
+    let f1 = na_node_free_count(1);   // 16 - 2 = 14
+
+    // Free slot 1 from node 0
+    na_free(0, 1);
+    let f0b = na_node_free_count(0);  // 14
+
+    print("na_test: b0=" + to_string(b0)
+          + " b3=" + to_string(b3)
+          + " f0=" + to_string(f0)
+          + " f1=" + to_string(f1)
+          + " f0b=" + to_string(f0b));
+
+    if b0 == 0 {
+        if b3 == 100 {
+            if f0 == 13 {
+                if f1 == 14 {
+                    if f0b == 14 {
+                        print("na_test: PASS");
+                        return 1;
+                    }
+                }
+            }
+        }
+    }
+    print("na_test: FAIL");
+    return 0;
+}
+
+print("numa_alloc.hl loaded");

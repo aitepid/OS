@@ -1,0 +1,134 @@
+// ftrace.hl -- Function Tracing Framework (Phase 6: 系统稳定化, iter 408)
+// Buffer: 0x1CF0000
+// Ring buffer of FT_BUF_SIZE=64 events; each event: type + func_id + timestamp + depth
+// FT_ENTRY=0: function entry (depth before increment)
+// FT_EXIT=1:  function exit  (depth after decrement)
+// ft_enter(func_id): record ENTRY event then increment depth
+// ft_exit(func_id):  decrement depth then record EXIT event
+
+let FT_BUF_SIZE  = 64;
+let FT_MAX_FUNCS = 32;
+let FT_ENTRY     = 0;
+let FT_EXIT      = 1;
+
+let ft_ev_type  = array(64, 0);
+let ft_ev_func  = array(64, 0);
+let ft_ev_time  = array(64, 0);
+let ft_ev_depth = array(64, 0);
+
+let ft_head    = 0;   // ring buffer write head
+let ft_n_ev    = 0;   // events recorded
+let ft_depth   = 0;   // current call depth
+let ft_tick    = 0;   // monotonic timestamp
+let ft_enabled = 0;   // 1=tracing enabled
+let ft_dropped = 0;   // dropped events (buffer full)
+
+fn ft_init() {
+    let i = 0;
+    while i < FT_BUF_SIZE {
+        set_at(ft_ev_type,  i, 0);
+        set_at(ft_ev_func,  i, 0);
+        set_at(ft_ev_time,  i, 0);
+        set_at(ft_ev_depth, i, 0);
+        i += 1;
+    }
+    ft_head    = 0;
+    ft_n_ev    = 0;
+    ft_depth   = 0;
+    ft_tick    = 0;
+    ft_enabled = 0;
+    ft_dropped = 0;
+    return 0;
+}
+
+fn ft_enable()  { ft_enabled = 1; return 0; }
+fn ft_disable() { ft_enabled = 0; return 0; }
+
+fn _ft_push(ev_type, func_id, depth) {
+    if ft_n_ev >= FT_BUF_SIZE {
+        ft_dropped += 1;
+        return 0 - 1;
+    }
+    let slot = ft_head;
+    set_at(ft_ev_type,  slot, ev_type);
+    set_at(ft_ev_func,  slot, func_id);
+    set_at(ft_ev_time,  slot, ft_tick);
+    set_at(ft_ev_depth, slot, depth);
+    ft_head = ft_head + 1 - (ft_head + 1) / FT_BUF_SIZE * FT_BUF_SIZE;
+    ft_n_ev += 1;
+    ft_tick += 1;
+    return slot;
+}
+
+fn ft_enter(func_id) {
+    if ft_enabled == 0 { return 0; }
+    _ft_push(FT_ENTRY, func_id, ft_depth);
+    ft_depth += 1;
+    return 0;
+}
+
+fn ft_exit(func_id) {
+    if ft_enabled == 0 { return 0; }
+    if ft_depth > 0 { ft_depth -= 1; }
+    _ft_push(FT_EXIT, func_id, ft_depth);
+    return 0;
+}
+
+fn ft_flush() {
+    ft_head  = 0;
+    ft_n_ev  = 0;
+    ft_depth = 0;
+    ft_tick  = 0;
+    return 0;
+}
+
+fn ft_get_n_events()    { return ft_n_ev; }
+fn ft_get_dropped()     { return ft_dropped; }
+fn ft_get_ev_type(idx)  { return ft_ev_type[idx]; }
+fn ft_get_ev_func(idx)  { return ft_ev_func[idx]; }
+fn ft_get_ev_depth(idx) { return ft_ev_depth[idx]; }
+fn ft_get_ev_time(idx)  { return ft_ev_time[idx]; }
+
+fn ft_test() {
+    ft_init();
+    ft_enable();
+
+    // Simulate: enter func 1 → enter func 2 → exit func 2 → exit func 1
+    ft_enter(1);  // event 0: ENTRY func=1 depth=0; then ft_depth=1
+    ft_enter(2);  // event 1: ENTRY func=2 depth=1; then ft_depth=2
+    ft_exit(2);   // ft_depth→1; event 2: EXIT  func=2 depth=1
+    ft_exit(1);   // ft_depth→0; event 3: EXIT  func=1 depth=0
+
+    let n  = ft_get_n_events();    // 4
+    let t0 = ft_get_ev_type(0);    // FT_ENTRY = 0
+    let f0 = ft_get_ev_func(0);    // 1
+    let d1 = ft_get_ev_depth(1);   // 1  (depth when entering func 2)
+    let t2 = ft_get_ev_type(2);    // FT_EXIT  = 1
+    let d3 = ft_get_ev_depth(3);   // 0  (depth after exiting func 1)
+
+    print("ft_test: n=" + to_string(n)
+          + " t0=" + to_string(t0)
+          + " f0=" + to_string(f0)
+          + " d1=" + to_string(d1)
+          + " t2=" + to_string(t2)
+          + " d3=" + to_string(d3));
+
+    if n == 4 {
+        if t0 == FT_ENTRY {
+            if f0 == 1 {
+                if d1 == 1 {
+                    if t2 == FT_EXIT {
+                        if d3 == 0 {
+                            print("ft_test: PASS");
+                            return 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    print("ft_test: FAIL");
+    return 0;
+}
+
+print("ftrace.hl loaded");

@@ -300,13 +300,16 @@ fn shell_handle(cmd) {
         serial_print("Embedding:     emb init  emb test  emb set <id> <dim> <v>  emb get <id> <dim>  emb lookup <id>  emb query <dim> <v>  emb dot <id>");
         serial_print("ModelSerialize:ms init  ms test  ms layer <type> <nw> <nb>  ms weight <lid> <wid> <v>  ms save  ms load  ms checksum");
         serial_print("GPU-Inference: gi init  gi test  gi input <idx> <v>  gi op <type> <in> <out> <ind> <outd>  gi dispatch  gi output <idx>  gi info");
+        serial_print("CFS-Sched:     sc init  sc test  sc add <weight>  sc tick <n>  sc next  sc vruntime <tid>  sc info");
+        serial_print("NUMA-Alloc:    na init  na test  na node <id>  na alloc  na free <node> <idx>  na info  na stat");
+        serial_print("Ftrace:        ft init  ft test  ft enable  ft disable  ft enter <fid>  ft exit <fid>  ft show");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
     }
 
     if cmd == "ver" {
-        return "HicOS 6.0 -- Hilbert-Lang Kernel (391 modules, pure H-L, zero deps)";
+        return "HicOS 6.0 -- Hilbert-Lang Kernel (394 modules, pure H-L, zero deps)";
     }
 
     if cmd == "uptime" {
@@ -7827,6 +7830,77 @@ fn shell_handle_ext(cmd) {
     if cmd == "gi info" {
         return "gi: ops=" + to_string(gi_queue_len()) + " cycles=" + to_string(gi_cycles_used());
     }
+
+    // --- CFS Scheduler ---
+    if cmd == "sc init" { sc_init(); return "sc: init"; }
+    if cmd == "sc test" { let scr = sc_test(); return "sc: " + to_string(scr); }
+    if _starts_with(cmd, "sc add ") {
+        let scaw = to_int(str_sub(cmd, 7, len(cmd)));
+        let scid = sc_add_task(scaw);
+        return "sc: added task " + to_string(scid) + " weight=" + to_string(scaw);
+    }
+    if _starts_with(cmd, "sc tick ") {
+        let sctn = to_int(str_sub(cmd, 8, len(cmd)));
+        sc_tick(sctn);
+        return "sc: ticked " + to_string(sctn) + " cur=" + to_string(sc_get_current());
+    }
+    if cmd == "sc next" {
+        let scnx = sc_pick_next();
+        return "sc: next=" + to_string(scnx) + " vr=" + to_string(sc_get_vruntime(scnx));
+    }
+    if _starts_with(cmd, "sc vruntime ") {
+        let sctid = to_int(str_sub(cmd, 12, len(cmd)));
+        return "sc: vruntime[" + to_string(sctid) + "]=" + to_string(sc_get_vruntime(sctid));
+    }
+    if cmd == "sc info" {
+        return "sc: tasks=" + to_string(sc_get_n_tasks()) + " ticks=" + to_string(sc_get_ticks()) + " cur=" + to_string(sc_get_current());
+    }
+
+    // --- NUMA Allocator ---
+    if cmd == "na init" { na_init(); return "na: init"; }
+    if cmd == "na test" { let nar = na_test(); return "na: " + to_string(nar); }
+    if _starts_with(cmd, "na node ") {
+        let nand = to_int(str_sub(cmd, 8, len(cmd)));
+        na_set_node(nand);
+        return "na: current_node=" + to_string(nand);
+    }
+    if cmd == "na alloc" {
+        let naaddr = na_alloc();
+        return "na: addr=" + to_string(naaddr);
+    }
+    if _starts_with(cmd, "na free ") {
+        let nafas  = str_sub(cmd, 8, len(cmd));
+        let nafsp  = _find_space(nafas);
+        let nafnd  = to_int(str_sub(nafas, 0, nafsp));
+        let nafidx = to_int(str_sub(nafas, nafsp + 1, len(nafas)));
+        na_free(nafnd, nafidx);
+        return "na: freed node=" + to_string(nafnd) + " idx=" + to_string(nafidx);
+    }
+    if cmd == "na info" {
+        return "na: node=" + to_string(na_get_cur_node()) + " free[0]=" + to_string(na_node_free_count(0)) + " free[1]=" + to_string(na_node_free_count(1));
+    }
+    if cmd == "na stat" {
+        return "na: allocs=" + to_string(na_get_allocs()) + " frees=" + to_string(na_get_frees());
+    }
+
+    // --- Ftrace ---
+    if cmd == "ft init"    { ft_init();    return "ft: init"; }
+    if cmd == "ft test"    { let ftr = ft_test(); return "ft: " + to_string(ftr); }
+    if cmd == "ft enable"  { ft_enable();  return "ft: enabled"; }
+    if cmd == "ft disable" { ft_disable(); return "ft: disabled"; }
+    if _starts_with(cmd, "ft enter ") {
+        let ftef = to_int(str_sub(cmd, 9, len(cmd)));
+        ft_enter(ftef);
+        return "ft: enter func=" + to_string(ftef) + " depth=" + to_string(ft_get_n_events());
+    }
+    if _starts_with(cmd, "ft exit ") {
+        let ftxf = to_int(str_sub(cmd, 8, len(cmd)));
+        ft_exit(ftxf);
+        return "ft: exit func=" + to_string(ftxf) + " events=" + to_string(ft_get_n_events());
+    }
+    if cmd == "ft show" {
+        return "ft: events=" + to_string(ft_get_n_events()) + " dropped=" + to_string(ft_get_dropped());
+    }
 }
 
 // Self-test
@@ -7837,7 +7911,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 1555 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld + lca + virtualtree + dominator + sam + manacher + eertree + bwt + lyndon + zfunction + ir + regalloc + codegen + ioring + persistseg + rollbackdsu + splaytree + mo + sqrtdecomp + cht + matrixexpo + numtheory + strhash + intervaldp + gametheory + trie + lichao + dcdp + monoqueue + segbeats + lct + quickselect + ntt + segmerge + palindromedp + knuthdp + bitset + millerrabin + pollardrho + linearbasis + geometry2d + rotcalip + halfplane + dinic + blockcuttree + bridgetree + polyinv + polylnexp + polysqrt + bitmaskdp + digitdp + brokenprofiledp + wavelettree + implicittreap + chtholly + suffixtree + bsgs + minencircle + gvn + licm + dce2 + linearscandra + regcoalesce + callingconv + typeinfer + typechecker + generics + linkerelf + linkerar + dynlinker + dwarf + perfcounter + jitstub + btree + btreeplus + lsmmemtable + wal + mvcc + transaction + indexhash + indexbtree + queryplan + dbengine + wireguard + tls13 + http3quic + doh + dht + bittorrent + opentelemetry + prometheus + grpc_stream + websocket_compression + conv2d + pooling + rnn + lstm + autograd + optimizer + tokenizer + embedding + model_serialize + gpu_inference");
+print("shell.hl loaded -- 1576 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld + lca + virtualtree + dominator + sam + manacher + eertree + bwt + lyndon + zfunction + ir + regalloc + codegen + ioring + persistseg + rollbackdsu + splaytree + mo + sqrtdecomp + cht + matrixexpo + numtheory + strhash + intervaldp + gametheory + trie + lichao + dcdp + monoqueue + segbeats + lct + quickselect + ntt + segmerge + palindromedp + knuthdp + bitset + millerrabin + pollardrho + linearbasis + geometry2d + rotcalip + halfplane + dinic + blockcuttree + bridgetree + polyinv + polylnexp + polysqrt + bitmaskdp + digitdp + brokenprofiledp + wavelettree + implicittreap + chtholly + suffixtree + bsgs + minencircle + gvn + licm + dce2 + linearscandra + regcoalesce + callingconv + typeinfer + typechecker + generics + linkerelf + linkerar + dynlinker + dwarf + perfcounter + jitstub + btree + btreeplus + lsmmemtable + wal + mvcc + transaction + indexhash + indexbtree + queryplan + dbengine + wireguard + tls13 + http3quic + doh + dht + bittorrent + opentelemetry + prometheus + grpc_stream + websocket_compression + conv2d + pooling + rnn + lstm + autograd + optimizer + tokenizer + embedding + model_serialize + gpu_inference + scheduler_cfs + numa_alloc + ftrace");
 
 // Main shell loop (called from kernel_init)
 

@@ -1,0 +1,121 @@
+// scheduler_cfs.hl -- CFS Completely Fair Scheduler (Phase 6: 系统稳定化, iter 406)
+// Buffer: 0x1CD0000
+// vruntime-based scheduling: pick task with minimum virtual runtime
+// vruntime += elapsed * CFS_SCALE / weight  (higher weight = less vruntime accumulation)
+// CFS_MAX_TASKS=16, CFS_SCALE=256
+// Weight guide: 512=high-priority, 256=normal(nice-0), 128=low-priority
+
+let CFS_MAX_TASKS = 16;
+let CFS_SCALE     = 256;
+
+let sc_vruntime = array(16, 0);    // virtual runtime per task
+let sc_weight   = array(16, 256);  // task weight
+let sc_active   = array(16, 0);    // 1=active, 0=inactive
+let sc_n_tasks  = 0;
+let sc_current  = 0;               // currently running task id
+let sc_ticks    = 0;               // total scheduler ticks
+
+fn sc_init() {
+    let i = 0;
+    while i < CFS_MAX_TASKS {
+        set_at(sc_vruntime, i, 0);
+        set_at(sc_weight,   i, CFS_SCALE);
+        set_at(sc_active,   i, 0);
+        i += 1;
+    }
+    sc_n_tasks = 0;
+    sc_current = 0;
+    sc_ticks   = 0;
+    return 0;
+}
+
+fn sc_add_task(weight) {
+    let id = sc_n_tasks;
+    set_at(sc_weight,   id, weight);
+    set_at(sc_vruntime, id, 0);
+    set_at(sc_active,   id, 1);
+    sc_n_tasks += 1;
+    return id;
+}
+
+fn sc_remove_task(tid) {
+    set_at(sc_active, tid, 0);
+    return 0;
+}
+
+fn sc_pick_next() {
+    // Return task id with minimum vruntime among active tasks
+    let best    = 0 - 1;
+    let best_vr = 0 - 1;
+    let i = 0;
+    while i < sc_n_tasks {
+        if sc_active[i] == 1 {
+            if best < 0 {
+                best    = i;
+                best_vr = sc_vruntime[i];
+            }
+            if sc_vruntime[i] < best_vr {
+                best    = i;
+                best_vr = sc_vruntime[i];
+            }
+        }
+        i += 1;
+    }
+    sc_current = best;
+    return best;
+}
+
+fn sc_tick(elapsed) {
+    sc_ticks += elapsed;
+    let cur = sc_current;
+    if cur >= 0 {
+        let w     = sc_weight[cur];
+        let delta = elapsed * CFS_SCALE / w;
+        set_at(sc_vruntime, cur, sc_vruntime[cur] + delta);
+    }
+    return 0;
+}
+
+fn sc_get_vruntime(tid) { return sc_vruntime[tid]; }
+fn sc_get_current()     { return sc_current; }
+fn sc_get_ticks()       { return sc_ticks; }
+fn sc_get_n_tasks()     { return sc_n_tasks; }
+
+fn sc_test() {
+    sc_init();
+
+    // Task 0: weight=256 (normal), Task 1: weight=512 (high priority)
+    sc_add_task(256);
+    sc_add_task(512);
+
+    // Run task 0 for 10 ticks: vruntime0 = 10*256/256 = 10
+    sc_current = 0;
+    sc_tick(10);
+
+    // Run task 1 for 10 ticks: vruntime1 = 10*256/512 = 5
+    sc_current = 1;
+    sc_tick(10);
+
+    let vr0 = sc_get_vruntime(0);   // 10
+    let vr1 = sc_get_vruntime(1);   // 5
+
+    // pick_next: task 1 has lower vruntime → should be selected
+    let nxt = sc_pick_next();
+
+    print("sc_test: vr0=" + to_string(vr0)
+          + " vr1=" + to_string(vr1)
+          + " next=" + to_string(nxt));
+
+    if vr0 == 10 {
+        if vr1 == 5 {
+            if nxt == 1 {
+                print("sc_test: PASS");
+                return 1;
+            }
+        }
+    }
+    print("sc_test: FAIL");
+    return 0;
+}
+
+print("scheduler_cfs.hl loaded");
