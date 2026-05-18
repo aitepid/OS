@@ -333,13 +333,15 @@ fn shell_handle(cmd) {
         serial_print("POSIXCompat:   pc init  pc test  pc sigaction <sig> <h>  pc raise <sig>  pc fork  pc waitpid <pid>  pc kill <pid> <sig>");
         serial_print("MuslShim:      ms init  ms test  ms malloc <sz>  ms free <addr>  ms fopen <id> <mode>  ms fwrite <h> <n>  ms fread <h> <n>");
         serial_print("LinuxSyscall:  ls init  ls test  ls syscall <no> <a0> <a1>  ls reads  ls writes  ls brk  ls maps");
+        serial_print("WASMRuntime:   wr init  wr test  wr defunc <id>  wr emit <id> <op> <arg>  wr call <id>  wr calls <id>  wr funcs");
+        serial_print("WASMJIT:       wj init  wj test  wj reg <id>  wj tick <id>  wj hot <id>  wj stub <id>  wj compiled");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
     }
 
     if cmd == "ver" {
-        return "HicOS 6.0 -- Hilbert-Lang Kernel (424 modules, pure H-L, zero deps)";
+        return "HicOS 6.0 -- Hilbert-Lang Kernel (426 modules, pure H-L, zero deps)";
     }
 
     if cmd == "uptime" {
@@ -8788,6 +8790,63 @@ fn shell_handle_ext(cmd) {
     if cmd == "ls writes" { return "ls: total_writes=" + to_string(ls_get_total_writes()); }
     if cmd == "ls brk"    { return "ls: brk="          + to_string(ls_get_brk()); }
     if cmd == "ls maps"   { return "ls: map_count="    + to_string(ls_get_map_count()); }
+
+    // --- WASM Runtime ---
+    if cmd == "wr init" { wasm_runtime_init(); return "wr: init"; }
+    if cmd == "wr test" { let wrtr = wasm_runtime_test(); return "wr: " + to_string(wrtr); }
+    if _starts_with(cmd, "wr defunc ") {
+        let wrdf = to_int(str_sub(cmd, 10, len(cmd)));
+        wr_define_func(wrdf);
+        return "wr: defined func=" + to_string(wrdf);
+    }
+    if _starts_with(cmd, "wr emit ") {
+        let wre_rest = str_sub(cmd, 8, len(cmd));
+        let wre_s1   = _find_space(wre_rest);
+        let wre_fid  = to_int(str_sub(wre_rest, 0, wre_s1));
+        let wre_r2   = str_sub(wre_rest, wre_s1 + 1, len(wre_rest));
+        let wre_s2   = _find_space(wre_r2);
+        let wre_op   = to_int(str_sub(wre_r2, 0, wre_s2));
+        let wre_arg  = to_int(str_sub(wre_r2, wre_s2 + 1, len(wre_r2)));
+        let wre_pos  = wr_emit(wre_fid, wre_op, wre_arg);
+        return "wr: emitted func=" + to_string(wre_fid) + " op=" + to_string(wre_op) + " pos=" + to_string(wre_pos);
+    }
+    if _starts_with(cmd, "wr call ") {
+        let wrcid = to_int(str_sub(cmd, 8, len(cmd)));
+        let wrcr  = wr_call(wrcid);
+        return "wr: call func=" + to_string(wrcid) + " result=" + to_string(wrcr);
+    }
+    if _starts_with(cmd, "wr calls ") {
+        let wrcci = to_int(str_sub(cmd, 9, len(cmd)));
+        let wrccv = wr_get_call_count(wrcci);
+        return "wr: func=" + to_string(wrcci) + " calls=" + to_string(wrccv);
+    }
+    if cmd == "wr funcs" { let wrfc = wr_get_func_count(); return "wr: func_count=" + to_string(wrfc); }
+
+    // --- WASM JIT ---
+    if cmd == "wj init" { wasm_jit_init(); return "wj: init"; }
+    if cmd == "wj test" { let wjtr = wasm_jit_test(); return "wj: " + to_string(wjtr); }
+    if _starts_with(cmd, "wj reg ") {
+        let wjreg = to_int(str_sub(cmd, 7, len(cmd)));
+        wj_register(wjreg);
+        return "wj: registered func=" + to_string(wjreg);
+    }
+    if _starts_with(cmd, "wj tick ") {
+        let wjtid  = to_int(str_sub(cmd, 8, len(cmd)));
+        let wjtst  = wj_tick(wjtid);
+        return "wj: tick func=" + to_string(wjtid) + " state=" + to_string(wjtst);
+    }
+    if _starts_with(cmd, "wj hot ") {
+        let wjhid = to_int(str_sub(cmd, 7, len(cmd)));
+        let wjhv  = wj_is_hot(wjhid);
+        return "wj: func=" + to_string(wjhid) + " hot=" + to_string(wjhv);
+    }
+    if _starts_with(cmd, "wj stub ") {
+        let wjsid = to_int(str_sub(cmd, 8, len(cmd)));
+        let wjsa  = wj_get_stub_addr(wjsid);
+        let wjsb  = wj_get_stub_bytes(wjsid);
+        return "wj: func=" + to_string(wjsid) + " stub_addr=" + to_string(wjsa) + " bytes=" + to_string(wjsb);
+    }
+    if cmd == "wj compiled" { let wjc = wj_get_total_compiled(); return "wj: total_compiled=" + to_string(wjc); }
 }
 
 // Self-test
@@ -8798,7 +8857,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 1786 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld + lca + virtualtree + dominator + sam + manacher + eertree + bwt + lyndon + zfunction + ir + regalloc + codegen + ioring + persistseg + rollbackdsu + splaytree + mo + sqrtdecomp + cht + matrixexpo + numtheory + strhash + intervaldp + gametheory + trie + lichao + dcdp + monoqueue + segbeats + lct + quickselect + ntt + segmerge + palindromedp + knuthdp + bitset + millerrabin + pollardrho + linearbasis + geometry2d + rotcalip + halfplane + dinic + blockcuttree + bridgetree + polyinv + polylnexp + polysqrt + bitmaskdp + digitdp + brokenprofiledp + wavelettree + implicittreap + chtholly + suffixtree + bsgs + minencircle + gvn + licm + dce2 + linearscandra + regcoalesce + callingconv + typeinfer + typechecker + generics + linkerelf + linkerar + dynlinker + dwarf + perfcounter + jitstub + btree + btreeplus + lsmmemtable + wal + mvcc + transaction + indexhash + indexbtree + queryplan + dbengine + wireguard + tls13 + http3quic + doh + dht + bittorrent + opentelemetry + prometheus + grpc_stream + websocket_compression + conv2d + pooling + rnn + lstm + autograd + optimizer + tokenizer + embedding + model_serialize + gpu_inference + scheduler_cfs + numa_alloc + ftrace + kprobe + memory_profiler + heap_checker + crash_reporter + core_dump + hotpatch + livepatch + power_mgmt + thermal + cpufreq + hypervisor + vmx + package_manager + pkg_registry + pkg_build + hldoc + hltest + hlbench + lsp_server + syntax_highlight + code_complete + debugger + gdb_stub + breakpoint + hl_repl + hl_fmt + hl_lint2 + posix_compat + musl_shim + linux_syscall");
+print("shell.hl loaded -- 1800 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld + lca + virtualtree + dominator + sam + manacher + eertree + bwt + lyndon + zfunction + ir + regalloc + codegen + ioring + persistseg + rollbackdsu + splaytree + mo + sqrtdecomp + cht + matrixexpo + numtheory + strhash + intervaldp + gametheory + trie + lichao + dcdp + monoqueue + segbeats + lct + quickselect + ntt + segmerge + palindromedp + knuthdp + bitset + millerrabin + pollardrho + linearbasis + geometry2d + rotcalip + halfplane + dinic + blockcuttree + bridgetree + polyinv + polylnexp + polysqrt + bitmaskdp + digitdp + brokenprofiledp + wavelettree + implicittreap + chtholly + suffixtree + bsgs + minencircle + gvn + licm + dce2 + linearscandra + regcoalesce + callingconv + typeinfer + typechecker + generics + linkerelf + linkerar + dynlinker + dwarf + perfcounter + jitstub + btree + btreeplus + lsmmemtable + wal + mvcc + transaction + indexhash + indexbtree + queryplan + dbengine + wireguard + tls13 + http3quic + doh + dht + bittorrent + opentelemetry + prometheus + grpc_stream + websocket_compression + conv2d + pooling + rnn + lstm + autograd + optimizer + tokenizer + embedding + model_serialize + gpu_inference + scheduler_cfs + numa_alloc + ftrace + kprobe + memory_profiler + heap_checker + crash_reporter + core_dump + hotpatch + livepatch + power_mgmt + thermal + cpufreq + hypervisor + vmx + package_manager + pkg_registry + pkg_build + hldoc + hltest + hlbench + lsp_server + syntax_highlight + code_complete + debugger + gdb_stub + breakpoint + hl_repl + hl_fmt + hl_lint2 + posix_compat + musl_shim + linux_syscall + wasm_runtime + wasm_jit");
 
 // Main shell loop (called from kernel_init)
 

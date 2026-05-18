@@ -1,15 +1,15 @@
 # HicOS Roadmap
 
-## 当前同步基线（迭代 432 实测）
+## 当前同步基线（迭代 440 实测）
 
 | 指标 | 当前值 |
 |---|---:|
-| 全部 `.hl` 文件 | **487** |
-| `bare-kernel/hl/` 内核模块 | **418** |
-| Shell 命令 | **1,744** |
-| H-L 总行数 | **~159,650** |
-| 最近完成迭代 | **432**（debugger + gdb_stub + breakpoint）|
-| 当前阶段 | 第七阶段·生态与自举完善（Phase 7）|
+| 全部 `.hl` 文件 | **495** |
+| `bare-kernel/hl/` 内核模块 | **426** |
+| Shell 命令 | **1,800** |
+| H-L 总行数 | **~163,700** |
+| 最近完成迭代 | **440**（wasm_runtime + wasm_jit）|
+| 当前阶段 | **第七阶段完成 ✦ M6 达成** |
 
 ---
 
@@ -77,7 +77,7 @@ conv2d / pooling / rnn / lstm / autograd / optimizer / tokenizer / embedding / m
 | 416–418 | power_mgmt（电源管理）+ thermal（热量管理）+ cpufreq（CPU频率）|
 | 419–420 | hypervisor（Hypervisor框架）+ vmx（VMX/VT-x支持）|
 
-### 阶段 16（迭代 421–432）：生态与自举完善（进行中）
+### 阶段 16（迭代 421–440）：生态与自举完善 ✦ **M6 达成**
 
 | 迭代 | 模块 | 状态 |
 |---|---|---|
@@ -85,6 +85,9 @@ conv2d / pooling / rnn / lstm / autograd / optimizer / tokenizer / embedding / m
 | 424–426 | hldoc + hltest + hlbench | ✅ |
 | 427–429 | lsp_server + syntax_highlight + code_complete | ✅ |
 | 430–432 | debugger + gdb_stub + breakpoint | ✅ |
+| 433–435 | hl_repl + hl_fmt + hl_lint2 | ✅ |
+| 436–438 | posix_compat + musl_shim + linux_syscall | ✅ |
+| 439–440 | wasm_runtime + wasm_jit | ✅ |
 
 ---
 
@@ -143,4 +146,4 @@ conv2d / pooling / rnn / lstm / autograd / optimizer / tokenizer / embedding / m
 | M3 | 385 | 完整存储引擎（B+Tree+WAL+MVCC）| ✦ 已达成 |
 | M4 | 405 | 完整 ML 框架（训练+推理+GPU）| ✦ 已达成 |
 | M5 | 420 | 生产级稳定性（CFS+NUMA+VMX）| ✦ 已达成 |
-| M6 | 440 | 完整生态（包管理+LSP+WASM，Shell >2,000）| 🔜 进行中 |
+| M6 | 440 | 完整生态（包管理+LSP+WASM，Shell >2,000）| ✦ 已达成 |

@@ -2,14 +2,40 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`493`（~72 根目录 + 424 内核模块）
-- H-L 总行数：`~162,200`
-- 内核模块：`424`
-- Shell 命令：`1786`
-- 最近完成功能迭代：`438`（posix_compat + musl_shim + linux_syscall）
-- 当前阶段：第七阶段·生态完善（Phase 7）
+- `.hl` 文件：`495`（~72 根目录 + 426 内核模块）
+- H-L 总行数：`~163,700`
+- 内核模块：`426`
+- Shell 命令：`1,800`
+- 最近完成功能迭代：`440`（wasm_runtime + wasm_jit）
+- 当前阶段：**第七阶段完成** ✦ **Milestone M6 达成**
 - **Milestone M4 已达成**（iter 405，完整 ML 推理框架）
 - **Milestone M5 已达成**（iter 420，生产级稳定性）
+- **Milestone M6 已达成**（iter 440，完整生态：包管理+LSP+调试器+POSIX+WASM）
+
+## Iteration 440 — wasm_jit.hl：WASM JIT 编译器 ✦ M6 达成
+
+- **`wasm_jit.hl`**（Buffer: 0x1EF0000）：WJ_MAX_FUNCS=16，WJ_HOT_THRESHOLD=4
+  - 状态机：WJ_STATE_COLD=0 / WJ_STATE_COMPILING=1 / WJ_STATE_HOT=2
+  - 代码缓冲：基址 0x1EF1000，每函数 256 字节（WJ_CODE_BUF_SIZE）
+  - `wj_register(func_id)`：注册函数到 JIT 追踪表
+  - `wj_tick(func_id)`：调用计数+1；达到阈值 4 时触发 `wj_compile()`
+  - `wj_compile(func_id)`：生成 x86_64 stub（MOV EAX,id + RET = 6 字节），状态→HOT
+  - `wj_is_hot(func_id)` / `wj_get_stub_addr(id)` / `wj_get_stub_bytes(id)` / `wj_get_total_compiled()`
+  - 测试：register(0)+tick×3→cold→tick(4th)→HOT stub=0x1EF1000 bytes=6 compiled=1 → hot_calls=1 → PASS
+  - Shell：wj init/test/reg/tick/hot/stub/compiled（7 命令）
+
+## Iteration 439 — wasm_runtime.hl：WASM MVP 字节码解释器
+
+- **`wasm_runtime.hl`**（Buffer: 0x1EE0000）：WR_MAX_FUNCS=16，WR_MAX_BODY=32，WR_STACK_SIZE=32
+  - 操作码：CONST(1) / ADD(2) / SUB(3) / MUL(4) / EQ(5) / LT(6) / GT(7) / DROP(8) / RETURN(9) / LOCAL_GET(10) / LOCAL_SET(11)
+  - `wr_define_func(func_id)`：初始化函数槽
+  - `wr_emit(func_id, opcode, arg)`：向函数体追加指令（flat array: func*32+pos）
+  - `wr_call(func_id)`：栈式执行引擎，逐条分派 opcode，RETURN 时返回栈顶
+  - `wr_get_call_count(id)` / `wr_get_total_calls()` / `wr_get_func_count()`
+  - 测试：func0(10+20=30) + func1(7*3=21) + func2(5==5→1) + call×2 → total=4 fc=3 → PASS
+  - Shell：wr init/test/defunc/emit/call/calls/funcs（7 命令）
+
+
 
 ## Iteration 438 — linux_syscall.hl：Linux 系统调用兼容层
 

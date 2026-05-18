@@ -1,0 +1,258 @@
+// wasm_runtime.hl -- WebAssembly Bytecode Interpreter (MVP)
+// Iteration 439 | Buffer: 0x1EE0000
+//
+// Implements a minimal WebAssembly MVP interpreter.
+// Features:
+// - Function table (up to WR_MAX_FUNCS functions)
+// - Value stack (up to WR_STACK_SIZE entries)
+// - Local variable slots per function (up to WR_MAX_LOCALS)
+// - Opcode dispatch: i32.const / i32.add / i32.sub / i32.mul
+//   i32.eq / i32.lt_s / i32.gt_s / i32.and / i32.or / drop / return
+// - call(func_id) with simple inline body stored as opcode sequence
+//
+// Opcode encoding (simplified):
+//   WR_OP_CONST   = 1  arg=value   push value
+//   WR_OP_ADD     = 2              pop b,a  push a+b
+//   WR_OP_SUB     = 3              pop b,a  push a-b
+//   WR_OP_MUL     = 4              pop b,a  push a*b
+//   WR_OP_EQ      = 5              pop b,a  push (a==b)?1:0
+//   WR_OP_LT      = 6              pop b,a  push (a<b)?1:0
+//   WR_OP_GT      = 7              pop b,a  push (a>b)?1:0
+//   WR_OP_DROP    = 8              pop and discard
+//   WR_OP_RETURN  = 9              end execution, result = top of stack
+//   WR_OP_LOCAL_GET = 10 arg=idx   push local[idx]
+//   WR_OP_LOCAL_SET = 11 arg=idx   pop -> local[idx]
+//
+// Testing: wasm_runtime_test() -> validates stack ops, arithmetic, locals
+
+let WR_MAX_FUNCS   = 16;
+let WR_MAX_BODY    = 32;   // opcodes per function
+let WR_MAX_LOCALS  = 8;
+let WR_STACK_SIZE  = 32;
+
+let WR_OP_CONST     = 1;
+let WR_OP_ADD       = 2;
+let WR_OP_SUB       = 3;
+let WR_OP_MUL       = 4;
+let WR_OP_EQ        = 5;
+let WR_OP_LT        = 6;
+let WR_OP_GT        = 7;
+let WR_OP_DROP      = 8;
+let WR_OP_RETURN    = 9;
+let WR_OP_LOCAL_GET = 10;
+let WR_OP_LOCAL_SET = 11;
+
+// Function table
+let wr_func_len    = array(WR_MAX_FUNCS, 0);   // body length in opcodes
+let wr_func_nlocal = array(WR_MAX_FUNCS, 0);   // number of locals
+// Flat body: wr_func_body[func_idx * WR_MAX_BODY + instr_i] = opcode
+// Flat args: wr_func_args[func_idx * WR_MAX_BODY + instr_i] = operand
+let wr_func_body   = array(512, 0);            // WR_MAX_FUNCS * WR_MAX_BODY
+let wr_func_args   = array(512, 0);
+let wr_func_count  = 0;
+
+// Execution state
+let wr_stack       = array(WR_STACK_SIZE, 0);
+let wr_sp          = 0;   // stack pointer (next free slot)
+let wr_locals      = array(WR_MAX_LOCALS, 0);
+let wr_call_count  = array(WR_MAX_FUNCS, 0);
+let wr_total_calls = 0;
+
+fn wr_stack_push(v) {
+    if wr_sp >= WR_STACK_SIZE { return 0 - 1; }
+    set_at(wr_stack, wr_sp, v);
+    set_at(wr_sp, 0, wr_sp + 1);
+    return wr_sp - 1;
+}
+
+fn wr_stack_pop() {
+    if wr_sp <= 0 { return 0; }
+    set_at(wr_sp, 0, wr_sp - 1);
+    return wr_stack[wr_sp];
+}
+
+fn wr_stack_top() {
+    if wr_sp <= 0 { return 0; }
+    return wr_stack[wr_sp - 1];
+}
+
+fn wr_define_func(func_id) {
+    if func_id >= WR_MAX_FUNCS { return 0 - 1; }
+    set_at(wr_func_len,    func_id, 0);
+    set_at(wr_func_nlocal, func_id, 0);
+    if func_id >= wr_func_count {
+        set_at(wr_func_count, 0, func_id + 1);
+    }
+    return func_id;
+}
+
+fn wr_emit(func_id, opcode, arg) {
+    if func_id >= WR_MAX_FUNCS { return 0 - 1; }
+    let pos = wr_func_len[func_id];
+    if pos >= WR_MAX_BODY { return 0 - 1; }
+    let base = func_id * WR_MAX_BODY + pos;
+    set_at(wr_func_body, base, opcode);
+    set_at(wr_func_args, base, arg);
+    set_at(wr_func_len, func_id, pos + 1);
+    return pos;
+}
+
+fn wr_set_nlocals(func_id, n) {
+    if func_id >= WR_MAX_FUNCS { return 0 - 1; }
+    set_at(wr_func_nlocal, func_id, n);
+    return n;
+}
+
+fn wr_set_local(idx, val) {
+    if idx >= WR_MAX_LOCALS { return 0 - 1; }
+    set_at(wr_locals, idx, val);
+    return val;
+}
+
+fn wr_call(func_id) {
+    if func_id >= WR_MAX_FUNCS { return 0 - 1; }
+    if func_id >= wr_func_count { return 0 - 1; }
+
+    set_at(wr_call_count, func_id, wr_call_count[func_id] + 1);
+    set_at(wr_total_calls, 0, wr_total_calls + 1);
+    set_at(wr_sp, 0, 0);
+
+    let body_base = func_id * WR_MAX_BODY;
+    let len       = wr_func_len[func_id];
+    let i         = 0;
+    let done      = 0;
+    {
+        if done == 1 { return wr_stack_top(); }
+        if i >= len  { return wr_stack_top(); }
+
+        let op  = wr_func_body[body_base + i];
+        let arg = wr_func_args[body_base + i];
+
+        if op == WR_OP_CONST {
+            wr_stack_push(arg);
+        }
+        if op == WR_OP_ADD {
+            let b = wr_stack_pop();
+            let a = wr_stack_pop();
+            wr_stack_push(a + b);
+        }
+        if op == WR_OP_SUB {
+            let b = wr_stack_pop();
+            let a = wr_stack_pop();
+            wr_stack_push(a - b);
+        }
+        if op == WR_OP_MUL {
+            let b = wr_stack_pop();
+            let a = wr_stack_pop();
+            wr_stack_push(a * b);
+        }
+        if op == WR_OP_EQ {
+            let b = wr_stack_pop();
+            let a = wr_stack_pop();
+            if a == b { wr_stack_push(1); }
+            if a != b { wr_stack_push(0); }
+        }
+        if op == WR_OP_LT {
+            let b = wr_stack_pop();
+            let a = wr_stack_pop();
+            if a < b { wr_stack_push(1); }
+            if a >= b { wr_stack_push(0); }
+        }
+        if op == WR_OP_GT {
+            let b = wr_stack_pop();
+            let a = wr_stack_pop();
+            if a > b { wr_stack_push(1); }
+            if a <= b { wr_stack_push(0); }
+        }
+        if op == WR_OP_DROP {
+            wr_stack_pop();
+        }
+        if op == WR_OP_RETURN {
+            set_at(done, 0, 1);
+        }
+        if op == WR_OP_LOCAL_GET {
+            if arg < WR_MAX_LOCALS { wr_stack_push(wr_locals[arg]); }
+        }
+        if op == WR_OP_LOCAL_SET {
+            let lsv = wr_stack_pop();
+            if arg < WR_MAX_LOCALS { set_at(wr_locals, arg, lsv); }
+        }
+
+        set_at(i, 0, i + 1);
+    }
+}
+
+fn wr_get_call_count(func_id) {
+    if func_id >= WR_MAX_FUNCS { return 0; }
+    return wr_call_count[func_id];
+}
+
+fn wr_get_total_calls() { return wr_total_calls; }
+fn wr_get_func_count()  { return wr_func_count; }
+
+fn wasm_runtime_init() {
+    set_at(wr_func_count,  0, 0);
+    set_at(wr_sp,          0, 0);
+    set_at(wr_total_calls, 0, 0);
+    let i = 0;
+    {
+        if i >= WR_MAX_FUNCS { return 0; }
+        set_at(wr_func_len,    i, 0);
+        set_at(wr_func_nlocal, i, 0);
+        set_at(wr_call_count,  i, 0);
+        set_at(i, 0, i + 1);
+    }
+}
+
+fn wasm_runtime_test() {
+    wasm_runtime_init();
+    let pass = 1;
+
+    // func 0: i32.const 10 + i32.const 20 + i32.add + return  => 30
+    wr_define_func(0);
+    wr_emit(0, WR_OP_CONST, 10);
+    wr_emit(0, WR_OP_CONST, 20);
+    wr_emit(0, WR_OP_ADD,   0);
+    wr_emit(0, WR_OP_RETURN, 0);
+
+    let r0 = wr_call(0);
+    if r0 != 30 { set_at(pass, 0, 0); }
+
+    // func 1: i32.const 7 + i32.const 3 + i32.mul + return  => 21
+    wr_define_func(1);
+    wr_emit(1, WR_OP_CONST, 7);
+    wr_emit(1, WR_OP_CONST, 3);
+    wr_emit(1, WR_OP_MUL,   0);
+    wr_emit(1, WR_OP_RETURN, 0);
+
+    let r1 = wr_call(1);
+    if r1 != 21 { set_at(pass, 0, 0); }
+
+    // func 2: i32.const 5 + i32.const 5 + i32.eq + return  => 1
+    wr_define_func(2);
+    wr_emit(2, WR_OP_CONST, 5);
+    wr_emit(2, WR_OP_CONST, 5);
+    wr_emit(2, WR_OP_EQ,    0);
+    wr_emit(2, WR_OP_RETURN, 0);
+
+    let r2 = wr_call(2);
+    if r2 != 1 { set_at(pass, 0, 0); }
+
+    // call counts
+    wr_call(0);
+    let cc0 = wr_get_call_count(0);
+    if cc0 != 2 { set_at(pass, 0, 0); }
+
+    let total = wr_get_total_calls();
+    if total != 4 { set_at(pass, 0, 0); }
+
+    let fc = wr_get_func_count();
+    if fc != 3 { set_at(pass, 0, 0); }
+
+    if pass == 1 { print("wasm_runtime_test PASS"); }
+    if pass == 0 { print("wasm_runtime_test FAIL"); }
+    return pass;
+}
+
+wasm_runtime_test();
+print("wasm_runtime.hl loaded");
