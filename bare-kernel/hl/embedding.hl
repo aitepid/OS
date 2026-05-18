@@ -1,0 +1,129 @@
+// embedding.hl -- Word Embedding Lookup Table (Phase 5: ML深化, iter 403)
+// Buffer: 0x1CA0000
+// Lookup table: EM_VOCAB_SIZE=64 tokens × EM_DIM=8 dimensions
+// Fixed-point: values scaled by EM_SCALE=256
+// em_table[token_id * EM_DIM + dim]: flat storage
+// em_lookup(token_id) → copies embedding to em_result[EM_DIM]
+// em_dot(token_id)    → dot product of embedding with em_query[EM_DIM]
+
+let EM_VOCAB_SIZE = 64;
+let EM_DIM        = 8;
+let EM_SCALE      = 256;
+
+let em_table  = array(512, 0);   // EM_VOCAB_SIZE * EM_DIM
+let em_result = array(8,   0);   // last em_lookup result
+let em_query  = array(8,   0);   // query vector for em_dot
+
+fn em_init() {
+    let i = 0;
+    while i < 512 {
+        set_at(em_table, i, 0);
+        i += 1;
+    }
+    let j = 0;
+    while j < EM_DIM {
+        set_at(em_result, j, 0);
+        set_at(em_query,  j, 0);
+        j += 1;
+    }
+    return 0;
+}
+
+fn em_set(token_id, dim_idx, val) {
+    set_at(em_table, token_id * EM_DIM + dim_idx, val);
+    return 0;
+}
+
+fn em_get(token_id, dim_idx) {
+    return em_table[token_id * EM_DIM + dim_idx];
+}
+
+fn em_set_query(dim_idx, val) {
+    set_at(em_query, dim_idx, val);
+    return 0;
+}
+
+fn em_lookup(token_id) {
+    let j = 0;
+    while j < EM_DIM {
+        set_at(em_result, j, em_table[token_id * EM_DIM + j]);
+        j += 1;
+    }
+    return em_result[0];
+}
+
+fn em_dot(token_id) {
+    // Σ em_table[id*EM_DIM+j] * em_query[j] / EM_SCALE
+    let sum = 0;
+    let j = 0;
+    while j < EM_DIM {
+        sum += em_table[token_id * EM_DIM + j] * em_query[j] / EM_SCALE;
+        j += 1;
+    }
+    return sum;
+}
+
+fn em_nearest(query_token) {
+    // Find token with highest dot product vs embedding of query_token
+    let qv = em_lookup(query_token);
+    let j = 0;
+    while j < EM_DIM {
+        em_set_query(j, em_result[j]);
+        j += 1;
+    }
+    let best_id  = 0;
+    let best_dot = 0 - 1;
+    let i = 0;
+    while i < EM_VOCAB_SIZE {
+        let d = em_dot(i);
+        if d > best_dot { best_dot = d; best_id = i; }
+        i += 1;
+    }
+    return best_id;
+}
+
+fn em_test() {
+    em_init();
+
+    // Token 1 ('a'): dim0=256(=1.0), dim1=128(=0.5)
+    em_set(1, 0, 256);
+    em_set(1, 1, 128);
+
+    // Token 2 ('b'): dim0=0, dim1=256
+    em_set(2, 0, 0);
+    em_set(2, 1, 256);
+
+    // Query: [256, 256, 0, ...]
+    em_set_query(0, 256);
+    em_set_query(1, 256);
+
+    // dot(1) = 256*256/256 + 128*256/256 = 256 + 128 = 384
+    let dot1 = em_dot(1);
+
+    // dot(2) = 0*256/256 + 256*256/256 = 0 + 256 = 256
+    let dot2 = em_dot(2);
+
+    // lookup(1) → em_result[0]=256, em_result[1]=128
+    let r0 = em_lookup(1);
+    let r1 = em_result[1];
+
+    print("em_test: dot1=" + to_string(dot1)
+          + " dot2=" + to_string(dot2)
+          + " r0=" + to_string(r0)
+          + " r1=" + to_string(r1));
+
+    if dot1 == 384 {
+        if dot2 == 256 {
+            if r0 == 256 {
+                if r1 == 128 {
+                    print("em_test: PASS");
+                    return 1;
+                }
+            }
+        }
+    }
+    print("em_test: FAIL");
+    return 0;
+}
+
+print("embedding.hl loaded");

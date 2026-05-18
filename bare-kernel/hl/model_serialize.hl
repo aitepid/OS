@@ -1,0 +1,217 @@
+// model_serialize.hl -- ML Model Serialization (Phase 5: ML深化, iter 404)
+// Buffer: 0x1CB0000
+// Custom binary format: HEADER(4) + LAYER_DESCS(4*n) + WEIGHTS + BIASES
+// Header: [magic=0xABCD, version=1, n_layers, total_weights]
+// Layer desc: [type, weight_offset, n_weights, n_bias]
+// Layer types: DENSE=0 CONV=1 RNN=2 LSTM=3
+// MS_MAX_LAYERS=8, MS_MAX_WEIGHTS=64
+
+let MS_MAX_LAYERS  = 8;
+let MS_MAX_WEIGHTS = 64;
+let MS_MAGIC       = 43981;   // 0xABCD
+let MS_VERSION     = 1;
+
+let MS_DENSE = 0;
+let MS_CONV  = 1;
+let MS_RNN   = 2;
+let MS_LSTM  = 3;
+
+// Layer descriptors
+let ms_layer_type  = array(8, 0);
+let ms_layer_w_off = array(8, 0);   // offset into ms_weights for this layer
+let ms_layer_n_w   = array(8, 0);   // number of weights
+let ms_layer_n_b   = array(8, 0);   // number of biases
+let ms_n_layers    = 0;
+
+// Parameter storage (weights and biases flat)
+let ms_weights  = array(64, 0);
+let ms_biases   = array(16, 0);    // up to 2 biases per layer
+let ms_total_w  = 0;
+let ms_total_b  = 0;
+
+// Serialized buffer
+let ms_buf      = array(200, 0);
+let ms_buf_len  = 0;
+
+// Last computed checksum
+let ms_cksum    = 0;
+
+fn ms_init() {
+    let i = 0;
+    while i < MS_MAX_LAYERS {
+        set_at(ms_layer_type,  i, 0);
+        set_at(ms_layer_w_off, i, 0);
+        set_at(ms_layer_n_w,   i, 0);
+        set_at(ms_layer_n_b,   i, 0);
+        i += 1;
+    }
+    i = 0;
+    while i < MS_MAX_WEIGHTS {
+        set_at(ms_weights, i, 0);
+        i += 1;
+    }
+    ms_n_layers = 0;
+    ms_total_w  = 0;
+    ms_total_b  = 0;
+    ms_buf_len  = 0;
+    ms_cksum    = 0;
+    return 0;
+}
+
+fn ms_add_layer(layer_type, n_weights, n_bias) {
+    let lid = ms_n_layers;
+    set_at(ms_layer_type,  lid, layer_type);
+    set_at(ms_layer_w_off, lid, ms_total_w);
+    set_at(ms_layer_n_w,   lid, n_weights);
+    set_at(ms_layer_n_b,   lid, n_bias);
+    ms_n_layers += 1;
+    ms_total_w  += n_weights;
+    ms_total_b  += n_bias;
+    return lid;
+}
+
+fn ms_set_weight(layer_id, w_idx, val) {
+    set_at(ms_weights, ms_layer_w_off[layer_id] + w_idx, val);
+    return 0;
+}
+
+fn ms_get_weight(layer_id, w_idx) {
+    return ms_weights[ms_layer_w_off[layer_id] + w_idx];
+}
+
+fn ms_set_bias(layer_id, b_idx, val) {
+    set_at(ms_biases, layer_id * 2 + b_idx, val);
+    return 0;
+}
+
+fn ms_serialize() {
+    // Header
+    set_at(ms_buf, 0, MS_MAGIC);
+    set_at(ms_buf, 1, MS_VERSION);
+    set_at(ms_buf, 2, ms_n_layers);
+    set_at(ms_buf, 3, ms_total_w);
+    let pos = 4;
+
+    // Layer descriptors
+    let i = 0;
+    while i < ms_n_layers {
+        set_at(ms_buf, pos,     ms_layer_type[i]);
+        set_at(ms_buf, pos + 1, ms_layer_w_off[i]);
+        set_at(ms_buf, pos + 2, ms_layer_n_w[i]);
+        set_at(ms_buf, pos + 3, ms_layer_n_b[i]);
+        pos += 4;
+        i += 1;
+    }
+
+    // Weights
+    i = 0;
+    while i < ms_total_w {
+        set_at(ms_buf, pos, ms_weights[i]);
+        pos += 1;
+        i += 1;
+    }
+
+    // Biases
+    i = 0;
+    while i < ms_total_b {
+        set_at(ms_buf, pos, ms_biases[i]);
+        pos += 1;
+        i += 1;
+    }
+
+    ms_buf_len = pos;
+
+    // Checksum: sum of all fields mod 65521
+    let ck = 0;
+    let p  = 65521;
+    i = 0;
+    while i < pos {
+        ck += ms_buf[i];
+        i += 1;
+    }
+    ms_cksum = ck - (ck / p) * p;
+    return pos;
+}
+
+fn ms_deserialize() {
+    if ms_buf[0] != MS_MAGIC { return 0 - 1; }
+    let n_lay = ms_buf[2];
+    let n_w   = ms_buf[3];
+    let pos   = 4;
+    ms_n_layers = n_lay;
+    ms_total_w  = n_w;
+
+    let i = 0;
+    while i < n_lay {
+        set_at(ms_layer_type,  i, ms_buf[pos]);
+        set_at(ms_layer_w_off, i, ms_buf[pos + 1]);
+        set_at(ms_layer_n_w,   i, ms_buf[pos + 2]);
+        set_at(ms_layer_n_b,   i, ms_buf[pos + 3]);
+        pos += 4;
+        i += 1;
+    }
+
+    i = 0;
+    while i < n_w {
+        set_at(ms_weights, i, ms_buf[pos]);
+        pos += 1;
+        i += 1;
+    }
+    return n_lay;
+}
+
+fn ms_get_checksum() { return ms_cksum; }
+fn ms_get_buf_len()  { return ms_buf_len; }
+fn ms_get_n_layers() { return ms_n_layers; }
+
+fn ms_test() {
+    ms_init();
+
+    // Add DENSE(4 weights, 2 bias) + RNN(4 weights, 1 bias)
+    ms_add_layer(MS_DENSE, 4, 2);
+    ms_add_layer(MS_RNN,   4, 1);
+
+    // Set weights: layer0[0]=256, layer0[1]=128, layer1[0]=192, layer1[1]=64
+    ms_set_weight(0, 0, 256);
+    ms_set_weight(0, 1, 128);
+    ms_set_weight(1, 0, 192);
+    ms_set_weight(1, 1, 64);
+    ms_set_bias(0, 0, 32);
+
+    // Serialize: 4(header) + 2×4(layer descs) + 8(weights) + 3(biases) = 23 fields
+    let n_bytes = ms_serialize();
+
+    // Clear and deserialize
+    ms_n_layers = 0;
+    ms_total_w  = 0;
+    let i = 0;
+    while i < MS_MAX_WEIGHTS { set_at(ms_weights, i, 0); i += 1; }
+
+    let n_lay  = ms_deserialize();
+    let wt0    = ms_get_weight(0, 0);   // 256
+    let wt1    = ms_get_weight(1, 0);   // 192
+    let lay1t  = ms_layer_type[1];      // MS_RNN = 2
+
+    print("ms_test: n_bytes=" + to_string(n_bytes)
+          + " n_lay=" + to_string(n_lay)
+          + " wt0=" + to_string(wt0)
+          + " wt1=" + to_string(wt1)
+          + " lay1t=" + to_string(lay1t));
+
+    if n_bytes == 23 {
+        if n_lay == 2 {
+            if wt0 == 256 {
+                if wt1 == 192 {
+                    if lay1t == MS_RNN {
+                        print("ms_test: PASS");
+                        return 1;
+                    }
+                }
+            }
+        }
+    }
+    print("ms_test: FAIL");
+    return 0;
+}
+
+print("model_serialize.hl loaded");

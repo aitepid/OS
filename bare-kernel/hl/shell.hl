@@ -297,13 +297,16 @@ fn shell_handle(cmd) {
         serial_print("Autograd:      ag init  ag test  ag const <v>  ag add <a> <b>  ag mul <a> <b>  ag run <loss_id>  ag grad <id>");
         serial_print("Optimizer:     op init  op test  op set <id> <v>  op setgrad <id> <v>  op sgd  op adam  op get <id>");
         serial_print("Tokenizer:     tk init  tk test  tk char <idx> <v>  tk textlen <n>  tk train <rounds>  tk encode  tk token <idx>");
+        serial_print("Embedding:     emb init  emb test  emb set <id> <dim> <v>  emb get <id> <dim>  emb lookup <id>  emb query <dim> <v>  emb dot <id>");
+        serial_print("ModelSerialize:ms init  ms test  ms layer <type> <nw> <nb>  ms weight <lid> <wid> <v>  ms save  ms load  ms checksum");
+        serial_print("GPU-Inference: gi init  gi test  gi input <idx> <v>  gi op <type> <in> <out> <ind> <outd>  gi dispatch  gi output <idx>  gi info");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
     }
 
     if cmd == "ver" {
-        return "HicOS 6.0 -- Hilbert-Lang Kernel (388 modules, pure H-L, zero deps)";
+        return "HicOS 6.0 -- Hilbert-Lang Kernel (391 modules, pure H-L, zero deps)";
     }
 
     if cmd == "uptime" {
@@ -7709,6 +7712,121 @@ fn shell_handle_ext(cmd) {
         let tktid = to_int(str_sub(cmd, 9, len(cmd)));
         return "tk: token[" + to_string(tktid) + "]=" + to_string(tk_get_token(tktid));
     }
+
+    // --- Embedding ---
+    if cmd == "emb init" { em_init(); return "emb: init"; }
+    if cmd == "emb test" { let emr = em_test(); return "emb: " + to_string(emr); }
+    if _starts_with(cmd, "emb set ") {
+        let emsa  = str_sub(cmd, 8, len(cmd));
+        let emss0 = _find_space(emsa);
+        let emsi  = to_int(str_sub(emsa, 0, emss0));
+        let emsa1 = str_sub(emsa, emss0 + 1, len(emsa));
+        let emss1 = _find_space(emsa1);
+        let emsd  = to_int(str_sub(emsa1, 0, emss1));
+        let emsv  = to_int(str_sub(emsa1, emss1 + 1, len(emsa1)));
+        em_set(emsi, emsd, emsv);
+        return "emb: set";
+    }
+    if _starts_with(cmd, "emb get ") {
+        let emga  = str_sub(cmd, 8, len(cmd));
+        let emgs0 = _find_space(emga);
+        let emgi  = to_int(str_sub(emga, 0, emgs0));
+        let emga1 = str_sub(emga, emgs0 + 1, len(emga));
+        let emgd  = to_int(emga1);
+        return "emb: " + to_string(em_get(emgi, emgd));
+    }
+    if _starts_with(cmd, "emb lookup ") {
+        let emli = to_int(str_sub(cmd, 11, len(cmd)));
+        let emlv = em_lookup(emli);
+        return "emb: result[0]=" + to_string(emlv);
+    }
+    if _starts_with(cmd, "emb query ") {
+        let emqa  = str_sub(cmd, 10, len(cmd));
+        let emqs0 = _find_space(emqa);
+        let emqd  = to_int(str_sub(emqa, 0, emqs0));
+        let emqv  = to_int(str_sub(emqa, emqs0 + 1, len(emqa)));
+        em_set_query(emqd, emqv);
+        return "emb: query set";
+    }
+    if _starts_with(cmd, "emb dot ") {
+        let emdi = to_int(str_sub(cmd, 8, len(cmd)));
+        return "emb: dot=" + to_string(em_dot(emdi));
+    }
+
+    // --- Model Serialize ---
+    if cmd == "ms init" { ms_init(); return "ms: init"; }
+    if cmd == "ms test" { let msr = ms_test(); return "ms: " + to_string(msr); }
+    if _starts_with(cmd, "ms layer ") {
+        let msla  = str_sub(cmd, 9, len(cmd));
+        let msls0 = _find_space(msla);
+        let mslt  = to_int(str_sub(msla, 0, msls0));
+        let msla1 = str_sub(msla, msls0 + 1, len(msla));
+        let msls1 = _find_space(msla1);
+        let mslnw = to_int(str_sub(msla1, 0, msls1));
+        let mslnb = to_int(str_sub(msla1, msls1 + 1, len(msla1)));
+        let mslid = ms_add_layer(mslt, mslnw, mslnb);
+        return "ms: layer=" + to_string(mslid);
+    }
+    if _starts_with(cmd, "ms weight ") {
+        let mswa  = str_sub(cmd, 10, len(cmd));
+        let msws0 = _find_space(mswa);
+        let mswli = to_int(str_sub(mswa, 0, msws0));
+        let mswa1 = str_sub(mswa, msws0 + 1, len(mswa));
+        let msws1 = _find_space(mswa1);
+        let mswwi = to_int(str_sub(mswa1, 0, msws1));
+        let mswv  = to_int(str_sub(mswa1, msws1 + 1, len(mswa1)));
+        ms_set_weight(mswli, mswwi, mswv);
+        return "ms: weight set";
+    }
+    if cmd == "ms save" {
+        let msbl = ms_serialize();
+        return "ms: bytes=" + to_string(msbl) + " ck=" + to_string(ms_get_checksum());
+    }
+    if cmd == "ms load" {
+        let msnl = ms_deserialize();
+        return "ms: layers=" + to_string(msnl);
+    }
+    if cmd == "ms checksum" { return "ms: ck=" + to_string(ms_get_checksum()); }
+
+    // --- GPU Inference ---
+    if cmd == "gi init" { gi_init(); return "gi: init"; }
+    if cmd == "gi test" { let gir = gi_test(); return "gi: " + to_string(gir); }
+    if _starts_with(cmd, "gi input ") {
+        let giia  = str_sub(cmd, 9, len(cmd));
+        let giis0 = _find_space(giia);
+        let giix  = to_int(str_sub(giia, 0, giis0));
+        let giiv  = to_int(str_sub(giia, giis0 + 1, len(giia)));
+        gi_set_input(giix, giiv);
+        return "gi: input set";
+    }
+    if _starts_with(cmd, "gi op ") {
+        let gioa  = str_sub(cmd, 6, len(cmd));
+        let gios0 = _find_space(gioa);
+        let giot  = to_int(str_sub(gioa, 0, gios0));
+        let gioa1 = str_sub(gioa, gios0 + 1, len(gioa));
+        let gios1 = _find_space(gioa1);
+        let gioio = to_int(str_sub(gioa1, 0, gios1));
+        let gioa2 = str_sub(gioa1, gios1 + 1, len(gioa1));
+        let gios2 = _find_space(gioa2);
+        let giooo = to_int(str_sub(gioa2, 0, gios2));
+        let gioa3 = str_sub(gioa2, gios2 + 1, len(gioa2));
+        let gios3 = _find_space(gioa3);
+        let gioid = to_int(str_sub(gioa3, 0, gios3));
+        let giood = to_int(str_sub(gioa3, gios3 + 1, len(gioa3)));
+        let gioqn = gi_add_op(giot, gioio, giooo, gioid, giood);
+        return "gi: op[" + to_string(gioqn) + "] queued";
+    }
+    if cmd == "gi dispatch" {
+        let gicyc = gi_dispatch();
+        return "gi: cycles=" + to_string(gicyc);
+    }
+    if _starts_with(cmd, "gi output ") {
+        let giox = to_int(str_sub(cmd, 10, len(cmd)));
+        return "gi: output[" + to_string(giox) + "]=" + to_string(gi_get_output(giox));
+    }
+    if cmd == "gi info" {
+        return "gi: ops=" + to_string(gi_queue_len()) + " cycles=" + to_string(gi_cycles_used());
+    }
 }
 
 // Self-test
@@ -7719,7 +7837,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 1534 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld + lca + virtualtree + dominator + sam + manacher + eertree + bwt + lyndon + zfunction + ir + regalloc + codegen + ioring + persistseg + rollbackdsu + splaytree + mo + sqrtdecomp + cht + matrixexpo + numtheory + strhash + intervaldp + gametheory + trie + lichao + dcdp + monoqueue + segbeats + lct + quickselect + ntt + segmerge + palindromedp + knuthdp + bitset + millerrabin + pollardrho + linearbasis + geometry2d + rotcalip + halfplane + dinic + blockcuttree + bridgetree + polyinv + polylnexp + polysqrt + bitmaskdp + digitdp + brokenprofiledp + wavelettree + implicittreap + chtholly + suffixtree + bsgs + minencircle + gvn + licm + dce2 + linearscandra + regcoalesce + callingconv + typeinfer + typechecker + generics + linkerelf + linkerar + dynlinker + dwarf + perfcounter + jitstub + btree + btreeplus + lsmmemtable + wal + mvcc + transaction + indexhash + indexbtree + queryplan + dbengine + wireguard + tls13 + http3quic + doh + dht + bittorrent + opentelemetry + prometheus + grpc_stream + websocket_compression + conv2d + pooling + rnn + lstm + autograd + optimizer + tokenizer");
+print("shell.hl loaded -- 1555 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld + lca + virtualtree + dominator + sam + manacher + eertree + bwt + lyndon + zfunction + ir + regalloc + codegen + ioring + persistseg + rollbackdsu + splaytree + mo + sqrtdecomp + cht + matrixexpo + numtheory + strhash + intervaldp + gametheory + trie + lichao + dcdp + monoqueue + segbeats + lct + quickselect + ntt + segmerge + palindromedp + knuthdp + bitset + millerrabin + pollardrho + linearbasis + geometry2d + rotcalip + halfplane + dinic + blockcuttree + bridgetree + polyinv + polylnexp + polysqrt + bitmaskdp + digitdp + brokenprofiledp + wavelettree + implicittreap + chtholly + suffixtree + bsgs + minencircle + gvn + licm + dce2 + linearscandra + regcoalesce + callingconv + typeinfer + typechecker + generics + linkerelf + linkerar + dynlinker + dwarf + perfcounter + jitstub + btree + btreeplus + lsmmemtable + wal + mvcc + transaction + indexhash + indexbtree + queryplan + dbengine + wireguard + tls13 + http3quic + doh + dht + bittorrent + opentelemetry + prometheus + grpc_stream + websocket_compression + conv2d + pooling + rnn + lstm + autograd + optimizer + tokenizer + embedding + model_serialize + gpu_inference");
 
 // Main shell loop (called from kernel_init)
 

@@ -2,13 +2,44 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`457`（76 根目录 + 388 内核模块）
-- H-L 总行数：`~153,800`
-- 内核模块：`388`
-- Shell 命令：`1534`
-- 最近完成功能迭代：`402`（autograd + optimizer + tokenizer）
+- `.hl` 文件：`460`（76 根目录 + 391 内核模块）
+- H-L 总行数：`~154,500`
+- 内核模块：`391`
+- Shell 命令：`1555`
+- 最近完成功能迭代：`405`（embedding + model_serialize + gpu_inference）
 - 当前阶段：第五阶段·ML深化（Phase 5）
 - **Milestone M3 已达成**（iter 385，完整存储引擎）
+- **Milestone M4 已达成**（iter 405，完整 ML 推理框架）
+
+## Iteration 405 — gpu_inference.hl：GPU 加速推理（Milestone M4 ✦）
+
+- **`gpu_inference.hl`**（Buffer: 0x1CC0000）：GI_BUF_SIZE=64，GI_WT_SIZE=64，GI_MAXOPS=16
+  - 算子类型：GI_RELU=0 / GI_LINEAR=1 / GI_SOFTMAX=2
+  - `gi_add_op(op_type, in_off, out_off, in_dim, out_dim)`：入队算子描述符
+  - `gi_dispatch()`：执行所有排队算子，累计 cycle 计数，返回 gi_cycles
+  - `_gi_relu(in_off, out_off, n)`：max(v,0) 逐元素，cycles += n
+  - `_gi_linear(in_off, out_off, in_dim, out_dim)`：y=Wxy/256+bias 矩阵乘，cycles += in×out
+  - `_gi_softmax(in_off, out_off, n)`：线性移位近似 exp(x-max+256) → 归一化，cycles += 2n
+  - 测试：inputs=[100,-50,150,-20]，RELU(dim=4)+SOFTMAX(dim=2) → r4=100 r5=0 r6=150 s0>s1 cyc=8 → PASS
+  - **✦ Milestone M4 达成：conv→pool→rnn→lstm→autograd→optim→tokenizer→embedding→model_serialize→gpu_inference 完整 ML 推理框架**
+
+## Iteration 404 — model_serialize.hl：ML 模型序列化
+
+- **`model_serialize.hl`**（Buffer: 0x1CB0000）：MS_MAX_LAYERS=8，MS_MAX_WEIGHTS=64
+  - 格式：HEADER(4) + LAYER_DESCS(4×n) + WEIGHTS + BIASES，MAGIC=0xABCD，VERSION=1
+  - 层类型：DENSE=0 / CONV=1 / RNN=2 / LSTM=3
+  - `ms_serialize()`：写入 ms_buf，计算校验和 mod 65521，返回 ms_buf_len
+  - `ms_deserialize()`：验证 MAGIC → 重建 ms_layer_* 数组与 ms_weights
+  - 测试：DENSE(4w,2b)+RNN(4w,1b) → n_bytes=23 n_lay=2 wt0=256 wt1=192 lay1t=2 → PASS
+
+## Iteration 403 — embedding.hl：词嵌入查找表
+
+- **`embedding.hl`**（Buffer: 0x1CA0000）：EM_VOCAB_SIZE=64，EM_DIM=8，EM_SCALE=256
+  - `em_table[token_id * EM_DIM + dim_idx]`：平铺存储，共 512 个 fixed-point 值
+  - `em_lookup(token_id)`：复制嵌入向量到 em_result[EM_DIM]
+  - `em_dot(token_id)`：计算嵌入向量与 em_query 的点积（fixed-point，/256）
+  - `em_nearest(query_token)`：暴力搜索最近邻 token（最高点积）
+  - 测试：token1=(256,128)，token2=(0,256)，query=(256,256) → dot1=384 dot2=256 r0=256 r1=128 → PASS
 
 ## Iteration 402 — tokenizer.hl：BPE 分词器
 
