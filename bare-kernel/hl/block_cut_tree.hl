@@ -1,0 +1,142 @@
+// block_cut_tree.hl -- Block-Cut Tree (iter 347)
+// Buffer: 0x1920000
+// BCT_V=8 vertices, BCT_MAXE=16 undirected edges (BCT_AMAX=32 adj slots).
+// bct_add_edge(u,v): undirected edge. bct_build(): DFS finds cut vertices + blocks.
+// bct_n_cut: articulation point count. bct_n_blocks: biconnected component count.
+
+let BCT_V    = 8;
+let BCT_MAXE = 16;
+let BCT_AMAX = 32;
+
+let bct_adj_head = array(8,  255);
+let bct_adj_to   = array(32, 0);
+let bct_adj_nxt  = array(32, 255);
+let bct_adj_cnt  = 0;
+
+let bct_disc    = array(8, 255);
+let bct_low     = array(8, 0);
+let bct_par     = array(8, 255);
+let bct_is_cut  = array(8, 0);
+let bct_timer   = 0;
+
+let bct_stk     = array(32, 0);
+let bct_stk_top = 0;
+let bct_n_blocks = 0;
+let bct_n_cut    = 0;
+let bct_ecnt     = 0;
+
+fn bct_init() {
+    let i = 0;
+    while i < BCT_V {
+        set_at(bct_adj_head, i, 255);
+        set_at(bct_disc,    i, 255);
+        set_at(bct_low,     i, 0);
+        set_at(bct_par,     i, 255);
+        set_at(bct_is_cut,  i, 0);
+        i += 1;
+    }
+    i = 0;
+    while i < BCT_AMAX {
+        set_at(bct_adj_to,  i, 0);
+        set_at(bct_adj_nxt, i, 255);
+        i += 1;
+    }
+    bct_adj_cnt = 0; bct_timer = 0; bct_stk_top = 0;
+    bct_n_blocks = 0; bct_n_cut = 0; bct_ecnt = 0;
+    return 0;
+}
+
+fn bct_add_edge(u, v) {
+    set_at(bct_adj_to,  bct_adj_cnt, v);
+    set_at(bct_adj_nxt, bct_adj_cnt, bct_adj_head[u]);
+    set_at(bct_adj_head, u, bct_adj_cnt);
+    bct_adj_cnt += 1;
+    set_at(bct_adj_to,  bct_adj_cnt, u);
+    set_at(bct_adj_nxt, bct_adj_cnt, bct_adj_head[v]);
+    set_at(bct_adj_head, v, bct_adj_cnt);
+    bct_adj_cnt += 1;
+    bct_ecnt += 1;
+    return bct_ecnt - 1;
+}
+
+fn _bct_dfs(u, par_v) {
+    set_at(bct_disc, u, bct_timer);
+    set_at(bct_low,  u, bct_timer);
+    bct_timer += 1;
+    let child_cnt = 0;
+    let slot = bct_adj_head[u];
+    while slot != 255 {
+        let v = bct_adj_to[slot];
+        if bct_disc[v] == 255 {
+            child_cnt += 1;
+            set_at(bct_par, v, u);
+            set_at(bct_stk, bct_stk_top, slot); bct_stk_top += 1;
+            _bct_dfs(v, u);
+            if bct_low[v] < bct_low[u] { set_at(bct_low, u, bct_low[v]); }
+            if bct_low[v] >= bct_disc[u] {
+                bct_n_blocks += 1;
+                if par_v != 255 { set_at(bct_is_cut, u, 1); }
+                let go = 1;
+                while go == 1 {
+                    if bct_stk_top == 0 { go = 0; }
+                    if go == 1 {
+                        bct_stk_top -= 1;
+                        if bct_stk[bct_stk_top] == slot { go = 0; }
+                    }
+                }
+            }
+        } else {
+            if v != par_v {
+                if bct_disc[v] < bct_disc[u] {
+                    set_at(bct_stk, bct_stk_top, slot); bct_stk_top += 1;
+                }
+                if bct_disc[v] < bct_low[u] { set_at(bct_low, u, bct_disc[v]); }
+            }
+        }
+        slot = bct_adj_nxt[slot];
+    }
+    if par_v == 255 {
+        if child_cnt > 1 { set_at(bct_is_cut, u, 1); }
+    }
+    return 0;
+}
+
+fn bct_build() {
+    let i = 0;
+    while i < BCT_V {
+        if bct_disc[i] == 255 { _bct_dfs(i, 255); }
+        i += 1;
+    }
+    bct_n_cut = 0;
+    i = 0;
+    while i < BCT_V {
+        if bct_is_cut[i] == 1 { bct_n_cut += 1; }
+        i += 1;
+    }
+    return 0;
+}
+
+fn bct_test() {
+    bct_init();
+    // 5-vertex graph: 0-1, 1-2, 2-0, 2-3, 3-4
+    // Cut vertices: {2, 3}; Biconnected blocks: {0,1,2}, {2,3}, {3,4} => n_cut=2, n_blocks=3
+    bct_add_edge(0, 1);
+    bct_add_edge(1, 2);
+    bct_add_edge(2, 0);
+    bct_add_edge(2, 3);
+    bct_add_edge(3, 4);
+    bct_build();
+    let nc = bct_n_cut;
+    let nb = bct_n_blocks;
+    print("bct_test: n_cut=" + to_string(nc) + " n_blocks=" + to_string(nb));
+    if nc == 2 {
+        if nb == 3 {
+            print("bct_test: PASS");
+            return 1;
+        }
+    }
+    print("bct_test: FAIL");
+    return 0;
+}
+
+print("block_cut_tree.hl loaded");

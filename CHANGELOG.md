@@ -2,11 +2,40 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`400`（76 根目录 + 331 内核模块）
-- H-L 总行数：`~117,700`
-- 内核模块：`331`
-- Shell 命令：`1135`
-- 最近完成功能迭代：`345`（geometry_2d + rotating_calipers + half_plane）
+- `.hl` 文件：`403`（76 根目录 + 334 内核模块）
+- H-L 总行数：`~118,800`
+- 内核模块：`334`
+- Shell 命令：`1156`
+- 最近完成功能迭代：`348`（dinic + block_cut_tree + bridge_tree）
+
+## Iteration 348 — bridge_tree.hl：桥树（边双连通分量 + 桥缩点）
+
+- **`bridge_tree.hl`**（Buffer: 0x1930000）：BT_V=8, BT_MAXE=16
+  - `bt_add_edge(u,v)`：无向边加入邻接表
+  - `_bt_dfs(u, par_ei)`：DFS 计算 disc/low，标记桥边（`bt_is_bridge[ei]=1`）
+  - `_bt_assign(u, comp_id)`：DFS 在非桥边上扩散，划分边双连通分量
+  - `bt_build()`：两阶段（找桥 + 分量赋值），结果：`bt_n_bridges`、`bt_n_comp`
+  - 测试：5 顶点 {0-1, 1-2, 2-0, 2-3, 3-4}，桥 = {2-3, 3-4}，分量 = {0,1,2},{3},{4} → n_bridges=2, n_comp=3 → PASS
+
+## Iteration 347 — block_cut_tree.hl：块割树（双连通分量 + 割点缩点）
+
+- **`block_cut_tree.hl`**（Buffer: 0x1920000）：BCT_V=8, BCT_MAXE=16
+  - `bct_add_edge(u,v)`：无向边
+  - `_bct_dfs(u, par_v)`：DFS + 边栈（slot 索引），low-link 法识别割点和双连通块
+    - 遇到 `low[v] >= disc[u]`：从栈弹出一个块，非根顶点标记为割点
+    - 根顶点：子树数 > 1 时标记为割点
+  - `bct_build()`：对所有未访问顶点调用 DFS，再统计 `bct_n_cut`
+  - 测试：5 顶点 {0-1, 1-2, 2-0, 2-3, 3-4}，割点 = {2,3}，块 = {0,1,2},{2,3},{3,4} → n_cut=2, n_blocks=3 → PASS
+
+## Iteration 346 — dinic.hl：Dinic 最大流 O(V²E)
+
+- **`dinic.hl`**（Buffer: 0x1910000）：DI_V=8, DI_E=128（正向 + 反向配对）
+  - `di_add_edge(u,v,cap)`：添加有向边及容量为 0 的反向边
+  - `_di_rev(e)`：反向边索引（奇偶互换：偶→+1，奇→-1）
+  - `_di_bfs(s,t)`：BFS 构建分层图（`di_level[]`），可达返回 1
+  - `_di_dfs(u,t,pushed)`：递归 DFS 当前弧优化阻塞流
+  - `di_max_flow(s,t)`：外层 BFS 循环 + 内层多路增广，返回最大流
+  - 测试：S=0,T=3，边 {0→1(10), 0→2(10), 1→3(10), 2→3(10)}，期望 flow=20 → PASS
 
 ## Iteration 345 — half_plane.hl：半平面交（Sutherland-Hodgman）
 

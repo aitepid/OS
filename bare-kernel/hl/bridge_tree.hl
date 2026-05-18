@@ -1,0 +1,140 @@
+// bridge_tree.hl -- Bridge Tree (iter 348)
+// Buffer: 0x1930000
+// BT_V=8 vertices, BT_MAXE=16 undirected edges (BT_AMAX=32 adj slots).
+// bt_add_edge(u,v): undirected edge. bt_build(): find bridges + 2-edge-connected components.
+// bt_n_bridges: bridge count. bt_n_comp: number of 2-edge-connected components.
+
+let BT_V    = 8;
+let BT_MAXE = 16;
+let BT_AMAX = 32;
+
+let bt_adj_head = array(8,  255);
+let bt_adj_to   = array(32, 0);
+let bt_adj_nxt  = array(32, 255);
+let bt_adj_cnt  = 0;
+
+let bt_disc    = array(8, 255);
+let bt_low     = array(8, 0);
+let bt_par_ei  = array(8, 255);
+let bt_timer   = 0;
+
+let bt_is_bridge = array(16, 0);
+let bt_comp      = array(8,  255);
+let bt_n_bridges = 0;
+let bt_n_comp    = 0;
+let bt_ecnt      = 0;
+
+fn bt_init() {
+    let i = 0;
+    while i < BT_V {
+        set_at(bt_adj_head, i, 255);
+        set_at(bt_disc,    i, 255);
+        set_at(bt_low,     i, 0);
+        set_at(bt_par_ei,  i, 255);
+        set_at(bt_comp,    i, 255);
+        i += 1;
+    }
+    i = 0;
+    while i < BT_AMAX { set_at(bt_adj_to, i, 0); set_at(bt_adj_nxt, i, 255); i += 1; }
+    i = 0;
+    while i < BT_MAXE { set_at(bt_is_bridge, i, 0); i += 1; }
+    bt_adj_cnt = 0; bt_timer = 0; bt_n_bridges = 0; bt_n_comp = 0; bt_ecnt = 0;
+    return 0;
+}
+
+fn bt_add_edge(u, v) {
+    set_at(bt_adj_to,  bt_adj_cnt, v);
+    set_at(bt_adj_nxt, bt_adj_cnt, bt_adj_head[u]);
+    set_at(bt_adj_head, u, bt_adj_cnt);
+    bt_adj_cnt += 1;
+    set_at(bt_adj_to,  bt_adj_cnt, u);
+    set_at(bt_adj_nxt, bt_adj_cnt, bt_adj_head[v]);
+    set_at(bt_adj_head, v, bt_adj_cnt);
+    bt_adj_cnt += 1;
+    bt_ecnt += 1;
+    return bt_ecnt - 1;
+}
+
+fn _bt_dfs(u, par_ei) {
+    set_at(bt_disc, u, bt_timer);
+    set_at(bt_low,  u, bt_timer);
+    bt_timer += 1;
+    let slot = bt_adj_head[u];
+    while slot != 255 {
+        let v  = bt_adj_to[slot];
+        let ei = slot / 2;
+        if bt_disc[v] == 255 {
+            set_at(bt_par_ei, v, ei);
+            _bt_dfs(v, ei);
+            if bt_low[v] < bt_low[u] { set_at(bt_low, u, bt_low[v]); }
+            if bt_low[v] > bt_disc[u] {
+                set_at(bt_is_bridge, ei, 1);
+                bt_n_bridges += 1;
+            }
+        } else {
+            if ei != par_ei {
+                if bt_disc[v] < bt_low[u] { set_at(bt_low, u, bt_disc[v]); }
+            }
+        }
+        slot = bt_adj_nxt[slot];
+    }
+    return 0;
+}
+
+fn _bt_assign(u, comp_id) {
+    set_at(bt_comp, u, comp_id);
+    let slot = bt_adj_head[u];
+    while slot != 255 {
+        let v  = bt_adj_to[slot];
+        let ei = slot / 2;
+        if bt_comp[v] == 255 {
+            if bt_is_bridge[ei] == 0 {
+                _bt_assign(v, comp_id);
+            }
+        }
+        slot = bt_adj_nxt[slot];
+    }
+    return 0;
+}
+
+fn bt_build() {
+    let i = 0;
+    while i < BT_V {
+        if bt_disc[i] == 255 { _bt_dfs(i, 255); }
+        i += 1;
+    }
+    i = 0;
+    while i < BT_V {
+        if bt_comp[i] == 255 {
+            _bt_assign(i, bt_n_comp);
+            bt_n_comp += 1;
+        }
+        i += 1;
+    }
+    return 0;
+}
+
+fn bt_test() {
+    bt_init();
+    // 5-vertex graph: 0-1, 1-2, 2-0, 2-3, 3-4
+    // Bridges: {2-3, 3-4}; 2-edge-conn components: {0,1,2}, {3}, {4} => n_bridges=2, n_comp=3
+    bt_add_edge(0, 1);
+    bt_add_edge(1, 2);
+    bt_add_edge(2, 0);
+    bt_add_edge(2, 3);
+    bt_add_edge(3, 4);
+    bt_build();
+    let nb = bt_n_bridges;
+    let nc = bt_n_comp;
+    print("bt_test: n_bridges=" + to_string(nb) + " n_comp=" + to_string(nc));
+    if nb == 2 {
+        if nc == 3 {
+            print("bt_test: PASS");
+            return 1;
+        }
+    }
+    print("bt_test: FAIL");
+    return 0;
+}
+
+print("bridge_tree.hl loaded");
