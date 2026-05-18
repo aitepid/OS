@@ -1,0 +1,174 @@
+// half_plane.hl -- Half-Plane Intersection via Sutherland-Hodgman (iter 345)
+// Buffer: 0x1900000
+// Half-plane: left side of directed line (ax,ay)->(bx,by) is "inside".
+// hp_set_box: initial bounding polygon. hp_add_hp: add a half-plane constraint.
+// hp_clip_all: Sutherland-Hodgman clipping. hp_area2: 2*area. hp_inside: feasibility.
+
+let HP_MAX  = 64;
+let HP_HMAX = 16;
+let hp_pts_x = array(64, 0);
+let hp_pts_y = array(64, 0);
+let hp_tmp_x = array(64, 0);
+let hp_tmp_y = array(64, 0);
+let hp_n     = 0;
+let hp_tmp_n = 0;
+let hp_hax   = array(16, 0);
+let hp_hay   = array(16, 0);
+let hp_hbx   = array(16, 0);
+let hp_hby   = array(16, 0);
+let hp_hn    = 0;
+
+fn hp_init() {
+    hp_n = 0; hp_tmp_n = 0; hp_hn = 0;
+    let i = 0;
+    while i < HP_MAX { set_at(hp_pts_x, i, 0); set_at(hp_pts_y, i, 0); i += 1; }
+    i = 0;
+    while i < HP_HMAX {
+        set_at(hp_hax, i, 0); set_at(hp_hay, i, 0);
+        set_at(hp_hbx, i, 0); set_at(hp_hby, i, 0);
+        i += 1;
+    }
+    return 0;
+}
+
+fn hp_set_box(x0, y0, x1, y1) {
+    hp_n = 4;
+    set_at(hp_pts_x, 0, x0); set_at(hp_pts_y, 0, y0);
+    set_at(hp_pts_x, 1, x1); set_at(hp_pts_y, 1, y0);
+    set_at(hp_pts_x, 2, x1); set_at(hp_pts_y, 2, y1);
+    set_at(hp_pts_x, 3, x0); set_at(hp_pts_y, 3, y1);
+    return 0;
+}
+
+fn hp_add_hp(ax, ay, bx, by) {
+    if hp_hn < HP_HMAX {
+        set_at(hp_hax, hp_hn, ax); set_at(hp_hay, hp_hn, ay);
+        set_at(hp_hbx, hp_hn, bx); set_at(hp_hby, hp_hn, by);
+        hp_hn += 1;
+    }
+    return hp_hn;
+}
+
+fn _hp_copy_tmp() {
+    let i = 0;
+    while i < hp_tmp_n {
+        set_at(hp_pts_x, i, hp_tmp_x[i]);
+        set_at(hp_pts_y, i, hp_tmp_y[i]);
+        i += 1;
+    }
+    hp_n = hp_tmp_n;
+    return 0;
+}
+
+fn _hp_clip_one(hax, hay, hbx, hby) {
+    hp_tmp_n = 0;
+    if hp_n == 0 { return 0; }
+    let hdx = hbx - hax;
+    let hdy = hby - hay;
+    let i = 0;
+    while i < hp_n {
+        let j = i + 1;
+        if j >= hp_n { j = 0; }
+        let p1x = hp_pts_x[i]; let p1y = hp_pts_y[i];
+        let p2x = hp_pts_x[j]; let p2y = hp_pts_y[j];
+        let d1 = hdx * (p1y - hay) - hdy * (p1x - hax);
+        let d2 = hdx * (p2y - hay) - hdy * (p2x - hax);
+        let p1in = 0; let p2in = 0;
+        if d1 >= 0 { p1in = 1; }
+        if d2 >= 0 { p2in = 1; }
+        if p1in == 1 {
+            if p2in == 1 {
+                set_at(hp_tmp_x, hp_tmp_n, p2x);
+                set_at(hp_tmp_y, hp_tmp_n, p2y);
+                hp_tmp_n += 1;
+            } else {
+                let denom = d1 - d2;
+                if denom != 0 {
+                    let ix = p1x + d1 * (p2x - p1x) / denom;
+                    let iy = p1y + d1 * (p2y - p1y) / denom;
+                    set_at(hp_tmp_x, hp_tmp_n, ix);
+                    set_at(hp_tmp_y, hp_tmp_n, iy);
+                    hp_tmp_n += 1;
+                }
+            }
+        } else {
+            if p2in == 1 {
+                let denom = d1 - d2;
+                if denom != 0 {
+                    let ix = p1x + d1 * (p2x - p1x) / denom;
+                    let iy = p1y + d1 * (p2y - p1y) / denom;
+                    set_at(hp_tmp_x, hp_tmp_n, ix);
+                    set_at(hp_tmp_y, hp_tmp_n, iy);
+                    hp_tmp_n += 1;
+                }
+                set_at(hp_tmp_x, hp_tmp_n, p2x);
+                set_at(hp_tmp_y, hp_tmp_n, p2y);
+                hp_tmp_n += 1;
+            }
+        }
+        i += 1;
+    }
+    _hp_copy_tmp();
+    return hp_n;
+}
+
+fn hp_clip_all() {
+    let i = 0;
+    while i < hp_hn {
+        _hp_clip_one(hp_hax[i], hp_hay[i], hp_hbx[i], hp_hby[i]);
+        i += 1;
+    }
+    return hp_n;
+}
+
+fn hp_area2() {
+    let s = 0;
+    let i = 0;
+    while i < hp_n {
+        let j = i + 1;
+        if j >= hp_n { j = 0; }
+        s = s + hp_pts_x[i] * hp_pts_y[j] - hp_pts_x[j] * hp_pts_y[i];
+        i += 1;
+    }
+    return s;
+}
+
+fn hp_inside(px, py) {
+    let i = 0;
+    while i < hp_hn {
+        let dx = hp_hbx[i] - hp_hax[i];
+        let dy = hp_hby[i] - hp_hay[i];
+        let d = dx * (py - hp_hay[i]) - dy * (px - hp_hax[i]);
+        if d < 0 { return 0; }
+        i += 1;
+    }
+    return 1;
+}
+
+fn hp_test() {
+    hp_init();
+    // Box (-10,-10)-(10,10) clipped by x+y<=10 (line (10,0)->(0,10), left=inside)
+    hp_set_box(0 - 10, 0 - 10, 10, 10);
+    hp_add_hp(10, 0, 0, 10);
+    hp_clip_all();
+    let n  = hp_n;
+    let a2 = hp_area2(); // 5-vertex pentagon, area=350 -> area2=700
+    let ins = hp_inside(0, 0);   // 0+0<=10: inside -> 1
+    let out = hp_inside(8, 8);   // 8+8=16>10: outside -> 0
+    print("hp_test: n=" + to_string(n) + " area2=" + to_string(a2) +
+          " inside(0,0)=" + to_string(ins) + " inside(8,8)=" + to_string(out));
+    if n == 5 {
+        if a2 == 700 {
+            if ins == 1 {
+                if out == 0 {
+                    print("hp_test: PASS");
+                    return 1;
+                }
+            }
+        }
+    }
+    print("hp_test: FAIL");
+    return 0;
+}
+
+print("half_plane.hl loaded");

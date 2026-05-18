@@ -2,11 +2,47 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`397`（76 根目录 + 328 内核模块）
-- H-L 总行数：`~117,400`
-- 内核模块：`328`
-- Shell 命令：`1114`
-- 最近完成功能迭代：`342`（miller_rabin + pollard_rho + linear_basis）
+- `.hl` 文件：`400`（76 根目录 + 331 内核模块）
+- H-L 总行数：`~117,700`
+- 内核模块：`331`
+- Shell 命令：`1135`
+- 最近完成功能迭代：`345`（geometry_2d + rotating_calipers + half_plane）
+
+## Iteration 345 — half_plane.hl：半平面交（Sutherland-Hodgman）
+
+- **`bare-kernel/hl/half_plane.hl`** 新增（~140 行）
+  - HP_MAX=64，HP_HMAX=16；`hp_pts_x/y[64]`（当前多边形）、`hp_tmp_x/y[64]`（裁剪缓冲）
+  - 半平面表示：有向直线 (ax,ay)→(bx,by)，左侧为内侧
+  - `hp_set_box(x0,y0,x1,y1)` — 设置初始矩形边界多边形（4 顶点 CCW）
+  - `hp_add_hp(ax,ay,bx,by)` — 添加半平面约束（最多 16 个）
+  - `_hp_clip_one(...)` — Sutherland-Hodgman 单次裁剪：逐边判断 p1/p2 内外，精确整数交点
+  - `hp_clip_all()` — 顺序应用所有半平面裁剪
+  - `hp_area2()` — 结果多边形面积×2（Shoelace 公式）
+  - `hp_inside(px,py)` — 点可行性检验（对所有半平面测试）
+  - 测试：边界框 (-10,-10)-(10,10) 切去 x+y>10 → 五边形 n=5,area2=700 PASS
+  - Buffer: 0x1900000
+
+## Iteration 344 — rotating_calipers.hl：旋转卡壳（最远点对 + 最小包围矩形）
+
+- **`bare-kernel/hl/rotating_calipers.hl`** 新增（~100 行）
+  - RC_MAX=64；`rc_px/py[64]` 凸多边形顶点（CCW 顺序）
+  - `_rc_next(i)` — 循环下标；`_rc_dist2(i,j)` — 点间距平方；`_rc_cross3(a,b,c)` — 有向叉积
+  - `rc_diameter2()` — 旋转卡壳 O(n)：初始化对极点 j，逐边推进直到叉积不增；返回最大距离平方
+  - `rc_mbr_area()` — 最小包围矩形面积 O(n²)：对每条边计算垂直/沿边方向的极值，scaled/d² 最小化
+  - 测试：正方形 (0,0),(6,0),(6,6),(0,6) → diameter²=72，MBR面积=36 PASS
+  - Buffer: 0x18F0000
+
+## Iteration 343 — geometry_2d.hl：二维计算几何基础原语
+
+- **`bare-kernel/hl/geometry_2d.hl`** 新增（~105 行）
+  - G2_MAX=64；`g2_px/py[64]` 多边形顶点，`g2_n` 顶点数
+  - `g2_cross(ax,ay,bx,by)` — 二维叉积（ax*by - ay*bx）
+  - `g2_dot(ax,ay,bx,by)` — 点积；`g2_dist2` — 距离平方
+  - `g2_area2()` — Shoelace 公式，有符号面积×2（CCW>0）
+  - `g2_pip(qx,qy)` — 射线法点在多边形内判断（整数精确）
+  - `g2_seg_inter(ax,ay,bx,by,cx,cy,dx,dy)` — 线段严格相交判断（叉积符号法）
+  - 测试：三角形(0,0),(10,0),(5,10)：area2=100，pip(5,3)=1，pip(11,3)=0，seg_inter=1 PASS
+  - Buffer: 0x18E0000
 
 ## Iteration 342 — linear_basis.hl：XOR 线性基（高斯消元）
 

@@ -237,13 +237,16 @@ fn shell_handle(cmd) {
         serial_print("MillerRabin: mr init  mr test  mr prime <n>  mr next <n>  mr count <lim>  mr wit <i>  mr nwits");
         serial_print("PollardRho:  pr init  pr test  pr factor <n>  pr factorize <n>  pr product  pr fcount  pr get <i>");
         serial_print("LinearBasis: lb init  lb test  lb insert <x>  lb max  lb size  lb get <i>  lb clear");
+        serial_print("Geometry2D:  g2 init  g2 test  g2 add <x> <y>  g2 area  g2 pip <x> <y>  g2 cross <ax> <ay> <bx> <by>  g2 n");
+        serial_print("RotCalip:    rc init  rc test  rc set <i> <x> <y>  rc setn <n>  rc diam  rc mbr  rc get <i>");
+        serial_print("HalfPlane:   hp init  hp test  hp add <ax> <ay> <bx> <by>  hp box <x0> <y0> <x1> <y1>  hp clip  hp area  hp inside <px> <py>");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
     }
 
     if cmd == "ver" {
-        return "HicOS 6.0 -- Hilbert-Lang Kernel (328 modules, pure H-L, zero deps)";
+        return "HicOS 6.0 -- Hilbert-Lang Kernel (331 modules, pure H-L, zero deps)";
     }
 
     if cmd == "uptime" {
@@ -5603,6 +5606,121 @@ fn shell_handle_ext(cmd) {
     }
     if cmd == "lb clear"  { lb_init(); return "lb: cleared"; }
 
+    // ── geometry_2d (iter 343) ───────────────────────────────────────────────
+    if cmd == "g2 init"  { g2_init(); return "g2: init"; }
+    if cmd == "g2 test"  { let g2r = g2_test(); return "g2: " + to_string(g2r); }
+    if cmd == "g2 area"  { return "g2: area2=" + to_string(g2_area2()); }
+    if cmd == "g2 n"     { return "g2: n=" + to_string(g2_n); }
+    if _starts_with(cmd, "g2 add ") {
+        let g2args = str_sub(cmd, 7, len(cmd));
+        let g2sp = _find_space(g2args);
+        if g2sp < 0 { return "g2 add: usage g2 add <x> <y>"; }
+        let g2x = to_int(str_sub(g2args, 0, g2sp));
+        let g2y = to_int(str_sub(g2args, g2sp + 1, len(g2args)));
+        let g2r = g2_add(g2x, g2y);
+        return "g2: added (" + to_string(g2x) + "," + to_string(g2y) + ") n=" + to_string(g2r);
+    }
+    if _starts_with(cmd, "g2 pip ") {
+        let g2pargs = str_sub(cmd, 7, len(cmd));
+        let g2psp = _find_space(g2pargs);
+        if g2psp < 0 { return "g2 pip: usage g2 pip <x> <y>"; }
+        let g2px = to_int(str_sub(g2pargs, 0, g2psp));
+        let g2py = to_int(str_sub(g2pargs, g2psp + 1, len(g2pargs)));
+        return "g2: pip(" + to_string(g2px) + "," + to_string(g2py) + ")=" + to_string(g2_pip(g2px, g2py));
+    }
+    if _starts_with(cmd, "g2 cross ") {
+        let g2cargs = str_sub(cmd, 9, len(cmd));
+        let g2cs1 = _find_space(g2cargs);
+        if g2cs1 < 0 { return "g2 cross: usage g2 cross <ax> <ay> <bx> <by>"; }
+        let g2ax = to_int(str_sub(g2cargs, 0, g2cs1));
+        let g2cr1 = str_sub(g2cargs, g2cs1 + 1, len(g2cargs));
+        let g2cs2 = _find_space(g2cr1);
+        if g2cs2 < 0 { return "g2 cross: usage g2 cross <ax> <ay> <bx> <by>"; }
+        let g2ay = to_int(str_sub(g2cr1, 0, g2cs2));
+        let g2cr2 = str_sub(g2cr1, g2cs2 + 1, len(g2cr1));
+        let g2cs3 = _find_space(g2cr2);
+        if g2cs3 < 0 { return "g2 cross: usage g2 cross <ax> <ay> <bx> <by>"; }
+        let g2bx = to_int(str_sub(g2cr2, 0, g2cs3));
+        let g2by = to_int(str_sub(g2cr2, g2cs3 + 1, len(g2cr2)));
+        return "g2: cross=" + to_string(g2_cross(g2ax, g2ay, g2bx, g2by));
+    }
+
+    // ── rotating_calipers (iter 344) ─────────────────────────────────────────
+    if cmd == "rc init"  { rc_init(); return "rc: init"; }
+    if cmd == "rc test"  { let rcr = rc_test(); return "rc: " + to_string(rcr); }
+    if cmd == "rc diam"  { return "rc: diameter2=" + to_string(rc_diameter2()); }
+    if cmd == "rc mbr"   { return "rc: mbr_area=" + to_string(rc_mbr_area()); }
+    if _starts_with(cmd, "rc setn ") {
+        let rcn = to_int(str_sub(cmd, 8, len(cmd)));
+        rc_setn(rcn);
+        return "rc: n=" + to_string(rc_n);
+    }
+    if _starts_with(cmd, "rc get ") {
+        let rci = to_int(str_sub(cmd, 7, len(cmd)));
+        return "rc: [" + to_string(rci) + "]=(" + to_string(rc_px[rci]) + "," + to_string(rc_py[rci]) + ")";
+    }
+    if _starts_with(cmd, "rc set ") {
+        let rcargs = str_sub(cmd, 7, len(cmd));
+        let rcsp1 = _find_space(rcargs);
+        if rcsp1 < 0 { return "rc set: usage rc set <i> <x> <y>"; }
+        let rci = to_int(str_sub(rcargs, 0, rcsp1));
+        let rcrem = str_sub(rcargs, rcsp1 + 1, len(rcargs));
+        let rcsp2 = _find_space(rcrem);
+        if rcsp2 < 0 { return "rc set: usage rc set <i> <x> <y>"; }
+        let rcx = to_int(str_sub(rcrem, 0, rcsp2));
+        let rcy = to_int(str_sub(rcrem, rcsp2 + 1, len(rcrem)));
+        rc_set(rci, rcx, rcy);
+        return "rc: set[" + to_string(rci) + "]=(" + to_string(rcx) + "," + to_string(rcy) + ")";
+    }
+
+    // ── half_plane (iter 345) ────────────────────────────────────────────────
+    if cmd == "hp init"  { hp_init(); return "hp: init"; }
+    if cmd == "hp test"  { let hpr = hp_test(); return "hp: " + to_string(hpr); }
+    if cmd == "hp clip"  { let hpn = hp_clip_all(); return "hp: clipped n=" + to_string(hpn); }
+    if cmd == "hp area"  { return "hp: area2=" + to_string(hp_area2()); }
+    if _starts_with(cmd, "hp inside ") {
+        let hpiargs = str_sub(cmd, 10, len(cmd));
+        let hpisp = _find_space(hpiargs);
+        if hpisp < 0 { return "hp inside: usage hp inside <px> <py>"; }
+        let hpipx = to_int(str_sub(hpiargs, 0, hpisp));
+        let hpipy = to_int(str_sub(hpiargs, hpisp + 1, len(hpiargs)));
+        return "hp: inside(" + to_string(hpipx) + "," + to_string(hpipy) + ")=" + to_string(hp_inside(hpipx, hpipy));
+    }
+    if _starts_with(cmd, "hp box ") {
+        let hpbargs = str_sub(cmd, 7, len(cmd));
+        let hpbs1 = _find_space(hpbargs);
+        if hpbs1 < 0 { return "hp box: usage hp box <x0> <y0> <x1> <y1>"; }
+        let hpbx0 = to_int(str_sub(hpbargs, 0, hpbs1));
+        let hpbr1 = str_sub(hpbargs, hpbs1 + 1, len(hpbargs));
+        let hpbs2 = _find_space(hpbr1);
+        if hpbs2 < 0 { return "hp box: usage hp box <x0> <y0> <x1> <y1>"; }
+        let hpby0 = to_int(str_sub(hpbr1, 0, hpbs2));
+        let hpbr2 = str_sub(hpbr1, hpbs2 + 1, len(hpbr1));
+        let hpbs3 = _find_space(hpbr2);
+        if hpbs3 < 0 { return "hp box: usage hp box <x0> <y0> <x1> <y1>"; }
+        let hpbx1 = to_int(str_sub(hpbr2, 0, hpbs3));
+        let hpby1 = to_int(str_sub(hpbr2, hpbs3 + 1, len(hpbr2)));
+        hp_set_box(hpbx0, hpby0, hpbx1, hpby1);
+        return "hp: box set n=4";
+    }
+    if _starts_with(cmd, "hp add ") {
+        let hpaargs = str_sub(cmd, 7, len(cmd));
+        let hpas1 = _find_space(hpaargs);
+        if hpas1 < 0 { return "hp add: usage hp add <ax> <ay> <bx> <by>"; }
+        let hpaax = to_int(str_sub(hpaargs, 0, hpas1));
+        let hpar1 = str_sub(hpaargs, hpas1 + 1, len(hpaargs));
+        let hpas2 = _find_space(hpar1);
+        if hpas2 < 0 { return "hp add: usage hp add <ax> <ay> <bx> <by>"; }
+        let hpaay = to_int(str_sub(hpar1, 0, hpas2));
+        let hpar2 = str_sub(hpar1, hpas2 + 1, len(hpar1));
+        let hpas3 = _find_space(hpar2);
+        if hpas3 < 0 { return "hp add: usage hp add <ax> <ay> <bx> <by>"; }
+        let hpabx = to_int(str_sub(hpar2, 0, hpas3));
+        let hpaby = to_int(str_sub(hpar2, hpas3 + 1, len(hpar2)));
+        hp_add_hp(hpaax, hpaay, hpabx, hpaby);
+        return "hp: added halfplane hn=" + to_string(hp_hn);
+    }
+
     return shell_handle(cmd);
 }
 
@@ -5614,7 +5732,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 1114 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld + lca + virtualtree + dominator + sam + manacher + eertree + bwt + lyndon + zfunction + ir + regalloc + codegen + ioring + persistseg + rollbackdsu + splaytree + mo + sqrtdecomp + cht + matrixexpo + numtheory + strhash + intervaldp + gametheory + trie + lichao + dcdp + monoqueue + segbeats + lct + quickselect + ntt + segmerge + palindromedp + knuthdp + bitset + millerrabin + pollardrho + linearbasis");
+print("shell.hl loaded -- 1135 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld + lca + virtualtree + dominator + sam + manacher + eertree + bwt + lyndon + zfunction + ir + regalloc + codegen + ioring + persistseg + rollbackdsu + splaytree + mo + sqrtdecomp + cht + matrixexpo + numtheory + strhash + intervaldp + gametheory + trie + lichao + dcdp + monoqueue + segbeats + lct + quickselect + ntt + segmerge + palindromedp + knuthdp + bitset + millerrabin + pollardrho + linearbasis + geometry2d + rotcalip + halfplane");
 
 // Main shell loop (called from kernel_init)
 

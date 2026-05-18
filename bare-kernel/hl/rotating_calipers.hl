@@ -1,0 +1,152 @@
+// rotating_calipers.hl -- Rotating Calipers: Diameter + Min Bounding Rect (iter 344)
+// Buffer: 0x18F0000
+// Input: CCW convex hull in rc_px/rc_py[0..rc_n-1].
+// rc_diameter2(): max squared distance between any two hull vertices (O(n)).
+// rc_mbr_area(): minimum bounding rectangle area (O(n^2) per-edge sweep).
+
+let RC_MAX = 64;
+let rc_px  = array(64, 0);
+let rc_py  = array(64, 0);
+let rc_n   = 0;
+
+fn rc_init() {
+    let i = 0;
+    while i < RC_MAX { set_at(rc_px, i, 0); set_at(rc_py, i, 0); i += 1; }
+    rc_n = 0;
+    return 0;
+}
+
+fn rc_set(i, x, y) {
+    set_at(rc_px, i, x);
+    set_at(rc_py, i, y);
+    return 0;
+}
+
+fn rc_setn(n) { rc_n = n; return 0; }
+
+fn _rc_next(i) {
+    let r = i + 1;
+    if r >= rc_n { r = 0; }
+    return r;
+}
+
+fn _rc_dist2(i, j) {
+    let dx = rc_px[i] - rc_px[j];
+    let dy = rc_py[i] - rc_py[j];
+    return dx * dx + dy * dy;
+}
+
+fn _rc_cross3(a, b, c) {
+    let bax = rc_px[b] - rc_px[a];
+    let bay = rc_py[b] - rc_py[a];
+    let cax = rc_px[c] - rc_px[a];
+    let cay = rc_py[c] - rc_py[a];
+    return bax * cay - bay * cax;
+}
+
+fn rc_diameter2() {
+    if rc_n < 2 { return 0; }
+    if rc_n == 2 { return _rc_dist2(0, 1); }
+    let max_d2 = 0;
+    let j = 1;
+    let step = 0;
+    let go = 1;
+    while go == 1 {
+        step += 1;
+        if step > rc_n { go = 0; }
+        if go == 1 {
+            let nj = _rc_next(j);
+            if _rc_cross3(0, 1, nj) > _rc_cross3(0, 1, j) {
+                j = nj;
+            } else {
+                go = 0;
+            }
+        }
+    }
+    let i = 0;
+    while i < rc_n {
+        let ni = _rc_next(i);
+        let d = _rc_dist2(i, j);
+        if d > max_d2 { max_d2 = d; }
+        step = 0;
+        go = 1;
+        while go == 1 {
+            step += 1;
+            if step > rc_n { go = 0; }
+            if go == 1 {
+                let nj = _rc_next(j);
+                if _rc_cross3(i, ni, nj) > _rc_cross3(i, ni, j) {
+                    j = nj;
+                    let d2 = _rc_dist2(i, j);
+                    if d2 > max_d2 { max_d2 = d2; }
+                } else {
+                    go = 0;
+                }
+            }
+        }
+        i += 1;
+    }
+    return max_d2;
+}
+
+fn rc_mbr_area() {
+    if rc_n < 3 { return 0; }
+    let min_area = 0;
+    let first = 1;
+    let i = 0;
+    while i < rc_n {
+        let ni = _rc_next(i);
+        let dx = rc_px[ni] - rc_px[i];
+        let dy = rc_py[ni] - rc_py[i];
+        let d2 = dx * dx + dy * dy;
+        if d2 > 0 {
+            let max_cr = 0; let min_cr = 0;
+            let max_dt = 0; let min_dt = 0;
+            let fv = 1;
+            let j = 0;
+            while j < rc_n {
+                let vx = rc_px[j] - rc_px[i];
+                let vy = rc_py[j] - rc_py[i];
+                let cr = dx * vy - dy * vx;
+                let dt = dx * vx + dy * vy;
+                if fv == 1 {
+                    max_cr = cr; min_cr = cr;
+                    max_dt = dt; min_dt = dt;
+                    fv = 0;
+                } else {
+                    if cr > max_cr { max_cr = cr; }
+                    if cr < min_cr { min_cr = cr; }
+                    if dt > max_dt { max_dt = dt; }
+                    if dt < min_dt { min_dt = dt; }
+                }
+                j += 1;
+            }
+            let scaled = (max_cr - min_cr) * (max_dt - min_dt);
+            let area = scaled / d2;
+            if first == 1 { min_area = area; first = 0; }
+            else { if area < min_area { min_area = area; } }
+        }
+        i += 1;
+    }
+    return min_area;
+}
+
+fn rc_test() {
+    rc_init();
+    // CCW square (0,0),(6,0),(6,6),(0,6): diameter2=72, MBR area=36
+    rc_setn(4);
+    rc_set(0, 0, 0); rc_set(1, 6, 0); rc_set(2, 6, 6); rc_set(3, 0, 6);
+    let d2 = rc_diameter2();
+    let ma = rc_mbr_area();
+    print("rc_test: diameter2=" + to_string(d2) + " mbr_area=" + to_string(ma));
+    if d2 == 72 {
+        if ma == 36 {
+            print("rc_test: PASS");
+            return 1;
+        }
+    }
+    print("rc_test: FAIL");
+    return 0;
+}
+
+print("rotating_calipers.hl loaded");
