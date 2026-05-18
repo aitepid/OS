@@ -1,0 +1,109 @@
+// hltest.hl -- H-L Test Framework (Phase 7: 生态与自举完善, iter 425)
+// Buffer: 0x1E00000
+// Unit test runner: register test cases, record pass/fail, summarize results
+// HT_MAX_TESTS=32; HT_PASS=1, HT_FAIL=0
+// Shell: ht init/test/register/record/result/summary/count (7 commands)
+
+let HT_MAX_TESTS = 32;
+let HT_PASS      = 1;
+let HT_FAIL      = 0;
+
+let ht_test_id     = array(32, 0);   // test case IDs
+let ht_test_result = array(32, 0 - 1); // -1=not run, 0=FAIL, 1=PASS
+let ht_n_tests     = 0;
+let ht_n_pass      = 0;
+let ht_n_fail      = 0;
+
+fn ht_init() {
+    let i = 0;
+    while i < HT_MAX_TESTS {
+        set_at(ht_test_id,     i, 0);
+        set_at(ht_test_result, i, 0 - 1);
+        i += 1;
+    }
+    ht_n_tests = 0;
+    ht_n_pass  = 0;
+    ht_n_fail  = 0;
+    return 0;
+}
+
+fn _ht_find(test_id) {
+    let i = 0;
+    while i < ht_n_tests {
+        if ht_test_id[i] == test_id { return i; }
+        i += 1;
+    }
+    return 0 - 1;
+}
+
+fn ht_register(test_id) {
+    if _ht_find(test_id) >= 0 { return 0 - 1; }
+    if ht_n_tests >= HT_MAX_TESTS { return 0 - 1; }
+    let slot = ht_n_tests;
+    set_at(ht_test_id,     slot, test_id);
+    set_at(ht_test_result, slot, 0 - 1);
+    ht_n_tests += 1;
+    return slot;
+}
+
+fn ht_record(test_id, result) {
+    let idx = _ht_find(test_id);
+    if idx < 0 { return 0 - 1; }
+    let prev = ht_test_result[idx];
+    set_at(ht_test_result, idx, result);
+    // Update counters only if newly recorded (prev was -1)
+    if prev == 0 - 1 {
+        if result == HT_PASS { ht_n_pass += 1; }
+        if result == HT_FAIL { ht_n_fail += 1; }
+    }
+    return idx;
+}
+
+fn ht_get_result(test_id) {
+    let idx = _ht_find(test_id);
+    if idx < 0 { return 0 - 1; }
+    return ht_test_result[idx];
+}
+
+fn ht_summary() { return ht_n_pass; }
+fn ht_count()   { return ht_n_tests; }
+
+fn ht_test() {
+    ht_init();
+    ht_register(1);
+    ht_register(2);
+    ht_register(3);
+
+    ht_record(1, HT_PASS);
+    ht_record(2, HT_FAIL);
+    ht_record(3, HT_PASS);
+
+    let total = ht_count();         // 3
+    let pass  = ht_n_pass;          // 2
+    let fail  = ht_n_fail;          // 1
+    let r2    = ht_get_result(2);   // 0 (FAIL)
+    let r1    = ht_get_result(1);   // 1 (PASS)
+
+    print("ht_test: total=" + to_string(total)
+          + " pass=" + to_string(pass)
+          + " fail=" + to_string(fail)
+          + " r1=" + to_string(r1)
+          + " r2=" + to_string(r2));
+
+    if total == 3 {
+        if pass == 2 {
+            if fail == 1 {
+                if r1 == HT_PASS {
+                    if r2 == HT_FAIL {
+                        print("ht_test: PASS");
+                        return 1;
+                    }
+                }
+            }
+        }
+    }
+    print("ht_test: FAIL");
+    return 0;
+}
+
+print("hltest.hl loaded");

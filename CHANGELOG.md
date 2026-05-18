@@ -2,14 +2,42 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`478`（76 根目录 + 409 内核模块）
-- H-L 总行数：`~158,600`
-- 内核模块：`409`
-- Shell 命令：`1681`
-- 最近完成功能迭代：`423`（package_manager + pkg_registry + pkg_build）
+- `.hl` 文件：`481`（76 根目录 + 412 内核模块）
+- H-L 总行数：`~158,950`
+- 内核模块：`412`
+- Shell 命令：`1702`
+- 最近完成功能迭代：`426`（hldoc + hltest + hlbench）
 - 当前阶段：第七阶段·生态完善（Phase 7）
 - **Milestone M4 已达成**（iter 405，完整 ML 推理框架）
 - **Milestone M5 已达成**（iter 420，生产级稳定性）
+
+## Iteration 426 — hlbench.hl：H-L 基准测试框架
+
+- **`hlbench.hl`**（Buffer: 0x1E10000）：HB_MAX_BENCHES=16
+  - `hb_register(bench_id, iters)`：注册基准测试，指定迭代次数
+  - `hb_record_time(bench_id, ticks)`：记录耗时（ticks 单位）
+  - `hb_throughput(bench_id)`：计算吞吐量 = iters / ticks（整数除法，ticks=0 时返回 iters）
+  - `hb_get_time(bench_id)` / `hb_get_iters(bench_id)` / `hb_count()`
+  - 测试：register(1,1000)+register(2,500)→time(1,100)+time(2,50) → t1=100 t2=50 thru1=10 thru2=10 cnt=2 → PASS
+  - Shell：hb init/test/register/time/result/thru/count（7 命令）
+
+## Iteration 425 — hltest.hl：H-L 单元测试框架
+
+- **`hltest.hl`**（Buffer: 0x1E00000）：HT_MAX_TESTS=32，HT_PASS=1，HT_FAIL=0
+  - `ht_register(test_id)`：注册测试用例（初始结果=-1 未运行）
+  - `ht_record(test_id, result)`：记录 PASS/FAIL，同步更新 ht_n_pass/ht_n_fail
+  - `ht_get_result(test_id)` / `ht_summary()` 返回 pass 数 / `ht_count()`
+  - 测试：register×3→record(1,PASS)+record(2,FAIL)+record(3,PASS) → pass=2 fail=1 r1=1 r2=0 → PASS
+  - Shell：ht init/test/register/record/result/summary/count（7 命令）
+
+## Iteration 424 — hldoc.hl：H-L 文档生成器
+
+- **`hldoc.hl`**（Buffer: 0x1DF0000）：HD_MAX_ENTRIES=16
+  - 条目类型：HD_TYPE_FN=0 / HD_TYPE_VAR=1 / HD_TYPE_CONST=2
+  - `hd_register(entry_id, type, module_id)`：注册文档条目（已存在则覆盖）
+  - `hd_find(entry_id)` / `hd_get_type(entry_id)` / `hd_count()` / `hd_count_by_type(type)`
+  - 测试：register(FN,mod10)+register(VAR,mod10)+register(CONST,mod20) → total=3 fn=1 var=1 find(2)≥0 miss=-1 t1=FN → PASS
+  - Shell：hd init/test/register/find/type/count/countby（7 命令）
 
 ## Iteration 423 — pkg_build.hl：H-L 构建系统
 

@@ -1,0 +1,115 @@
+// hlbench.hl -- H-L Benchmark Framework (Phase 7: 生态与自举完善, iter 426)
+// Buffer: 0x1E10000
+// Registers benchmarks with iteration counts, records elapsed ticks, computes throughput
+// HB_MAX_BENCHES=16; hb_throughput = iters / time_ticks (integer division)
+// Shell: hb init/test/register/time/result/thru/count (7 commands)
+
+let HB_MAX_BENCHES = 16;
+
+let hb_bench_id    = array(16, 0);   // benchmark IDs
+let hb_bench_iters = array(16, 0);   // iteration counts
+let hb_bench_time  = array(16, 0);   // elapsed ticks (0 = not measured)
+let hb_n_benches   = 0;
+
+fn hb_init() {
+    let i = 0;
+    while i < HB_MAX_BENCHES {
+        set_at(hb_bench_id,    i, 0);
+        set_at(hb_bench_iters, i, 0);
+        set_at(hb_bench_time,  i, 0);
+        i += 1;
+    }
+    hb_n_benches = 0;
+    return 0;
+}
+
+fn _hb_find(bench_id) {
+    let i = 0;
+    while i < hb_n_benches {
+        if hb_bench_id[i] == bench_id { return i; }
+        i += 1;
+    }
+    return 0 - 1;
+}
+
+fn hb_register(bench_id, iters) {
+    let idx = _hb_find(bench_id);
+    if idx >= 0 {
+        set_at(hb_bench_iters, idx, iters);
+        return idx;
+    }
+    if hb_n_benches >= HB_MAX_BENCHES { return 0 - 1; }
+    let slot = hb_n_benches;
+    set_at(hb_bench_id,    slot, bench_id);
+    set_at(hb_bench_iters, slot, iters);
+    set_at(hb_bench_time,  slot, 0);
+    hb_n_benches += 1;
+    return slot;
+}
+
+fn hb_record_time(bench_id, time_ticks) {
+    let idx = _hb_find(bench_id);
+    if idx < 0 { return 0 - 1; }
+    set_at(hb_bench_time, idx, time_ticks);
+    return idx;
+}
+
+fn hb_get_time(bench_id) {
+    let idx = _hb_find(bench_id);
+    if idx < 0 { return 0 - 1; }
+    return hb_bench_time[idx];
+}
+
+fn hb_get_iters(bench_id) {
+    let idx = _hb_find(bench_id);
+    if idx < 0 { return 0 - 1; }
+    return hb_bench_iters[idx];
+}
+
+fn hb_throughput(bench_id) {
+    let idx = _hb_find(bench_id);
+    if idx < 0 { return 0 - 1; }
+    let t = hb_bench_time[idx];
+    if t == 0 { return hb_bench_iters[idx]; }
+    return hb_bench_iters[idx] / t;
+}
+
+fn hb_count() { return hb_n_benches; }
+
+fn hb_test() {
+    hb_init();
+    hb_register(1, 1000);
+    hb_register(2, 500);
+
+    hb_record_time(1, 100);
+    hb_record_time(2, 50);
+
+    let t1    = hb_get_time(1);      // 100
+    let t2    = hb_get_time(2);      // 50
+    let thru1 = hb_throughput(1);    // 1000/100 = 10
+    let thru2 = hb_throughput(2);    // 500/50   = 10
+    let cnt   = hb_count();          // 2
+
+    print("hb_test: t1=" + to_string(t1)
+          + " t2=" + to_string(t2)
+          + " thru1=" + to_string(thru1)
+          + " thru2=" + to_string(thru2)
+          + " cnt=" + to_string(cnt));
+
+    if t1 == 100 {
+        if t2 == 50 {
+            if thru1 == 10 {
+                if thru2 == 10 {
+                    if cnt == 2 {
+                        print("hb_test: PASS");
+                        return 1;
+                    }
+                }
+            }
+        }
+    }
+    print("hb_test: FAIL");
+    return 0;
+}
+
+print("hlbench.hl loaded");

@@ -1,0 +1,111 @@
+// hldoc.hl -- H-L Documentation Generator (Phase 7: 生态与自举完善, iter 424)
+// Buffer: 0x1DF0000
+// Registers and queries doc entries for H-L functions/vars/consts per module
+// HD_MAX_ENTRIES=16; HD_TYPE_FN=0, HD_TYPE_VAR=1, HD_TYPE_CONST=2
+// Shell: hd init/test/register/find/type/count/countby (7 commands)
+
+let HD_MAX_ENTRIES = 16;
+let HD_TYPE_FN     = 0;
+let HD_TYPE_VAR    = 1;
+let HD_TYPE_CONST  = 2;
+
+let hd_entry_id     = array(16, 0);   // unique entry IDs
+let hd_entry_type   = array(16, 0);   // HD_TYPE_FN/VAR/CONST
+let hd_entry_module = array(16, 0);   // owning module ID
+let hd_n_entries    = 0;
+
+fn hd_init() {
+    let i = 0;
+    while i < HD_MAX_ENTRIES {
+        set_at(hd_entry_id,     i, 0);
+        set_at(hd_entry_type,   i, 0);
+        set_at(hd_entry_module, i, 0);
+        i += 1;
+    }
+    hd_n_entries = 0;
+    return 0;
+}
+
+fn hd_find(entry_id) {
+    let i = 0;
+    while i < hd_n_entries {
+        if hd_entry_id[i] == entry_id { return i; }
+        i += 1;
+    }
+    return 0 - 1;
+}
+
+fn hd_register(entry_id, entry_type, module_id) {
+    let idx = hd_find(entry_id);
+    if idx >= 0 {
+        set_at(hd_entry_type,   idx, entry_type);
+        set_at(hd_entry_module, idx, module_id);
+        return idx;
+    }
+    if hd_n_entries >= HD_MAX_ENTRIES { return 0 - 1; }
+    let slot = hd_n_entries;
+    set_at(hd_entry_id,     slot, entry_id);
+    set_at(hd_entry_type,   slot, entry_type);
+    set_at(hd_entry_module, slot, module_id);
+    hd_n_entries += 1;
+    return slot;
+}
+
+fn hd_get_type(entry_id) {
+    let idx = hd_find(entry_id);
+    if idx < 0 { return 0 - 1; }
+    return hd_entry_type[idx];
+}
+
+fn hd_count() { return hd_n_entries; }
+
+fn hd_count_by_type(entry_type) {
+    let count = 0;
+    let i = 0;
+    while i < hd_n_entries {
+        if hd_entry_type[i] == entry_type { count += 1; }
+        i += 1;
+    }
+    return count;
+}
+
+fn hd_test() {
+    hd_init();
+    // Register fn(id=1,mod=10), var(id=2,mod=10), const(id=3,mod=20)
+    hd_register(1, HD_TYPE_FN,    10);
+    hd_register(2, HD_TYPE_VAR,   10);
+    hd_register(3, HD_TYPE_CONST, 20);
+
+    let total   = hd_count();              // 3
+    let fn_cnt  = hd_count_by_type(HD_TYPE_FN);    // 1
+    let var_cnt = hd_count_by_type(HD_TYPE_VAR);   // 1
+    let found   = hd_find(2);             // >=0
+    let missing = hd_find(99);            // -1
+    let t1      = hd_get_type(1);         // 0 (FN)
+
+    print("hd_test: total=" + to_string(total)
+          + " fn=" + to_string(fn_cnt)
+          + " var=" + to_string(var_cnt)
+          + " found=" + to_string(found)
+          + " missing=" + to_string(missing)
+          + " t1=" + to_string(t1));
+
+    if total == 3 {
+        if fn_cnt == 1 {
+            if var_cnt == 1 {
+                if found >= 0 {
+                    if missing == 0 - 1 {
+                        if t1 == HD_TYPE_FN {
+                            print("hd_test: PASS");
+                            return 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    print("hd_test: FAIL");
+    return 0;
+}
+
+print("hldoc.hl loaded");
