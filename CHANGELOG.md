@@ -2,13 +2,44 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`445`（76 根目录 + 376 内核模块）
-- H-L 总行数：`~150,500`
-- 内核模块：`376`
-- Shell 命令：`1450`
-- 最近完成功能迭代：`390`（http3_quic + dns_over_https + dht）
-- 当前阶段：第四阶段·网络深化（iter 391 下一批：torrent_proto）
+- `.hl` 文件：`448`（76 根目录 + 379 内核模块）
+- H-L 总行数：`~151,600`
+- 内核模块：`379`
+- Shell 命令：`1471`
+- 最近完成功能迭代：`393`（torrent_proto + opentelemetry + prometheus）
+- 当前阶段：第四阶段·网络深化（iter 394 下一批：grpc_stream）
 - **Milestone M3 已达成**（iter 385，完整存储引擎）
+
+## Iteration 393 — prometheus.hl：Prometheus 指标采集与文本导出
+
+- **`prometheus.hl`**（Buffer: 0x1C00000）：PM_MAXMETRICS=32，4 种类型
+  - Counter / Gauge / Histogram / Summary（`pm_counter/pm_gauge/pm_histogram/pm_summary`）
+  - 标签支持：每个指标最多 4 个 key_hash=val_hash 标签对（`pm_label`）
+  - `pm_inc(id)` / `pm_add(id, delta)` / `pm_set(id, val)`：修改值
+  - Histogram：8 固定桶（上界 1/5/10/50/100/500/1000/+Inf），累积计数 + sum + count
+  - Summary：最多 64 个观测值，插入排序后用百分位索引（`pm_quantile(id, pct)`）
+  - 测试：counter=3；gauge=32768；histogram sum=211 count=3 b0=0 b2=2；p50=500 p90=900 → PASS
+
+## Iteration 392 — opentelemetry.hl：分布式追踪（W3C Trace Context）
+
+- **`opentelemetry.hl`**（Buffer: 0x1BF0000）：OT_MAXSPANS=32，OT_MAXATTRS=8/span
+  - Span 字段：trace_id / span_id / parent_span / name_hash / start_tick / end_tick / status
+  - `otel_trace_new()`：创建新 Trace，返回 trace_idx
+  - `otel_span_start(tid, parent, name)` → `otel_span_attr(slot, k, v)` → `otel_span_end(slot)`
+  - Status：UNSET=0 / OK=1 / ERROR=2；`otel_span_set_status`
+  - `otel_export()`：序列化已结束 span 到导出缓冲区（5字段/span：trace/id/parent/status/duration）
+  - 测试：1 trace + 3 spans（root + db.query + cache.lookup(ERROR)）→ export=3，duration>0 → PASS
+
+## Iteration 391 — torrent_proto.hl：BitTorrent 对等协议（BEP-3）
+
+- **`torrent_proto.hl`**（Buffer: 0x1BE0000）：BT_MAXPEERS=16，BT_MAXPIECES=64
+  - 消息类型：CHOKE/UNCHOKE/INTERESTED/NOT_INTERESTED/HAVE/BITFIELD/REQUEST/PIECE/CANCEL
+  - `bt_handshake(peer_id)`：握手交换 + BITFIELD 协商，进入 ACTIVE 状态
+  - `bt_recv_bitfield(peer_id, bitfield_hash)`：逐位解码对端拥有的分片，更新稀缺度计数器
+  - `bt_select_rarest(peer_id)`：稀缺优先选取对端有、我方无的最稀缺分片
+  - `bt_request_piece(peer_id, piece_idx)`：发送 REQUEST，模拟接收 PIECE 响应
+  - `bt_download_progress()`：返回完成百分比×100（0–10000）
+  - 测试：3 个对端各有不同分片组；下载 2 片；progress=2500；rarest≥4 → PASS
 
 ## Iteration 390 — dht.hl：Kademlia 分布式哈希表
 

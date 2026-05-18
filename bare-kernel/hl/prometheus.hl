@@ -1,0 +1,252 @@
+// prometheus.hl -- Prometheus metrics exposition format (iter 393)
+// Buffer: 0x1C00000
+// PM_MAXMETRICS=32; metric types: COUNTER=1 GAUGE=2 HISTOGRAM=3 SUMMARY=4
+// Text exposition format: "# HELP", "# TYPE", metric lines
+// Labels: up to PM_MAXLABELS=4 per metric (key_hash=val_hash pairs)
+// Histogram: PM_HIST_BUCKETS=8 fixed upper bounds: 1,5,10,50,100,500,1000,+Inf
+// Summary: p50/p90/p99 via sorted observation buffer (max 64 samples)
+
+let PM_MAXMETRICS  = 32;
+let PM_MAXLABELS   = 4;
+let PM_HIST_BUCKETS= 8;
+let PM_MAXSAMPLES  = 64;
+
+// Metric types
+let PM_COUNTER   = 1;
+let PM_GAUGE     = 2;
+let PM_HISTOGRAM = 3;
+let PM_SUMMARY   = 4;
+
+// Metric fields
+let pm_type      = array(32, 0);
+let pm_name_hash = array(32, 0);
+let pm_value     = array(32, 0);   // counter/gauge value
+let pm_active    = array(32, 0);
+let pm_n_metrics = 0;
+
+// Label storage: pm_lkey[metric*4+i], pm_lval[metric*4+i]
+let PM_LBL_STRIDE = 4;
+let pm_lkey       = array(128, 0);
+let pm_lval       = array(128, 0);
+let pm_lused      = array(128, 0);
+let pm_nlabels    = array(32, 0);
+
+// Histogram bucket counts (flat: metric*8 + bucket_idx)
+// Bounds: 1, 5, 10, 50, 100, 500, 1000, +Inf
+let PM_HB_STRIDE  = 8;
+let pm_hb_count   = array(256, 0);  // PM_MAXMETRICS * PM_HIST_BUCKETS
+let pm_hb_bound   = array(8, 0);    // upper bounds
+let pm_hb_sum     = array(32, 0);   // observation sum per histogram metric
+let pm_hb_total   = array(32, 0);   // total count per histogram metric
+
+// Summary sample buffer (flat: metric*64 + sample_idx)
+let PM_SMP_STRIDE = 64;
+let pm_smp        = array(2048, 0); // 32 * 64
+let pm_smp_n      = array(32, 0);   // sample count per metric
+
+fn pm_init() {
+    set_at(pm_hb_bound, 0, 1);
+    set_at(pm_hb_bound, 1, 5);
+    set_at(pm_hb_bound, 2, 10);
+    set_at(pm_hb_bound, 3, 50);
+    set_at(pm_hb_bound, 4, 100);
+    set_at(pm_hb_bound, 5, 500);
+    set_at(pm_hb_bound, 6, 1000);
+    set_at(pm_hb_bound, 7, 32767);  // +Inf sentinel
+    let i = 0;
+    while i < PM_MAXMETRICS {
+        set_at(pm_active,  i, 0);
+        set_at(pm_value,   i, 0);
+        set_at(pm_nlabels, i, 0);
+        set_at(pm_hb_sum,  i, 0);
+        set_at(pm_hb_total,i, 0);
+        set_at(pm_smp_n,   i, 0);
+        i += 1;
+    }
+    pm_n_metrics = 0;
+    return 0;
+}
+
+fn _pm_alloc(type_, name_hash) {
+    let id = pm_n_metrics;
+    set_at(pm_type,      id, type_);
+    set_at(pm_name_hash, id, name_hash);
+    set_at(pm_value,     id, 0);
+    set_at(pm_active,    id, 1);
+    set_at(pm_nlabels,   id, 0);
+    set_at(pm_hb_sum,    id, 0);
+    set_at(pm_hb_total,  id, 0);
+    set_at(pm_smp_n,     id, 0);
+    pm_n_metrics += 1;
+    return id;
+}
+
+fn pm_counter(name_hash)   { return _pm_alloc(PM_COUNTER,   name_hash); }
+fn pm_gauge(name_hash)     { return _pm_alloc(PM_GAUGE,     name_hash); }
+fn pm_histogram(name_hash) { return _pm_alloc(PM_HISTOGRAM, name_hash); }
+fn pm_summary(name_hash)   { return _pm_alloc(PM_SUMMARY,   name_hash); }
+
+fn pm_label(id, key_hash, val_hash) {
+    let n = pm_nlabels[id];
+    if n >= PM_MAXLABELS { return 0 - 1; }
+    let base = id * PM_LBL_STRIDE + n;
+    set_at(pm_lkey,  base, key_hash);
+    set_at(pm_lval,  base, val_hash);
+    set_at(pm_lused, base, 1);
+    set_at(pm_nlabels, id, n + 1);
+    return 0;
+}
+
+fn pm_inc(id) {
+    set_at(pm_value, id, pm_value[id] + 1);
+    return pm_value[id];
+}
+
+fn pm_add(id, delta) {
+    set_at(pm_value, id, pm_value[id] + delta);
+    return pm_value[id];
+}
+
+fn pm_set(id, val) {
+    set_at(pm_value, id, val);
+    return 0;
+}
+
+fn pm_get(id) { return pm_value[id]; }
+
+fn pm_observe(id, val) {
+    // Histogram or Summary observation
+    if pm_type[id] == PM_HISTOGRAM {
+        set_at(pm_hb_sum,   id, pm_hb_sum[id] + val);
+        set_at(pm_hb_total, id, pm_hb_total[id] + 1);
+        // Increment all buckets where val <= bound
+        let b = 0;
+        while b < PM_HIST_BUCKETS {
+            if val <= pm_hb_bound[b] {
+                let bidx = id * PM_HB_STRIDE + b;
+                set_at(pm_hb_count, bidx, pm_hb_count[bidx] + 1);
+            }
+            b += 1;
+        }
+    } else {
+        // Summary: store sample (ring buffer)
+        let n   = pm_smp_n[id];
+        let slot = n - (n / PM_MAXSAMPLES) * PM_MAXSAMPLES;
+        set_at(pm_smp, id * PM_SMP_STRIDE + slot, val);
+        set_at(pm_smp_n, id, n + 1);
+    }
+    return 0;
+}
+
+fn _pm_sort_samples(id) {
+    // Insertion sort of samples in place (max PM_MAXSAMPLES)
+    let n = pm_smp_n[id];
+    if n > PM_MAXSAMPLES { n = PM_MAXSAMPLES; }
+    let base = id * PM_SMP_STRIDE;
+    let i = 1;
+    while i < n {
+        let key = pm_smp[base + i];
+        let j   = i - 1;
+        let go  = 1;
+        while go == 1 {
+            if j >= 0 {
+                if pm_smp[base + j] > key {
+                    set_at(pm_smp, base + j + 1, pm_smp[base + j]);
+                    j -= 1;
+                } else {
+                    go = 0;
+                }
+            } else {
+                go = 0;
+            }
+        }
+        set_at(pm_smp, base + j + 1, key);
+        i += 1;
+    }
+    return n;
+}
+
+fn pm_quantile(id, q_pct) {
+    // Returns q_pct-th percentile (0-100)
+    let n = _pm_sort_samples(id);
+    if n == 0 { return 0; }
+    let idx = q_pct * n / 100;
+    if idx >= n { idx = n - 1; }
+    return pm_smp[id * PM_SMP_STRIDE + idx];
+}
+
+fn pm_hist_bucket(id, b) {
+    return pm_hb_count[id * PM_HB_STRIDE + b];
+}
+
+fn pm_hist_sum(id)   { return pm_hb_sum[id]; }
+fn pm_hist_count(id) { return pm_hb_total[id]; }
+
+fn pm_metric_count() { return pm_n_metrics; }
+
+fn pm_test() {
+    pm_init();
+
+    // Counter: http_requests_total
+    let c1 = pm_counter(1001);
+    pm_label(c1, 200, 300);   // method="GET"
+    pm_inc(c1); pm_inc(c1); pm_inc(c1);
+    let cv = pm_get(c1);      // should be 3
+
+    // Gauge: memory_bytes
+    let g1 = pm_gauge(1002);
+    pm_set(g1, 65536);
+    pm_set(g1, 32768);
+    let gv = pm_get(g1);      // should be 32768
+
+    // Histogram: request_duration_ms
+    let h1 = pm_histogram(1003);
+    pm_observe(h1, 3);     // bucket ≤5 and ≤10 ... ≤+Inf
+    pm_observe(h1, 8);     // bucket ≤10 ... ≤+Inf
+    pm_observe(h1, 200);   // bucket ≤500 ≤1000 ≤+Inf
+    let hsum = pm_hist_sum(h1);     // 3+8+200=211
+    let hcnt = pm_hist_count(h1);   // 3
+    let hb0  = pm_hist_bucket(h1, 0);  // bound≤1: 0
+    let hb2  = pm_hist_bucket(h1, 2);  // bound≤10: 2
+
+    // Summary: response_size_bytes
+    let s1 = pm_summary(1004);
+    pm_observe(s1, 100); pm_observe(s1, 200); pm_observe(s1, 300);
+    pm_observe(s1, 400); pm_observe(s1, 500); pm_observe(s1, 600);
+    pm_observe(s1, 700); pm_observe(s1, 800); pm_observe(s1, 900);
+    pm_observe(s1, 1000);
+    let p50 = pm_quantile(s1, 50);  // 5th element of sorted 10 = 500
+    let p90 = pm_quantile(s1, 90);  // 9th element = 900
+
+    print("pm_test: cv=" + to_string(cv)
+          + " gv=" + to_string(gv)
+          + " hsum=" + to_string(hsum)
+          + " hcnt=" + to_string(hcnt)
+          + " hb0=" + to_string(hb0)
+          + " hb2=" + to_string(hb2)
+          + " p50=" + to_string(p50)
+          + " p90=" + to_string(p90));
+
+    if cv == 3 {
+        if gv == 32768 {
+            if hsum == 211 {
+                if hcnt == 3 {
+                    if hb0 == 0 {
+                        if hb2 == 2 {
+                            if p50 == 500 {
+                                if p90 == 900 {
+                                    print("pm_test: PASS");
+                                    return 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    print("pm_test: FAIL");
+    return 0;
+}
+
+print("prometheus.hl loaded");

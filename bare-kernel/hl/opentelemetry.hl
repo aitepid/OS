@@ -1,0 +1,234 @@
+// opentelemetry.hl -- OpenTelemetry distributed tracing (iter 392)
+// Buffer: 0x1BF0000
+// W3C Trace Context (RFC): 128-bit trace_id, 64-bit span_id
+// OT_MAXSPANS=32, OT_MAXATTRS=8 per span, OT_MAXTRACES=8
+// Span lifecycle: START → add attrs/events → set status → END
+// Export: OTLP-like flat serialization (span records in export buffer)
+// Status codes: UNSET=0 OK=1 ERROR=2
+
+let OT_MAXSPANS  = 32;
+let OT_MAXATTRS  = 8;
+let OT_MAXTRACES = 8;
+
+// Status codes
+let OT_STATUS_UNSET = 0;
+let OT_STATUS_OK    = 1;
+let OT_STATUS_ERROR = 2;
+
+// Span field arrays
+let ot_span_trace   = array(32, 0);   // trace_id (high 32-bit part)
+let ot_span_id      = array(32, 0);   // span_id
+let ot_span_parent  = array(32, 0);   // parent span_id (0 = root)
+let ot_span_name    = array(32, 0);   // operation name hash
+let ot_span_start   = array(32, 0);   // start tick
+let ot_span_end_t   = array(32, 0);   // end tick (0 = still open)
+let ot_span_status  = array(32, 0);   // status code
+let ot_span_active  = array(32, 0);   // 1 = allocated
+
+// Per-span attribute storage (flat: span*8 + attr_idx)
+let OT_ATTR_STRIDE  = 8;
+let ot_attr_key     = array(256, 0);  // OT_MAXSPANS * OT_MAXATTRS
+let ot_attr_val     = array(256, 0);
+let ot_attr_used    = array(256, 0);
+let ot_attr_n       = array(32, 0);   // attr count per span
+
+// Trace table
+let ot_trace_id     = array(8, 0);    // trace IDs
+let ot_trace_root   = array(8, 0);    // root span id per trace
+let ot_trace_active = array(8, 0);    // 1 = open
+let ot_n_traces     = 0;
+
+// Global counters
+let ot_n_spans      = 0;
+let ot_n_exported   = 0;
+
+// Export buffer (flat: 5 fields per span)
+let OT_EXP_STRIDE = 5;
+let ot_export_buf = array(160, 0);  // 32 spans * 5 fields
+let ot_export_n   = 0;
+
+// Monotone tick counter (simulates clock)
+let ot_tick       = 0;
+
+fn otel_init() {
+    let i = 0;
+    while i < OT_MAXSPANS {
+        set_at(ot_span_active, i, 0);
+        set_at(ot_span_status, i, OT_STATUS_UNSET);
+        set_at(ot_attr_n, i, 0);
+        i += 1;
+    }
+    let j = 0;
+    while j < OT_MAXTRACES {
+        set_at(ot_trace_active, j, 0);
+        j += 1;
+    }
+    ot_n_spans    = 0;
+    ot_n_traces   = 0;
+    ot_n_exported = 0;
+    ot_export_n   = 0;
+    ot_tick       = 0;
+    return 0;
+}
+
+fn _ot_alloc_span() {
+    // Find free span slot
+    let i = 0;
+    while i < OT_MAXSPANS {
+        if ot_span_active[i] == 0 { return i; }
+        i += 1;
+    }
+    return 0 - 1;
+}
+
+fn otel_trace_new() {
+    // Create new trace, return trace_idx
+    let tid = ot_n_traces;
+    let trace_id = tid * 31 + ot_tick * 7 + 1;
+    set_at(ot_trace_id,     tid, trace_id);
+    set_at(ot_trace_root,   tid, 0 - 1);
+    set_at(ot_trace_active, tid, 1);
+    ot_n_traces += 1;
+    ot_tick += 1;
+    return tid;
+}
+
+fn otel_span_start(trace_idx, parent_span, name_hash) {
+    let slot = _ot_alloc_span();
+    if slot == 0 - 1 { return 0 - 1; }
+    let span_id = ot_n_spans * 17 + ot_tick * 3 + name_hash;
+    let p = 65521;
+    span_id = span_id - (span_id / p) * p;
+    set_at(ot_span_trace,  slot, ot_trace_id[trace_idx]);
+    set_at(ot_span_id,     slot, span_id);
+    set_at(ot_span_parent, slot, parent_span);
+    set_at(ot_span_name,   slot, name_hash);
+    set_at(ot_span_start,  slot, ot_tick);
+    set_at(ot_span_end_t,  slot, 0);
+    set_at(ot_span_status, slot, OT_STATUS_UNSET);
+    set_at(ot_span_active, slot, 1);
+    set_at(ot_attr_n,      slot, 0);
+    if ot_trace_root[trace_idx] == 0 - 1 {
+        set_at(ot_trace_root, trace_idx, slot);
+    }
+    ot_n_spans += 1;
+    ot_tick    += 1;
+    return slot;
+}
+
+fn otel_span_attr(slot, key_hash, val_hash) {
+    if slot == 0 - 1 { return 0 - 1; }
+    let an = ot_attr_n[slot];
+    if an >= OT_MAXATTRS { return 0 - 1; }
+    let ai = slot * OT_ATTR_STRIDE + an;
+    set_at(ot_attr_key,  ai, key_hash);
+    set_at(ot_attr_val,  ai, val_hash);
+    set_at(ot_attr_used, ai, 1);
+    set_at(ot_attr_n, slot, an + 1);
+    return an;
+}
+
+fn otel_span_set_status(slot, status) {
+    if slot == 0 - 1 { return 0 - 1; }
+    set_at(ot_span_status, slot, status);
+    return 0;
+}
+
+fn otel_span_end(slot) {
+    if slot == 0 - 1 { return 0 - 1; }
+    set_at(ot_span_end_t, slot, ot_tick);
+    if ot_span_status[slot] == OT_STATUS_UNSET {
+        set_at(ot_span_status, slot, OT_STATUS_OK);
+    }
+    ot_tick += 1;
+    return ot_span_end_t[slot] - ot_span_start[slot];
+}
+
+fn otel_export() {
+    // Serialize finished spans to export buffer
+    ot_export_n = 0;
+    let i = 0;
+    while i < OT_MAXSPANS {
+        if ot_span_active[i] == 1 {
+            if ot_span_end_t[i] > 0 {
+                let b = ot_export_n * OT_EXP_STRIDE;
+                set_at(ot_export_buf, b,     ot_span_trace[i]);
+                set_at(ot_export_buf, b + 1, ot_span_id[i]);
+                set_at(ot_export_buf, b + 2, ot_span_parent[i]);
+                set_at(ot_export_buf, b + 3, ot_span_status[i]);
+                set_at(ot_export_buf, b + 4,
+                       ot_span_end_t[i] - ot_span_start[i]);
+                ot_export_n   += 1;
+                ot_n_exported += 1;
+                set_at(ot_span_active, i, 0);  // mark as exported
+            }
+        }
+        i += 1;
+    }
+    return ot_export_n;
+}
+
+fn otel_span_duration(slot) {
+    if ot_span_end_t[slot] == 0 { return 0 - 1; }
+    return ot_span_end_t[slot] - ot_span_start[slot];
+}
+
+fn otel_span_id_of(slot)     { return ot_span_id[slot]; }
+fn otel_span_status_of(slot) { return ot_span_status[slot]; }
+fn otel_attr_count(slot)     { return ot_attr_n[slot]; }
+fn otel_total_spans()        { return ot_n_spans; }
+fn otel_exported_count()     { return ot_n_exported; }
+
+fn otel_test() {
+    otel_init();
+
+    // Create trace
+    let tid = otel_trace_new();
+
+    // Root span: "http.request"
+    let s0 = otel_span_start(tid, 0, 1001);
+    otel_span_attr(s0, 100, 200);   // http.method=GET
+    otel_span_attr(s0, 101, 201);   // http.url=/api
+
+    // Child span: "db.query"
+    let s1 = otel_span_start(tid, ot_span_id_of(s0), 1002);
+    otel_span_attr(s1, 110, 210);   // db.statement
+    otel_span_end(s1);
+
+    // Child span with error: "cache.lookup"
+    let s2 = otel_span_start(tid, ot_span_id_of(s0), 1003);
+    otel_span_set_status(s2, OT_STATUS_ERROR);
+    otel_span_end(s2);
+
+    // End root span
+    otel_span_end(s0);
+
+    // Export
+    let n_exp = otel_export();
+
+    let dur0  = otel_span_duration(s0);
+    let stat2 = otel_span_status_of(s2);
+    let attrs1= otel_attr_count(s1);
+
+    print("otel_test: tid=" + to_string(tid)
+          + " s0=" + to_string(s0)
+          + " dur0=" + to_string(dur0)
+          + " stat2=" + to_string(stat2)
+          + " attrs1=" + to_string(attrs1)
+          + " exported=" + to_string(n_exp));
+
+    if n_exp == 3 {
+        if dur0 > 0 {
+            if stat2 == OT_STATUS_ERROR {
+                if attrs1 == 1 {
+                    print("otel_test: PASS");
+                    return 1;
+                }
+            }
+        }
+    }
+    print("otel_test: FAIL");
+    return 0;
+}
+
+print("opentelemetry.hl loaded");

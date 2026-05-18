@@ -285,13 +285,16 @@ fn shell_handle(cmd) {
         serial_print("HTTP3/QUIC:    h3q init  h3q test  h3q connect <cid> <server>  h3q get <cid> <path>  h3q post <cid> <path> <body>  h3q status <cid> <sid>  h3q close <cid>");
         serial_print("DoH:           doh init  doh test  doh query <domain> <type>  doh cache  doh server <hash>  doh flush  doh tick");
         serial_print("DHT:           dht init  dht test  dht self <id>  dht add <id> <addr>  dht put <k> <v>  dht get <k>  dht find <target>");
+        serial_print("BitTorrent:    bt init  bt test  bt torrent <hash> <len> <npieces> <psz>  bt addpeer <hash>  bt handshake <id>  bt request <peer> <piece>  bt progress");
+        serial_print("OpenTelemetry: otel init  otel test  otel trace  otel span <tid> <par> <name>  otel attr <slot> <key> <val>  otel end <slot>  otel export");
+        serial_print("Prometheus:    pm init  pm test  pm counter <name>  pm gauge <name>  pm set <id> <val>  pm observe <id> <val>  pm quantile <id> <pct>");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
     }
 
     if cmd == "ver" {
-        return "HicOS 6.0 -- Hilbert-Lang Kernel (376 modules, pure H-L, zero deps)";
+        return "HicOS 6.0 -- Hilbert-Lang Kernel (379 modules, pure H-L, zero deps)";
     }
 
     if cmd == "uptime" {
@@ -7221,6 +7224,122 @@ fn shell_handle_ext(cmd) {
         let dhtfn = dht_find_node(dhtft);
         return "dht: closest_count=" + to_string(dhtfn);
     }
+
+    // --- BitTorrent ---
+    if cmd == "bt init" { bt_init(); return "bt: init"; }
+    if cmd == "bt test" { let btr = bt_test(); return "bt: " + to_string(btr); }
+    if _starts_with(cmd, "bt torrent ") {
+        let bttra  = str_sub(cmd, 11, len(cmd));
+        let btts0  = _find_space(bttra);
+        let bttih  = to_int(str_sub(bttra, 0, btts0));
+        let bttra1 = str_sub(bttra, btts0 + 1, len(bttra));
+        let btts1  = _find_space(bttra1);
+        let bttln  = to_int(str_sub(bttra1, 0, btts1));
+        let bttra2 = str_sub(bttra1, btts1 + 1, len(bttra1));
+        let btts2  = _find_space(bttra2);
+        let bttnp  = to_int(str_sub(bttra2, 0, btts2));
+        let bttps  = to_int(str_sub(bttra2, btts2 + 1, len(bttra2)));
+        bt_set_torrent(bttih, bttln, bttnp, bttps);
+        return "bt: torrent set pieces=" + to_string(bttnp);
+    }
+    if _starts_with(cmd, "bt addpeer ") {
+        let btaph = to_int(str_sub(cmd, 11, len(cmd)));
+        let btapi = bt_add_peer(btaph);
+        return "bt: peer id=" + to_string(btapi);
+    }
+    if _starts_with(cmd, "bt handshake ") {
+        let bthsi = to_int(str_sub(cmd, 13, len(cmd)));
+        let bthsr = bt_handshake(bthsi);
+        return "bt: state=" + to_string(bthsr);
+    }
+    if _starts_with(cmd, "bt request ") {
+        let btrqa  = str_sub(cmd, 11, len(cmd));
+        let btrqs0 = _find_space(btrqa);
+        let btrqpi = to_int(str_sub(btrqa, 0, btrqs0));
+        let btrqpc = to_int(str_sub(btrqa, btrqs0 + 1, len(btrqa)));
+        let btrqv  = bt_request_piece(btrqpi, btrqpc);
+        return "bt: piece_data=" + to_string(btrqv);
+    }
+    if cmd == "bt progress" {
+        return "bt: progress=" + to_string(bt_download_progress()) + "/10000 complete=" + to_string(bt_complete_count());
+    }
+
+    // --- OpenTelemetry ---
+    if cmd == "otel init" { otel_init(); return "otel: init"; }
+    if cmd == "otel test" { let otr = otel_test(); return "otel: " + to_string(otr); }
+    if cmd == "otel trace" {
+        let otid = otel_trace_new();
+        return "otel: trace_idx=" + to_string(otid);
+    }
+    if _starts_with(cmd, "otel span ") {
+        let otsa  = str_sub(cmd, 10, len(cmd));
+        let otss0 = _find_space(otsa);
+        let otstid= to_int(str_sub(otsa, 0, otss0));
+        let otsa1 = str_sub(otsa, otss0 + 1, len(otsa));
+        let otss1 = _find_space(otsa1);
+        let otspar= to_int(str_sub(otsa1, 0, otss1));
+        let otsnm = to_int(str_sub(otsa1, otss1 + 1, len(otsa1)));
+        let otssl = otel_span_start(otstid, otspar, otsnm);
+        return "otel: span_slot=" + to_string(otssl);
+    }
+    if _starts_with(cmd, "otel attr ") {
+        let otaa  = str_sub(cmd, 10, len(cmd));
+        let otas0 = _find_space(otaa);
+        let otasl = to_int(str_sub(otaa, 0, otas0));
+        let otaa1 = str_sub(otaa, otas0 + 1, len(otaa));
+        let otas1 = _find_space(otaa1);
+        let otakv = to_int(str_sub(otaa1, 0, otas1));
+        let otavv = to_int(str_sub(otaa1, otas1 + 1, len(otaa1)));
+        otel_span_attr(otasl, otakv, otavv);
+        return "otel: attr added";
+    }
+    if _starts_with(cmd, "otel end ") {
+        let otens = to_int(str_sub(cmd, 9, len(cmd)));
+        let otend = otel_span_end(otens);
+        return "otel: duration=" + to_string(otend);
+    }
+    if cmd == "otel export" {
+        let oten = otel_export();
+        return "otel: exported=" + to_string(oten);
+    }
+
+    // --- Prometheus ---
+    if cmd == "pm init" { pm_init(); return "pm: init"; }
+    if cmd == "pm test" { let pmr = pm_test(); return "pm: " + to_string(pmr); }
+    if _starts_with(cmd, "pm counter ") {
+        let pmcn = to_int(str_sub(cmd, 11, len(cmd)));
+        let pmci = pm_counter(pmcn);
+        return "pm: counter id=" + to_string(pmci);
+    }
+    if _starts_with(cmd, "pm gauge ") {
+        let pmgn = to_int(str_sub(cmd, 9, len(cmd)));
+        let pmgi = pm_gauge(pmgn);
+        return "pm: gauge id=" + to_string(pmgi);
+    }
+    if _starts_with(cmd, "pm set ") {
+        let pmsa  = str_sub(cmd, 7, len(cmd));
+        let pmss0 = _find_space(pmsa);
+        let pmsid = to_int(str_sub(pmsa, 0, pmss0));
+        let pmsv  = to_int(str_sub(pmsa, pmss0 + 1, len(pmsa)));
+        pm_set(pmsid, pmsv);
+        return "pm: set id=" + to_string(pmsid) + " val=" + to_string(pmsv);
+    }
+    if _starts_with(cmd, "pm observe ") {
+        let pmoa  = str_sub(cmd, 11, len(cmd));
+        let pmos0 = _find_space(pmoa);
+        let pmoid = to_int(str_sub(pmoa, 0, pmos0));
+        let pmov  = to_int(str_sub(pmoa, pmos0 + 1, len(pmoa)));
+        pm_observe(pmoid, pmov);
+        return "pm: observed";
+    }
+    if _starts_with(cmd, "pm quantile ") {
+        let pmqа  = str_sub(cmd, 12, len(cmd));
+        let pmqs0 = _find_space(pmqа);
+        let pmqid = to_int(str_sub(pmqа, 0, pmqs0));
+        let pmqpct= to_int(str_sub(pmqа, pmqs0 + 1, len(pmqа)));
+        let pmqv  = pm_quantile(pmqid, pmqpct);
+        return "pm: p" + to_string(pmqpct) + "=" + to_string(pmqv);
+    }
 }
 
 // Self-test
@@ -7231,7 +7350,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 1450 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld + lca + virtualtree + dominator + sam + manacher + eertree + bwt + lyndon + zfunction + ir + regalloc + codegen + ioring + persistseg + rollbackdsu + splaytree + mo + sqrtdecomp + cht + matrixexpo + numtheory + strhash + intervaldp + gametheory + trie + lichao + dcdp + monoqueue + segbeats + lct + quickselect + ntt + segmerge + palindromedp + knuthdp + bitset + millerrabin + pollardrho + linearbasis + geometry2d + rotcalip + halfplane + dinic + blockcuttree + bridgetree + polyinv + polylnexp + polysqrt + bitmaskdp + digitdp + brokenprofiledp + wavelettree + implicittreap + chtholly + suffixtree + bsgs + minencircle + gvn + licm + dce2 + linearscandra + regcoalesce + callingconv + typeinfer + typechecker + generics + linkerelf + linkerar + dynlinker + dwarf + perfcounter + jitstub + btree + btreeplus + lsmmemtable + wal + mvcc + transaction + indexhash + indexbtree + queryplan + dbengine + wireguard + tls13 + http3quic + doh + dht");
+print("shell.hl loaded -- 1471 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld + lca + virtualtree + dominator + sam + manacher + eertree + bwt + lyndon + zfunction + ir + regalloc + codegen + ioring + persistseg + rollbackdsu + splaytree + mo + sqrtdecomp + cht + matrixexpo + numtheory + strhash + intervaldp + gametheory + trie + lichao + dcdp + monoqueue + segbeats + lct + quickselect + ntt + segmerge + palindromedp + knuthdp + bitset + millerrabin + pollardrho + linearbasis + geometry2d + rotcalip + halfplane + dinic + blockcuttree + bridgetree + polyinv + polylnexp + polysqrt + bitmaskdp + digitdp + brokenprofiledp + wavelettree + implicittreap + chtholly + suffixtree + bsgs + minencircle + gvn + licm + dce2 + linearscandra + regcoalesce + callingconv + typeinfer + typechecker + generics + linkerelf + linkerar + dynlinker + dwarf + perfcounter + jitstub + btree + btreeplus + lsmmemtable + wal + mvcc + transaction + indexhash + indexbtree + queryplan + dbengine + wireguard + tls13 + http3quic + doh + dht + bittorrent + opentelemetry + prometheus");
 
 // Main shell loop (called from kernel_init)
 

@@ -1,0 +1,242 @@
+// torrent_proto.hl -- BitTorrent peer wire protocol (iter 391)
+// Buffer: 0x1BE0000
+// BEP-3 peer wire protocol: handshake + piece exchange
+// BT_MAXPEERS=16, BT_MAXPIECES=64
+// Message types: CHOKE=0 UNCHOKE=1 INTERESTED=2 NOT_INTERESTED=3
+//                HAVE=4 BITFIELD=5 REQUEST=6 PIECE=7 CANCEL=8
+// Piece selection: rarest-first (count peer ownership per piece)
+
+let BT_MAXPEERS  = 16;
+let BT_MAXPIECES = 64;
+let BT_MAXFILES  = 8;
+
+// Message types
+let BT_CHOKE         = 0;
+let BT_UNCHOKE       = 1;
+let BT_INTERESTED    = 2;
+let BT_NOT_INTERESTED= 3;
+let BT_HAVE          = 4;
+let BT_BITFIELD      = 5;
+let BT_REQUEST       = 6;
+let BT_PIECE         = 7;
+let BT_CANCEL        = 8;
+
+// Peer states
+let BT_P_IDLE         = 0;
+let BT_P_HANDSHAKED   = 1;
+let BT_P_ACTIVE       = 2;
+let BT_P_CHOKED       = 3;
+let BT_P_DISCONNECTED = 4;
+
+// Peer table
+let bt_peer_state    = array(16, 0);
+let bt_peer_hash     = array(16, 0);   // address hash
+let bt_peer_am_choke = array(16, 0);   // we choke them
+let bt_peer_interested = array(16, 0); // they are interested
+let bt_n_peers       = 0;
+
+// Piece ownership per peer: bt_peer_pieces[peer*64 + piece] = 1 if has
+let bt_peer_pieces   = array(1024, 0); // BT_MAXPEERS * BT_MAXPIECES
+
+// Local piece state
+let bt_have_piece    = array(64, 0);   // 1 = we have this piece
+let bt_piece_data    = array(64, 0);   // piece data (simplified as single hash)
+let bt_n_pieces      = 0;
+let bt_piece_size    = 0;
+
+// Torrent info
+let bt_info_hash     = 0;
+let bt_total_length  = 0;
+
+// Download statistics
+let bt_downloaded    = 0;
+let bt_uploaded      = 0;
+let bt_n_complete    = 0;   // pieces we fully have
+
+// Rarity count: how many peers have each piece
+let bt_piece_rarity  = array(64, 0);
+
+fn bt_init() {
+    let i = 0;
+    while i < BT_MAXPEERS {
+        set_at(bt_peer_state,      i, BT_P_IDLE);
+        set_at(bt_peer_hash,       i, 0);
+        set_at(bt_peer_am_choke,   i, 1);
+        set_at(bt_peer_interested, i, 0);
+        i += 1;
+    }
+    let j = 0;
+    while j < BT_MAXPIECES {
+        set_at(bt_have_piece,   j, 0);
+        set_at(bt_piece_data,   j, 0);
+        set_at(bt_piece_rarity, j, 0);
+        j += 1;
+    }
+    bt_n_peers      = 0;
+    bt_n_pieces     = 0;
+    bt_piece_size   = 0;
+    bt_info_hash    = 0;
+    bt_total_length = 0;
+    bt_downloaded   = 0;
+    bt_uploaded     = 0;
+    bt_n_complete   = 0;
+    return 0;
+}
+
+fn bt_set_torrent(info_hash, total_len, n_pieces, piece_sz) {
+    bt_info_hash    = info_hash;
+    bt_total_length = total_len;
+    bt_n_pieces     = n_pieces;
+    bt_piece_size   = piece_sz;
+    return 0;
+}
+
+fn bt_add_peer(peer_hash) {
+    let id = bt_n_peers;
+    set_at(bt_peer_hash,  id, peer_hash);
+    set_at(bt_peer_state, id, BT_P_IDLE);
+    bt_n_peers += 1;
+    return id;
+}
+
+fn bt_handshake(peer_id) {
+    // Exchange handshake: pstrlen(1) + pstr(19) + reserved(8) + info_hash(20) + peer_id(20)
+    // Simulated: just check info_hash matches
+    if bt_peer_state[peer_id] != BT_P_IDLE { return 0; }
+    set_at(bt_peer_state, peer_id, BT_P_HANDSHAKED);
+    // After handshake, exchange BITFIELD
+    set_at(bt_peer_state, peer_id, BT_P_ACTIVE);
+    return BT_P_ACTIVE;
+}
+
+fn bt_recv_bitfield(peer_id, bitfield_hash) {
+    // Simulate receiving BITFIELD: decode which pieces the peer has
+    // bitfield_hash encodes presence as (bitfield_hash >> piece_idx) & 1
+    // Simplified: peer has piece i if (bitfield_hash / 2^i) mod 2 == 1
+    let i = 0;
+    while i < bt_n_pieces {
+        let bit = 1;
+        let k   = 0;
+        while k < i { bit = bit * 2; k += 1; }
+        let q = bitfield_hash / bit;
+        let has = q - (q / 2) * 2;
+        set_at(bt_peer_pieces, peer_id * BT_MAXPIECES + i, has);
+        if has == 1 {
+            set_at(bt_piece_rarity, i, bt_piece_rarity[i] + 1);
+        }
+        i += 1;
+    }
+    return 0;
+}
+
+fn bt_select_rarest(peer_id) {
+    // Rarest-first: find piece peer has, we don't, with min rarity
+    let best_piece  = 0 - 1;
+    let best_rarity = BT_MAXPEERS + 1;
+    let i = 0;
+    while i < bt_n_pieces {
+        if bt_have_piece[i] == 0 {
+            if bt_peer_pieces[peer_id * BT_MAXPIECES + i] == 1 {
+                if bt_piece_rarity[i] < best_rarity {
+                    best_rarity = bt_piece_rarity[i];
+                    best_piece  = i;
+                }
+            }
+        }
+        i += 1;
+    }
+    return best_piece;
+}
+
+fn bt_request_piece(peer_id, piece_idx) {
+    // Send REQUEST message: piece_idx + offset=0 + block_len=piece_size
+    if bt_peer_state[peer_id] != BT_P_ACTIVE { return 0 - 1; }
+    if bt_peer_am_choke[peer_id] == 1 {
+        // Send INTERESTED first
+        set_at(bt_peer_interested, peer_id, 1);
+        set_at(bt_peer_am_choke,   peer_id, 0);
+    }
+    // Simulate receiving PIECE response
+    let piece_data = bt_info_hash * piece_idx + bt_peer_hash[peer_id];
+    let p = 65521;
+    piece_data = piece_data - (piece_data / p) * p;
+    set_at(bt_piece_data, piece_idx, piece_data);
+    set_at(bt_have_piece, piece_idx, 1);
+    bt_downloaded += bt_piece_size;
+    bt_n_complete += 1;
+    // Announce HAVE to other peers
+    return piece_data;
+}
+
+fn bt_got_piece(piece_idx) { return bt_have_piece[piece_idx]; }
+fn bt_piece_val(piece_idx)  { return bt_piece_data[piece_idx]; }
+
+fn bt_download_progress() {
+    // Returns percentage * 100 (0-10000)
+    if bt_n_pieces == 0 { return 0; }
+    return (bt_n_complete * 10000) / bt_n_pieces;
+}
+
+fn bt_seed_ratio() {
+    // Returns ratio * 100
+    if bt_downloaded == 0 { return 0; }
+    return (bt_uploaded * 100) / bt_downloaded;
+}
+
+fn bt_choke_peer(peer_id) {
+    set_at(bt_peer_state, peer_id, BT_P_CHOKED);
+    return 0;
+}
+
+fn bt_peer_count()    { return bt_n_peers; }
+fn bt_complete_count(){ return bt_n_complete; }
+
+fn bt_test() {
+    bt_init();
+    bt_set_torrent(12345, 1048576, 8, 131072);  // 1MB, 8 pieces, 128KB each
+
+    // Add 3 peers
+    let p0 = bt_add_peer(1001);
+    let p1 = bt_add_peer(1002);
+    let p2 = bt_add_peer(1003);
+
+    // Handshake all
+    bt_handshake(p0);
+    bt_handshake(p1);
+    bt_handshake(p2);
+
+    // Receive bitfields: p0 has pieces 0,2,4,6; p1 has 1,3,5,7; p2 has 0,1,2,3
+    bt_recv_bitfield(p0, 85);   // 0101 0101 in binary = pieces 0,2,4,6
+    bt_recv_bitfield(p1, 170);  // 1010 1010 = pieces 1,3,5,7
+    bt_recv_bitfield(p2, 15);   // 0000 1111 = pieces 0,1,2,3
+
+    // Select rarest piece from p0 (pieces 4,6 have rarity=1)
+    let rarest = bt_select_rarest(p0);
+
+    // Request piece 0 from p0
+    let pdata = bt_request_piece(p0, 0);
+
+    // Request piece 1 from p1
+    bt_request_piece(p1, 1);
+
+    let progress = bt_download_progress();
+    let complete = bt_complete_count();
+
+    print("bt_test: rarest=" + to_string(rarest)
+          + " pdata=" + to_string(pdata)
+          + " complete=" + to_string(complete)
+          + " progress=" + to_string(progress));
+
+    if complete == 2 {
+        if progress == 2500 {
+            if rarest >= 4 {
+                print("bt_test: PASS");
+                return 1;
+            }
+        }
+    }
+    print("bt_test: FAIL");
+    return 0;
+}
+
+print("torrent_proto.hl loaded");
