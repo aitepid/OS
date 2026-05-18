@@ -1,0 +1,158 @@
+// index_hash.hl -- Hash Index: chained hash table for column indexing (iter 382)
+// Buffer: 0x1B50000
+// IH_BUCKETS=64, IH_MAXENT=256; collision via chaining (entry pool with next[] links)
+// Hash: k mod 64 = k - (k/64)*64
+// Supports: insert(key, rid), lookup(key)->rid, delete(key), load factor
+
+let IH_BUCKETS = 64;
+let IH_MAXENT  = 256;
+let IH_EMPTY   = 0 - 1;   // sentinel (stored as 0xFFFF... in simulation)
+
+// Bucket heads: ih_head[b] = first entry index, or IH_EMPTY
+let ih_head = array(64,  0);
+
+// Entry pool
+let ih_key  = array(256, 0);
+let ih_rid  = array(256, 0);   // row id
+let ih_next = array(256, 0);   // next in chain (IH_EMPTY = end)
+let ih_used = array(256, 0);   // 1 = live
+
+let ih_n    = 0;   // high-water mark in pool
+let ih_size = 0;   // live entries
+
+fn ih_init() {
+    ih_n    = 0;
+    ih_size = 0;
+    let i = 0;
+    while i < IH_BUCKETS {
+        set_at(ih_head, i, IH_EMPTY);
+        i += 1;
+    }
+    return 0;
+}
+
+fn _ih_hash(k) {
+    // k mod IH_BUCKETS without %
+    let b = k - (k / IH_BUCKETS) * IH_BUCKETS;
+    if b < 0 { b = 0 - b; }
+    return b;
+}
+
+fn _ih_alloc() {
+    // Linear scan for free slot
+    let i = 0;
+    let go = 1;
+    while go == 1 {
+        if i < IH_MAXENT {
+            if ih_used[i] == 0 { go = 0; }
+            else { i += 1; }
+        } else {
+            i = IH_EMPTY;
+            go = 0;
+        }
+    }
+    return i;
+}
+
+fn ih_insert(key, rid) {
+    let b = _ih_hash(key);
+    // Walk chain: update if key exists
+    let cur = ih_head[b];
+    let go = 1;
+    while go == 1 {
+        if cur == IH_EMPTY { go = 0; }
+        else {
+            if ih_key[cur] == key {
+                set_at(ih_rid, cur, rid);
+                return 0;
+            }
+            cur = ih_next[cur];
+        }
+    }
+    // New entry
+    let e = _ih_alloc();
+    if e == IH_EMPTY { return IH_EMPTY; }
+    set_at(ih_key,  e, key);
+    set_at(ih_rid,  e, rid);
+    set_at(ih_used, e, 1);
+    set_at(ih_next, e, ih_head[b]);
+    set_at(ih_head, b, e);
+    ih_size += 1;
+    if e >= ih_n { ih_n = e + 1; }
+    return e;
+}
+
+fn ih_lookup(key) {
+    let b = _ih_hash(key);
+    let cur = ih_head[b];
+    let go = 1;
+    while go == 1 {
+        if cur == IH_EMPTY { go = 0; }
+        else {
+            if ih_key[cur] == key { return ih_rid[cur]; }
+            cur = ih_next[cur];
+        }
+    }
+    return IH_EMPTY;
+}
+
+fn ih_delete(key) {
+    let b = _ih_hash(key);
+    let cur  = ih_head[b];
+    let prev = IH_EMPTY;
+    let go = 1;
+    while go == 1 {
+        if cur == IH_EMPTY { go = 0; }
+        else {
+            if ih_key[cur] == key {
+                if prev == IH_EMPTY { set_at(ih_head, b, ih_next[cur]); }
+                else                { set_at(ih_next, prev, ih_next[cur]); }
+                set_at(ih_used, cur, 0);
+                ih_size -= 1;
+                return 1;
+            }
+            prev = cur;
+            cur  = ih_next[cur];
+        }
+    }
+    return 0;
+}
+
+fn ih_size_get()    { return ih_size; }
+fn ih_load_factor() { return (ih_size * 100) / IH_BUCKETS; }
+
+fn ih_test() {
+    ih_init();
+    let i = 0;
+    while i < 10 {
+        ih_insert(i * 7, i * 100);   // keys 0,7,14,21,28,35,42,49,56,63
+        i += 1;
+    }
+    let r0  = ih_lookup(0);
+    let r7  = ih_lookup(7);
+    let r63 = ih_lookup(63);
+    let miss = ih_lookup(99);
+    ih_delete(14);
+    let r14 = ih_lookup(14);
+    print("ih_test: r0=" + to_string(r0) + " r7=" + to_string(r7) + " r63=" + to_string(r63));
+    print("ih_test: miss=" + to_string(miss) + " r14_after_del=" + to_string(r14));
+    print("ih_test: size=" + to_string(ih_size_get()) + " load=" + to_string(ih_load_factor()));
+    if r0 == 0 {
+        if r7 == 100 {
+            if r63 == 900 {
+                if miss == IH_EMPTY {
+                    if r14 == IH_EMPTY {
+                        if ih_size_get() == 9 {
+                            print("ih_test: PASS");
+                            return 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    print("ih_test: FAIL");
+    return 0;
+}
+
+print("index_hash.hl loaded");

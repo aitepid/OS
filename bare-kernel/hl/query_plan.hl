@@ -1,0 +1,209 @@
+// query_plan.hl -- Rule-based query plan generator (iter 384)
+// Buffer: 0x1B70000
+// QP_MAXNODES=32 plan tree nodes stored as flat arrays
+// Node types: SEQSCAN=1 INDEXSCAN=2 NESTLOOP=3 HASHJOIN=4 SORT=5 AGG=6 FILTER=7 PROJ=8
+// Optimizer rules:
+//   index_id >= 0 → INDEXSCAN (cost ≈ log2(n) * sel); else SEQSCAN (cost = n)
+//   join(left, right): HASHJOIN if both sides > 100 rows; else NESTLOOP
+//   ORDER BY → SORT on top (cost += n*log2(n))
+//   GROUP BY → AGG on top (cost += n, rows = groups)
+
+let QP_MAXNODES = 32;
+let QP_SEQSCAN   = 1;
+let QP_INDEXSCAN = 2;
+let QP_NESTLOOP  = 3;
+let QP_HASHJOIN  = 4;
+let QP_SORT      = 5;
+let QP_AGG       = 6;
+let QP_FILTER    = 7;
+let QP_PROJ      = 8;
+
+// Node fields
+let qp_type     = array(32, 0);
+let qp_table    = array(32, 0);   // table id
+let qp_index    = array(32, 0);   // index id (-1 = none)
+let qp_left     = array(32, 0);   // left child id (-1 = leaf)
+let qp_right    = array(32, 0);   // right child id (-1 = none)
+let qp_cost     = array(32, 0);   // cumulative cost estimate
+let qp_rows     = array(32, 0);   // estimated output rows
+
+let qp_n    = 0;
+let qp_root = 0;
+
+fn qp_init() {
+    qp_n    = 0;
+    qp_root = 0;
+    return 0;
+}
+
+fn _qp_alloc(tp) {
+    let id = qp_n;
+    set_at(qp_type,  id, tp);
+    set_at(qp_table, id, 0);
+    set_at(qp_index, id, 0 - 1);
+    set_at(qp_left,  id, 0 - 1);
+    set_at(qp_right, id, 0 - 1);
+    set_at(qp_cost,  id, 0);
+    set_at(qp_rows,  id, 0);
+    qp_n += 1;
+    return id;
+}
+
+fn _qp_ilog2(n) {
+    let v = n;
+    let r = 0;
+    while v > 1 { v = v / 2; r += 1; }
+    return r;
+}
+
+fn qp_scan(table_id, n_rows, index_id, sel_rows) {
+    // Plan a table scan; index_id>=0 → INDEXSCAN
+    let nd = 0;
+    if index_id >= 0 {
+        nd = _qp_alloc(QP_INDEXSCAN);
+        set_at(qp_cost, nd, _qp_ilog2(n_rows) * sel_rows + 1);
+    } else {
+        nd = _qp_alloc(QP_SEQSCAN);
+        set_at(qp_cost, nd, n_rows);
+    }
+    set_at(qp_table, nd, table_id);
+    set_at(qp_index, nd, index_id);
+    set_at(qp_rows,  nd, sel_rows);
+    return nd;
+}
+
+fn qp_join(left_nd, right_nd) {
+    // Choose HASHJOIN if both outputs > 100 rows, else NESTLOOP
+    let lr = qp_rows[left_nd];
+    let rr = qp_rows[right_nd];
+    let nd = 0;
+    let join_cost = 0;
+    if lr > 100 {
+        if rr > 100 {
+            nd = _qp_alloc(QP_HASHJOIN);
+            join_cost = lr + rr;   // hash build + probe
+        } else {
+            nd = _qp_alloc(QP_NESTLOOP);
+            join_cost = lr * rr;
+        }
+    } else {
+        nd = _qp_alloc(QP_NESTLOOP);
+        join_cost = lr * rr;
+    }
+    set_at(qp_left,  nd, left_nd);
+    set_at(qp_right, nd, right_nd);
+    set_at(qp_rows,  nd, lr);   // simplified: left-side cardinality
+    set_at(qp_cost,  nd, qp_cost[left_nd] + qp_cost[right_nd] + join_cost);
+    return nd;
+}
+
+fn qp_filter(child_nd, sel_rows) {
+    // WHERE clause push-down
+    let nd = _qp_alloc(QP_FILTER);
+    set_at(qp_left,  nd, child_nd);
+    set_at(qp_rows,  nd, sel_rows);
+    set_at(qp_cost,  nd, qp_cost[child_nd] + qp_rows[child_nd]);
+    return nd;
+}
+
+fn qp_sort(child_nd) {
+    // ORDER BY — sort cost n*log2(n)
+    let n  = qp_rows[child_nd];
+    let nd = _qp_alloc(QP_SORT);
+    set_at(qp_left,  nd, child_nd);
+    set_at(qp_rows,  nd, n);
+    set_at(qp_cost,  nd, qp_cost[child_nd] + n * _qp_ilog2(n + 1));
+    return nd;
+}
+
+fn qp_agg(child_nd, n_groups) {
+    // GROUP BY — AGG cost = input rows
+    let n  = qp_rows[child_nd];
+    let nd = _qp_alloc(QP_AGG);
+    set_at(qp_left,  nd, child_nd);
+    set_at(qp_rows,  nd, n_groups);
+    set_at(qp_cost,  nd, qp_cost[child_nd] + n);
+    return nd;
+}
+
+fn qp_proj(child_nd) {
+    // SELECT col list — zero extra cost
+    let nd = _qp_alloc(QP_PROJ);
+    set_at(qp_left, nd, child_nd);
+    set_at(qp_rows, nd, qp_rows[child_nd]);
+    set_at(qp_cost, nd, qp_cost[child_nd]);
+    return nd;
+}
+
+fn qp_node_count() { return qp_n; }
+fn qp_total_cost(nd) { return qp_cost[nd]; }
+
+fn _qp_type_name(tp) {
+    if tp == QP_SEQSCAN   { return "SEQSCAN";   }
+    if tp == QP_INDEXSCAN { return "INDEXSCAN"; }
+    if tp == QP_NESTLOOP  { return "NESTLOOP";  }
+    if tp == QP_HASHJOIN  { return "HASHJOIN";  }
+    if tp == QP_SORT      { return "SORT";      }
+    if tp == QP_AGG       { return "AGG";       }
+    if tp == QP_FILTER    { return "FILTER";    }
+    if tp == QP_PROJ      { return "PROJ";      }
+    return "?";
+}
+
+fn qp_explain(nd) {
+    // Print plan tree (iterative post-order via manual stack simulation)
+    let i = 0;
+    while i < qp_n {
+        print("  [" + to_string(i) + "] " + _qp_type_name(qp_type[i])
+              + " rows=" + to_string(qp_rows[i])
+              + " cost=" + to_string(qp_cost[i]));
+        i += 1;
+    }
+    return 0;
+}
+
+fn qp_test() {
+    qp_init();
+
+    // Query: SELECT a FROM T1 JOIN T2 ON ... WHERE T1.id=X ORDER BY T1.ts GROUP BY region
+    // T1: 1000 rows, indexed col (idx=0), sel=5
+    // T2: 200 rows, no index, full scan
+
+    let s1  = qp_scan(1, 1000, 0, 5);     // INDEXSCAN T1 → 5 rows
+    let s2  = qp_scan(2, 200, 0 - 1, 200); // SEQSCAN T2 → 200 rows
+    let jn  = qp_join(s1, s2);             // NESTLOOP (5 * 200)
+    let srt = qp_sort(jn);                 // SORT
+    let agg = qp_agg(srt, 3);             // AGG 3 groups
+    let prj = qp_proj(agg);               // PROJ
+
+    qp_root = prj;
+    qp_explain(prj);
+
+    print("qp_test: nodes=" + to_string(qp_n) + " total_cost=" + to_string(qp_total_cost(prj)));
+
+    let t1 = qp_type[s1];
+    let t2 = qp_type[s2];
+    let t3 = qp_type[jn];
+    let t4 = qp_type[srt];
+    let t5 = qp_type[agg];
+    let t6 = qp_type[prj];
+
+    if t1 == QP_INDEXSCAN {
+        if t2 == QP_SEQSCAN {
+            if t3 == QP_NESTLOOP {
+                if t4 == QP_SORT {
+                    if t5 == QP_AGG {
+                        if t6 == QP_PROJ {
+                            print("qp_test: PASS");
+                            return 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    print("qp_test: FAIL");
+    return 0;
+}
+
+print("query_plan.hl loaded");

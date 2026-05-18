@@ -2,12 +2,39 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`436`（76 根目录 + 367 内核模块）
-- H-L 总行数：`~144,200`
-- 内核模块：`367`
-- Shell 命令：`1387`
-- 最近完成功能迭代：`381`（wal + mvcc + transaction）
-- 当前阶段：第三阶段·存储引擎（iter 379–385）
+- `.hl` 文件：`439`（76 根目录 + 370 内核模块）
+- H-L 总行数：`~149,000`
+- 内核模块：`370`
+- Shell 命令：`1408`
+- 最近完成功能迭代：`384`（index_hash + index_btree + query_plan）
+- 当前阶段：第三阶段·存储引擎（iter 385 下一批：db_engine）
+
+## Iteration 384 — query_plan.hl：规则驱动查询计划生成
+
+- **`query_plan.hl`**（Buffer: 0x1B70000）：QP_MAXNODES=32
+  - 节点类型：SEQSCAN=1 / INDEXSCAN=2 / NESTLOOP=3 / HASHJOIN=4 / SORT=5 / AGG=6 / FILTER=7 / PROJ=8
+  - 规则：`index_id≥0` → INDEXSCAN（cost=log2(n)×sel）；否则 SEQSCAN（cost=n）
+  - JOIN 选择：两侧行数均>100 → HASHJOIN；否则 NESTLOOP
+  - ORDER BY → SORT（cost+=n×log2(n)）；GROUP BY → AGG（cost+=n）
+  - `qp_explain(root)`：打印全部节点 type/rows/cost
+  - 测试：T1(1000行,有索引,sel=5) + T2(200行,无索引) → INDEXSCAN+SEQSCAN+NESTLOOP+SORT+AGG+PROJ → PASS
+
+## Iteration 383 — index_btree.hl：B-Tree 索引层（多 RID + 区间扫描）
+
+- **`index_btree.hl`**（Buffer: 0x1B60000）：IBT_MAXKEYS=64，IBT_MAXRIDS=4
+  - 有序键数组（二分定位 + 插入右移），非唯一索引：同键最多 4 个 RID
+  - `ibt_insert(k, rid)`：键已存在则追加 RID；新键则二分定位并移位插入
+  - `ibt_range_scan(lo, hi)`：二分定位起点，线性扫描至 hi
+  - 测试：插入 8 个键（key=1 两次）→ range[2,5]=4；key1 有 2 个 RID → PASS
+
+## Iteration 382 — index_hash.hl：哈希索引（链式冲突解决）
+
+- **`index_hash.hl`**（Buffer: 0x1B50000）：IH_BUCKETS=64，IH_MAXENT=256
+  - 桶数组 + 条目池链表；`_ih_hash(k) = k - (k/64)*64`（无 %）
+  - `ih_insert(k, rid)`：链中已有则更新；否则头插法追加
+  - `ih_delete(k)`：链表解链，条目标记为空闲
+  - `ih_load_factor()`：size×100 / buckets
+  - 测试：插入 10 项 → lookup 正确；删除 key=14 后 miss → size=9 → PASS
 
 ## Iteration 381 — transaction.hl：ACID 事务 API
 
