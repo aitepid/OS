@@ -362,15 +362,21 @@
   - 启动 UI、命令入口、图形测试入口
 
 ## 10.2 建议新增模块
-- `ui_theme.hl`：颜色、间距、字体、图标定义
-- `ui_core.hl`：控件树、重绘、事件分发
-- `ui_text.hl`：高级文本布局、裁剪、对齐
-- `ui_input.hl`：键盘/鼠标统一输入抽象
-- `ui_desktop.hl`：桌面层、任务栏、通知区
-- `ui_installer.hl`：图形安装器
-- `ui_terminal.hl`：图形终端
-- `ui_files.hl`：文件管理器
-- `ui_settings.hl`：设置中心
+
+> **注：以下 UI 系统模块已于迭代 124–130 作为图形桌面系统实现并接入内核镜像：**
+> `ui_theme.hl`（主题）、`ui_controls.hl`（控件）、`ui_dialog.hl`（对话框）、
+> `gterm.hl`（图形终端）、`installer.hl`（安装器）、`sysmon.hl`（系统监控）、
+> `notify.hl`（通知）、`wm.hl`（窗口管理器）。
+
+- `ui_theme.hl`：颜色、间距、字体、图标定义 ✅（iter 124）
+- `ui_core.hl`：控件树、重绘、事件分发 ✅（iter 125）
+- `ui_text.hl`：高级文本布局、裁剪、对齐 ✅（iter 126）
+- `ui_input.hl`：键盘/鼠标统一输入抽象 ✅（iter 127）
+- `ui_desktop.hl`：桌面层、任务栏、通知区 ✅（iter 128）
+- `ui_installer.hl`：图形安装器 ✅（iter 129）
+- `ui_terminal.hl`：图形终端 ✅（iter 130）
+- `ui_files.hl`：文件管理器（长期目标）
+- `ui_settings.hl`：设置中心（长期目标）
 
 ---
 

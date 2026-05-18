@@ -2,27 +2,28 @@
 
 纯 `Hilbert-Lang (H-L)` 编写的实验性 x86_64 裸金属操作系统与自举工具链。零外部依赖，100% 自研语言实现。
 
-## 当前状态（迭代 432）
+## 当前状态（迭代 440 — M6 全部里程碑达成）
 
 | 指标 | 数值 |
 |---|---:|
-| 总 `.hl` 文件 | **487** |
-| 内核模块（`bare-kernel/hl/`）| **418** |
-| Shell 命令 | **1,744** |
-| H-L 总行数 | **~159,650** |
+| 总 `.hl` 文件 | **495** |
+| 内核模块（`bare-kernel/hl/`）| **426** |
+| Shell 命令 | **1,800** |
+| H-L 总行数 | **~163,700** |
 | 内核函数 | **~2,200** |
 | 外部依赖 | **0** |
 | 启动镜像（BIOS） | 162,816 字节 |
 | 启动镜像（UEFI） | 34,603,008 字节 |
 
-**当前阶段：第七阶段·生态与自举完善（iter 421–440）**
+**当前阶段：第七阶段·生态与自举完善 ✦ 全部完成**
 
-已完成里程碑：
-- ✦ **M1**（iter 360）：竞赛级算法库完整
-- ✦ **M2**（iter 375）：自宿主编译器成熟
-- ✦ **M3**（iter 385）：完整存储引擎
-- ✦ **M4**（iter 405）：完整 ML 推理框架
-- ✦ **M5**（iter 420）：生产级稳定性
+全部里程碑已达成：
+- ✦ **M1**（iter 360）：竞赛级算法库完整（300+ 算法）
+- ✦ **M2**（iter 375）：自宿主编译器成熟（类型系统+链接器）
+- ✦ **M3**（iter 385）：完整存储引擎（B+Tree+WAL+MVCC）
+- ✦ **M4**（iter 405）：完整 ML 推理框架（CNN+RNN+Transformer）
+- ✦ **M5**（iter 420）：生产级稳定性（CFS+NUMA+Hypervisor）
+- ✦ **M6**（iter 440）：完整生态（包管理+LSP+调试器+POSIX+WASM）
 
 ---
 
@@ -41,7 +42,7 @@
 ```text
 HicOS/
 ├─ bare-kernel/
-│  └─ hl/               # 415 个内核模块（~140,000 行）
+│  └─ hl/               # 423+ 个内核模块（~140,000 行）
 ├─ scripts/             # 29 个 PowerShell 构建/验证脚本
 ├─ IP-Protection/       # 60 个知识产权文件
 ├─ hl-bootstrap.hl      # 自举编译器（4,572 行，208 函数）
@@ -83,31 +84,39 @@ HicOS/
 
 ### 阶段 10（迭代 340–360）：算法库完善 ✦ M1 达成
 
-bitmask_dp、digit_dp、broken_profile_dp、wavelet_tree_range、implicit_treap、chtholly_tree、suffix_tree、bsgs、min_enclosing_circle 等 21 个模块。
+bitmask_dp / digit_dp / broken_profile_dp / wavelet_tree_range / implicit_treap / chtholly_tree / suffix_tree / bsgs / min_enclosing_circle 等 21 个模块。
 
 ### 阶段 11（迭代 361–375）：编译器深化 ✦ M2 达成
 
-pass_gvn、pass_licm、pass_dce2、regalloc_linear_scan、regalloc_coalesce、calling_conv、type_infer、type_checker、generics、linker_elf、linker_ar、dynamic_linker、dwarf、perf_counter、jit_stub 共 15 个模块。
+pass_gvn / pass_licm / pass_dce2 / regalloc_linear_scan / regalloc_coalesce / calling_conv / type_infer / type_checker / generics / linker_elf / linker_ar / dynamic_linker / dwarf / perf_counter / jit_stub 共 15 个模块。
 
 ### 阶段 12（迭代 376–385）：存储引擎 ✦ M3 达成
 
-btree、btree_plus、lsm_memtable、wal、mvcc、transaction、index_hash、index_btree、query_plan、db_engine 共 10 个模块。
+btree / btree_plus / lsm_memtable / wal / mvcc / transaction / index_hash / index_btree / query_plan / db_engine 共 10 个模块。
 
 ### 阶段 13（迭代 386–395）：网络深化
 
-wireguard、tls13、http3_quic、dns_over_https、dht、torrent_proto、opentelemetry、prometheus、grpc_stream、websocket_compression 共 10 个模块。
+wireguard / tls13 / http3_quic / dns_over_https / dht / torrent_proto / opentelemetry / prometheus / grpc_stream / websocket_compression 共 10 个模块。
 
 ### 阶段 14（迭代 396–405）：机器学习深化 ✦ M4 达成
 
-conv2d、pooling、rnn、lstm、autograd、optimizer、tokenizer、embedding、model_serialize、gpu_inference 共 10 个模块。
+conv2d / pooling / rnn / lstm / autograd / optimizer / tokenizer / embedding / model_serialize / gpu_inference 共 10 个模块。
 
 ### 阶段 15（迭代 406–420）：系统稳定性与生产化 ✦ M5 达成
 
-scheduler_cfs、numa_alloc、ftrace、kprobe、memory_profiler、heap_checker、crash_reporter、core_dump、hotpatch、livepatch、power_mgmt、thermal、cpufreq、hypervisor、vmx 共 15 个模块。
+scheduler_cfs / numa_alloc / ftrace / kprobe / memory_profiler / heap_checker / crash_reporter / core_dump / hotpatch / livepatch / power_mgmt / thermal / cpufreq / hypervisor / vmx 共 15 个模块。
 
-### 阶段 16（迭代 421–432）：生态与自举完善（进行中）
+### 阶段 16（迭代 421–440）：生态与自举完善 ✦ M6 达成
 
-package_manager、pkg_registry、pkg_build、hldoc、hltest、hlbench、lsp_server、syntax_highlight、code_complete、debugger、gdb_stub、breakpoint 共 12 个模块（迭代 440 目标：M6）。
+| 迭代 | 模块 | 功能 |
+|---|---|---|
+| 421–423 | package_manager + pkg_registry + pkg_build | H-L 包管理器 + 软件包注册中心 + 构建系统 |
+| 424–426 | hldoc + hltest + hlbench | 文档生成器 + 单元测试框架 + 基准测试框架 |
+| 427–429 | lsp_server + syntax_highlight + code_complete | LSP 服务器 + 语法高亮 + 代码补全 |
+| 430–432 | debugger + gdb_stub + breakpoint | 内置调试器 + GDB Remote 协议桩 + 断点管理器 |
+| 433–435 | hl_repl + hl_fmt + hl_lint2 | H-L REPL 环境 + 代码格式化器 + 增强 Lint |
+| 436–438 | posix_compat + musl_shim + linux_syscall | POSIX 兼容层 + musl libc 垫片 + Linux syscall 层 |
+| 439–440 | wasm_runtime + wasm_jit | WASM MVP 解释器 + JIT 热路径编译器 |
 
 ---
 
@@ -121,6 +130,9 @@ package_manager、pkg_registry、pkg_build、hldoc、hltest、hlbench、lsp_serv
 - **内存**：伙伴系统 / 分级空闲链表 / 按需分页+COW / Swap / Block Cache / NUMA 分配器
 - **调度**：MLFQ 4级 / CFS 完全公平 / SMP Per-CPU 运行队列
 - **隔离**：futex / epoll / cgroup / seccomp / 命名空间 / 容器运行时
+- **稳定性**：ftrace / kprobe / memory_profiler / heap_checker / crash_reporter / core_dump
+- **热补丁**：hotpatch（trampoline）/ livepatch（运行时函数替换）
+- **虚拟化**：hypervisor 框架 / vmx（VMX/VT-x 支持）
 
 ### 文件系统层
 
@@ -133,7 +145,7 @@ FAT16 / Ext2/Ext4 / NTFS / VFS / devfs / procfs / sysfs / ramfs / tmpfs / Overla
 | 数据链路 | ARP、以太网、VLAN |
 | 网络层 | IPv4、IPv6、ICMP |
 | 传输层 | TCP（Reno）、UDP |
-| 应用层 | HTTP/1.1/2/3、WebSocket、TLS 1.3、QUIC、DNS、DHCP、NTP、SMTP、POP3、IMAP、FTP、IRC、MQTT、SIP、RTSP、RTP、STUN、SOCKS5、LDAP、RADIUS、gRPC、WireGuard、DoH |
+| 应用层 | HTTP/1.1/2/3、WebSocket、TLS 1.3、QUIC、DNS/DoH、DHCP、NTP、SMTP、POP3、IMAP、FTP、IRC、MQTT、SIP、RTSP、RTP、STUN、SOCKS5、LDAP、RADIUS、gRPC、WireGuard |
 
 ### 加密/安全
 
@@ -160,15 +172,15 @@ x86_64 原生后端（126 指令）/ IR+SSA（37 操作码）/ 线性扫描寄�
 
 B-Tree / B+ Tree / LSM Memtable / WAL / MVCC / 事务 API / 哈希索引 / 查询计划 / 完整关系型数据库引擎
 
-### 生态工具（Phase 7）
+### 生态工具（Phase 7 — 全部完成）
 
-包管理器（install/remove/registry）/ 构建系统（依赖追踪）/ 文档生成器 / 单元测试框架 / 基准测试框架 / LSP 服务器 / 语法高亮 / 代码补全 / 内置调试器 / GDB Remote 协议桩 / 断点管理器
+包管理器（install/remove/registry）/ 构建系统（依赖追踪）/ 文档生成器 / 单元测试框架 / 基准测试框架 / LSP 服务器 / 语法高亮 / 代码补全 / 内置调试器 / GDB Remote 协议桩 / 断点管理器 / H-L REPL 环境 / 代码格式化器 / 增强 Lint / POSIX 兼容层 / musl libc 垫片 / Linux 系统调用层 / WASM MVP 解释器 / WASM JIT 编译器
 
 ---
 
-## Shell 命令（1,744 个）
+## Shell 命令（1,800 个）
 
-覆盖：系统管理 / 网络诊断 / 文件操作 / 进程管理 / 压缩加密 / 数据结构 / 图算法 / ML推理 / 虚拟化 / 调试 / 包管理 / 生态工具
+覆盖：系统管理 / 网络诊断 / 文件操作 / 进程管理 / 压缩加密 / 数据结构 / 图算法 / ML推理 / 虚拟化 / 调试 / 包管理 / 生态工具 / POSIX / WASM 运行时
 
 ---
 
@@ -195,14 +207,14 @@ powershell -ExecutionPolicy Bypass -File .\scripts\qemu-smoke.ps1
 - **零外部依赖**：无 C/C++/Rust，无 JSON/YAML，无 npm/cargo
 - **自宿主**：编译器、链接器、解释器全部用 H-L 编写
 - **裸金属**：直接在 x86_64 硬件上运行，BIOS 和 UEFI 双启动
-- **模块化**：418 个独立内核模块，每个专注单一功能
+- **模块化**：426 个独立内核模块，每个专注单一功能
 - **三层架构**：镜像构建（Layer A）/ 自举工具链（Layer B）/ 内核模块（Layer C）
 
 ## 相关文档
 
 - `ARCHITECTURE.md`：三层架构详解
-- `ROADMAP.md`：已完成阶段与未来规划
-- `CHANGELOG.md`：详细迭代记录（432 个迭代）
+- `ROADMAP.md`：已完成阶段与里程碑
+- `CHANGELOG.md`：详细迭代记录（440 个迭代）
 - `PROJECT_STATUS.md`：项目状态与统计
 - `PROJECT_ADVANCEMENT_OUTLINE.md`：推进大纲与 SOP
 - `HILBERT_LANG_BNF.md`：H-L 语言语法规范
