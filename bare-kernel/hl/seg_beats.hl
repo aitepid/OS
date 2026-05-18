@@ -1,0 +1,174 @@
+// seg_beats.hl -- Segment Tree Beats (Ji Driver Seg Tree) (iter 332)
+// Buffer: 0x1830000
+// Supports range chmin + range sum in O(n log^2 n) amortized.
+// Each node tracks: max, strict second-max, max-count, sum, lazy-chmin.
+
+let SB_MAX = 32;
+let SB_SZ  = 128;    // 4 * SB_MAX segment-tree nodes (1-indexed)
+let SB_INF = 999999;
+let SB_NEG = -999999;
+
+let sb_max   = array(128, 0);
+let sb_max2  = array(128, 0);
+let sb_maxcn = array(128, 0);
+let sb_sum   = array(128, 0);
+let sb_lazy  = array(128, 0);
+let sb_data  = array(32,  0);
+let sb_n     = 0;
+
+fn sb_init() {
+    sb_n = 0;
+    let i = 0;
+    while i < SB_SZ {
+        set_at(sb_max,   i, 0);
+        set_at(sb_max2,  i, SB_NEG);
+        set_at(sb_maxcn, i, 0);
+        set_at(sb_sum,   i, 0);
+        set_at(sb_lazy,  i, SB_INF);
+        i += 1;
+    }
+    i = 0;
+    while i < SB_MAX {
+        set_at(sb_data, i, 0);
+        i += 1;
+    }
+    return 0;
+}
+
+fn _sb_imax(a, b) {
+    if a > b { return a; }
+    return b;
+}
+
+fn _sb_pull(v) {
+    let l = v * 2;
+    let r = v * 2 + 1;
+    set_at(sb_sum, v, sb_sum[l] + sb_sum[r]);
+    if sb_max[l] == sb_max[r] {
+        set_at(sb_max,   v, sb_max[l]);
+        set_at(sb_max2,  v, _sb_imax(sb_max2[l], sb_max2[r]));
+        set_at(sb_maxcn, v, sb_maxcn[l] + sb_maxcn[r]);
+    } else {
+        if sb_max[l] > sb_max[r] {
+            set_at(sb_max,   v, sb_max[l]);
+            set_at(sb_max2,  v, _sb_imax(sb_max2[l], sb_max[r]));
+            set_at(sb_maxcn, v, sb_maxcn[l]);
+        } else {
+            set_at(sb_max,   v, sb_max[r]);
+            set_at(sb_max2,  v, _sb_imax(sb_max[l], sb_max2[r]));
+            set_at(sb_maxcn, v, sb_maxcn[r]);
+        }
+    }
+    return 0;
+}
+
+fn _sb_apply(v, val) {
+    if val >= sb_max[v] { return 0; }
+    set_at(sb_sum,  v, sb_sum[v] - (sb_max[v] - val) * sb_maxcn[v]);
+    set_at(sb_max,  v, val);
+    set_at(sb_lazy, v, val);
+    return 0;
+}
+
+fn _sb_push(v) {
+    let lz = sb_lazy[v];
+    if lz < SB_INF {
+        _sb_apply(v * 2,     lz);
+        _sb_apply(v * 2 + 1, lz);
+        set_at(sb_lazy, v, SB_INF);
+    }
+    return 0;
+}
+
+fn _sb_build(v, lo, hi) {
+    set_at(sb_lazy, v, SB_INF);
+    if lo == hi {
+        let val = sb_data[lo];
+        set_at(sb_sum,   v, val);
+        set_at(sb_max,   v, val);
+        set_at(sb_max2,  v, SB_NEG);
+        set_at(sb_maxcn, v, 1);
+        return 0;
+    }
+    let mid = (lo + hi) / 2;
+    _sb_build(v * 2, lo, mid);
+    _sb_build(v * 2 + 1, mid + 1, hi);
+    _sb_pull(v);
+    return 0;
+}
+
+fn sb_build(n) {
+    sb_n = n;
+    _sb_build(1, 0, n - 1);
+    return 0;
+}
+
+fn _sb_chmin(v, lo, hi, l, r, val) {
+    if lo > r || hi < l || sb_max[v] <= val { return 0; }
+    if lo >= l && hi <= r && sb_max2[v] < val {
+        _sb_apply(v, val);
+        return 0;
+    }
+    _sb_push(v);
+    let mid = (lo + hi) / 2;
+    _sb_chmin(v * 2, lo, mid, l, r, val);
+    _sb_chmin(v * 2 + 1, mid + 1, hi, l, r, val);
+    _sb_pull(v);
+    return 0;
+}
+
+fn sb_chmin(l, r, val) {
+    _sb_chmin(1, 0, sb_n - 1, l, r, val);
+    return 0;
+}
+
+fn _sb_query(v, lo, hi, l, r) {
+    if lo > r || hi < l { return 0; }
+    if lo >= l && hi <= r { return sb_sum[v]; }
+    _sb_push(v);
+    let mid = (lo + hi) / 2;
+    return _sb_query(v * 2, lo, mid, l, r) +
+           _sb_query(v * 2 + 1, mid + 1, hi, l, r);
+}
+
+fn sb_query(l, r) {
+    return _sb_query(1, 0, sb_n - 1, l, r);
+}
+
+fn sb_test() {
+    sb_init();
+    // data = [5,3,7,2,8,4,6,1], n=8, initial sum=36
+    set_at(sb_data, 0, 5);
+    set_at(sb_data, 1, 3);
+    set_at(sb_data, 2, 7);
+    set_at(sb_data, 3, 2);
+    set_at(sb_data, 4, 8);
+    set_at(sb_data, 5, 4);
+    set_at(sb_data, 6, 6);
+    set_at(sb_data, 7, 1);
+    sb_build(8);
+    let s0 = sb_query(0, 7);
+    // chmin(0,7,5): [5,3,5,2,5,4,5,1] sum=30
+    sb_chmin(0, 7, 5);
+    let s1 = sb_query(0, 7);
+    // chmin(2,5,3): [5,3,3,2,3,3,5,1] sum[0..7]=25 sum[2..5]=11
+    sb_chmin(2, 5, 3);
+    let s2 = sb_query(0, 7);
+    let s3 = sb_query(2, 5);
+    print("sb_test: s0=" + to_string(s0) + " s1=" + to_string(s1) +
+          " s2=" + to_string(s2) + " s3=" + to_string(s3));
+    if s0 == 36 {
+        if s1 == 30 {
+            if s2 == 25 {
+                if s3 == 11 {
+                    print("sb_test: PASS");
+                    return 1;
+                }
+            }
+        }
+    }
+    print("sb_test: FAIL");
+    return 0;
+}
+
+print("seg_beats.hl loaded");

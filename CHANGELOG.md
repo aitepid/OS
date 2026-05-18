@@ -2,11 +2,43 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`385`（76 根目录 + 316 内核模块）
-- H-L 总行数：`~113,800`
-- 内核模块：`316`
-- Shell 命令：`1025`
-- 最近完成功能迭代：`330`（trie + li_chao_tree + dc_dp）
+- `.hl` 文件：`388`（76 根目录 + 319 内核模块）
+- H-L 总行数：`~114,600`
+- 内核模块：`319`
+- Shell 命令：`1050`
+- 最近完成功能迭代：`333`（monotone_queue + seg_beats + link_cut_tree）
+
+## Iteration 333 — link_cut_tree.hl：Link-Cut Tree（动态森林路径查询）
+
+- **`bare-kernel/hl/link_cut_tree.hl`** 新增（~220 行）
+  - 辅助 Splay 树 + 路径翻转懒标记（`lk_rev[]`），1-indexed 节点 1..LK_N=32
+  - `lk_access(v)` — 打通 v 到根的首选路径，O(log n) 均摊
+  - `lk_makeroot(v)` — 换根（access + toggle rev）
+  - `lk_findroot(v)` — 找树根（access 后向左走到底）
+  - `lk_link(u,v)` / `lk_cut(u,v)` — 加边/删边
+  - `lk_connected(u,v)` — 连通性查询
+  - `lk_pathsum(u,v)` — 路径权值和（makeroot + access → lk_sum[v]）
+  - 测试：链 1-2-3-4-5，sum(1,5)=15，cut(3,4)，conn(1,5)=0，sum(1,3)=6
+  - Buffer: 0x1840000
+
+## Iteration 332 — seg_beats.hl：吉司机线段树（Segment Tree Beats）
+
+- **`bare-kernel/hl/seg_beats.hl`** 新增（~165 行）
+  - 每节点维护 max/max2/maxcnt/sum/lazy_chmin，支持区间 chmin + 区间求和
+  - `_sb_apply(v,val)` — O(1) 应用 chmin 当 val > max2：sum -= (max-val)*maxcnt
+  - `_sb_chmin(v,lo,hi,l,r,val)` — 当 val ≤ max2 时递归，O(n log² n) 均摊
+  - `sb_build(n)` / `sb_query(l,r)` — 从 sb_data[] 建树，区间求和
+  - 测试：[5,3,7,2,8,4,6,1] → chmin(0,7,5)→sum=30，chmin(2,5,3)→sum=25，sum[2..5]=11
+  - Buffer: 0x1830000
+
+## Iteration 331 — monotone_queue.hl：单调队列（滑动窗口 min/max）
+
+- **`bare-kernel/hl/monotone_queue.hl`** 新增（~85 行）
+  - `mq_slide_min(n,k)` — 填充 mq_min_res[i] = min(mq_data[i-k+1..i])，O(n)
+  - `mq_slide_max(n,k)` — 填充 mq_max_res[i] = max(...)，O(n)
+  - 单调递增/递减双端队列：deque 存下标，维护窗口内单调性
+  - 测试：data=[3,1,4,1,5,9,2,6], k=3 → min[2]=1, min[5]=1, max[2]=4, max[7]=9
+  - Buffer: 0x1820000
 
 ## Iteration 330 — dc_dp.hl：Divide-and-Conquer DP 优化
 

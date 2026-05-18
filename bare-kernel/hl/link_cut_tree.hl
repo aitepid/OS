@@ -1,0 +1,226 @@
+// link_cut_tree.hl -- Link-Cut Tree (LCT): dynamic forest path queries (iter 333)
+// Buffer: 0x1840000
+// lk_link(u,v): add edge; lk_cut(u,v): remove edge; lk_pathsum(u,v): sum on path.
+// Auxiliary splay trees + path reversal lazy flag. 1-indexed nodes 1..LK_N.
+// lk_ch[v*2]=left  lk_ch[v*2+1]=right  lk_fa[v]=splay-parent or path-parent.
+
+let LK_N = 32;
+
+let lk_ch  = array(64, 0);    // lk_ch[v*2] = left, lk_ch[v*2+1] = right (0=null)
+let lk_fa  = array(32, 0);    // parent in splay or path-parent when splay-root
+let lk_rev = array(32, 0);    // lazy reverse flag
+let lk_val = array(32, 0);    // node value
+let lk_sum = array(32, 0);    // path sum of splay subtree
+let lk_stk = array(32, 0);    // scratch stack for splay push-down
+let lk_n   = 0;
+
+fn lk_init(n) {
+    lk_n = n;
+    let i = 0;
+    while i <= n {
+        set_at(lk_ch,  i * 2,     0);
+        set_at(lk_ch,  i * 2 + 1, 0);
+        set_at(lk_fa,  i, 0);
+        set_at(lk_rev, i, 0);
+        set_at(lk_val, i, i);
+        set_at(lk_sum, i, i);
+        i += 1;
+    }
+    return 0;
+}
+
+fn _lk_is_root(v) {
+    let f = lk_fa[v];
+    if f == 0 { return 1; }
+    if lk_ch[f * 2] == v     { return 0; }
+    if lk_ch[f * 2 + 1] == v { return 0; }
+    return 1;
+}
+
+fn _lk_pull(v) {
+    let l = lk_ch[v * 2];
+    let r = lk_ch[v * 2 + 1];
+    let s = lk_val[v];
+    if l != 0 { s += lk_sum[l]; }
+    if r != 0 { s += lk_sum[r]; }
+    set_at(lk_sum, v, s);
+    return 0;
+}
+
+fn _lk_apply_rev(v) {
+    if v == 0 { return 0; }
+    let l = lk_ch[v * 2];
+    let r = lk_ch[v * 2 + 1];
+    set_at(lk_ch, v * 2,     r);
+    set_at(lk_ch, v * 2 + 1, l);
+    let rv = lk_rev[v];
+    set_at(lk_rev, v, 1 - rv);
+    return 0;
+}
+
+fn _lk_push(v) {
+    if lk_rev[v] == 1 {
+        let l = lk_ch[v * 2];
+        let r = lk_ch[v * 2 + 1];
+        if l != 0 { let rl = lk_rev[l]; set_at(lk_rev, l, 1 - rl); }
+        if r != 0 { let rr = lk_rev[r]; set_at(lk_rev, r, 1 - rr); }
+        let cl = lk_ch[v * 2];
+        let cr = lk_ch[v * 2 + 1];
+        set_at(lk_ch, v * 2,     cr);
+        set_at(lk_ch, v * 2 + 1, cl);
+        set_at(lk_rev, v, 0);
+    }
+    return 0;
+}
+
+fn _lk_rotate(v) {
+    let f   = lk_fa[v];
+    let g   = lk_fa[f];
+    let dir = 0;
+    if lk_ch[f * 2 + 1] == v { dir = 1; }
+    if dir == 0 {
+        let vr = lk_ch[v * 2 + 1];
+        set_at(lk_ch, f * 2, vr);
+        if vr != 0 { set_at(lk_fa, vr, f); }
+        set_at(lk_ch, v * 2 + 1, f);
+    } else {
+        let vl = lk_ch[v * 2];
+        set_at(lk_ch, f * 2 + 1, vl);
+        if vl != 0 { set_at(lk_fa, vl, f); }
+        set_at(lk_ch, v * 2, f);
+    }
+    if g != 0 {
+        if lk_ch[g * 2] == f     { set_at(lk_ch, g * 2,     v); }
+        if lk_ch[g * 2 + 1] == f { set_at(lk_ch, g * 2 + 1, v); }
+    }
+    set_at(lk_fa, v, g);
+    set_at(lk_fa, f, v);
+    _lk_pull(f);
+    _lk_pull(v);
+    return 0;
+}
+
+fn _lk_splay(v) {
+    let top = 0;
+    let u   = v;
+    while _lk_is_root(u) == 0 {
+        set_at(lk_stk, top, u);
+        top += 1;
+        u = lk_fa[u];
+    }
+    set_at(lk_stk, top, u);
+    top += 1;
+    let i = top - 1;
+    while i >= 0 {
+        _lk_push(lk_stk[i]);
+        i -= 1;
+    }
+    while _lk_is_root(v) == 0 {
+        let f = lk_fa[v];
+        if _lk_is_root(f) == 0 {
+            let g    = lk_fa[f];
+            let vdir = 0;
+            if lk_ch[f * 2 + 1] == v { vdir = 1; }
+            let fdir = 0;
+            if lk_ch[g * 2 + 1] == f { fdir = 1; }
+            if vdir == fdir { _lk_rotate(f); } else { _lk_rotate(v); }
+        }
+        _lk_rotate(v);
+    }
+    return 0;
+}
+
+fn lk_access(v) {
+    let last = 0;
+    let u    = v;
+    while u != 0 {
+        _lk_splay(u);
+        set_at(lk_ch, u * 2 + 1, last);
+        if last != 0 { set_at(lk_fa, last, u); }
+        _lk_pull(u);
+        last = u;
+        u = lk_fa[u];
+    }
+    _lk_splay(v);
+    return 0;
+}
+
+fn lk_makeroot(v) {
+    lk_access(v);
+    let rv = lk_rev[v];
+    set_at(lk_rev, v, 1 - rv);
+    return 0;
+}
+
+fn lk_findroot(v) {
+    lk_access(v);
+    let u = v;
+    _lk_push(u);
+    while lk_ch[u * 2] != 0 {
+        u = lk_ch[u * 2];
+        _lk_push(u);
+    }
+    _lk_splay(u);
+    return u;
+}
+
+fn lk_link(u, v) {
+    lk_makeroot(u);
+    if lk_findroot(v) != u {
+        set_at(lk_fa, u, v);
+    }
+    return 0;
+}
+
+fn lk_cut(u, v) {
+    lk_makeroot(u);
+    lk_access(v);
+    set_at(lk_ch, v * 2, 0);
+    set_at(lk_fa, u, 0);
+    _lk_pull(v);
+    return 0;
+}
+
+fn lk_connected(u, v) {
+    lk_makeroot(u);
+    let r = lk_findroot(v);
+    if r == u { return 1; }
+    return 0;
+}
+
+fn lk_pathsum(u, v) {
+    lk_makeroot(u);
+    lk_access(v);
+    return lk_sum[v];
+}
+
+fn lk_test() {
+    lk_init(5);
+    lk_link(1, 2);
+    lk_link(2, 3);
+    lk_link(3, 4);
+    lk_link(4, 5);
+    let ps15 = lk_pathsum(1, 5);
+    let c15  = lk_connected(1, 5);
+    lk_cut(3, 4);
+    let c15b = lk_connected(1, 5);
+    let ps13 = lk_pathsum(1, 3);
+    print("lk_test: path(1,5)=" + to_string(ps15) +
+          " conn(1,5)=" + to_string(c15) +
+          " conn(1,5)_cut=" + to_string(c15b) +
+          " path(1,3)=" + to_string(ps13));
+    if ps15 == 15 {
+        if c15 == 1 {
+            if c15b == 0 {
+                if ps13 == 6 {
+                    print("lk_test: PASS");
+                    return 1;
+                }
+            }
+        }
+    }
+    print("lk_test: FAIL");
+    return 0;
+}
+
+print("link_cut_tree.hl loaded");

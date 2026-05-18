@@ -225,13 +225,16 @@ fn shell_handle(cmd) {
         serial_print("Trie:        trie init  trie test  trie sz  trie set <i> <c>  trie wlen <n>  trie insert  trie search  trie prefix");
         serial_print("LiChao:      lct init  lct test  lct cnt  lct add <m> <b>  lct query <x>");
         serial_print("DCDP:        dcdp init  dcdp test  dcdp n  dcdp prev <i> <v>  dcdp run <n>  dcdp dp <i>");
+        serial_print("MonoQueue:   mq init  mq test  mq n  mq set <i> <v>  mq k <val>  mq slide_min <n>  mq slide_max <n>  mq min <i>  mq max <i>");
+        serial_print("SegBeats:    sb init  sb test  sb n  sb set <i> <v>  sb build <n>  sb chmin <l> <r> <v>  sb query <l> <r>");
+        serial_print("LCT:         lk init <n>  lk test  lk n  lk link <u> <v>  lk cut <u> <v>  lk conn <u> <v>  lk path <u> <v>  lk val <v> <w>  lk root <v>");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
     }
 
     if cmd == "ver" {
-        return "HicOS 6.0 -- Hilbert-Lang Kernel (316 modules, pure H-L, zero deps)";
+        return "HicOS 6.0 -- Hilbert-Lang Kernel (319 modules, pure H-L, zero deps)";
     }
 
     if cmd == "uptime" {
@@ -5249,6 +5252,120 @@ fn shell_handle_ext(cmd) {
         return "dcdp: dp[" + to_string(dc_di) + "]=" + to_string(dc_dp[dc_di]);
     }
 
+    // ── monotone_queue (iter 331) ────────────────────────────────────────────
+    if cmd == "mq init"      { mq_init(); return "mq: init"; }
+    if cmd == "mq test"      { let mqr = mq_test(); return "mq: " + to_string(mqr); }
+    if cmd == "mq n"         { return "mq: n=" + to_string(mq_n); }
+    if _starts_with(cmd, "mq k ") {
+        mq_k = to_int(str_sub(cmd, 5, len(cmd)));
+        return "mq: k=" + to_string(mq_k);
+    }
+    if _starts_with(cmd, "mq set ") {
+        let mq_sv  = str_sub(cmd, 7, len(cmd));
+        let mq_si  = to_int(mq_sv);
+        let mq_sv2 = to_int(str_sub(mq_sv, 2, len(mq_sv)));
+        set_at(mq_data, mq_si, mq_sv2);
+        return "mq: data[" + to_string(mq_si) + "]=" + to_string(mq_sv2);
+    }
+    if _starts_with(cmd, "mq slide_min ") {
+        let mq_sn = to_int(str_sub(cmd, 13, len(cmd)));
+        mq_n = mq_sn;
+        mq_slide_min(mq_sn, mq_k);
+        return "mq: slide_min n=" + to_string(mq_sn) + " k=" + to_string(mq_k);
+    }
+    if _starts_with(cmd, "mq slide_max ") {
+        let mq_sn = to_int(str_sub(cmd, 13, len(cmd)));
+        mq_n = mq_sn;
+        mq_slide_max(mq_sn, mq_k);
+        return "mq: slide_max n=" + to_string(mq_sn) + " k=" + to_string(mq_k);
+    }
+    if _starts_with(cmd, "mq min ") {
+        let mq_qi = to_int(str_sub(cmd, 7, len(cmd)));
+        return "mq: min[" + to_string(mq_qi) + "]=" + to_string(mq_min_res[mq_qi]);
+    }
+    if _starts_with(cmd, "mq max ") {
+        let mq_qi = to_int(str_sub(cmd, 7, len(cmd)));
+        return "mq: max[" + to_string(mq_qi) + "]=" + to_string(mq_max_res[mq_qi]);
+    }
+
+    // ── seg_beats (iter 332) ─────────────────────────────────────────────────
+    if cmd == "sb init"    { sb_init(); return "sb: init"; }
+    if cmd == "sb test"    { let sbr = sb_test(); return "sb: " + to_string(sbr); }
+    if cmd == "sb n"       { return "sb: n=" + to_string(sb_n); }
+    if _starts_with(cmd, "sb set ") {
+        let sb_sv  = str_sub(cmd, 7, len(cmd));
+        let sb_si  = to_int(sb_sv);
+        let sb_sv2 = to_int(str_sub(sb_sv, 2, len(sb_sv)));
+        set_at(sb_data, sb_si, sb_sv2);
+        return "sb: data[" + to_string(sb_si) + "]=" + to_string(sb_sv2);
+    }
+    if _starts_with(cmd, "sb build ") {
+        let sb_bn = to_int(str_sub(cmd, 9, len(cmd)));
+        sb_build(sb_bn);
+        return "sb: built n=" + to_string(sb_bn);
+    }
+    if _starts_with(cmd, "sb chmin ") {
+        let sb_cs  = str_sub(cmd, 9, len(cmd));
+        let sb_cl  = to_int(sb_cs);
+        let sb_cr  = to_int(str_sub(sb_cs, 2, len(sb_cs)));
+        let sb_cv  = to_int(str_sub(sb_cs, 4, len(sb_cs)));
+        sb_chmin(sb_cl, sb_cr, sb_cv);
+        return "sb: chmin [" + to_string(sb_cl) + "," + to_string(sb_cr) + "] val=" + to_string(sb_cv);
+    }
+    if _starts_with(cmd, "sb query ") {
+        let sb_qs  = str_sub(cmd, 9, len(cmd));
+        let sb_ql  = to_int(sb_qs);
+        let sb_qr  = to_int(str_sub(sb_qs, 2, len(sb_qs)));
+        return "sb: sum[" + to_string(sb_ql) + ".." + to_string(sb_qr) + "]=" + to_string(sb_query(sb_ql, sb_qr));
+    }
+
+    // ── link_cut_tree (iter 333) ─────────────────────────────────────────────
+    if _starts_with(cmd, "lk init ") {
+        let lk_in = to_int(str_sub(cmd, 8, len(cmd)));
+        lk_init(lk_in);
+        return "lk: init n=" + to_string(lk_in);
+    }
+    if cmd == "lk test" { let lkr = lk_test(); return "lk: " + to_string(lkr); }
+    if cmd == "lk n"    { return "lk: n=" + to_string(lk_n); }
+    if _starts_with(cmd, "lk link ") {
+        let lk_ls  = str_sub(cmd, 8, len(cmd));
+        let lk_lu  = to_int(lk_ls);
+        let lk_lv  = to_int(str_sub(lk_ls, 2, len(lk_ls)));
+        lk_link(lk_lu, lk_lv);
+        return "lk: linked " + to_string(lk_lu) + "-" + to_string(lk_lv);
+    }
+    if _starts_with(cmd, "lk cut ") {
+        let lk_cs  = str_sub(cmd, 7, len(cmd));
+        let lk_cu  = to_int(lk_cs);
+        let lk_cv  = to_int(str_sub(lk_cs, 2, len(lk_cs)));
+        lk_cut(lk_cu, lk_cv);
+        return "lk: cut " + to_string(lk_cu) + "-" + to_string(lk_cv);
+    }
+    if _starts_with(cmd, "lk conn ") {
+        let lk_ks  = str_sub(cmd, 8, len(cmd));
+        let lk_ku  = to_int(lk_ks);
+        let lk_kv  = to_int(str_sub(lk_ks, 2, len(lk_ks)));
+        return "lk: connected=" + to_string(lk_connected(lk_ku, lk_kv));
+    }
+    if _starts_with(cmd, "lk path ") {
+        let lk_ps  = str_sub(cmd, 8, len(cmd));
+        let lk_pu  = to_int(lk_ps);
+        let lk_pv  = to_int(str_sub(lk_ps, 2, len(lk_ps)));
+        return "lk: pathsum=" + to_string(lk_pathsum(lk_pu, lk_pv));
+    }
+    if _starts_with(cmd, "lk val ") {
+        let lk_vs  = str_sub(cmd, 7, len(cmd));
+        let lk_vi  = to_int(lk_vs);
+        let lk_vv  = to_int(str_sub(lk_vs, 2, len(lk_vs)));
+        set_at(lk_val, lk_vi, lk_vv);
+        set_at(lk_sum, lk_vi, lk_vv);
+        return "lk: val[" + to_string(lk_vi) + "]=" + to_string(lk_vv);
+    }
+    if _starts_with(cmd, "lk root ") {
+        let lk_rv = to_int(str_sub(cmd, 8, len(cmd)));
+        return "lk: root=" + to_string(lk_findroot(lk_rv));
+    }
+
     return shell_handle(cmd);
 }
 
@@ -5260,7 +5377,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 1025 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld + lca + virtualtree + dominator + sam + manacher + eertree + bwt + lyndon + zfunction + ir + regalloc + codegen + ioring + persistseg + rollbackdsu + splaytree + mo + sqrtdecomp + cht + matrixexpo + numtheory + strhash + intervaldp + gametheory + trie + lichao + dcdp");
+print("shell.hl loaded -- 1050 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld + lca + virtualtree + dominator + sam + manacher + eertree + bwt + lyndon + zfunction + ir + regalloc + codegen + ioring + persistseg + rollbackdsu + splaytree + mo + sqrtdecomp + cht + matrixexpo + numtheory + strhash + intervaldp + gametheory + trie + lichao + dcdp + monoqueue + segbeats + lct");
 
 // Main shell loop (called from kernel_init)
 
