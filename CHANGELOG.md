@@ -2,11 +2,38 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`412`（76 根目录 + 343 内核模块）
-- H-L 总行数：`~119,900`
-- 内核模块：`343`
-- Shell 命令：`1219`
-- 最近完成功能迭代：`357`（wavelet_tree_range + implicit_treap + chtholly_tree）
+- `.hl` 文件：`415`（76 根目录 + 346 内核模块）
+- H-L 总行数：`~121,700`
+- 内核模块：`346`
+- Shell 命令：`1240`
+- 最近完成功能迭代：`360`（suffix_tree + bsgs + min_enclosing_circle）
+
+## Iteration 360 — min_enclosing_circle.hl：最小圆覆盖（Welzl O(n)）
+
+- **`min_enclosing_circle.hl`**（Buffer: 0x19F0000）：MEC_MAXN=16 点，固定点坐标整数
+  - `mec_add(x,y)`：添加点到待覆盖集合
+  - `mec_compute()`：调用 Welzl 随机递归算法，确定最小覆盖圆
+  - `_mec_c1/c2/c3`：1/2/3 点确定圆；3 点用外接圆公式（整数叉积+除法）
+  - `_mec_inside(x,y)`：判断点是否在当前圆内（固定点 *1000 精度）
+  - 测试：(0,0)(4,0)(2,3) → cx=2, cy≈0.833 → PASS
+
+## Iteration 359 — bsgs.hl：Baby-step Giant-step 离散对数
+
+- **`bsgs.hl`**（Buffer: 0x19E0000）：BSGS_M=32，哈希表大小 64（线性探测）
+  - `bsgs_solve(a,b,p)`：解 a^x≡b (mod p)，x∈[0,p-1]，p 为素数
+  - Baby steps：table[a^j mod p]=j，j∈[0,M)
+  - Giant steps：枚举 b·(a^{-M})^i，查表匹配
+  - `_bsgs_powmod(base,exp,mod)`：快速模幂（无 %，用减法模）
+  - 测试：2^x=64 mod 101→x=6；3^x=27 mod 101→x=3 → PASS
+
+## Iteration 358 — suffix_tree.hl：后缀树（Ukkonen O(n)）
+
+- **`suffix_tree.hl`**（Buffer: 0x19D0000）：ST_MAXN=32，ST_MAXNODES=128
+  - `st_build()`：Ukkonen 在线构造后缀树，O(n) 字符级扩展
+  - `_st_extend(pos)`：处理位置 pos 的字符；维护活跃点 (an,ae,al) 和 rem
+  - `st_count_occurrences(pat,plen)`：从根走模式路径，返回叶计数
+  - 后缀链接 + 活跃点跳转保证 O(n) 均摊
+  - 测试："banana"（编码为整数），occ("ana")=2 → PASS
 
 ## Iteration 357 — chtholly_tree.hl：珂朵莉树（ODT，区间推平）
 

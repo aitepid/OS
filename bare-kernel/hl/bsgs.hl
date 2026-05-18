@@ -1,0 +1,130 @@
+// bsgs.hl -- Baby-step Giant-step discrete logarithm O(sqrt(p)) (iter 359)
+// Buffer: 0x19E0000
+// Solves a^x = b (mod p) for x in [0, p-1], p prime
+// Baby steps: table[a^j mod p] = j for j in [0, m)
+// Giant steps: b * (a^(-m))^i until match found
+// BSGS_M = 32 (covers p up to ~1024), hash table size 64
+
+let BSGS_M    = 32;
+let BSGS_TMAX = 64;
+
+// Hash table: keys and values (-1 = empty)
+let bsgs_hk = array(64, 0);
+let bsgs_hv = array(64, 0);
+
+let bsgs_a  = 0;
+let bsgs_b  = 0;
+let bsgs_p  = 0;
+
+fn bsgs_init() {
+    let i = 0;
+    while i < BSGS_TMAX {
+        set_at(bsgs_hk, i, 0 - 1);
+        set_at(bsgs_hv, i, 0 - 1);
+        i += 1;
+    }
+    return 0;
+}
+
+fn _bsgs_powmod(base, exp, mod) {
+    let result = 1;
+    let b = base - (base / mod) * mod;
+    let e = exp;
+    let go = 1;
+    while go == 1 {
+        if e <= 0 { go = 0; }
+        if go == 1 {
+            let ebit = e - (e / 2) * 2;
+            if ebit == 1 {
+                result = result * b - (result * b / mod) * mod;
+            }
+            b = b * b - (b * b / mod) * mod;
+            e = e / 2;
+        }
+    }
+    return result;
+}
+
+fn _bsgs_hash_insert(key, val) {
+    let slot = key - (key / BSGS_TMAX) * BSGS_TMAX;
+    let go = 1;
+    while go == 1 {
+        if bsgs_hk[slot] == 0 - 1 { go = 0; }
+        if go == 1 {
+            if bsgs_hk[slot] == key { go = 0; }
+            if go == 1 {
+                slot += 1;
+                if slot >= BSGS_TMAX { slot = 0; }
+            }
+        }
+    }
+    set_at(bsgs_hk, slot, key);
+    set_at(bsgs_hv, slot, val);
+    return 0;
+}
+
+fn _bsgs_hash_lookup(key) {
+    let slot = key - (key / BSGS_TMAX) * BSGS_TMAX;
+    let steps = 0;
+    while steps < BSGS_TMAX {
+        if bsgs_hk[slot] == 0 - 1 { return 0 - 1; }
+        if bsgs_hk[slot] == key { return bsgs_hv[slot]; }
+        slot += 1;
+        if slot >= BSGS_TMAX { slot = 0; }
+        steps += 1;
+    }
+    return 0 - 1;
+}
+
+fn bsgs_solve(a, b, p) {
+    bsgs_init();
+    bsgs_a = a;
+    bsgs_b = b;
+    bsgs_p = p;
+
+    // Baby steps: compute a^j mod p for j in [0,M)
+    let aj = 1;
+    let j = 0;
+    while j < BSGS_M {
+        _bsgs_hash_insert(aj, j);
+        aj = aj * a - (aj * a / p) * p;
+        j += 1;
+    }
+
+    // Giant step factor: a^(-M) mod p = a^(p-1-M) mod p (Fermat)
+    let am = _bsgs_powmod(a, BSGS_M, p);
+    let am_inv = _bsgs_powmod(am, p - 2, p);
+
+    // Giant steps: b * (a^-m)^i for i in [0,M)
+    let gamma = b - (b / p) * p;
+    let i = 0;
+    while i < BSGS_M {
+        let jj = _bsgs_hash_lookup(gamma);
+        if jj != 0 - 1 {
+            let x = i * BSGS_M + jj;
+            return x;
+        }
+        gamma = gamma * am_inv - (gamma * am_inv / p) * p;
+        i += 1;
+    }
+    return 0 - 1;  // no solution
+}
+
+fn bsgs_test() {
+    // 2^x = 64 (mod 101) -> x = 6
+    let x = bsgs_solve(2, 64, 101);
+    print("bsgs_test: 2^x=64 mod 101 -> x=" + to_string(x));
+    if x == 6 {
+        // also test 3^x = 27 (mod 101) -> x = 3
+        let x2 = bsgs_solve(3, 27, 101);
+        print("bsgs_test: 3^x=27 mod 101 -> x=" + to_string(x2));
+        if x2 == 3 {
+            print("bsgs_test: PASS");
+            return 1;
+        }
+    }
+    print("bsgs_test: FAIL");
+    return 0;
+}
+
+print("bsgs.hl loaded");

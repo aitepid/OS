@@ -1,0 +1,226 @@
+// suffix_tree.hl -- Ukkonen suffix tree O(n) online construction (iter 358)
+// Buffer: 0x19D0000
+// ST_MAXN=32 chars, ST_MAXNODES=128 (2*n worst case)
+// Each node: children[26], suffix_link, start, end (-1=open), len
+// Active point: active_node, active_edge, active_len
+// odt_test: build "banana\0", count substr occurrences via leaf count
+
+let ST_MAXN     = 32;
+let ST_MAXNODES = 128;
+let ST_INF      = 999999;
+
+// Node arrays (flattened)
+let st_ch   = array(3328, 0);  // 128*26 children
+let st_sl   = array(128, 0);   // suffix link
+let st_s    = array(128, 0);   // start
+let st_e    = array(128, 0);   // end  (-1 = open leaf)
+let st_nd   = 0;               // node count (0 = root)
+
+// Input
+let st_str  = array(32, 0);
+let st_n    = 0;
+let st_end  = 0;               // global end for leaves
+
+// Active point
+let st_an   = 0;
+let st_ae   = 0;
+let st_al   = 0;
+let st_rem  = 0;
+let st_last = 0;               // last internal node created
+
+fn _st_newnode(start, end_val) {
+    let id = st_nd;
+    set_at(st_s, id, start);
+    set_at(st_e, id, end_val);
+    set_at(st_sl, id, 0);
+    let base = id * 26;
+    let i = 0;
+    let go = 1;
+    while go == 1 {
+        if i >= 26 { go = 0; }
+        if go == 1 { set_at(st_ch, base + i, 0 - 1); i += 1; }
+    }
+    st_nd += 1;
+    return id;
+}
+
+fn _st_edgelen(node) {
+    let ev = st_e[node];
+    if ev == 0 - 1 { ev = st_end; }
+    return ev - st_s[node] + 1;
+}
+
+fn _st_walk_down(node) {
+    let elen = _st_edgelen(node);
+    if st_al >= elen {
+        let ec = st_str[st_s[node] + st_al - elen];
+        st_ae = ec;
+        st_al -= elen;
+        st_an = node;
+        return 1;
+    }
+    return 0;
+}
+
+fn st_init(n) {
+    st_nd = 0;
+    st_n  = n;
+    st_end = 0;
+    st_an = 0;
+    st_ae = 0;
+    st_al = 0;
+    st_rem = 0;
+    st_last = 0;
+    _st_newnode(0 - 1, 0 - 1);
+    return 0;
+}
+
+fn st_set_char(i, c) {
+    set_at(st_str, i, c);
+    return 0;
+}
+
+fn _st_extend(pos) {
+    set_at(st_e, 0, pos);
+    st_end = pos;
+    st_rem += 1;
+    st_last = 0;
+    let go = 1;
+    while go == 1 {
+        if st_rem <= 0 { go = 0; }
+        if go == 1 {
+            if st_al == 0 { st_ae = st_str[pos]; }
+            let cur_ch = st_ch[st_an * 26 + st_ae];
+            if cur_ch == 0 - 1 {
+                let leaf = _st_newnode(pos, 0 - 1);
+                set_at(st_ch, st_an * 26 + st_ae, leaf);
+                if st_last != 0 {
+                    set_at(st_sl, st_last, st_an);
+                }
+                st_last = 0;
+                st_rem -= 1;
+            } else {
+                let nxt = cur_ch;
+                if _st_walk_down(nxt) == 1 {
+                    go = 1;
+                } else {
+                    let edge_char = st_str[st_s[nxt] + st_al];
+                    if edge_char == st_str[pos] {
+                        st_al += 1;
+                        if st_last != 0 { set_at(st_sl, st_last, st_an); }
+                        go = 0;
+                    } else {
+                        let split = _st_newnode(st_s[nxt], st_s[nxt] + st_al - 1);
+                        set_at(st_ch, st_an * 26 + st_ae, split);
+                        let leaf2 = _st_newnode(pos, 0 - 1);
+                        let ec2 = st_str[pos];
+                        set_at(st_ch, split * 26 + ec2, leaf2);
+                        set_at(st_s, nxt, st_s[nxt] + st_al);
+                        let ec3 = edge_char;
+                        set_at(st_ch, split * 26 + ec3, nxt);
+                        if st_last != 0 { set_at(st_sl, st_last, split); }
+                        st_last = split;
+                        st_rem -= 1;
+                        if st_an == 0 {
+                            if st_al > 0 {
+                                st_al -= 1;
+                                st_ae = st_str[pos - st_rem + 1];
+                            }
+                        } else {
+                            let slv = st_sl[st_an];
+                            if slv == 0 - 1 { st_an = 0; } else { st_an = slv; }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+fn st_build() {
+    let i = 0;
+    while i < st_n {
+        _st_extend(i);
+        i += 1;
+    }
+    return 0;
+}
+
+fn _st_count_leaves(node) {
+    let total = 0;
+    let ev = st_e[node];
+    if ev == 0 - 1 { ev = st_end; }
+    let is_leaf = 1;
+    let c = 0;
+    while c < 26 {
+        let ch = st_ch[node * 26 + c];
+        if ch != 0 - 1 {
+            is_leaf = 0;
+            total += _st_count_leaves(ch);
+        }
+        c += 1;
+    }
+    if is_leaf == 1 { total = 1; }
+    return total;
+}
+
+fn st_count_occurrences(pat, plen) {
+    // Walk from root following pat chars
+    let cur = 0;
+    let pi = 0;
+    let go = 1;
+    while go == 1 {
+        if pi >= plen { go = 0; }
+        if go == 1 {
+            let c = pat[pi];
+            let nxt = st_ch[cur * 26 + c];
+            if nxt == 0 - 1 { return 0; }
+            let elen = _st_edgelen(nxt);
+            let j = 0;
+            let go2 = 1;
+            while go2 == 1 {
+                if j >= elen { go2 = 0; }
+                if go2 == 1 {
+                    if pi >= plen { go2 = 0; }
+                    if go2 == 1 {
+                        if st_str[st_s[nxt] + j] != pat[pi] { return 0; }
+                        pi += 1;
+                        j += 1;
+                    }
+                }
+            }
+            cur = nxt;
+        }
+    }
+    return _st_count_leaves(cur);
+}
+
+fn st_test() {
+    // "banana" -> encoded as [1,0,13,0,13,0] (a=0,b=1,n=13)
+    // occurrences of "ana"=[0,13,0]: 2
+    st_init(6);
+    st_set_char(0, 1);   // b
+    st_set_char(1, 0);   // a
+    st_set_char(2, 13);  // n
+    st_set_char(3, 0);   // a
+    st_set_char(4, 13);  // n
+    st_set_char(5, 0);   // a
+    st_build();
+    let pat = array(3, 0);
+    set_at(pat, 0, 0);   // a
+    set_at(pat, 1, 13);  // n
+    set_at(pat, 2, 0);   // a
+    let occ = st_count_occurrences(pat, 3);
+    print("st_test: occ(ana)=" + to_string(occ) + " nodes=" + to_string(st_nd));
+    if occ == 2 {
+        print("st_test: PASS");
+        return 1;
+    }
+    print("st_test: FAIL");
+    return 0;
+}
+
+fn st_node_count() { return st_nd; }
+
+print("suffix_tree.hl loaded");
