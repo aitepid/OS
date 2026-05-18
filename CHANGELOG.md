@@ -2,13 +2,44 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`448`（76 根目录 + 379 内核模块）
-- H-L 总行数：`~151,600`
-- 内核模块：`379`
-- Shell 命令：`1471`
-- 最近完成功能迭代：`393`（torrent_proto + opentelemetry + prometheus）
-- 当前阶段：第四阶段·网络深化（iter 394 下一批：grpc_stream）
+- `.hl` 文件：`451`（76 根目录 + 382 内核模块）
+- H-L 总行数：`~152,300`
+- 内核模块：`382`
+- Shell 命令：`1492`
+- 最近完成功能迭代：`396`（grpc_stream + websocket_compression + conv2d）
+- 当前阶段：第五阶段·ML深化（Phase 5，iter 396 起）
 - **Milestone M3 已达成**（iter 385，完整存储引擎）
+
+## Iteration 396 — conv2d.hl：2D 卷积层（Phase 5 ML深化开始）
+
+- **`conv2d.hl`**（Buffer: 0x1C30000）：CV_MAX_H/W=8，CV_MAX_CH=4，CV_SCALE=256
+  - 固定点运算：所有权重/输入按 CV_SCALE=256 缩放，输出 `accum/256` 后 ReLU
+  - 输入张量：`cv_input[ch*64 + r*8 + c]`（CV_MAX_CH×H×W flat array）
+  - 卷积核：`cv_kernel[oc*36 + ic*9 + kr*3 + kc]`（out_ch×in_ch×kH×kW）
+  - `conv2d_forward(in_ch, out_ch, k_size, stride, padding)` → 完整嵌套循环
+  - `_cv_relu(x)`：x<0 返回 0；`_cv_pad_input`：边界外返回 0（零填充）
+  - 测试：4×4 输入，中心权重=256 的恒等卷积，stride=1 padding=1 → v00=1 v12=7 v33=16 oh=8 → PASS
+
+## Iteration 395 — websocket_compression.hl：WebSocket permessage-deflate（RFC 7692）
+
+- **`websocket_compression.hl`**（Buffer: 0x1C20000）：WC_MAXCONNS=8，WC_WBITS=9（窗口512字节）
+  - 每连接滑动窗口（flat: conn*512 + pos）+ 压缩上下文
+  - `_wc_find_match(conn_id, data_hash, win_base)`：LZ77 模拟，散列碰撞检测，返回 `dist*256+len`
+  - 匹配≥3字节：back-reference 编码 `comp_len = data_len/3 + 2`
+  - 无匹配：Huffman 字面编码 `comp_len = data_len*7/8 + 1`（约 87% ratio）
+  - `wc_ctx_takeover`：1=no_context_takeover，每帧后重置窗口
+  - 测试：重复消息 cl2≤cl1；ratio0<100；frames0=2 → PASS
+
+## Iteration 394 — grpc_stream.hl：gRPC 流式 RPC（HTTP/2 over H-L）
+
+- **`grpc_stream.hl`**（Buffer: 0x1C10000）：GS_MAXSTREAMS=16，4 种流类型
+  - 流类型：UNARY=0 / SERVER_STREAM=1 / CLIENT_STREAM=2 / BIDI=3
+  - 状态机：IDLE→OPEN→HALF_CL→CLOSED / RESET
+  - `_gs_lpm_encode(msg_hash)`：Length-Prefix Message 编码模拟
+  - `gs_send(sid, msg)`：UNARY 自动生成 1 个响应；SERVER_STREAM 自动生成 3 个响应
+  - `gs_recv(sid)`：队列出队，空返回 -1（O(n) 左移）
+  - `gs_close(sid)`：写 trailer（status + method hash），转 CLOSED
+  - 测试：UNARY r0>0 r0b=-1；SERVER 3消息 sr3=-1 pend=0；state=CLOSED → PASS
 
 ## Iteration 393 — prometheus.hl：Prometheus 指标采集与文本导出
 

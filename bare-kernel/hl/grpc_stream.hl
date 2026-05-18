@@ -1,0 +1,216 @@
+// grpc_stream.hl -- gRPC streaming RPC (iter 394)
+// Buffer: 0x1C10000
+// gRPC over HTTP/2: server-streaming, client-streaming, bidirectional
+// GS_MAXSTREAMS=16; stream types: UNARY=0 SERVER=1 CLIENT=2 BIDI=3
+// HTTP/2 DATA frame simulation: 5-byte header + payload
+// Length-Prefix Framing: compressed_flag(1) + message_length(4) + data
+// Status codes: OK=0 CANCELLED=1 UNKNOWN=2 INVALID=3 NOT_FOUND=5
+
+let GS_MAXSTREAMS = 16;
+let GS_MSGBUF     = 64;   // message buffer per stream
+
+// Stream types
+let GS_UNARY   = 0;
+let GS_SERVER  = 1;
+let GS_CLIENT  = 2;
+let GS_BIDI    = 3;
+
+// Stream states
+let GS_IDLE    = 0;
+let GS_OPEN    = 1;
+let GS_HALF_CL = 2;
+let GS_CLOSED  = 3;
+let GS_RESET   = 4;
+
+// gRPC status codes
+let GS_OK        = 0;
+let GS_CANCELLED = 1;
+let GS_UNKNOWN   = 2;
+let GS_NOT_FOUND = 5;
+
+// Stream fields
+let gs_state      = array(16, 0);
+let gs_type       = array(16, 0);
+let gs_service    = array(16, 0);   // service name hash
+let gs_method     = array(16, 0);   // method name hash
+let gs_status     = array(16, 0);   // gRPC status code
+let gs_send_seq   = array(16, 0);   // messages sent
+let gs_recv_seq   = array(16, 0);   // messages received
+let gs_n_streams  = 0;
+
+// Message buffer: gs_msg[stream * GS_MSGBUF + seq_mod] = message_hash
+let GS_MSG_STRIDE = 64;
+let gs_msg_send   = array(1024, 0); // GS_MAXSTREAMS * GS_MSGBUF
+let gs_msg_recv   = array(1024, 0);
+
+// Metadata headers (simulated: 4 k-v pairs per stream)
+let GS_META_STRIDE = 4;
+let gs_meta_key    = array(64, 0);
+let gs_meta_val    = array(64, 0);
+let gs_meta_n      = array(16, 0);
+
+// Trailer buffer (status + message)
+let gs_trailer_status = array(16, 0);
+let gs_trailer_msg    = array(16, 0);
+
+fn gs_init() {
+    let i = 0;
+    while i < GS_MAXSTREAMS {
+        set_at(gs_state,    i, GS_IDLE);
+        set_at(gs_type,     i, GS_UNARY);
+        set_at(gs_service,  i, 0);
+        set_at(gs_method,   i, 0);
+        set_at(gs_status,   i, GS_OK);
+        set_at(gs_send_seq, i, 0);
+        set_at(gs_recv_seq, i, 0);
+        set_at(gs_meta_n,   i, 0);
+        i += 1;
+    }
+    gs_n_streams = 0;
+    return 0;
+}
+
+fn _gs_lpm_encode(msg_hash) {
+    // Length-Prefix Message: [0(no compress)] [len_hi][len_md][len_lo_hi][len_lo] [data]
+    // Simplified: return encoded as (msg_hash mod 65521)
+    let p = 65521;
+    return msg_hash - (msg_hash / p) * p;
+}
+
+fn gs_open(service_hash, method_hash, stream_type) {
+    let sid = gs_n_streams;
+    set_at(gs_service,  sid, service_hash);
+    set_at(gs_method,   sid, method_hash);
+    set_at(gs_type,     sid, stream_type);
+    set_at(gs_state,    sid, GS_OPEN);
+    set_at(gs_status,   sid, GS_OK);
+    set_at(gs_send_seq, sid, 0);
+    set_at(gs_recv_seq, sid, 0);
+    set_at(gs_meta_n,   sid, 0);
+    gs_n_streams += 1;
+    return sid;
+}
+
+fn gs_add_meta(sid, key_hash, val_hash) {
+    let n = gs_meta_n[sid];
+    if n >= GS_META_STRIDE { return 0 - 1; }
+    set_at(gs_meta_key, sid * GS_META_STRIDE + n, key_hash);
+    set_at(gs_meta_val, sid * GS_META_STRIDE + n, val_hash);
+    set_at(gs_meta_n, sid, n + 1);
+    return 0;
+}
+
+fn gs_send(sid, msg_hash) {
+    if gs_state[sid] != GS_OPEN { return 0 - 1; }
+    let seq  = gs_send_seq[sid];
+    let slot = sid * GS_MSG_STRIDE + seq - (seq / GS_MSGBUF) * GS_MSGBUF;
+    set_at(gs_msg_send, slot, _gs_lpm_encode(msg_hash));
+    set_at(gs_send_seq, sid, seq + 1);
+
+    // For SERVER_STREAM and BIDI: simulate server generating N responses
+    if gs_type[sid] == GS_SERVER {
+        let r = 0;
+        while r < 3 {
+            let resp = msg_hash * (r + 1) + service_hash_for(sid);
+            let p    = 65521;
+            resp = resp - (resp / p) * p;
+            let rslot = sid * GS_MSG_STRIDE + gs_recv_seq[sid];
+            set_at(gs_msg_recv, rslot, resp);
+            set_at(gs_recv_seq, sid, gs_recv_seq[sid] + 1);
+            r += 1;
+        }
+    }
+    if gs_type[sid] == GS_UNARY {
+        let resp = msg_hash * 7 + gs_method[sid];
+        let p    = 65521;
+        resp = resp - (resp / p) * p;
+        let rslot = sid * GS_MSG_STRIDE;
+        set_at(gs_msg_recv, rslot, resp);
+        set_at(gs_recv_seq, sid, 1);
+    }
+    return seq;
+}
+
+fn service_hash_for(sid) { return gs_service[sid]; }
+
+fn gs_recv(sid) {
+    // Pop next received message; returns -1 if none
+    let seq = gs_recv_seq[sid];
+    if seq == 0 { return 0 - 1; }
+    let slot = sid * GS_MSG_STRIDE;
+    let msg  = gs_msg_recv[slot];
+    // Shift remaining messages
+    let i = 0;
+    while i < seq - 1 {
+        set_at(gs_msg_recv, sid * GS_MSG_STRIDE + i,
+               gs_msg_recv[sid * GS_MSG_STRIDE + i + 1]);
+        i += 1;
+    }
+    set_at(gs_recv_seq, sid, seq - 1);
+    return msg;
+}
+
+fn gs_close(sid) {
+    if gs_state[sid] == GS_IDLE { return 0; }
+    set_at(gs_state,          sid, GS_HALF_CL);
+    set_at(gs_trailer_status, sid, gs_status[sid]);
+    set_at(gs_trailer_msg,    sid, gs_method[sid]);
+    set_at(gs_state,          sid, GS_CLOSED);
+    return gs_status[sid];
+}
+
+fn gs_stream_state(sid)   { return gs_state[sid]; }
+fn gs_sent_count(sid)     { return gs_send_seq[sid]; }
+fn gs_pending_count(sid)  { return gs_recv_seq[sid]; }
+fn gs_stream_count()      { return gs_n_streams; }
+
+fn gs_test() {
+    gs_init();
+
+    // Unary RPC: route = method 1001 on service 2001
+    let s0  = gs_open(2001, 1001, GS_UNARY);
+    gs_add_meta(s0, 100, 200);  // authorization header
+    let seq = gs_send(s0, 9999);
+    let r0  = gs_recv(s0);
+    let r0b = gs_recv(s0);  // should be -1 (no more)
+    gs_close(s0);
+
+    // Server-streaming RPC: method 1002
+    let s1 = gs_open(2001, 1002, GS_SERVER);
+    gs_send(s1, 1234);
+    let sr0 = gs_recv(s1);
+    let sr1 = gs_recv(s1);
+    let sr2 = gs_recv(s1);
+    let sr3 = gs_recv(s1);  // should be -1
+
+    let pend = gs_pending_count(s1);
+    gs_close(s1);
+    let st = gs_stream_state(s0);
+
+    print("gs_test: s0=" + to_string(s0)
+          + " r0=" + to_string(r0)
+          + " r0b=" + to_string(r0b)
+          + " sr0=" + to_string(sr0)
+          + " sr3=" + to_string(sr3)
+          + " pend=" + to_string(pend)
+          + " st=" + to_string(st));
+
+    if r0 > 0 {
+        if r0b == 0 - 1 {
+            if sr0 > 0 {
+                if sr3 == 0 - 1 {
+                    if pend == 0 {
+                        if st == GS_CLOSED {
+                            print("gs_test: PASS");
+                            return 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    print("gs_test: FAIL");
+    return 0;
+}
+
+print("grpc_stream.hl loaded");

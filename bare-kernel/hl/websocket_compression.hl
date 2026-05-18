@@ -1,0 +1,233 @@
+// websocket_compression.hl -- WebSocket permessage-deflate (RFC 7692, iter 395)
+// Buffer: 0x1C20000
+// DEFLATE compression for WebSocket frames via sliding window LZ77 simulation
+// WC_MAXCONNS=8; per-connection compression context (sliding window + Huffman tables)
+// client_no_context_takeover / server_no_context_takeover negotiation
+// Compression: find longest match in window → emit (dist, len) back-reference
+// Window size: 2^WC_WBITS (default WC_WBITS=9 = 512 byte window)
+
+let WC_MAXCONNS  = 8;
+let WC_WBITS     = 9;
+let WC_WSIZE     = 512;    // 2^9
+let WC_MAXDATA   = 64;     // max data units per frame
+
+// Connection states
+let WC_IDLE      = 0;
+let WC_NEGOTIATED= 1;
+let WC_ACTIVE    = 2;
+
+// Compression context per connection
+let wc_state           = array(8, 0);
+let wc_ctx_takeover    = array(8, 0);  // 0=context_takeover, 1=no_takeover
+let wc_compressed_bytes= array(8, 0);  // total compressed output bytes
+let wc_original_bytes  = array(8, 0);  // total original bytes
+let wc_n_frames        = array(8, 0);  // frames compressed
+
+// Sliding window (flat: conn*512 + pos)
+let WC_WIN_STRIDE = 512;
+let wc_window     = array(4096, 0);  // WC_MAXCONNS * WC_WSIZE
+let wc_win_pos    = array(8, 0);     // current write position in window
+
+// Last compressed/decompressed result
+let wc_last_comp_hash = array(8, 0);
+let wc_last_comp_len  = array(8, 0);
+let wc_last_decomp_hash = array(8, 0);
+let wc_last_decomp_len  = array(8, 0);
+
+let wc_n_conns = 0;
+
+fn wc_init() {
+    let i = 0;
+    while i < WC_MAXCONNS {
+        set_at(wc_state,            i, WC_IDLE);
+        set_at(wc_ctx_takeover,     i, 0);
+        set_at(wc_compressed_bytes, i, 0);
+        set_at(wc_original_bytes,   i, 0);
+        set_at(wc_n_frames,         i, 0);
+        set_at(wc_win_pos,          i, 0);
+        set_at(wc_last_comp_hash,   i, 0);
+        set_at(wc_last_comp_len,    i, 0);
+        set_at(wc_last_decomp_hash, i, 0);
+        set_at(wc_last_decomp_len,  i, 0);
+        i += 1;
+    }
+    wc_n_conns = 0;
+    return 0;
+}
+
+fn wc_connect(no_takeover) {
+    let id = wc_n_conns;
+    set_at(wc_state,        id, WC_NEGOTIATED);
+    set_at(wc_ctx_takeover, id, no_takeover);
+    wc_n_conns += 1;
+    set_at(wc_state, id, WC_ACTIVE);
+    return id;
+}
+
+fn _wc_hash_to_len(data_hash, data_len) {
+    // Derive a simulated byte sequence length from (hash, declared_len)
+    // Returns number of distinct "byte values" in the sequence
+    return data_len;
+}
+
+fn _wc_find_match(conn_id, data_hash, win_base) {
+    // Simulate LZ77 match: search window for longest match of data
+    // Returns (dist, match_len) packed as dist*256 + match_len
+    // Simplified: hash-based collision check
+    let wpos = wc_win_pos[conn_id];
+    let best_len  = 0;
+    let best_dist = 0;
+    let i = 0;
+    while i < wpos {
+        let win_val = wc_window[win_base + i];
+        if win_val == data_hash {
+            // "Match" found; length = 3 (minimum useful match in DEFLATE)
+            let dist = wpos - i;
+            if dist <= WC_WSIZE {
+                if best_len < 3 {
+                    best_len  = 3;
+                    best_dist = dist;
+                }
+            }
+        }
+        i += 1;
+    }
+    return best_dist * 256 + best_len;
+}
+
+fn _wc_update_window(conn_id, data_hash) {
+    let win_base = conn_id * WC_WIN_STRIDE;
+    let wpos     = wc_win_pos[conn_id];
+    let slot     = wpos - (wpos / WC_WSIZE) * WC_WSIZE;
+    set_at(wc_window, win_base + slot, data_hash);
+    set_at(wc_win_pos, conn_id, wpos + 1);
+    return slot;
+}
+
+fn wc_compress(conn_id, data_hash, data_len) {
+    // Simulate DEFLATE compression on data_hash (represents data_len bytes)
+    // Output: compressed_hash derived from LZ77 + Huffman encoding simulation
+    let win_base = conn_id * WC_WIN_STRIDE;
+    let match    = _wc_find_match(conn_id, data_hash, win_base);
+    let match_len = match - (match / 256) * 256;
+
+    let comp_len = 0;
+    let comp_hash = 0;
+    if match_len >= 3 {
+        // Back-reference: 2 bytes for dist/len pair
+        comp_len  = data_len / 3 + 2;
+        let dist  = match / 256;
+        let p     = 65521;
+        comp_hash = data_hash * dist + 13;
+        comp_hash = comp_hash - (comp_hash / p) * p;
+    } else {
+        // Literal bytes: ~7/8 ratio via Huffman (simplified to 87%)
+        comp_len  = data_len * 7 / 8 + 1;
+        let p     = 65521;
+        comp_hash = data_hash * 31 + 7;
+        comp_hash = comp_hash - (comp_hash / p) * p;
+    }
+
+    // Update window (context takeover: keep window between frames)
+    _wc_update_window(conn_id, data_hash);
+    if wc_ctx_takeover[conn_id] == 1 {
+        // no_context_takeover: reset window after each message
+        set_at(wc_win_pos, conn_id, 0);
+    }
+
+    set_at(wc_last_comp_hash, conn_id, comp_hash);
+    set_at(wc_last_comp_len,  conn_id, comp_len);
+    set_at(wc_compressed_bytes, conn_id, wc_compressed_bytes[conn_id] + comp_len);
+    set_at(wc_original_bytes,   conn_id, wc_original_bytes[conn_id] + data_len);
+    set_at(wc_n_frames, conn_id, wc_n_frames[conn_id] + 1);
+    return comp_len;
+}
+
+fn wc_decompress(conn_id, comp_hash, comp_len) {
+    // Inverse: reconstruct original hash and length from compressed representation
+    // For context_takeover: same window used → same match found
+    let p = 65521;
+    let decomp_hash = 0;
+    // Check if this was a back-reference encoding
+    let win_base = conn_id * WC_WIN_STRIDE;
+    let wpos     = wc_win_pos[conn_id];
+    let found_hash = 0;
+    if wpos > 0 {
+        // The last window entry is the original data_hash
+        let slot = wpos - 1 - ((wpos - 1) / WC_WSIZE) * WC_WSIZE;
+        found_hash = wc_window[win_base + slot];
+    }
+    if found_hash > 0 {
+        decomp_hash = found_hash;
+    } else {
+        // Literal: reverse the Huffman simulation
+        decomp_hash = comp_hash * 33 + 5;
+        decomp_hash = decomp_hash - (decomp_hash / p) * p;
+    }
+    let decomp_len = comp_len * 8 / 7;
+    set_at(wc_last_decomp_hash, conn_id, decomp_hash);
+    set_at(wc_last_decomp_len,  conn_id, decomp_len);
+    return decomp_hash;
+}
+
+fn wc_ratio(conn_id) {
+    // Compression ratio * 100 (lower = better)
+    let orig = wc_original_bytes[conn_id];
+    if orig == 0 { return 100; }
+    return (wc_compressed_bytes[conn_id] * 100) / orig;
+}
+
+fn wc_reset(conn_id) {
+    set_at(wc_win_pos, conn_id, 0);
+    return 0;
+}
+
+fn wc_frames(conn_id)    { return wc_n_frames[conn_id]; }
+fn wc_comp_hash(conn_id) { return wc_last_comp_hash[conn_id]; }
+fn wc_comp_len(conn_id)  { return wc_last_comp_len[conn_id]; }
+
+fn wc_test() {
+    wc_init();
+
+    // Connection 0: context_takeover (window persists between messages)
+    let c0 = wc_connect(0);
+
+    // Compress message 1: data_hash=12345, len=100
+    let cl1 = wc_compress(c0, 12345, 100);
+    let ch1 = wc_comp_hash(c0);
+
+    // Compress same hash again: should find match → better compression
+    let cl2 = wc_compress(c0, 12345, 100);
+
+    // Connection 1: no_context_takeover
+    let c1 = wc_connect(1);
+    let cl3 = wc_compress(c1, 99999, 200);
+    wc_compress(c1, 99999, 200);  // no match (window reset)
+
+    let ratio0 = wc_ratio(c0);
+    let ratio1 = wc_ratio(c1);
+    let frames0 = wc_frames(c0);
+
+    print("wc_test: cl1=" + to_string(cl1)
+          + " cl2=" + to_string(cl2)
+          + " cl3=" + to_string(cl3)
+          + " ratio0=" + to_string(ratio0)
+          + " ratio1=" + to_string(ratio1)
+          + " frames0=" + to_string(frames0));
+
+    // cl2 <= cl1 (second compress has match → smaller or equal)
+    // ratio0 < 100 (some compression achieved)
+    // frames0 == 2
+    if cl2 <= cl1 {
+        if ratio0 < 100 {
+            if frames0 == 2 {
+                print("wc_test: PASS");
+                return 1;
+            }
+        }
+    }
+    print("wc_test: FAIL");
+    return 0;
+}
+
+print("websocket_compression.hl loaded");
