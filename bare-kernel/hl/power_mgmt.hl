@@ -1,0 +1,140 @@
+// power_mgmt.hl -- ACPI Power Management (Phase 6: 系统稳定化, iter 416)
+// Buffer: 0x1D70000
+// Power states: PM_S0=0 (running), PM_S3=3 (suspend), PM_S5=5 (shutdown)
+// Events: PM_EV_AC_CONNECT=0, PM_EV_AC_DISC=1, PM_EV_LOW_BAT=2, PM_EV_CRIT_BAT=3
+// pm_set_battery(pct): auto-pushes LOW_BAT event on crossing below 20%
+// pm_set_ac(1/0): auto-pushes AC_CONNECT/AC_DISC event
+
+let PM_S0 = 0;
+let PM_S3 = 3;
+let PM_S5 = 5;
+
+let PM_EV_AC_CONNECT = 0;
+let PM_EV_AC_DISC    = 1;
+let PM_EV_LOW_BAT    = 2;
+let PM_EV_CRIT_BAT   = 3;
+
+let PM_EV_BUF = 8;
+
+let pm_state         = 0;
+let pm_battery_pct   = 100;
+let pm_ac_connected  = 0;
+let pm_charging      = 0;
+let pm_suspend_count = 0;
+let pm_uptime        = 0;
+
+let pm_event_queue = array(8, 0);
+let pm_n_events    = 0;
+
+fn pm_init() {
+    let i = 0;
+    while i < PM_EV_BUF {
+        set_at(pm_event_queue, i, 0);
+        i += 1;
+    }
+    pm_state         = PM_S0;
+    pm_battery_pct   = 100;
+    pm_ac_connected  = 0;
+    pm_charging      = 0;
+    pm_suspend_count = 0;
+    pm_uptime        = 0;
+    pm_n_events      = 0;
+    return 0;
+}
+
+fn pm_push_event(ev) {
+    if pm_n_events < PM_EV_BUF {
+        set_at(pm_event_queue, pm_n_events, ev);
+        pm_n_events += 1;
+    }
+    return 0;
+}
+
+fn pm_pop_event() {
+    if pm_n_events == 0 { return 0 - 1; }
+    let ev = pm_event_queue[0];
+    let i = 0;
+    while i < pm_n_events - 1 {
+        set_at(pm_event_queue, i, pm_event_queue[i + 1]);
+        i += 1;
+    }
+    pm_n_events -= 1;
+    return ev;
+}
+
+fn pm_set_state(s) {
+    if s == PM_S3 { pm_suspend_count += 1; }
+    pm_state = s;
+    return 0;
+}
+
+fn pm_set_battery(pct) {
+    let prev = pm_battery_pct;
+    pm_battery_pct = pct;
+    if pct < 20 { if prev >= 20 { pm_push_event(PM_EV_LOW_BAT);  } }
+    if pct < 5  { if prev >= 5  { pm_push_event(PM_EV_CRIT_BAT); } }
+    return 0;
+}
+
+fn pm_set_ac(connected) {
+    pm_ac_connected = connected;
+    if connected == 1 { pm_push_event(PM_EV_AC_CONNECT); pm_charging = 1; }
+    if connected == 0 { pm_push_event(PM_EV_AC_DISC);    pm_charging = 0; }
+    return 0;
+}
+
+fn pm_tick() {
+    pm_uptime += 1;
+    return pm_uptime;
+}
+
+fn pm_get_state()         { return pm_state; }
+fn pm_get_battery()       { return pm_battery_pct; }
+fn pm_get_ac()            { return pm_ac_connected; }
+fn pm_get_uptime()        { return pm_uptime; }
+fn pm_get_n_events()      { return pm_n_events; }
+fn pm_get_suspend_count() { return pm_suspend_count; }
+
+fn pm_test() {
+    pm_init();
+
+    // Battery 100% → 30%: no event (still above 20%)
+    pm_set_battery(30);
+
+    // Battery 30% → 15%: crosses below 20% → push LOW_BAT (2)
+    pm_set_battery(15);
+
+    // Connect AC → push AC_CONNECT (0)
+    pm_set_ac(1);
+
+    // Pop events: expect LOW_BAT first, then AC_CONNECT, then -1
+    let e0 = pm_pop_event();   // 2 (PM_EV_LOW_BAT)
+    let e1 = pm_pop_event();   // 0 (PM_EV_AC_CONNECT)
+    let e2 = pm_pop_event();   // -1 (empty)
+
+    let bat = pm_get_battery();  // 15
+    let ac  = pm_get_ac();       // 1
+
+    print("pm_test: e0=" + to_string(e0)
+          + " e1=" + to_string(e1)
+          + " e2=" + to_string(e2)
+          + " bat=" + to_string(bat)
+          + " ac=" + to_string(ac));
+
+    if e0 == PM_EV_LOW_BAT {
+        if e1 == PM_EV_AC_CONNECT {
+            if e2 < 0 {
+                if bat == 15 {
+                    if ac == 1 {
+                        print("pm_test: PASS");
+                        return 1;
+                    }
+                }
+            }
+        }
+    }
+    print("pm_test: FAIL");
+    return 0;
+}
+
+print("power_mgmt.hl loaded");

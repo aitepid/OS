@@ -1,0 +1,105 @@
+// thermal.hl -- Thermal Management (Phase 6: 系统稳定化, iter 417)
+// Buffer: 0x1D80000
+// TH_MAX_ZONES=4; thresholds: WARM>=70°C, HOT>=85°C, CRITICAL>=100°C
+// Throttle: NORMAL=0%, WARM=25%, HOT=50%, CRITICAL=100%
+// Fan speed: NORMAL=20%, WARM=50%, HOT=80%, CRITICAL=100%
+// th_update_fan(): sets th_fan_speed based on the hottest active zone
+
+let TH_MAX_ZONES = 4;
+let TH_NORMAL    = 0;
+let TH_WARM      = 1;
+let TH_HOT       = 2;
+let TH_CRITICAL  = 3;
+
+let th_temp     = array(4, 0);   // temperature per zone (°C)
+let th_state    = array(4, 0);   // thermal state per zone
+let th_throttle = array(4, 0);   // throttle % per zone
+let th_n_zones  = 0;
+let th_fan_speed = 20;           // current fan speed %
+let th_alerts   = 0;             // total CRITICAL events
+
+fn th_init() {
+    let i = 0;
+    while i < TH_MAX_ZONES {
+        set_at(th_temp,     i, 0);
+        set_at(th_state,    i, TH_NORMAL);
+        set_at(th_throttle, i, 0);
+        i += 1;
+    }
+    th_n_zones  = 0;
+    th_fan_speed = 20;
+    th_alerts   = 0;
+    return 0;
+}
+
+fn th_set_temp(zone, temp) {
+    if zone >= th_n_zones { th_n_zones = zone + 1; }
+    set_at(th_temp, zone, temp);
+    let st = TH_NORMAL;
+    let th = 0;
+    if temp >= 70  { st = TH_WARM;     th = 25; }
+    if temp >= 85  { st = TH_HOT;      th = 50; }
+    if temp >= 100 { st = TH_CRITICAL; th = 100; th_alerts += 1; }
+    set_at(th_state,    zone, st);
+    set_at(th_throttle, zone, th);
+    return 0;
+}
+
+fn th_update_fan() {
+    let max_st = TH_NORMAL;
+    let i = 0;
+    while i < th_n_zones {
+        if th_state[i] > max_st { max_st = th_state[i]; }
+        i += 1;
+    }
+    if max_st == TH_NORMAL   { th_fan_speed = 20; }
+    if max_st == TH_WARM     { th_fan_speed = 50; }
+    if max_st == TH_HOT      { th_fan_speed = 80; }
+    if max_st == TH_CRITICAL { th_fan_speed = 100; }
+    return th_fan_speed;
+}
+
+fn th_get_temp(zone)     { return th_temp[zone]; }
+fn th_get_state(zone)    { return th_state[zone]; }
+fn th_get_throttle(zone) { return th_throttle[zone]; }
+fn th_get_fan_speed()    { return th_fan_speed; }
+fn th_get_n_zones()      { return th_n_zones; }
+fn th_get_alerts()       { return th_alerts; }
+
+fn th_test() {
+    th_init();
+
+    // Zone 0: 60°C → NORMAL, throttle=0
+    th_set_temp(0, 60);
+    // Zone 1: 80°C → WARM,   throttle=25
+    th_set_temp(1, 80);
+    // Zone 2: 90°C → HOT,    throttle=50
+    th_set_temp(2, 90);
+
+    // Fan speed = max state HOT → 80%
+    let fan = th_update_fan();
+
+    let s0  = th_get_state(0);     // TH_NORMAL = 0
+    let s2  = th_get_state(2);     // TH_HOT    = 2
+    let th2 = th_get_throttle(2);  // 50
+
+    print("th_test: s0=" + to_string(s0)
+          + " s2=" + to_string(s2)
+          + " th2=" + to_string(th2)
+          + " fan=" + to_string(fan));
+
+    if s0 == TH_NORMAL {
+        if s2 == TH_HOT {
+            if th2 == 50 {
+                if fan == 80 {
+                    print("th_test: PASS");
+                    return 1;
+                }
+            }
+        }
+    }
+    print("th_test: FAIL");
+    return 0;
+}
+
+print("thermal.hl loaded");

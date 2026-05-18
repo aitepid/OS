@@ -2,13 +2,40 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`469`（76 根目录 + 400 内核模块）
-- H-L 总行数：`~156,600`
-- 内核模块：`400`
-- Shell 命令：`1618`
-- 最近完成功能迭代：`414`（crash_reporter + core_dump + hotpatch）
+- `.hl` 文件：`472`（76 根目录 + 403 内核模块）
+- H-L 总行数：`~157,400`
+- 内核模块：`403`
+- Shell 命令：`1639`
+- 最近完成功能迭代：`417`（livepatch + power_mgmt + thermal）
 - 当前阶段：第六阶段·系统稳定化（Phase 6）
 - **Milestone M4 已达成**（iter 405，完整 ML 推理框架）
+
+## Iteration 417 — thermal.hl：热量管理
+
+- **`thermal.hl`**（Buffer: 0x1D80000）：TH_MAX_ZONES=4
+  - 阈值：WARM≥70°C（油门25%）/ HOT≥85°C（油门50%）/ CRITICAL≥100°C（油门100%）
+  - `th_set_temp(zone, temp)`：更新温度，自动计算热态和节流百分比
+  - `th_update_fan()`：扫描所有区域最高状态，设定风扇转速（20/50/80/100%）
+  - `th_get_alerts()`：CRITICAL 事件计数
+  - 测试：zone0=60(NORMAL) zone1=80(WARM) zone2=90(HOT) → fan=80% → PASS
+
+## Iteration 416 — power_mgmt.hl：ACPI 电源管理
+
+- **`power_mgmt.hl`**（Buffer: 0x1D70000）：PM_S0/S3/S5 电源状态
+  - 事件：PM_EV_AC_CONNECT=0 / PM_EV_AC_DISC=1 / PM_EV_LOW_BAT=2 / PM_EV_CRIT_BAT=3
+  - `pm_set_battery(pct)`：越过 20% 阈值时自动入队 LOW_BAT 事件
+  - `pm_set_ac(connected)`：连接/断开 AC 自动推送对应事件
+  - `pm_pop_event()`：FIFO 出队，队空返回 -1；左移实现 O(n) 出队
+  - 测试：battery(30→15)→push LOW_BAT；ac(1)→push AC_CONNECT → e0=2 e1=0 e2=-1 → PASS
+
+## Iteration 415 — livepatch.hl：内核在线补丁
+
+- **`livepatch.hl`**（Buffer: 0x1D60000）：LP_MAX_PATCHES=8，LP_FUNCS_PER=4
+  - `lp_register(ver)`：注册版本化补丁集，返回 patch_id
+  - `lp_add_func(patch_id, orig, repl)`：向补丁集添加函数映射
+  - `lp_apply(pid)` / `lp_revert(pid)`：原子应用/撤销补丁集
+  - `lp_resolve(func_id)`：遍历所有 APPLIED 集，返回替换 fid 或原 fid
+  - 测试：register→add(5→50,6→60)→apply→r5=50 r6=60 r7=7；revert→r5b=5 → PASS
 
 ## Iteration 414 — hotpatch.hl：内核热补丁
 

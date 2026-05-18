@@ -1,0 +1,125 @@
+// livepatch.hl -- Live Kernel Patching (Phase 6: 系统稳定化, iter 415)
+// Buffer: 0x1D60000
+// Atomic patch sets: each set groups multiple function replacements under one version
+// LP_MAX_PATCHES=8 sets; each holds up to LP_FUNCS_PER=4 function mappings
+// LP_UNAPPLIED=0, LP_APPLIED=1
+// lp_resolve(func_id): walks all APPLIED sets, returns replacement or original fid
+
+let LP_MAX_PATCHES = 8;
+let LP_FUNCS_PER   = 4;
+let LP_UNAPPLIED   = 0;
+let LP_APPLIED     = 1;
+
+let lp_patch_ver     = array(8,  0);  // version tag per patch set
+let lp_patch_state   = array(8,  0);  // UNAPPLIED / APPLIED
+let lp_patch_n_funcs = array(8,  0);  // how many funcs in this set
+let lp_func_orig     = array(32, 0);  // [patch_id * LP_FUNCS_PER + i]
+let lp_func_repl     = array(32, 0);
+let lp_n_patches     = 0;
+
+fn lp_init() {
+    let i = 0;
+    while i < LP_MAX_PATCHES {
+        set_at(lp_patch_ver,     i, 0);
+        set_at(lp_patch_state,   i, LP_UNAPPLIED);
+        set_at(lp_patch_n_funcs, i, 0);
+        i += 1;
+    }
+    i = 0;
+    while i < 32 {
+        set_at(lp_func_orig, i, 0);
+        set_at(lp_func_repl, i, 0);
+        i += 1;
+    }
+    lp_n_patches = 0;
+    return 0;
+}
+
+fn lp_register(ver) {
+    let id = lp_n_patches;
+    set_at(lp_patch_ver,     id, ver);
+    set_at(lp_patch_state,   id, LP_UNAPPLIED);
+    set_at(lp_patch_n_funcs, id, 0);
+    lp_n_patches += 1;
+    return id;
+}
+
+fn lp_add_func(patch_id, orig_fid, repl_fid) {
+    let nf  = lp_patch_n_funcs[patch_id];
+    let idx = patch_id * LP_FUNCS_PER + nf;
+    set_at(lp_func_orig, idx, orig_fid);
+    set_at(lp_func_repl, idx, repl_fid);
+    set_at(lp_patch_n_funcs, patch_id, nf + 1);
+    return nf;
+}
+
+fn lp_apply(patch_id) {
+    set_at(lp_patch_state, patch_id, LP_APPLIED);
+    return 0;
+}
+
+fn lp_revert(patch_id) {
+    set_at(lp_patch_state, patch_id, LP_UNAPPLIED);
+    return 0;
+}
+
+fn lp_resolve(func_id) {
+    let pid = 0;
+    while pid < lp_n_patches {
+        if lp_patch_state[pid] == LP_APPLIED {
+            let fi = 0;
+            while fi < lp_patch_n_funcs[pid] {
+                if lp_func_orig[pid * LP_FUNCS_PER + fi] == func_id {
+                    return lp_func_repl[pid * LP_FUNCS_PER + fi];
+                }
+                fi += 1;
+            }
+        }
+        pid += 1;
+    }
+    return func_id;
+}
+
+fn lp_get_state(patch_id)  { return lp_patch_state[patch_id]; }
+fn lp_get_ver(patch_id)    { return lp_patch_ver[patch_id]; }
+fn lp_get_n_patches()      { return lp_n_patches; }
+
+fn lp_test() {
+    lp_init();
+
+    // Register patch set v1, add func 5→50 and func 6→60
+    let pid = lp_register(1);
+    lp_add_func(pid, 5, 50);
+    lp_add_func(pid, 6, 60);
+
+    // Apply the patch set
+    lp_apply(pid);
+
+    let r5  = lp_resolve(5);   // 50 (patched)
+    let r6  = lp_resolve(6);   // 60 (patched)
+    let r7  = lp_resolve(7);   // 7  (passthrough)
+
+    // Revert, then re-check func 5
+    lp_revert(pid);
+    let r5b = lp_resolve(5);   // 5  (reverted)
+
+    print("lp_test: r5=" + to_string(r5)
+          + " r6=" + to_string(r6)
+          + " r7=" + to_string(r7)
+          + " r5b=" + to_string(r5b));
+
+    if r5 == 50 {
+        if r6 == 60 {
+            if r7 == 7 {
+                if r5b == 5 {
+                    print("lp_test: PASS");
+                    return 1;
+                }
+            }
+        }
+    }
+    print("lp_test: FAIL");
+    return 0;
+}
+
+print("livepatch.hl loaded");

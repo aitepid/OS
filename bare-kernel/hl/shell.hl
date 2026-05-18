@@ -309,13 +309,16 @@ fn shell_handle(cmd) {
         serial_print("CrashReport:   cr init  cr test  cr record <type> <addr> <rip> <rsp>  cr frame <addr>  cr show  cr count  cr clear");
         serial_print("CoreDump:      cd init  cd test  cd setreg <idx> <v>  cd setmem <idx> <v>  cd dump  cd buf <idx>  cd info");
         serial_print("HotPatch:      hp init  hp test  hp apply <orig> <repl>  hp revert <pid>  hp dispatch <fid>  hp list  hp info");
+        serial_print("LivePatch:     lp init  lp test  lp register <ver>  lp addfunc <pid> <o> <r>  lp apply <pid>  lp revert <pid>  lp resolve <fid>");
+        serial_print("PowerMgmt:     pm init  pm test  pm state <s>  pm battery <pct>  pm ac <0|1>  pm event  pm info");
+        serial_print("Thermal:       th init  th test  th temp <zone> <c>  th state <zone>  th throttle <zone>  th fan  th info");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
     }
 
     if cmd == "ver" {
-        return "HicOS 6.0 -- Hilbert-Lang Kernel (400 modules, pure H-L, zero deps)";
+        return "HicOS 6.0 -- Hilbert-Lang Kernel (403 modules, pure H-L, zero deps)";
     }
 
     if cmd == "uptime" {
@@ -8078,6 +8081,94 @@ fn shell_handle_ext(cmd) {
     if cmd == "hp info" {
         return "hp: patches=" + to_string(hp_get_n_patches());
     }
+
+    // --- LivePatch ---
+    if cmd == "lp init" { lp_init(); return "lp: init"; }
+    if cmd == "lp test" { let lpr = lp_test(); return "lp: " + to_string(lpr); }
+    if _starts_with(cmd, "lp register ") {
+        let lpvr = to_int(str_sub(cmd, 12, len(cmd)));
+        let lpid = lp_register(lpvr);
+        return "lp: patch " + to_string(lpid) + " ver=" + to_string(lpvr);
+    }
+    if _starts_with(cmd, "lp addfunc ") {
+        let lpafa  = str_sub(cmd, 11, len(cmd));
+        let lpas0  = _find_space(lpafa);
+        let lpapid = to_int(str_sub(lpafa, 0, lpas0));
+        let lpafa2 = str_sub(lpafa, lpas0 + 1, len(lpafa));
+        let lpas1  = _find_space(lpafa2);
+        let lpaof  = to_int(str_sub(lpafa2, 0, lpas1));
+        let lparf  = to_int(str_sub(lpafa2, lpas1 + 1, len(lpafa2)));
+        lp_add_func(lpapid, lpaof, lparf);
+        return "lp: added orig=" + to_string(lpaof) + " repl=" + to_string(lparf);
+    }
+    if _starts_with(cmd, "lp apply ") {
+        let lpap = to_int(str_sub(cmd, 9, len(cmd)));
+        lp_apply(lpap);
+        return "lp: patch " + to_string(lpap) + " applied";
+    }
+    if _starts_with(cmd, "lp revert ") {
+        let lprp = to_int(str_sub(cmd, 10, len(cmd)));
+        lp_revert(lprp);
+        return "lp: patch " + to_string(lprp) + " reverted";
+    }
+    if _starts_with(cmd, "lp resolve ") {
+        let lprf = to_int(str_sub(cmd, 11, len(cmd)));
+        let lprr = lp_resolve(lprf);
+        return "lp: resolve(" + to_string(lprf) + ")=" + to_string(lprr);
+    }
+
+    // --- Power Management ---
+    if cmd == "pm init" { pm_init(); return "pm: init"; }
+    if cmd == "pm test" { let pmr = pm_test(); return "pm: " + to_string(pmr); }
+    if _starts_with(cmd, "pm state ") {
+        let pmss = to_int(str_sub(cmd, 9, len(cmd)));
+        pm_set_state(pmss);
+        return "pm: state=" + to_string(pmss);
+    }
+    if _starts_with(cmd, "pm battery ") {
+        let pmbp = to_int(str_sub(cmd, 11, len(cmd)));
+        pm_set_battery(pmbp);
+        return "pm: battery=" + to_string(pmbp) + "%";
+    }
+    if _starts_with(cmd, "pm ac ") {
+        let pmac = to_int(str_sub(cmd, 6, len(cmd)));
+        pm_set_ac(pmac);
+        return "pm: ac=" + to_string(pmac);
+    }
+    if cmd == "pm event" {
+        let pmev = pm_pop_event();
+        return "pm: event=" + to_string(pmev);
+    }
+    if cmd == "pm info" {
+        return "pm: state=" + to_string(pm_get_state()) + " bat=" + to_string(pm_get_battery()) + "% ac=" + to_string(pm_get_ac()) + " events=" + to_string(pm_get_n_events());
+    }
+
+    // --- Thermal ---
+    if cmd == "th init" { th_init(); return "th: init"; }
+    if cmd == "th test" { let thr = th_test(); return "th: " + to_string(thr); }
+    if _starts_with(cmd, "th temp ") {
+        let thta  = str_sub(cmd, 8, len(cmd));
+        let thts  = _find_space(thta);
+        let thtzo = to_int(str_sub(thta, 0, thts));
+        let thttm = to_int(str_sub(thta, thts + 1, len(thta)));
+        th_set_temp(thtzo, thttm);
+        return "th: zone=" + to_string(thtzo) + " temp=" + to_string(thttm) + " state=" + to_string(th_get_state(thtzo));
+    }
+    if _starts_with(cmd, "th state ") {
+        let thsz = to_int(str_sub(cmd, 9, len(cmd)));
+        return "th: zone=" + to_string(thsz) + " state=" + to_string(th_get_state(thsz));
+    }
+    if _starts_with(cmd, "th throttle ") {
+        let ththz = to_int(str_sub(cmd, 12, len(cmd)));
+        return "th: zone=" + to_string(ththz) + " throttle=" + to_string(th_get_throttle(ththz)) + "%";
+    }
+    if cmd == "th fan" {
+        let thf = th_update_fan();
+        return "th: fan=" + to_string(thf) + "%";
+    }
+    if cmd == "th info" {
+        return "th: zones=" + to_string(th_get_n_zones()) + " fan=" + to_string(th_get_fan_speed()) + "% alerts=" + to_string(th_get_alerts());
+    }
 }
 
 // Self-test
@@ -8088,7 +8179,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 1618 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld + lca + virtualtree + dominator + sam + manacher + eertree + bwt + lyndon + zfunction + ir + regalloc + codegen + ioring + persistseg + rollbackdsu + splaytree + mo + sqrtdecomp + cht + matrixexpo + numtheory + strhash + intervaldp + gametheory + trie + lichao + dcdp + monoqueue + segbeats + lct + quickselect + ntt + segmerge + palindromedp + knuthdp + bitset + millerrabin + pollardrho + linearbasis + geometry2d + rotcalip + halfplane + dinic + blockcuttree + bridgetree + polyinv + polylnexp + polysqrt + bitmaskdp + digitdp + brokenprofiledp + wavelettree + implicittreap + chtholly + suffixtree + bsgs + minencircle + gvn + licm + dce2 + linearscandra + regcoalesce + callingconv + typeinfer + typechecker + generics + linkerelf + linkerar + dynlinker + dwarf + perfcounter + jitstub + btree + btreeplus + lsmmemtable + wal + mvcc + transaction + indexhash + indexbtree + queryplan + dbengine + wireguard + tls13 + http3quic + doh + dht + bittorrent + opentelemetry + prometheus + grpc_stream + websocket_compression + conv2d + pooling + rnn + lstm + autograd + optimizer + tokenizer + embedding + model_serialize + gpu_inference + scheduler_cfs + numa_alloc + ftrace + kprobe + memory_profiler + heap_checker + crash_reporter + core_dump + hotpatch");
+print("shell.hl loaded -- 1639 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld + lca + virtualtree + dominator + sam + manacher + eertree + bwt + lyndon + zfunction + ir + regalloc + codegen + ioring + persistseg + rollbackdsu + splaytree + mo + sqrtdecomp + cht + matrixexpo + numtheory + strhash + intervaldp + gametheory + trie + lichao + dcdp + monoqueue + segbeats + lct + quickselect + ntt + segmerge + palindromedp + knuthdp + bitset + millerrabin + pollardrho + linearbasis + geometry2d + rotcalip + halfplane + dinic + blockcuttree + bridgetree + polyinv + polylnexp + polysqrt + bitmaskdp + digitdp + brokenprofiledp + wavelettree + implicittreap + chtholly + suffixtree + bsgs + minencircle + gvn + licm + dce2 + linearscandra + regcoalesce + callingconv + typeinfer + typechecker + generics + linkerelf + linkerar + dynlinker + dwarf + perfcounter + jitstub + btree + btreeplus + lsmmemtable + wal + mvcc + transaction + indexhash + indexbtree + queryplan + dbengine + wireguard + tls13 + http3quic + doh + dht + bittorrent + opentelemetry + prometheus + grpc_stream + websocket_compression + conv2d + pooling + rnn + lstm + autograd + optimizer + tokenizer + embedding + model_serialize + gpu_inference + scheduler_cfs + numa_alloc + ftrace + kprobe + memory_profiler + heap_checker + crash_reporter + core_dump + hotpatch + livepatch + power_mgmt + thermal");
 
 // Main shell loop (called from kernel_init)
 
