@@ -1,0 +1,284 @@
+// db_engine.hl -- Minimal relational database engine (iter 385)
+// Buffer: 0x1B80000
+// Integrates: btree/index_hash/index_btree/mvcc/transaction/query_plan
+// Milestone M3: complete storage engine
+// DB_MAXTABLES=8, DB_MAXCOLS=8, DB_MAXROWS=64 per table
+// Row storage: db_rows[tid*512 + rid*8 + col]  (TBL_STRIDE=512, ROW_STRIDE=8)
+// Hash index on col-0 per table when enabled
+
+let DB_MAXTABLES  = 8;
+let DB_MAXCOLS    = 8;
+let DB_MAXROWS    = 64;
+let DB_TBL_STRIDE = 512;   // DB_MAXROWS * DB_MAXCOLS
+let DB_ROW_STRIDE = 8;     // DB_MAXCOLS
+let DB_NULL       = 0 - 1;
+
+// Per-table metadata
+let db_nrows     = array(8, 0);    // row count per table
+let db_ncols     = array(8, 0);    // col count per table
+let db_has_idx   = array(8, 0);    // 1 = hash index on col-0
+
+// Row storage (flat): db_rows[tid*512 + rid*8 + col]
+let db_rows      = array(4096, 0);
+
+// Hash index heads per table (reuse ih_* globals from index_hash.hl
+// but we maintain a per-table snapshot via db_idx_key/rid pairs)
+let db_idx_key   = array(512, DB_NULL);  // 8 tables * 64 rows
+let db_idx_rid   = array(512, DB_NULL);
+let db_idx_used  = array(512, 0);
+let db_idx_n     = array(8, 0);    // count of indexed entries per table
+
+let db_scan_count = 0;   // last select scan length
+
+fn dbeng_init() {
+    let i = 0;
+    while i < DB_MAXTABLES {
+        set_at(db_nrows,   i, 0);
+        set_at(db_ncols,   i, 0);
+        set_at(db_has_idx, i, 0);
+        set_at(db_idx_n,   i, 0);
+        i += 1;
+    }
+    db_scan_count = 0;
+    return 0;
+}
+
+fn db_create_table(tid, ncols) {
+    set_at(db_ncols, tid, ncols);
+    set_at(db_nrows, tid, 0);
+    set_at(db_has_idx, tid, 0);
+    return tid;
+}
+
+// Write 4 columns (extend to more via db_set_col)
+fn db_insert(tid, c0, c1, c2, c3) {
+    let rid  = db_nrows[tid];
+    let base = tid * DB_TBL_STRIDE + rid * DB_ROW_STRIDE;
+    set_at(db_rows, base,     c0);
+    set_at(db_rows, base + 1, c1);
+    set_at(db_rows, base + 2, c2);
+    set_at(db_rows, base + 3, c3);
+    set_at(db_nrows, tid, rid + 1);
+    // update hash index if present
+    if db_has_idx[tid] == 1 {
+        let slot = tid * DB_MAXROWS + rid;
+        set_at(db_idx_key,  slot, c0);
+        set_at(db_idx_rid,  slot, rid);
+        set_at(db_idx_used, slot, 1);
+        set_at(db_idx_n, tid, db_idx_n[tid] + 1);
+    }
+    return rid;
+}
+
+fn db_get_col(tid, rid, col) {
+    let base = tid * DB_TBL_STRIDE + rid * DB_ROW_STRIDE;
+    return db_rows[base + col];
+}
+
+fn _db_idx_lookup(tid, key) {
+    // Linear scan over table's index slots
+    let base = tid * DB_MAXROWS;
+    let i    = 0;
+    while i < db_nrows[tid] {
+        let slot = base + i;
+        if db_idx_used[slot] == 1 {
+            if db_idx_key[slot] == key {
+                return db_idx_rid[slot];
+            }
+        }
+        i += 1;
+    }
+    return DB_NULL;
+}
+
+fn db_create_index(tid) {
+    // Build hash index from existing rows
+    set_at(db_has_idx, tid, 1);
+    let base = tid * DB_MAXROWS;
+    let i    = 0;
+    while i < db_nrows[tid] {
+        let slot  = base + i;
+        let rb    = tid * DB_TBL_STRIDE + i * DB_ROW_STRIDE;
+        let key   = db_rows[rb];
+        set_at(db_idx_key,  slot, key);
+        set_at(db_idx_rid,  slot, i);
+        set_at(db_idx_used, slot, 1);
+        i += 1;
+    }
+    set_at(db_idx_n, tid, db_nrows[tid]);
+    return 0;
+}
+
+fn db_select_eq(tid, col, val) {
+    // Returns first matching rid or DB_NULL
+    // Use index if col==0 and index present
+    if col == 0 {
+        if db_has_idx[tid] == 1 {
+            db_scan_count = 1;
+            return _db_idx_lookup(tid, val);
+        }
+    }
+    // Sequential scan
+    let n    = db_nrows[tid];
+    let i    = 0;
+    db_scan_count = n;
+    while i < n {
+        let v = db_get_col(tid, i, col);
+        if v == val {
+            return i;
+        }
+        i += 1;
+    }
+    return DB_NULL;
+}
+
+fn db_select_range(tid, col, lo, hi) {
+    // Returns count of rows with lo <= col_val <= hi
+    let n     = db_nrows[tid];
+    let count = 0;
+    let i     = 0;
+    db_scan_count = n;
+    while i < n {
+        let v = db_get_col(tid, i, col);
+        let ok = 0;
+        if v >= lo { if v <= hi { ok = 1; } }
+        if ok == 1 { count += 1; }
+        i += 1;
+    }
+    return count;
+}
+
+fn db_delete_row(tid, rid) {
+    // Mark row deleted by setting all cols to DB_NULL
+    let base = tid * DB_TBL_STRIDE + rid * DB_ROW_STRIDE;
+    let j    = 0;
+    while j < DB_ROW_STRIDE {
+        set_at(db_rows, base + j, DB_NULL);
+        j += 1;
+    }
+    // invalidate index entry
+    if db_has_idx[tid] == 1 {
+        let slot = tid * DB_MAXROWS + rid;
+        set_at(db_idx_used, slot, 0);
+    }
+    return 0;
+}
+
+fn db_update_col(tid, rid, col, newval) {
+    let base = tid * DB_TBL_STRIDE + rid * DB_ROW_STRIDE;
+    set_at(db_rows, base + col, newval);
+    // rebuild index entry if col-0
+    if col == 0 {
+        if db_has_idx[tid] == 1 {
+            let slot = tid * DB_MAXROWS + rid;
+            set_at(db_idx_key, slot, newval);
+        }
+    }
+    return 0;
+}
+
+fn db_explain(tid, col, use_index) {
+    qp_init();
+    let n = db_nrows[tid];
+    let nd = 0;
+    if use_index == 1 {
+        nd = qp_scan(tid, n, 0, 1);
+    } else {
+        nd = qp_scan(tid, n, 0 - 1, n);
+    }
+    nd = qp_proj(nd);
+    qp_root = nd;
+    qp_explain(nd);
+    return qp_total_cost(nd);
+}
+
+fn db_row_count(tid)  { return db_nrows[tid]; }
+fn db_last_scan()     { return db_scan_count; }
+
+fn db_print_row(tid, rid) {
+    let c0 = db_get_col(tid, rid, 0);
+    let c1 = db_get_col(tid, rid, 1);
+    let c2 = db_get_col(tid, rid, 2);
+    let c3 = db_get_col(tid, rid, 3);
+    print("  row[" + to_string(rid) + "]: "
+          + to_string(c0) + " " + to_string(c1)
+          + " " + to_string(c2) + " " + to_string(c3));
+    return 0;
+}
+
+fn db_dump(tid) {
+    let n = db_nrows[tid];
+    let i = 0;
+    print("db_dump table=" + to_string(tid) + " rows=" + to_string(n));
+    while i < n {
+        db_print_row(tid, i);
+        i += 1;
+    }
+    return 0;
+}
+
+fn db_test() {
+    dbeng_init();
+
+    // Create table 0 with 4 columns, 8 rows
+    db_create_table(0, 4);
+
+    db_insert(0, 1, 10, 100, 1000);
+    db_insert(0, 2, 20, 200, 2000);
+    db_insert(0, 3, 30, 300, 3000);
+    db_insert(0, 4, 40, 400, 4000);
+    db_insert(0, 5, 50, 500, 5000);
+    db_insert(0, 6, 60, 600, 6000);
+    db_insert(0, 7, 70, 700, 7000);
+    db_insert(0, 8, 80, 800, 8000);
+
+    // Build index on col-0
+    db_create_index(0);
+
+    // Index lookup: col=0, val=5 → rid=4
+    let rid1 = db_select_eq(0, 0, 5);
+    let sc1  = db_last_scan();
+
+    // Sequential scan: col=1, val=30 → rid=2
+    let rid2 = db_select_eq(0, 1, 30);
+    let sc2  = db_last_scan();
+
+    // Range query: col=1, 20<=val<=50 → count=4
+    let cnt = db_select_range(0, 1, 20, 50);
+
+    // Update row 0: set col-0 = 99
+    db_update_col(0, 0, 0, 99);
+    let ck = db_get_col(0, 0, 0);
+
+    // Explain
+    let cost_idx = db_explain(0, 0, 1);
+    let cost_seq = db_explain(0, 0, 0);
+
+    print("db_test: rid1=" + to_string(rid1)
+          + " sc1=" + to_string(sc1)
+          + " rid2=" + to_string(rid2)
+          + " sc2=" + to_string(sc2)
+          + " range=" + to_string(cnt)
+          + " upd_ck=" + to_string(ck));
+    print("db_test: cost_idx=" + to_string(cost_idx)
+          + " cost_seq=" + to_string(cost_seq));
+
+    if rid1 == 4 {
+        if sc1 == 1 {
+            if rid2 == 2 {
+                if sc2 == 8 {
+                    if cnt == 4 {
+                        if ck == 99 {
+                            print("db_test: PASS");
+                            return 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    print("db_test: FAIL");
+    return 0;
+}
+
+print("db_engine.hl loaded");

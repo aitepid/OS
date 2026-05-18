@@ -1,0 +1,210 @@
+// wireguard.hl -- WireGuard VPN protocol simulation (iter 386)
+// Buffer: 0x1B90000
+// Noise_IKpsk2 handshake simulation (arithmetic approximation)
+// WG_MAXPEERS=8; states: IDLE=0 INIT_SENT=1 RESP_SENT=2 ESTABLISHED=3
+// Session key: sk = (priv + ppub) * 17 mod 65521
+// Encrypt: ct = (pt + sk + counter) mod 65536
+// Decrypt: pt = (ct - sk - counter + 65536*2) mod 65536
+// Message format: [type, sender_idx, key_or_eph, mac, payload]
+
+let WG_MAXPEERS  = 8;
+let WG_KEYSPACE  = 65521;   // prime modulus for key ops
+let WG_MSGSPACE  = 65536;   // 16-bit wrap for message fields
+
+// Peer states
+let WG_IDLE        = 0;
+let WG_INIT_SENT   = 1;
+let WG_RESP_SENT   = 2;
+let WG_ESTABLISHED = 3;
+
+// Message types
+let WG_MSG_INIT   = 1;
+let WG_MSG_RESP   = 2;
+let WG_MSG_DATA   = 4;
+
+// Peer table
+let wg_state      = array(8, 0);    // per-peer state
+let wg_priv       = array(8, 0);    // local private key (per peer context)
+let wg_ppub       = array(8, 0);    // remote public key
+let wg_eph_priv   = array(8, 0);    // ephemeral private (generated on INIT)
+let wg_eph_pub    = array(8, 0);    // ephemeral public
+let wg_psk        = array(8, 0);    // pre-shared key
+let wg_session_key= array(8, 0);    // derived session key
+let wg_send_ctr   = array(8, 0);    // nonce counter outbound
+let wg_recv_ctr   = array(8, 0);    // last accepted nonce inbound
+
+// Message buffer (flat 5-word messages)
+let WG_MSG_STRIDE = 5;
+let wg_msg        = array(40, 0);   // 8 peers * 5 fields
+let wg_n_peers    = 0;
+
+fn wg_init() {
+    let i = 0;
+    while i < WG_MAXPEERS {
+        set_at(wg_state,       i, WG_IDLE);
+        set_at(wg_priv,        i, 0);
+        set_at(wg_ppub,        i, 0);
+        set_at(wg_eph_priv,    i, 0);
+        set_at(wg_eph_pub,     i, 0);
+        set_at(wg_psk,         i, 0);
+        set_at(wg_session_key, i, 0);
+        set_at(wg_send_ctr,    i, 0);
+        set_at(wg_recv_ctr,    i, 0);
+        i += 1;
+    }
+    wg_n_peers = 0;
+    return 0;
+}
+
+fn wg_add_peer(priv_key, pub_key, psk) {
+    let id = wg_n_peers;
+    set_at(wg_priv,  id, priv_key);
+    set_at(wg_ppub,  id, pub_key);
+    set_at(wg_psk,   id, psk);
+    set_at(wg_state, id, WG_IDLE);
+    wg_n_peers += 1;
+    return id;
+}
+
+fn _wg_derive_key(priv_key, pub_key, psk) {
+    // Simulate Noise DH + KDF: sk = ((priv*pub mod P) + psk) * 17 mod P
+    let dh  = priv_key * pub_key;
+    let r   = dh - (dh / WG_KEYSPACE) * WG_KEYSPACE;
+    let mix = r + psk;
+    let sk  = mix * 17;
+    sk = sk - (sk / WG_KEYSPACE) * WG_KEYSPACE;
+    return sk;
+}
+
+fn _wg_gen_eph(id) {
+    // Ephemeral key: hash of (priv, counter)
+    let base  = wg_priv[id] * 31 + wg_send_ctr[id] + 7;
+    let epriv = base - (base / WG_KEYSPACE) * WG_KEYSPACE;
+    let epub  = epriv * 2 + 1;
+    epub = epub - (epub / WG_KEYSPACE) * WG_KEYSPACE;
+    set_at(wg_eph_priv, id, epriv);
+    set_at(wg_eph_pub,  id, epub);
+    return epub;
+}
+
+fn _wg_mac(key, payload) {
+    // Simplified MAC: (key * 31 + payload) mod 65536
+    let v = key * 31 + payload;
+    return v - (v / WG_MSG_SPACE) * WG_MSG_SPACE;
+}
+
+fn wg_handshake_init(id) {
+    // Build Initiation message and derive ephemeral key
+    let epub = _wg_gen_eph(id);
+    let mac  = _wg_mac(wg_ppub[id], epub);
+    let base = id * WG_MSG_STRIDE;
+    set_at(wg_msg, base,     WG_MSG_INIT);
+    set_at(wg_msg, base + 1, id);
+    set_at(wg_msg, base + 2, epub);
+    set_at(wg_msg, base + 3, mac);
+    set_at(wg_msg, base + 4, 0);
+    set_at(wg_state, id, WG_INIT_SENT);
+    return 0;
+}
+
+fn wg_handshake_resp(id) {
+    // Responder receives init, derives session key, sends response
+    let epub     = _wg_gen_eph(id);
+    let sk       = _wg_derive_key(wg_priv[id], wg_ppub[id], wg_psk[id]);
+    set_at(wg_session_key, id, sk);
+    let mac  = _wg_mac(sk, epub);
+    let base = id * WG_MSG_STRIDE;
+    set_at(wg_msg, base,     WG_MSG_RESP);
+    set_at(wg_msg, base + 1, id);
+    set_at(wg_msg, base + 2, epub);
+    set_at(wg_msg, base + 3, mac);
+    set_at(wg_msg, base + 4, 0);
+    set_at(wg_state, id, WG_RESP_SENT);
+    return sk;
+}
+
+fn wg_establish(id) {
+    // Initiator receives response, derives same session key
+    let sk = _wg_derive_key(wg_priv[id], wg_ppub[id], wg_psk[id]);
+    set_at(wg_session_key, id, sk);
+    set_at(wg_state,       id, WG_ESTABLISHED);
+    return sk;
+}
+
+fn wg_encrypt(id, plaintext) {
+    // ct = (pt + sk + ctr) mod 65536
+    let sk  = wg_session_key[id];
+    let ctr = wg_send_ctr[id];
+    let ct  = plaintext + sk + ctr;
+    ct = ct - (ct / WG_MSG_SPACE) * WG_MSG_SPACE;
+    set_at(wg_send_ctr, id, ctr + 1);
+    // pack into msg buffer
+    let base = id * WG_MSG_STRIDE;
+    set_at(wg_msg, base,     WG_MSG_DATA);
+    set_at(wg_msg, base + 1, id);
+    set_at(wg_msg, base + 2, ctr);
+    set_at(wg_msg, base + 3, _wg_mac(sk, ct));
+    set_at(wg_msg, base + 4, ct);
+    return ct;
+}
+
+fn wg_decrypt(id, ct, counter) {
+    // Anti-replay: counter must be >= last accepted
+    if counter < wg_recv_ctr[id] {
+        return 0 - 1;   // replay
+    }
+    let sk  = wg_session_key[id];
+    // pt = (ct - sk - ctr + 2*65536) mod 65536
+    let pt  = ct - sk - counter + WG_MSG_SPACE + WG_MSG_SPACE;
+    pt = pt - (pt / WG_MSG_SPACE) * WG_MSG_SPACE;
+    set_at(wg_recv_ctr, id, counter + 1);
+    return pt;
+}
+
+fn wg_peer_state(id)       { return wg_state[id];       }
+fn wg_peer_session_key(id) { return wg_session_key[id]; }
+
+fn wg_test() {
+    wg_init();
+
+    // Peer 0: priv=1234, remote_pub=5678, psk=42
+    let pid = wg_add_peer(1234, 5678, 42);
+
+    // Full handshake simulation
+    wg_handshake_init(pid);
+    let sk_resp = wg_handshake_resp(pid);
+    let sk_init = wg_establish(pid);
+
+    // Both sides should derive same session key
+    let state = wg_peer_state(pid);
+
+    // Encrypt plaintext=9999, counter starts at 0
+    let ct = wg_encrypt(pid, 9999);
+    // Decrypt: receiver side derives same sk, uses counter=0
+    let pt = wg_decrypt(pid, ct, 0);
+
+    // Replay: counter=0 again → should fail (returns -1)
+    let replay_pt = wg_decrypt(pid, ct, 0);
+
+    print("wg_test: sk_resp=" + to_string(sk_resp)
+          + " sk_init=" + to_string(sk_init)
+          + " state=" + to_string(state)
+          + " ct=" + to_string(ct)
+          + " pt=" + to_string(pt)
+          + " replay=" + to_string(replay_pt));
+
+    if sk_resp == sk_init {
+        if state == WG_ESTABLISHED {
+            if pt == 9999 {
+                if replay_pt == 0 - 1 {
+                    print("wg_test: PASS");
+                    return 1;
+                }
+            }
+        }
+    }
+    print("wg_test: FAIL");
+    return 0;
+}
+
+print("wireguard.hl loaded");

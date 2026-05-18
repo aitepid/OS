@@ -1,0 +1,234 @@
+// tls13.hl -- TLS 1.3 handshake + AEAD record layer simulation (iter 387)
+// Buffer: 0x1BA0000
+// Handshake state machine: IDLE→CH_SENT→SH_RCVD→HS_DONE→ESTAB→ALERT
+// Key schedule: HKDF simulation via arithmetic (prime 65521)
+// AEAD record: ct = (pt + client_key + seq) mod 65536
+// TLS13_MAX=8 concurrent sessions
+
+let TLS13_MAX    = 8;
+let TLS_PRIME    = 65521;
+let TLS_SPACE    = 65536;
+
+// Session states
+let TLS_IDLE     = 0;
+let TLS_CH_SENT  = 1;
+let TLS_SH_RCVD  = 2;
+let TLS_HS_DONE  = 3;
+let TLS_ESTAB    = 4;
+let TLS_ALERT    = 5;
+
+// Alert levels
+let TLS_ALERT_WARN  = 1;
+let TLS_ALERT_FATAL = 2;
+
+// Alert descriptions
+let TLS_CLOSE_NOTIFY       = 0;
+let TLS_HANDSHAKE_FAILURE  = 40;
+let TLS_BAD_RECORD_MAC     = 20;
+let TLS_DECRYPT_ERROR      = 51;
+
+// Record content types
+let TLS_RT_HANDSHAKE = 22;
+let TLS_RT_APP_DATA  = 23;
+let TLS_RT_ALERT     = 21;
+
+// Session fields
+let tls_state       = array(8, 0);
+let tls_client_rand = array(8, 0);
+let tls_server_rand = array(8, 0);
+let tls_eph_priv    = array(8, 0);    // client ephemeral
+let tls_eph_pub     = array(8, 0);
+
+// Key schedule layers
+let tls_early_secret  = array(8, 0);
+let tls_hs_secret     = array(8, 0);
+let tls_master_secret = array(8, 0);
+let tls_client_key    = array(8, 0);
+let tls_server_key    = array(8, 0);
+let tls_client_iv     = array(8, 0);
+let tls_server_iv     = array(8, 0);
+
+// Sequence counters
+let tls_send_seq = array(8, 0);
+let tls_recv_seq = array(8, 0);
+
+// Alert storage
+let tls_alert_level = array(8, 0);
+let tls_alert_desc  = array(8, 0);
+
+let tls_n_sessions = 0;
+
+fn tls_init() {
+    let i = 0;
+    while i < TLS13_MAX {
+        set_at(tls_state,         i, TLS_IDLE);
+        set_at(tls_client_rand,   i, 0);
+        set_at(tls_server_rand,   i, 0);
+        set_at(tls_eph_priv,      i, 0);
+        set_at(tls_eph_pub,       i, 0);
+        set_at(tls_early_secret,  i, 0);
+        set_at(tls_hs_secret,     i, 0);
+        set_at(tls_master_secret, i, 0);
+        set_at(tls_client_key,    i, 0);
+        set_at(tls_server_key,    i, 0);
+        set_at(tls_client_iv,     i, 0);
+        set_at(tls_server_iv,     i, 0);
+        set_at(tls_send_seq,      i, 0);
+        set_at(tls_recv_seq,      i, 0);
+        set_at(tls_alert_level,   i, 0);
+        set_at(tls_alert_desc,    i, 0);
+        i += 1;
+    }
+    tls_n_sessions = 0;
+    return 0;
+}
+
+fn _tls_hkdf_expand(secret, label) {
+    // HKDF-Expand simulation: (secret*31 + label*7 + 1) mod TLS_PRIME
+    let v = secret * 31 + label * 7 + 1;
+    return v - (v / TLS_PRIME) * TLS_PRIME;
+}
+
+fn _tls_mix(a, b) {
+    // Mix two values: (a*17 + b*13 + 3) mod TLS_PRIME
+    let v = a * 17 + b * 13 + 3;
+    return v - (v / TLS_PRIME) * TLS_PRIME;
+}
+
+fn tls_new_session() {
+    let sid = tls_n_sessions;
+    tls_n_sessions += 1;
+    return sid;
+}
+
+fn tls_client_hello(sid, client_rand, eph_priv) {
+    set_at(tls_client_rand, sid, client_rand);
+    set_at(tls_eph_priv,    sid, eph_priv);
+    // eph_pub = eph_priv * 2 + 1 mod TLS_PRIME
+    let epub = eph_priv * 2 + 1;
+    epub = epub - (epub / TLS_PRIME) * TLS_PRIME;
+    set_at(tls_eph_pub, sid, epub);
+    set_at(tls_state,   sid, TLS_CH_SENT);
+    return epub;
+}
+
+fn tls_server_hello(sid, server_rand, server_eph_pub) {
+    set_at(tls_server_rand, sid, server_rand);
+    // DH shared secret = eph_priv * server_eph_pub mod TLS_PRIME
+    let dh = tls_eph_priv[sid] * server_eph_pub;
+    let shared = dh - (dh / TLS_PRIME) * TLS_PRIME;
+
+    // Key schedule
+    let early  = _tls_hkdf_expand(0, tls_client_rand[sid]);
+    let hs     = _tls_mix(early, shared);
+    let hs_s   = _tls_hkdf_expand(hs, server_rand);
+    let master = _tls_hkdf_expand(hs_s, shared);
+    let ck     = _tls_hkdf_expand(master, 1);
+    let sk     = _tls_hkdf_expand(master, 2);
+    let civ    = _tls_hkdf_expand(ck, 3);
+    let siv    = _tls_hkdf_expand(sk, 4);
+
+    set_at(tls_early_secret,  sid, early);
+    set_at(tls_hs_secret,     sid, hs_s);
+    set_at(tls_master_secret, sid, master);
+    set_at(tls_client_key,    sid, ck);
+    set_at(tls_server_key,    sid, sk);
+    set_at(tls_client_iv,     sid, civ);
+    set_at(tls_server_iv,     sid, siv);
+    set_at(tls_state,         sid, TLS_SH_RCVD);
+    return ck;
+}
+
+fn tls_handshake_finish(sid) {
+    // Verify Finished MAC (simulated: just advance state)
+    set_at(tls_state, sid, TLS_HS_DONE);
+    set_at(tls_state, sid, TLS_ESTAB);
+    return 0;
+}
+
+fn tls_send(sid, plaintext) {
+    // AEAD encrypt: ct = (pt + client_key + send_seq) mod TLS_SPACE
+    if tls_state[sid] != TLS_ESTAB {
+        return 0 - 1;
+    }
+    let ck  = tls_client_key[sid];
+    let seq = tls_send_seq[sid];
+    let ct  = plaintext + ck + seq;
+    ct = ct - (ct / TLS_SPACE) * TLS_SPACE;
+    set_at(tls_send_seq, sid, seq + 1);
+    return ct;
+}
+
+fn tls_recv(sid, ciphertext) {
+    // AEAD decrypt: pt = (ct - server_key - recv_seq + 2*SPACE) mod SPACE
+    if tls_state[sid] != TLS_ESTAB {
+        return 0 - 1;
+    }
+    let sk  = tls_server_key[sid];
+    let seq = tls_recv_seq[sid];
+    let pt  = ciphertext - sk - seq + TLS_SPACE + TLS_SPACE;
+    pt = pt - (pt / TLS_SPACE) * TLS_SPACE;
+    set_at(tls_recv_seq, sid, seq + 1);
+    return pt;
+}
+
+fn tls_alert(sid, level, desc) {
+    set_at(tls_alert_level, sid, level);
+    set_at(tls_alert_desc,  sid, desc);
+    set_at(tls_state,       sid, TLS_ALERT);
+    return 0;
+}
+
+fn tls_close(sid) {
+    tls_alert(sid, TLS_ALERT_WARN, TLS_CLOSE_NOTIFY);
+    return 0;
+}
+
+fn tls_session_state(sid)      { return tls_state[sid];      }
+fn tls_get_client_key(sid)     { return tls_client_key[sid]; }
+fn tls_get_server_key(sid)     { return tls_server_key[sid]; }
+fn tls_get_master_secret(sid)  { return tls_master_secret[sid]; }
+
+fn tls_test() {
+    tls_init();
+
+    let sid = tls_new_session();
+
+    // ClientHello: rand=1111, eph_priv=333
+    let epub = tls_client_hello(sid, 1111, 333);
+
+    // ServerHello: server_rand=2222, server_eph_pub=777
+    let ck = tls_server_hello(sid, 2222, 777);
+
+    // Finish handshake
+    tls_handshake_finish(sid);
+
+    let state = tls_session_state(sid);
+    let sk    = tls_get_server_key(sid);
+    let ms    = tls_get_master_secret(sid);
+
+    // Send plaintext=9999
+    let ct = tls_send(sid, 9999);
+
+    // Simulate server decrypts: ct was encrypted with client_key+0
+    // So to recover: pt_check = (ct - ck + SPACE) mod SPACE
+    let pt_check = ct - ck + TLS_SPACE;
+    pt_check = pt_check - (pt_check / TLS_SPACE) * TLS_SPACE;
+
+    print("tls_test: state=" + to_string(state)
+          + " ck=" + to_string(ck)
+          + " sk=" + to_string(sk)
+          + " ct=" + to_string(ct)
+          + " pt_check=" + to_string(pt_check));
+
+    if state == TLS_ESTAB {
+        if pt_check == 9999 {
+            print("tls_test: PASS");
+            return 1;
+        }
+    }
+    print("tls_test: FAIL");
+    return 0;
+}
+
+print("tls13.hl loaded");

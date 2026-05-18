@@ -279,13 +279,16 @@ fn shell_handle(cmd) {
         serial_print("HashIndex:     ih init  ih test  ih insert <k> <rid>  ih lookup <k>  ih delete <k>  ih size  ih load");
         serial_print("BTreeIndex:    ibt init  ibt test  ibt insert <k> <rid>  ibt lookup <k>  ibt range <lo> <hi>  ibt size  ibt scan");
         serial_print("QueryPlan:     qp init  qp test  qp scan <tbl> <n> <idx> <sel>  qp join <l> <r>  qp sort <nd>  qp agg <nd> <grp>  qp filter <nd> <sel>  qp explain  qp cost <nd>  qp nodes");
+        serial_print("DBEngine:      dbe init  dbe test  dbe create <tid> <ncols>  dbe insert <tid> <c0> <c1> <c2> <c3>  dbe select <tid> <col> <val>  dbe range <tid> <col> <lo> <hi>  dbe index <tid>");
+        serial_print("WireGuard:     wg init  wg test  wg addpeer <priv> <pub> <psk>  wg handshake <id>  wg establish <id>  wg encrypt <id> <pt>  wg decrypt <id> <ct> <ctr>");
+        serial_print("TLS1.3:        tls init  tls test  tls new  tls hello <sid> <rand> <eph>  tls shello <sid> <srand> <spub>  tls finish <sid>  tls send <sid> <pt>");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
     }
 
     if cmd == "ver" {
-        return "HicOS 6.0 -- Hilbert-Lang Kernel (370 modules, pure H-L, zero deps)";
+        return "HicOS 6.0 -- Hilbert-Lang Kernel (373 modules, pure H-L, zero deps)";
     }
 
     if cmd == "uptime" {
@@ -6975,7 +6978,148 @@ fn shell_handle_ext(cmd) {
     }
     if cmd == "qp nodes" { return "qp: nodes=" + to_string(qp_node_count()); }
 
-    return shell_handle(cmd);
+    // --- DBEngine ---
+    if cmd == "dbe init" { dbeng_init(); return "dbe: init"; }
+    if cmd == "dbe test" { let dber = db_test(); return "dbe: " + to_string(dber); }
+    if _starts_with(cmd, "dbe create ") {
+        let dbeca = str_sub(cmd, 11, len(cmd));
+        let dbes0 = _find_space(dbeca);
+        let dbet  = to_int(str_sub(dbeca, 0, dbes0));
+        let dben  = to_int(str_sub(dbeca, dbes0 + 1, len(dbeca)));
+        db_create_table(dbet, dben);
+        return "dbe: created table=" + to_string(dbet) + " ncols=" + to_string(dben);
+    }
+    if _starts_with(cmd, "dbe insert ") {
+        let dbiia = str_sub(cmd, 11, len(cmd));
+        let dbis0 = _find_space(dbiia);
+        let dbiti = to_int(str_sub(dbiia, 0, dbis0));
+        let dbia1 = str_sub(dbiia, dbis0 + 1, len(dbiia));
+        let dbis1 = _find_space(dbia1);
+        let dbic0 = to_int(str_sub(dbia1, 0, dbis1));
+        let dbia2 = str_sub(dbia1, dbis1 + 1, len(dbia1));
+        let dbis2 = _find_space(dbia2);
+        let dbic1 = to_int(str_sub(dbia2, 0, dbis2));
+        let dbia3 = str_sub(dbia2, dbis2 + 1, len(dbia2));
+        let dbis3 = _find_space(dbia3);
+        let dbic2 = to_int(str_sub(dbia3, 0, dbis3));
+        let dbic3 = to_int(str_sub(dbia3, dbis3 + 1, len(dbia3)));
+        let dbrid = db_insert(dbiti, dbic0, dbic1, dbic2, dbic3);
+        return "dbe: inserted rid=" + to_string(dbrid);
+    }
+    if _starts_with(cmd, "dbe select ") {
+        let dbsea = str_sub(cmd, 11, len(cmd));
+        let dbes0 = _find_space(dbsea);
+        let dbset = to_int(str_sub(dbsea, 0, dbes0));
+        let dbsea1= str_sub(dbsea, dbes0 + 1, len(dbsea));
+        let dbes1 = _find_space(dbsea1);
+        let dbsec = to_int(str_sub(dbsea1, 0, dbes1));
+        let dbsev = to_int(str_sub(dbsea1, dbes1 + 1, len(dbsea1)));
+        let dbser = db_select_eq(dbset, dbsec, dbsev);
+        return "dbe: rid=" + to_string(dbser) + " scan=" + to_string(db_last_scan());
+    }
+    if _starts_with(cmd, "dbe range ") {
+        let dbrga = str_sub(cmd, 10, len(cmd));
+        let dbrgs0= _find_space(dbrga);
+        let dbrgt = to_int(str_sub(dbrga, 0, dbrgs0));
+        let dbrga1= str_sub(dbrga, dbrgs0 + 1, len(dbrga));
+        let dbrgs1= _find_space(dbrga1);
+        let dbrgc = to_int(str_sub(dbrga1, 0, dbrgs1));
+        let dbrga2= str_sub(dbrga1, dbrgs1 + 1, len(dbrga1));
+        let dbrgs2= _find_space(dbrga2);
+        let dbrgl = to_int(str_sub(dbrga2, 0, dbrgs2));
+        let dbrgh = to_int(str_sub(dbrga2, dbrgs2 + 1, len(dbrga2)));
+        let dbrgn = db_select_range(dbrgt, dbrgc, dbrgl, dbrgh);
+        return "dbe: range_count=" + to_string(dbrgn);
+    }
+    if _starts_with(cmd, "dbe index ") {
+        let dbeit = to_int(str_sub(cmd, 10, len(cmd)));
+        db_create_index(dbeit);
+        return "dbe: index built on table=" + to_string(dbeit);
+    }
+
+    // --- WireGuard ---
+    if cmd == "wg init" { wg_init(); return "wg: init"; }
+    if cmd == "wg test" { let wgr = wg_test(); return "wg: " + to_string(wgr); }
+    if _starts_with(cmd, "wg addpeer ") {
+        let wgaa  = str_sub(cmd, 11, len(cmd));
+        let wgas0 = _find_space(wgaa);
+        let wgprv = to_int(str_sub(wgaa, 0, wgas0));
+        let wgaa1 = str_sub(wgaa, wgas0 + 1, len(wgaa));
+        let wgas1 = _find_space(wgaa1);
+        let wgpub = to_int(str_sub(wgaa1, 0, wgas1));
+        let wgpsk = to_int(str_sub(wgaa1, wgas1 + 1, len(wgaa1)));
+        let wgid  = wg_add_peer(wgprv, wgpub, wgpsk);
+        return "wg: peer id=" + to_string(wgid);
+    }
+    if _starts_with(cmd, "wg handshake ") {
+        let wghid = to_int(str_sub(cmd, 13, len(cmd)));
+        wg_handshake_init(wghid);
+        return "wg: handshake init sent id=" + to_string(wghid);
+    }
+    if _starts_with(cmd, "wg establish ") {
+        let wgeid = to_int(str_sub(cmd, 13, len(cmd)));
+        let wgesk = wg_establish(wgeid);
+        return "wg: established sk=" + to_string(wgesk);
+    }
+    if _starts_with(cmd, "wg encrypt ") {
+        let wgena = str_sub(cmd, 11, len(cmd));
+        let wgens = _find_space(wgena);
+        let wgeni = to_int(str_sub(wgena, 0, wgens));
+        let wgenp = to_int(str_sub(wgena, wgens + 1, len(wgena)));
+        let wgenct= wg_encrypt(wgeni, wgenp);
+        return "wg: ct=" + to_string(wgenct);
+    }
+    if _starts_with(cmd, "wg decrypt ") {
+        let wgdca = str_sub(cmd, 11, len(cmd));
+        let wgdcs0= _find_space(wgdca);
+        let wgdci = to_int(str_sub(wgdca, 0, wgdcs0));
+        let wgdca1= str_sub(wgdca, wgdcs0 + 1, len(wgdca));
+        let wgdcs1= _find_space(wgdca1);
+        let wgdcct= to_int(str_sub(wgdca1, 0, wgdcs1));
+        let wgdccr= to_int(str_sub(wgdca1, wgdcs1 + 1, len(wgdca1)));
+        let wgdcpt= wg_decrypt(wgdci, wgdcct, wgdccr);
+        return "wg: pt=" + to_string(wgdcpt);
+    }
+
+    // --- TLS 1.3 ---
+    if cmd == "tls init" { tls_init(); return "tls: init"; }
+    if cmd == "tls test" { let tlsr = tls_test(); return "tls: " + to_string(tlsr); }
+    if cmd == "tls new"  { let tlsid = tls_new_session(); return "tls: sid=" + to_string(tlsid); }
+    if _starts_with(cmd, "tls hello ") {
+        let tlsha  = str_sub(cmd, 10, len(cmd));
+        let tlshs0 = _find_space(tlsha);
+        let tlshsi = to_int(str_sub(tlsha, 0, tlshs0));
+        let tlsha1 = str_sub(tlsha, tlshs0 + 1, len(tlsha));
+        let tlshs1 = _find_space(tlsha1);
+        let tlshrn = to_int(str_sub(tlsha1, 0, tlshs1));
+        let tlshep = to_int(str_sub(tlsha1, tlshs1 + 1, len(tlsha1)));
+        let tlshpb = tls_client_hello(tlshsi, tlshrn, tlshep);
+        return "tls: epub=" + to_string(tlshpb);
+    }
+    if _starts_with(cmd, "tls shello ") {
+        let tlssha  = str_sub(cmd, 11, len(cmd));
+        let tlsshs0 = _find_space(tlssha);
+        let tlsshsi = to_int(str_sub(tlssha, 0, tlsshs0));
+        let tlssha1 = str_sub(tlssha, tlsshs0 + 1, len(tlssha));
+        let tlsshs1 = _find_space(tlssha1);
+        let tlsshrn = to_int(str_sub(tlssha1, 0, tlsshs1));
+        let tlsshsp = to_int(str_sub(tlssha1, tlsshs1 + 1, len(tlssha1)));
+        let tlsshck = tls_server_hello(tlsshsi, tlsshrn, tlsshsp);
+        return "tls: ck=" + to_string(tlsshck);
+    }
+    if _starts_with(cmd, "tls finish ") {
+        let tlsfsi = to_int(str_sub(cmd, 11, len(cmd)));
+        tls_handshake_finish(tlsfsi);
+        return "tls: established sid=" + to_string(tlsfsi);
+    }
+    if _starts_with(cmd, "tls send ") {
+        let tlssna = str_sub(cmd, 9, len(cmd));
+        let tlssns = _find_space(tlssna);
+        let tlssnsi= to_int(str_sub(tlssna, 0, tlssns));
+        let tlssnpt= to_int(str_sub(tlssna, tlssns + 1, len(tlssna)));
+        let tlssnct= tls_send(tlssnsi, tlssnpt);
+        return "tls: ct=" + to_string(tlssnct);
+    }
 }
 
 // Self-test
@@ -6986,7 +7130,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 1408 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld + lca + virtualtree + dominator + sam + manacher + eertree + bwt + lyndon + zfunction + ir + regalloc + codegen + ioring + persistseg + rollbackdsu + splaytree + mo + sqrtdecomp + cht + matrixexpo + numtheory + strhash + intervaldp + gametheory + trie + lichao + dcdp + monoqueue + segbeats + lct + quickselect + ntt + segmerge + palindromedp + knuthdp + bitset + millerrabin + pollardrho + linearbasis + geometry2d + rotcalip + halfplane + dinic + blockcuttree + bridgetree + polyinv + polylnexp + polysqrt + bitmaskdp + digitdp + brokenprofiledp + wavelettree + implicittreap + chtholly + suffixtree + bsgs + minencircle + gvn + licm + dce2 + linearscandra + regcoalesce + callingconv + typeinfer + typechecker + generics + linkerelf + linkerar + dynlinker + dwarf + perfcounter + jitstub + btree + btreeplus + lsmmemtable + wal + mvcc + transaction + indexhash + indexbtree + queryplan");
+print("shell.hl loaded -- 1429 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld + lca + virtualtree + dominator + sam + manacher + eertree + bwt + lyndon + zfunction + ir + regalloc + codegen + ioring + persistseg + rollbackdsu + splaytree + mo + sqrtdecomp + cht + matrixexpo + numtheory + strhash + intervaldp + gametheory + trie + lichao + dcdp + monoqueue + segbeats + lct + quickselect + ntt + segmerge + palindromedp + knuthdp + bitset + millerrabin + pollardrho + linearbasis + geometry2d + rotcalip + halfplane + dinic + blockcuttree + bridgetree + polyinv + polylnexp + polysqrt + bitmaskdp + digitdp + brokenprofiledp + wavelettree + implicittreap + chtholly + suffixtree + bsgs + minencircle + gvn + licm + dce2 + linearscandra + regcoalesce + callingconv + typeinfer + typechecker + generics + linkerelf + linkerar + dynlinker + dwarf + perfcounter + jitstub + btree + btreeplus + lsmmemtable + wal + mvcc + transaction + indexhash + indexbtree + queryplan + dbengine + wireguard + tls13");
 
 // Main shell loop (called from kernel_init)
 

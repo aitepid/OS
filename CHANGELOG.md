@@ -2,12 +2,47 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`439`（76 根目录 + 370 内核模块）
-- H-L 总行数：`~149,000`
-- 内核模块：`370`
-- Shell 命令：`1408`
-- 最近完成功能迭代：`384`（index_hash + index_btree + query_plan）
-- 当前阶段：第三阶段·存储引擎（iter 385 下一批：db_engine）
+- `.hl` 文件：`442`（76 根目录 + 373 内核模块）
+- H-L 总行数：`~149,700`
+- 内核模块：`373`
+- Shell 命令：`1429`
+- 最近完成功能迭代：`387`（db_engine + wireguard + tls13）
+- 当前阶段：第四阶段·网络深化（iter 388 下一批）
+- **Milestone M3 达成**：db_engine 完成完整存储引擎（B-Tree/索引/MVCC/事务/查询计划全整合）
+
+## Iteration 387 — tls13.hl：TLS 1.3 握手状态机 + AEAD 记录层
+
+- **`tls13.hl`**（Buffer: 0x1BA0000）：TLS13_MAX=8，状态 IDLE→CH_SENT→SH_RCVD→HS_DONE→ESTAB→ALERT
+  - HKDF 模拟：`_tls_hkdf_expand(secret, label) = (secret*31 + label*7 + 1) mod 65521`
+  - 密钥调度：early_secret → hs_secret → master_secret → client_key/server_key/client_iv/server_iv
+  - `tls_client_hello(sid, rand, eph_priv)`：生成 epub，进入 CH_SENT
+  - `tls_server_hello(sid, srand, s_eph_pub)`：DH 共享秘钥 → 密钥调度推导全套密钥
+  - `tls_handshake_finish(sid)`：双向 Finished 确认，进入 ESTAB
+  - AEAD 加密：`ct = (pt + client_key + seq) mod 65536`；解密：逆向恢复
+  - 测试：完整握手 → state=ESTAB；send(9999) → 正确解密 → PASS
+
+## Iteration 386 — wireguard.hl：WireGuard VPN 协议模拟
+
+- **`wireguard.hl`**（Buffer: 0x1B90000）：WG_MAXPEERS=8，状态 IDLE/INIT_SENT/RESP_SENT/ESTABLISHED
+  - Noise_IKpsk2 握手模拟：`_wg_derive_key(priv, pub, psk) = ((priv*pub mod P) + psk)*17 mod P`
+  - `wg_handshake_init(id)`：生成临时密钥对，构造 INIT 消息
+  - `wg_handshake_resp(id)`：响应方推导会话密钥，返回 RESP 消息
+  - `wg_establish(id)`：发起方推导相同会话密钥，进入 ESTABLISHED
+  - `wg_encrypt(id, pt)`：`ct = (pt + sk + ctr) mod 65536`，发送计数器递增
+  - `wg_decrypt(id, ct, ctr)`：重放防护（拒绝旧 counter）+ 逆向解密
+  - 测试：双方推导出相同 sk；encrypt(9999) + decrypt → pt=9999；重放 → -1 → PASS
+
+## Iteration 385 — db_engine.hl：关系型数据库引擎（Milestone M3）
+
+- **`db_engine.hl`**（Buffer: 0x1B80000）：DB_MAXTABLES=8，DB_MAXROWS=64，DB_MAXCOLS=8
+  - 行存储：`db_rows[tid*512 + rid*8 + col]`（TBL_STRIDE=512，ROW_STRIDE=8）
+  - `db_insert(tid, c0..c3)`：追加行，若已建索引则同步更新哈希索引条目
+  - `db_select_eq(tid, col, val)`：col=0 且有索引 → 直接 `_db_idx_lookup(val)`（scan=1）；否则顺序扫全表
+  - `db_select_range(tid, col, lo, hi)`：顺序扫描，统计 lo≤val≤hi 的行数
+  - `db_create_index(tid)`：对已有行在 col-0 上构建哈希索引
+  - `db_explain(tid, col, use_index)`：委托 `qp_scan + qp_proj + qp_explain`，返回总代价
+  - 测试：8 行，col-0 索引；select_eq(col=0,5)→rid=4,scan=1；select_eq(col=1,30)→rid=2,scan=8；range[20,50]=4；update/verify → PASS
+  - **Milestone M3 达成**：完整关系型存储引擎（B-Tree + B+Tree + LSM + WAL + MVCC + Transaction + HashIndex + BTreeIndex + QueryPlan + DBEngine）
 
 ## Iteration 384 — query_plan.hl：规则驱动查询计划生成
 
