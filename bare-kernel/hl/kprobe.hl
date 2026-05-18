@@ -1,0 +1,101 @@
+// kprobe.hl -- Dynamic Kernel Probes (Phase 6: 系统稳定化, iter 409)
+// Buffer: 0x1D00000
+// Register probes on function IDs; kp_trigger() simulates calling a probed function
+// KP_MAX_PROBES=16; tracks hit_count and last_arg per probe
+// kp_register(func_id) → probe_id; kp_trigger(func_id, arg) → fires all matching probes
+
+let KP_MAX_PROBES = 16;
+
+let kp_probe_fid    = array(16, 0);  // function id being probed
+let kp_probe_active = array(16, 0);  // 1=active, 0=unregistered
+let kp_hit_count    = array(16, 0);  // times triggered
+let kp_last_arg     = array(16, 0);  // last argument at trigger
+let kp_n_probes     = 0;
+let kp_total_hits   = 0;
+
+fn kp_init() {
+    let i = 0;
+    while i < KP_MAX_PROBES {
+        set_at(kp_probe_fid,    i, 0);
+        set_at(kp_probe_active, i, 0);
+        set_at(kp_hit_count,    i, 0);
+        set_at(kp_last_arg,     i, 0);
+        i += 1;
+    }
+    kp_n_probes   = 0;
+    kp_total_hits = 0;
+    return 0;
+}
+
+fn kp_register(func_id) {
+    let id = kp_n_probes;
+    set_at(kp_probe_fid,    id, func_id);
+    set_at(kp_probe_active, id, 1);
+    set_at(kp_hit_count,    id, 0);
+    set_at(kp_last_arg,     id, 0);
+    kp_n_probes += 1;
+    return id;
+}
+
+fn kp_unregister(probe_id) {
+    set_at(kp_probe_active, probe_id, 0);
+    return 0;
+}
+
+fn kp_trigger(func_id, arg) {
+    let i = 0;
+    while i < kp_n_probes {
+        if kp_probe_active[i] == 1 {
+            if kp_probe_fid[i] == func_id {
+                set_at(kp_hit_count, i, kp_hit_count[i] + 1);
+                set_at(kp_last_arg,  i, arg);
+                kp_total_hits += 1;
+            }
+        }
+        i += 1;
+    }
+    return 0;
+}
+
+fn kp_get_hits(probe_id)     { return kp_hit_count[probe_id]; }
+fn kp_get_last_arg(probe_id) { return kp_last_arg[probe_id]; }
+fn kp_get_n_probes()         { return kp_n_probes; }
+fn kp_get_total_hits()       { return kp_total_hits; }
+
+fn kp_test() {
+    kp_init();
+
+    // Register probes on func_id 5 and 7
+    kp_register(5);   // probe_id=0
+    kp_register(7);   // probe_id=1
+
+    // Trigger func 5 twice (args 42, 99), func 7 once (arg 10)
+    kp_trigger(5, 42);
+    kp_trigger(5, 99);
+    kp_trigger(7, 10);
+
+    let h0  = kp_get_hits(0);       // 2
+    let h1  = kp_get_hits(1);       // 1
+    let la0 = kp_get_last_arg(0);   // 99
+    let tot = kp_get_total_hits();  // 3
+
+    print("kp_test: h0=" + to_string(h0)
+          + " h1=" + to_string(h1)
+          + " la0=" + to_string(la0)
+          + " tot=" + to_string(tot));
+
+    if h0 == 2 {
+        if h1 == 1 {
+            if la0 == 99 {
+                if tot == 3 {
+                    print("kp_test: PASS");
+                    return 1;
+                }
+            }
+        }
+    }
+    print("kp_test: FAIL");
+    return 0;
+}
+
+print("kprobe.hl loaded");

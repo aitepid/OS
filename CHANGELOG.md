@@ -2,13 +2,40 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`463`（76 根目录 + 394 内核模块）
-- H-L 总行数：`~155,200`
-- 内核模块：`394`
-- Shell 命令：`1576`
-- 最近完成功能迭代：`408`（scheduler_cfs + numa_alloc + ftrace）
+- `.hl` 文件：`466`（76 根目录 + 397 内核模块）
+- H-L 总行数：`~155,900`
+- 内核模块：`397`
+- Shell 命令：`1597`
+- 最近完成功能迭代：`411`（kprobe + memory_profiler + heap_checker）
 - 当前阶段：第六阶段·系统稳定化（Phase 6）
 - **Milestone M4 已达成**（iter 405，完整 ML 推理框架）
+
+## Iteration 411 — heap_checker.hl：堆越界检测器
+
+- **`heap_checker.hl`**（Buffer: 0x1D20000）：HC_MAX_ALLOCS=16，HC_MAGIC=57005 (0xDEAD)
+  - `hc_track(base, size)`：注册分配，在 hc_pre_rz/hc_post_rz 写入哨兵值
+  - `hc_corrupt(alloc_id, side)`：模拟溢出（0=前越界，1=后越界），将哨兵清零
+  - `hc_check(alloc_id)`：检查红区是否完整，返回 0=OK / 1=violation
+  - `hc_check_all()`：扫描所有活跃分配，更新 hc_violations，返回违规数
+  - 测试：track(0x1000,64)+track(0x2000,128)→v0a=v1a=0；corrupt(0,1)→v0b=1 v1b=0 cnt=1 → PASS
+
+## Iteration 410 — memory_profiler.hl：内存使用分析器
+
+- **`memory_profiler.hl`**（Buffer: 0x1D10000）：MP_MAX_SITES=16
+  - `mp_record_alloc(site_id, size)`：按 site 累加字节数，更新 live + peak
+  - `mp_record_free(size)`：减少 live 字节数（site-agnostic）
+  - `mp_get_live()` / `mp_get_peak()`：当前 / 峰值活跃字节
+  - `mp_get_site_bytes(site)` / `mp_get_site_count(site)`：per-site 统计
+  - 测试：alloc(0,64)+alloc(0,128)+alloc(1,256)→live=448 peak=448；free(192)→live=256 → PASS
+
+## Iteration 409 — kprobe.hl：动态内核探针
+
+- **`kprobe.hl`**（Buffer: 0x1D00000）：KP_MAX_PROBES=16
+  - `kp_register(func_id)`：注册探针，返回 probe_id
+  - `kp_unregister(probe_id)`：停用探针
+  - `kp_trigger(func_id, arg)`：模拟调用被探测函数，触发所有匹配探针
+  - 每探针独立跟踪 hit_count + last_arg；kp_total_hits 全局计数
+  - 测试：probe(5)+probe(7)→trigger(5,42)×2 trigger(7,10)×1 → h0=2 h1=1 la0=99 tot=3 → PASS
 
 ## Iteration 408 — ftrace.hl：函数追踪框架
 
