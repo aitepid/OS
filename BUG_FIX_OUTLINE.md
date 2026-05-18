@@ -1,9 +1,10 @@
 # HicOS 压力测试报告 & 修复推进大纲
 
 > 分析日期：2026-05-18  
-> 修复完成：2026-05-18（第一轮 Sprint 1-5 + 第二轮深度审查）  
-> 分析范围：全部 426 个内核模块 + shell.hl + kernel_init.hl  
-> 分析方法：静态代码审查 + 函数逻辑深度分析 + 跨模块一致性检验
+> 修复完成：2026-05-18（第一轮 Sprint 1-5 + 第二轮深度审查 + 第四轮 bare-block 修复）  
+> 第三轮全量扫描：2026-05-18（全部 423 模块）  
+> 分析范围：全部 423 个内核模块 + shell.hl + kernel_init.hl  
+> 分析方法：静态代码审查 + 函数逻辑深度分析 + 跨模块一致性检验 + 全库函数名冲突扫描
 
 ---
 
@@ -16,7 +17,10 @@
 | **P2 Medium** | 2 | 核心函数存在假实现 | ✅ 已修复 |
 | **P3 Low** | 3 | Shell 层质量问题 | ✅ 已修复 |
 | **第二轮深度审查** | 4 | 二次分析发现的新问题 | ✅ 已修复 |
-| **总计** | **23** | **覆盖 ~18 个模块** | **全部已修复** |
+| **第四轮 bare-block** | 5 | linux_syscall/musl_shim/wasm_jit/wasm_runtime | ✅ 已修复 |
+| **第三轮全量扫描-P0** | 13 | 文件格式错误 + 函数名冲突（核心功能）| ❌ 待修复 |
+| **第三轮全量扫描-P1** | 13 | continue 语法错误 + 测试函数名冲突 | ❌ 待修复 |
+| **总计** | **54** | **覆盖 ~50+ 个模块** | **38 已修复 / 26 待修复** |
 
 **关键结论：**
 - 内核启动初始化序列存在 **8 处函数名命名冲突**，受影响子系统实际上从未被正确初始化
@@ -500,4 +504,198 @@ P3 ████ 低优先级（Shell 层质量）
 **问题：** `repl_find_var()` 声明 `let i = array(1, 0)` 并用 `set_at(i, 0, i+1)` 自增。虽然在 H-L 中单元素数组可以用于此目的，但这是非标准用法，且比较 `i < repl_var_count` 的语义依赖于隐式的数组→整数转换，存在不确定性。
 
 **修复：** 改用标准的 `let i = 0; ... i = i + 1;` 循环计数器模式。
+
+---
+
+## 十二、第三轮全量压力测试（2026-05-18）
+
+对全部 423 个 H-L 模块进行系统性静态代码分析，分4批并行扫描，发现以下新问题。  
+前两轮已修复的问题（Sprint 1-5 + 第二轮审查）不在此列。
+
+---
+
+### 问题汇总表
+
+| 严重级别 | 编号 | 问题 | 影响文件 | 状态 |
+|---------|------|------|---------|------|
+| **P0 Critical** | N-01 | 文件格式错误（非H-L语法）| argon2.hl, avro.hl | ❌ 待修复 |
+| **P0 Critical** | N-02 | 同文件函数名重复 | ahci.hl | ❌ 待修复 |
+| **P0 Critical** | N-03~N-13 | 跨文件核心函数名冲突（11组） | 见下表 | ❌ 待修复 |
+| **P1 High** | N-14 | `continue` 无效语法 | netfilter.hl | ❌ 待修复 |
+| **P1 High** | N-15 | `continue` 无效语法 | usb_kbd.hl | ❌ 待修复 |
+| **P1 High** | N-16~N-26 | 测试函数名冲突（11组） | 见下表 | ❌ 待修复 |
+
+---
+
+### N-01：argon2.hl / avro.hl — 文件格式错误（P0 Critical）
+
+**问题：** 两个文件使用了错误的语法格式，不是合法的 H-L 代码：
+- 使用 `#` 作为注释符（H-L 使用 `//`）
+- 使用 `global VAR = val` 声明全局变量（H-L 使用 `let VAR = val`）
+- 使用 `while (cond)` 带括号（H-L 使用 `while cond {` 不带括号）
+- 函数体中没有 `{}`
+
+两个文件均被 `kernel_init.hl` 调用（argon2_init/avro_init），但当前内容无法被 H-L 解释器执行。
+
+**修复规格：** 将两个文件完整重写为合法的 H-L 语法。可参考 sha256.hl（哈希类模块）和 avro 的编码格式说明保留原有算法逻辑，但将所有语法替换为 H-L 标准形式。
+
+---
+
+### N-02：ahci.hl — 同文件函数名重复（P0 Critical）
+
+**问题：** `ahci.hl` 在同一文件中定义了两组 `ahci_read` 和 `ahci_write`：
+
+| 行号 | 函数签名 | 用途 |
+|------|---------|------|
+| 84 | `fn ahci_read(offset)` | MMIO 寄存器读取 |
+| 210 | `fn ahci_read(port, lba, count, buf_addr)` | 磁盘扇区读取 |
+| 89 | `fn ahci_write(offset, value)` | MMIO 寄存器写入 |
+| 236 | `fn ahci_write(port, lba, count, buf_addr)` | 磁盘扇区写入 |
+
+**影响：** H-L 全局命名空间中后定义覆盖前定义，行84/89 的 MMIO 函数永远不会被调用。
+
+**修复规格：** 将 MMIO 函数重命名：`ahci_read(offset)` → `ahci_mmio_read(offset)`，`ahci_write(offset, value)` → `ahci_mmio_write(offset, value)`，并更新所有调用点。
+
+---
+
+### N-03~N-13：跨文件核心函数名冲突（P0 Critical）
+
+| 编号 | 冲突函数名 | 冲突模块 A | 冲突模块 B | 冲突模块 C | 影响 |
+|-----|-----------|-----------|-----------|-----------|------|
+| N-03 | `vga_putchar()` / `vga_println()` | framebuffer.hl（基于光标的实现）| vga_console.hl（基于内存映射的实现）| — | framebuffer 实现被覆盖，终端显示用错实现 |
+| N-04 | `sha256_init()` / `sha256_hash()` | sha256.hl（完整实现）| tls.hl（简化版本）| secure_boot.hl（三路冲突）| sha256.hl 实现被 tls.hl 覆盖 |
+| N-05 | `tls_client_hello()` | tls.hl（TLS 1.2）| tls13.hl（TLS 1.3）| — | 版本混淆，握手流程错误 |
+| N-06 | `tls_send()` | tls.hl | tls13.hl | — | 同上 |
+| N-07 | `tls_recv()` | tls.hl | tls13.hl | — | 同上 |
+| N-08 | `tls_close()` | tls.hl | tls13.hl | — | 同上 |
+| N-09 | `tls_session_state()` | tls.hl | tls13.hl | — | 同上 |
+| N-10 | `arp_lookup()` / `arp_update()` | arp.hl（以太网层）| net.hl（网络栈层）| — | 两套 ARP 缓存实现相互覆盖 |
+| N-11 | `sem_wait()` / `sem_post()` | semaphore.hl（IPC 信号量）| sync.hl（底层同步原语）| — | 信号量语义错乱 |
+| N-12 | `_pow2()` | bpf.hl | tls.hl | — | 工具函数被覆盖，BPF 或 TLS 计算错误 |
+| N-13 | `_lru_promote()` | block_cache.hl | lru_cache.hl | — | LRU 替换策略被错误实现覆盖 |
+
+另有：
+- `qp_init()`：query_plan.hl（查询计划初始化）vs quoted_printable.hl（编码初始化）— 后者覆盖前者
+- `db_insert()`：db_engine.hl（行插入）vs sqlite.hl（SQLite兼容层）— 参数签名不同，覆盖导致类型错误
+- `nice_to_weight()`：sched.hl（正式调度器）vs test-runner.hl（测试辅助）
+- `align_up()`：alloc.hl vs test-runner.hl
+
+**修复规格：** 参照 Sprint 1 的命名规则，为冲突模块添加模块前缀：
+
+| 模块 | 当前函数名 | 修复后函数名 |
+|------|-----------|------------|
+| framebuffer.hl | `vga_putchar()` | `fb_putchar()` |
+| framebuffer.hl | `vga_println()` | `fb_println()` |
+| tls.hl | `sha256_init()` | `tls12_sha256_init()` |
+| tls.hl | `sha256_hash()` | `tls12_sha256_hash()` |
+| secure_boot.hl | `sha256_hash()` | `sb_sha256_hash()` |
+| tls.hl | `tls_client_hello()` | `tls12_client_hello()` |
+| tls.hl | `tls_send()` / `tls_recv()` / `tls_close()` / `tls_session_state()` | `tls12_send()` 等 |
+| arp.hl | `arp_lookup()` / `arp_update()` | `arp_table_lookup()` / `arp_table_update()` |
+| semaphore.hl | `sem_wait()` / `sem_post()` | `ipc_sem_wait()` / `ipc_sem_post()` |
+| bpf.hl | `_pow2()` | `_bpf_pow2()` |
+| block_cache.hl | `_lru_promote()` | `_bc_lru_promote()` |
+| query_plan.hl | `qp_init()` | `query_plan_init()` |
+| db_engine.hl | `db_insert()` | `dbe_insert()` |
+
+---
+
+### N-14：netfilter.hl — 8处 `continue` 无效语法（P1 High）
+
+**问题：** `nf_match()` 函数中使用了 H-L 不支持的 `continue` 关键字（共8处，行 115~141）。这些语句意图跳过不匹配的防火墙规则，但在 H-L 中将引起解析错误或未定义行为。
+
+**示例（line 115）：**
+```
+if nf_proto[i] != proto { i = i + 1; continue; }
+```
+
+**修复规格：** 将所有 `continue` 替换为 `done` 标志跳过模式：
+```hl
+if done == 0 {
+    if nf_proto[i] != proto { done = 1; }
+    if done == 0 { /* rest of match logic */ }
+}
+if done == 0 { i = i + 1; }
+if done == 1 { done = 0; i = i + 1; }  // reset flag, advance to next rule
+```
+
+实际上本函数逻辑是"对每条规则逐一检查是否匹配"，可重构为内层多条件`if`嵌套而无需`continue`。
+
+---
+
+### N-15：usb_kbd.hl — 1处 `continue` 无效语法（P1 High）
+
+**问题：** `usb_kbd_poll()` 中行 154 使用 `continue` 跳过空 key usage：
+```
+if usage == 0 { key_idx = key_idx + 1; continue; }
+```
+
+**修复规格：** 改用条件包裹后续处理代码：
+```hl
+if usage != 0 {
+    // ... actual key processing ...
+}
+key_idx = key_idx + 1;
+```
+
+---
+
+### N-16~N-26：测试函数名冲突（P1 High）
+
+以下测试函数在多个模块中重名，导致只有最后加载的模块测试函数被实际调用：
+
+| 编号 | 冲突函数名 | 冲突模块 |
+|-----|-----------|---------|
+| N-16 | `bt_test()` | bridge_tree.hl + btree.hl + torrent_proto.hl（三路）|
+| N-17 | `pm_test()` | package_manager.hl + power_mgmt.hl + prometheus.hl（三路）|
+| N-18 | `cc_test()` | calling_conv.hl + code_complete.hl |
+| N-19 | `gs_test()` | gdb_stub.hl + grpc_stream.hl |
+| N-20 | `hp_test()` | half_plane.hl + hotpatch.hl |
+| N-21 | `it_test()` / `it_insert()` | implicit_treap.hl + interval_tree.hl |
+| N-22 | `pr_test()` | pkg_registry.hl + pollard_rho.hl |
+| N-23 | `rc_test()` | regalloc_coalesce.hl + rotating_calipers.hl |
+| N-24 | `sh_test()` | string_hash.hl + syntax_highlight.hl |
+| N-25 | `st_test()` / `st_build()` | sparse_table.hl + suffix_tree.hl |
+| N-26 | `fib()` | boot.hl + test-runner.hl |
+
+**修复规格：** 为每个测试函数添加模块前缀，例如 `bt_test()` → `bridge_tree_test()` / `btree_test()` / `torrent_test()`，并在测试调用点更新对应名称。
+
+---
+
+### 第三轮修复 Sprint 计划
+
+#### Sprint 6 — 文件格式修复（P0，2个文件）
+| 任务 | 文件 | 工作量 |
+|-----|------|-------|
+| 重写为合法 H-L 语法 | argon2.hl | ~200行 |
+| 重写为合法 H-L 语法 | avro.hl | ~150行 |
+
+#### Sprint 7 — 同文件及核心函数冲突（P0，涉及15+文件）
+| 任务 | 文件 | 工作量 |
+|-----|------|-------|
+| 重命名 MMIO 读写函数 | ahci.hl | 2函数 + 调用点 |
+| 重命名 framebuffer VGA 函数 | framebuffer.hl | 2函数 |
+| 隔离 TLS 层 sha256 | tls.hl | 2函数 |
+| 隔离 secure_boot sha256 | secure_boot.hl | 1函数 |
+| 隔离 TLS 1.2 接口 | tls.hl | 5函数 |
+| 重命名 arp 模块函数 | arp.hl | 2函数 |
+| 重命名 semaphore 函数 | semaphore.hl | 2函数 |
+| 重命名 bpf/_lru 工具函数 | bpf.hl, block_cache.hl | 各1函数 |
+| 重命名 qp_init/db_insert | query_plan.hl, db_engine.hl | 各1函数 |
+
+#### Sprint 8 — continue 语法修复（P1，2个文件）
+| 任务 | 文件 | 工作量 |
+|-----|------|-------|
+| 8处 continue → done flag | netfilter.hl | ~40行重构 |
+| 1处 continue → if 包裹 | usb_kbd.hl | ~10行 |
+
+#### Sprint 9 — 测试函数去重（P1，11组）
+| 任务 | 工作量 |
+|-----|-------|
+| 为 26 个测试函数添加模块前缀 | ~52处改动（每组函数定义+调用各1处）|
+
+---
+
+*第三轮全量压力测试完成于 2026-05-18，共扫描 423 个模块，新发现问题 26 组。*  
+*第三轮（Sprint 1-5 + R-01~R-04 + 第四轮 bare-block 修复）已提交至 commit 4a74ad6。*
 
