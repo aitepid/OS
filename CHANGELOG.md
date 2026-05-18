@@ -2,14 +2,42 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`481`（76 根目录 + 412 内核模块）
-- H-L 总行数：`~158,950`
-- 内核模块：`412`
-- Shell 命令：`1702`
-- 最近完成功能迭代：`426`（hldoc + hltest + hlbench）
+- `.hl` 文件：`484`（76 根目录 + 415 内核模块）
+- H-L 总行数：`~159,300`
+- 内核模块：`415`
+- Shell 命令：`1723`
+- 最近完成功能迭代：`429`（lsp_server + syntax_highlight + code_complete）
 - 当前阶段：第七阶段·生态完善（Phase 7）
 - **Milestone M4 已达成**（iter 405，完整 ML 推理框架）
 - **Milestone M5 已达成**（iter 420，生产级稳定性）
+
+## Iteration 429 — code_complete.hl：H-L 代码补全引擎
+
+- **`code_complete.hl`**（Buffer: 0x1E40000）：CC_MAX_ITEMS=32
+  - 类型：CC_TYPE_FN=0 / CC_TYPE_VAR=1 / CC_TYPE_KEYWORD=2
+  - `cc_add(item_id, type, score)`：注册补全候选（已存在则更新得分）
+  - `cc_get_best()`：线性扫描返回最高得分条目的 item_id
+  - `cc_get_score(item_id)` / `cc_find(item_id)` / `cc_count()`
+  - 测试：add(FN,80)+add(VAR,95)+add(KW,60) → cnt=3 best=20(VAR) s10=80 s30=60 → PASS
+  - Shell：cc init/test/add/best/score/find/count（7 命令）
+
+## Iteration 428 — syntax_highlight.hl：H-L 语法高亮器
+
+- **`syntax_highlight.hl`**（Buffer: 0x1E30000）：SH_MAX_RULES=32
+  - 类型：SH_TYPE_KEYWORD=0 / SH_TYPE_STRING=1 / SH_TYPE_COMMENT=2 / SH_TYPE_NUMBER=3
+  - `sh_add_rule(token_id, color, rule_type)`：注册 token→颜色映射（已存在则覆盖）
+  - `sh_get_color(token_id)` / `sh_get_type(token_id)` / `sh_find_rule(token_id)` / `sh_count()`
+  - 测试：add(RED,KW)+add(GREEN,STR)+add(BLUE,CMT) → cnt=3 c1=1 c2=2 t3=COMMENT found≥0 miss=-1 → PASS
+  - Shell：sh init/test/add/color/type/find/count（7 命令）
+
+## Iteration 427 — lsp_server.hl：Language Server Protocol 存根
+
+- **`lsp_server.hl`**（Buffer: 0x1E20000）：LS_MAX_DOCS=8，LS_MAX_DIAGS=16
+  - `ls_open(doc_id, version)`：打开文档（已存在则更新版本）
+  - `ls_add_diag(doc_id, diag_code)`：追加诊断（平铺数组 [doc_idx*16+i]）
+  - `ls_get_diag(doc_id, i)` / `ls_get_diag_count(doc_id)` / `ls_ndocs()`
+  - 测试：open(1,v1)+open(2,v1)→diag(1,100)+diag(1,200)+diag(2,300) → nd=2 dc1=2 dc2=1 d10=100 d20=300 → PASS
+  - Shell：ls init/test/open/close/diag/diagcount/ndocs（7 命令）
 
 ## Iteration 426 — hlbench.hl：H-L 基准测试框架
 

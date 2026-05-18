@@ -1,0 +1,133 @@
+// lsp_server.hl -- Language Server Protocol Server (Phase 7: 生态与自举完善, iter 427)
+// Buffer: 0x1E20000
+// LSP stub: open/close documents, accumulate per-doc diagnostics
+// LS_MAX_DOCS=8, LS_MAX_DIAGS=16; ls_diags flat [doc_idx*16 + diag_i]
+// Shell: ls init/test/open/close/diag/diagcount/ndocs (7 commands)
+
+let LS_MAX_DOCS  = 8;
+let LS_MAX_DIAGS = 16;
+
+let ls_doc_id         = array(8, 0);    // document IDs
+let ls_doc_version    = array(8, 0);    // document versions
+let ls_doc_open       = array(8, 0);    // 1=open, 0=closed
+let ls_doc_diag_count = array(8, 0);    // diagnostics per doc
+let ls_diags          = array(128, 0);  // ls_diags[doc_idx * LS_MAX_DIAGS + i]
+let ls_n_docs         = 0;
+
+fn ls_init() {
+    let i = 0;
+    while i < LS_MAX_DOCS {
+        set_at(ls_doc_id,         i, 0);
+        set_at(ls_doc_version,    i, 0);
+        set_at(ls_doc_open,       i, 0);
+        set_at(ls_doc_diag_count, i, 0);
+        i += 1;
+    }
+    let j = 0;
+    while j < 128 {
+        set_at(ls_diags, j, 0);
+        j += 1;
+    }
+    ls_n_docs = 0;
+    return 0;
+}
+
+fn ls_find(doc_id) {
+    let i = 0;
+    while i < ls_n_docs {
+        if ls_doc_id[i] == doc_id { return i; }
+        i += 1;
+    }
+    return 0 - 1;
+}
+
+fn ls_open(doc_id, version) {
+    let idx = ls_find(doc_id);
+    if idx >= 0 {
+        set_at(ls_doc_version, idx, version);
+        set_at(ls_doc_open,    idx, 1);
+        return idx;
+    }
+    if ls_n_docs >= LS_MAX_DOCS { return 0 - 1; }
+    let slot = ls_n_docs;
+    set_at(ls_doc_id,         slot, doc_id);
+    set_at(ls_doc_version,    slot, version);
+    set_at(ls_doc_open,       slot, 1);
+    set_at(ls_doc_diag_count, slot, 0);
+    ls_n_docs += 1;
+    return slot;
+}
+
+fn ls_close(doc_id) {
+    let idx = ls_find(doc_id);
+    if idx < 0 { return 0 - 1; }
+    set_at(ls_doc_open, idx, 0);
+    return idx;
+}
+
+fn ls_add_diag(doc_id, diag_code) {
+    let idx = ls_find(doc_id);
+    if idx < 0 { return 0 - 1; }
+    let dc = ls_doc_diag_count[idx];
+    if dc >= LS_MAX_DIAGS { return 0 - 1; }
+    set_at(ls_diags, idx * LS_MAX_DIAGS + dc, diag_code);
+    set_at(ls_doc_diag_count, idx, dc + 1);
+    return dc;
+}
+
+fn ls_get_diag_count(doc_id) {
+    let idx = ls_find(doc_id);
+    if idx < 0 { return 0 - 1; }
+    return ls_doc_diag_count[idx];
+}
+
+fn ls_get_diag(doc_id, i) {
+    let idx = ls_find(doc_id);
+    if idx < 0 { return 0 - 1; }
+    if i >= ls_doc_diag_count[idx] { return 0 - 1; }
+    return ls_diags[idx * LS_MAX_DIAGS + i];
+}
+
+fn ls_ndocs() { return ls_n_docs; }
+
+fn ls_test() {
+    ls_init();
+    ls_open(1, 1);
+    ls_open(2, 1);
+    ls_add_diag(1, 100);
+    ls_add_diag(1, 200);
+    ls_add_diag(2, 300);
+
+    let nd   = ls_ndocs();          // 2
+    let dc1  = ls_get_diag_count(1);// 2
+    let dc2  = ls_get_diag_count(2);// 1
+    let d10  = ls_get_diag(1, 0);   // 100
+    let d11  = ls_get_diag(1, 1);   // 200
+    let d20  = ls_get_diag(2, 0);   // 300
+
+    print("ls_test: nd=" + to_string(nd)
+          + " dc1=" + to_string(dc1)
+          + " dc2=" + to_string(dc2)
+          + " d10=" + to_string(d10)
+          + " d11=" + to_string(d11)
+          + " d20=" + to_string(d20));
+
+    if nd == 2 {
+        if dc1 == 2 {
+            if dc2 == 1 {
+                if d10 == 100 {
+                    if d11 == 200 {
+                        if d20 == 300 {
+                            print("ls_test: PASS");
+                            return 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    print("ls_test: FAIL");
+    return 0;
+}
+
+print("lsp_server.hl loaded");

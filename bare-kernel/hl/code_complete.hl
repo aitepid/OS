@@ -1,0 +1,115 @@
+// code_complete.hl -- H-L Code Completion Engine (Phase 7: 生态与自举完善, iter 429)
+// Buffer: 0x1E40000
+// Ranks completion candidates by score; cc_get_best() returns highest-score item
+// CC_MAX_ITEMS=32; CC_TYPE_FN=0, CC_TYPE_VAR=1, CC_TYPE_KEYWORD=2
+// Shell: cc init/test/add/best/score/find/count (7 commands)
+
+let CC_MAX_ITEMS    = 32;
+let CC_TYPE_FN      = 0;
+let CC_TYPE_VAR     = 1;
+let CC_TYPE_KEYWORD = 2;
+
+let cc_item_id    = array(32, 0);   // completion item IDs
+let cc_item_type  = array(32, 0);   // CC_TYPE_*
+let cc_item_score = array(32, 0);   // relevance score (higher = better)
+let cc_n_items    = 0;
+
+fn cc_init() {
+    let i = 0;
+    while i < CC_MAX_ITEMS {
+        set_at(cc_item_id,    i, 0);
+        set_at(cc_item_type,  i, 0);
+        set_at(cc_item_score, i, 0);
+        i += 1;
+    }
+    cc_n_items = 0;
+    return 0;
+}
+
+fn cc_find(item_id) {
+    let i = 0;
+    while i < cc_n_items {
+        if cc_item_id[i] == item_id { return i; }
+        i += 1;
+    }
+    return 0 - 1;
+}
+
+fn cc_add(item_id, item_type, score) {
+    let idx = cc_find(item_id);
+    if idx >= 0 {
+        set_at(cc_item_type,  idx, item_type);
+        set_at(cc_item_score, idx, score);
+        return idx;
+    }
+    if cc_n_items >= CC_MAX_ITEMS { return 0 - 1; }
+    let slot = cc_n_items;
+    set_at(cc_item_id,    slot, item_id);
+    set_at(cc_item_type,  slot, item_type);
+    set_at(cc_item_score, slot, score);
+    cc_n_items += 1;
+    return slot;
+}
+
+fn cc_get_score(item_id) {
+    let idx = cc_find(item_id);
+    if idx < 0 { return 0 - 1; }
+    return cc_item_score[idx];
+}
+
+fn cc_get_best() {
+    if cc_n_items == 0 { return 0 - 1; }
+    let best_idx = 0;
+    let best_sc  = cc_item_score[0];
+    let i = 1;
+    while i < cc_n_items {
+        if cc_item_score[i] > best_sc {
+            best_idx = i;
+            best_sc  = cc_item_score[i];
+        }
+        i += 1;
+    }
+    return cc_item_id[best_idx];
+}
+
+fn cc_count() { return cc_n_items; }
+
+fn cc_test() {
+    cc_init();
+    cc_add(10, CC_TYPE_FN,      80);
+    cc_add(20, CC_TYPE_VAR,     95);
+    cc_add(30, CC_TYPE_KEYWORD, 60);
+
+    let cnt  = cc_count();       // 3
+    let best = cc_get_best();    // 20 (score=95)
+    let s10  = cc_get_score(10); // 80
+    let s30  = cc_get_score(30); // 60
+    let fi   = cc_find(10);      // >=0
+    let miss = cc_find(99);      // -1
+
+    print("cc_test: cnt=" + to_string(cnt)
+          + " best=" + to_string(best)
+          + " s10=" + to_string(s10)
+          + " s30=" + to_string(s30)
+          + " fi=" + to_string(fi)
+          + " miss=" + to_string(miss));
+
+    if cnt == 3 {
+        if best == 20 {
+            if s10 == 80 {
+                if s30 == 60 {
+                    if fi >= 0 {
+                        if miss == 0 - 1 {
+                            print("cc_test: PASS");
+                            return 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    print("cc_test: FAIL");
+    return 0;
+}
+
+print("code_complete.hl loaded");

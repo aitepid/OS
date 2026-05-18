@@ -1,0 +1,108 @@
+// syntax_highlight.hl -- H-L Syntax Highlighter (Phase 7: 生态与自举完善, iter 428)
+// Buffer: 0x1E30000
+// Maps token IDs to color codes and rule types for H-L source rendering
+// SH_MAX_RULES=32; SH_TYPE_KEYWORD=0, SH_TYPE_STRING=1, SH_TYPE_COMMENT=2, SH_TYPE_NUMBER=3
+// Shell: sh init/test/add/color/type/find/count (7 commands)
+
+let SH_MAX_RULES    = 32;
+let SH_TYPE_KEYWORD = 0;
+let SH_TYPE_STRING  = 1;
+let SH_TYPE_COMMENT = 2;
+let SH_TYPE_NUMBER  = 3;
+
+let sh_rule_token = array(32, 0);   // token IDs
+let sh_rule_color = array(32, 0);   // color codes (integer)
+let sh_rule_type  = array(32, 0);   // SH_TYPE_*
+let sh_n_rules    = 0;
+
+fn sh_init() {
+    let i = 0;
+    while i < SH_MAX_RULES {
+        set_at(sh_rule_token, i, 0);
+        set_at(sh_rule_color, i, 0);
+        set_at(sh_rule_type,  i, 0);
+        i += 1;
+    }
+    sh_n_rules = 0;
+    return 0;
+}
+
+fn sh_find_rule(token_id) {
+    let i = 0;
+    while i < sh_n_rules {
+        if sh_rule_token[i] == token_id { return i; }
+        i += 1;
+    }
+    return 0 - 1;
+}
+
+fn sh_add_rule(token_id, color, rule_type) {
+    let idx = sh_find_rule(token_id);
+    if idx >= 0 {
+        set_at(sh_rule_color, idx, color);
+        set_at(sh_rule_type,  idx, rule_type);
+        return idx;
+    }
+    if sh_n_rules >= SH_MAX_RULES { return 0 - 1; }
+    let slot = sh_n_rules;
+    set_at(sh_rule_token, slot, token_id);
+    set_at(sh_rule_color, slot, color);
+    set_at(sh_rule_type,  slot, rule_type);
+    sh_n_rules += 1;
+    return slot;
+}
+
+fn sh_get_color(token_id) {
+    let idx = sh_find_rule(token_id);
+    if idx < 0 { return 0 - 1; }
+    return sh_rule_color[idx];
+}
+
+fn sh_get_type(token_id) {
+    let idx = sh_find_rule(token_id);
+    if idx < 0 { return 0 - 1; }
+    return sh_rule_type[idx];
+}
+
+fn sh_count() { return sh_n_rules; }
+
+fn sh_test() {
+    sh_init();
+    // token=1 RED=1 KEYWORD; token=2 GREEN=2 STRING; token=3 BLUE=3 COMMENT
+    sh_add_rule(1, 1, SH_TYPE_KEYWORD);
+    sh_add_rule(2, 2, SH_TYPE_STRING);
+    sh_add_rule(3, 3, SH_TYPE_COMMENT);
+
+    let cnt    = sh_count();          // 3
+    let c1     = sh_get_color(1);     // 1
+    let c2     = sh_get_color(2);     // 2
+    let t3     = sh_get_type(3);      // 2 (SH_TYPE_COMMENT)
+    let found  = sh_find_rule(2);     // >=0
+    let miss   = sh_find_rule(99);    // -1
+
+    print("sh_test: cnt=" + to_string(cnt)
+          + " c1=" + to_string(c1)
+          + " c2=" + to_string(c2)
+          + " t3=" + to_string(t3)
+          + " found=" + to_string(found)
+          + " miss=" + to_string(miss));
+
+    if cnt == 3 {
+        if c1 == 1 {
+            if c2 == 2 {
+                if t3 == SH_TYPE_COMMENT {
+                    if found >= 0 {
+                        if miss == 0 - 1 {
+                            print("sh_test: PASS");
+                            return 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    print("sh_test: FAIL");
+    return 0;
+}
+
+print("syntax_highlight.hl loaded");
