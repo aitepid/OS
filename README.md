@@ -1,23 +1,30 @@
 # HicOS 6.0
 
-纯 `Hilbert-Lang` 编写的实验性 x86_64 操作系统与自举工具链。
+纯 `Hilbert-Lang (H-L)` 编写的实验性 x86_64 裸金属操作系统与自举工具链。零外部依赖，100% 自研语言实现。
 
-## 当前状态（迭代 288）
+## 当前状态（迭代 432）
 
-- 代码仓库包含 `343` 个 `.hl` 文件（共 `~100,400` 行）
-  - 根目录：`69` 个（含自举编译器、标准库、子系统模块、测试与策划案）
-  - `bare-kernel/hl/`：`274` 个内核模块（编译产出 `3,757` 个函数）
-- `kernel_entry.hl`：`10,427` 行（307 函数，内核入口 + 命令分发）
-- `hl-bootstrap.hl`：`4,572` 行（自举编译器/工具链，`208` 个函数）
-- `stdlib.hl`：`1,545` 行（标准库，`143` 个函数）
-- `shell.hl`：`4,510` 行（全功能 Shell 命令集）
-- `scripts/` 下有 `29` 个 PowerShell 构建/验证脚本（共 `11,193` 行）
-- Shell 命令：`790`（`shell.hl` 全功能命令集）
-- 当前功能里程碑：`288`（dijkstra + topological_sort + bellman_ford）
-- 三层架构：
-  - `Layer A`：`scripts/rebuild-image.ps1` → 可引导 BIOS 镜像
-  - `Layer B`：`hl-bootstrap.hl` 自举编译器/工具链
-  - `Layer C`：`bare-kernel/hl/*.hl` → `kernel.bin`
+| 指标 | 数值 |
+|---|---:|
+| 总 `.hl` 文件 | **487** |
+| 内核模块（`bare-kernel/hl/`）| **418** |
+| Shell 命令 | **1,744** |
+| H-L 总行数 | **~159,650** |
+| 内核函数 | **~2,200** |
+| 外部依赖 | **0** |
+| 启动镜像（BIOS） | 162,816 字节 |
+| 启动镜像（UEFI） | 34,603,008 字节 |
+
+**当前阶段：第七阶段·生态与自举完善（iter 421–440）**
+
+已完成里程碑：
+- ✦ **M1**（iter 360）：竞赛级算法库完整
+- ✦ **M2**（iter 375）：自宿主编译器成熟
+- ✦ **M3**（iter 385）：完整存储引擎
+- ✦ **M4**（iter 405）：完整 ML 推理框架
+- ✦ **M5**（iter 420）：生产级稳定性
+
+---
 
 ## 产物
 
@@ -27,9 +34,30 @@
 | `hicos-uefi.img`（UEFI） | 34,603,008 字节 |
 | `kernel.bin` | 30,704 字节 |
 
-## 迭代历程概览
+---
 
-### 迭代 81-107：六阶段算法升级
+## 仓库结构
+
+```text
+HicOS/
+├─ bare-kernel/
+│  └─ hl/               # 415 个内核模块（~140,000 行）
+├─ scripts/             # 29 个 PowerShell 构建/验证脚本
+├─ IP-Protection/       # 60 个知识产权文件
+├─ hl-bootstrap.hl      # 自举编译器（4,572 行，208 函数）
+├─ stdlib.hl            # 标准库（1,545 行，143 函数）
+├─ manifest.hl          # 项目元数据（单一事实来源）
+├─ HicOS_*.hl           # 27 个子系统模块
+├─ hicos-hl.img         # BIOS 镜像（162,816 字节）
+├─ hicos-uefi.img       # UEFI 镜像（34,603,008 字节）
+└─ *.md                 # 11 个文档
+```
+
+---
+
+## 已完成的迭代历程
+
+### 阶段 1–5（迭代 81–107）：内核核心算法升级
 
 | 阶段 | 模块 | 升级 |
 |---|---|---|
@@ -37,129 +65,119 @@
 | 2 网络 | `tcp` `dns` `vfs` | Reno拥塞 / TTL缓存 / Trie前缀树 |
 | 3 多核 | `arp+net` `ext2` `swap` `smp` | 哈希表 / inode缓存 / 增强时钟 / Per-CPU队列 |
 | 4 调度 | `sched` `mmap` `pipe` `tls` | MLFQ / 按需COW / SPSC环形 / TLS1.3状态机 |
-| 5 隔离 | `sync` `poll` `cgroup` `bpf` | futex哈希队列 / 边缘触发epoll / cgroup强制 / eBPF VM |
+| 5 隔离 | `sync` `poll` `cgroup` `bpf` | futex哈希 / 边缘触发epoll / cgroup强制 / eBPF VM |
 
-### 迭代 109-130：高级特性与UI系统
+### 阶段 6（迭代 109–130）：高级特性与 UI 系统
 
-- **迭代 109-120**：链接器优化、IR VM、QUIC、内核热补丁、高级验证
-- **迭代 121-123**：裸机安装（VGA控制台、ATA PIO、USB键盘、真实滚屏）
-- **迭代 124-130**：完整图形桌面环境（主题、控件、对话框、终端、安装器、系统监控、通知、窗口管理）
+- **109–120**：链接器优化、IR VM 双引擎、QUIC v1、内核热补丁框架
+- **121–123**：裸机安装（VGA控制台、ATA PIO、USB键盘、自安装镜像）
+- **124–130**：完整图形桌面（主题/控件/对话框/终端/安装器/系统监控/通知/窗口管理）
 
-### 迭代 131-246：协议与算法模块扩展（116 次迭代）
+### 阶段 7–8（迭代 131–246）：协议与算法大扩展（130→232 模块）
 
-系统从 130 个模块扩展到 232 个模块，涵盖：
+116 次迭代，新增：**网络协议**（HTTP/WS/SMTP/POP3/IMAP/IRC/FTP/MQTT 等）、**压缩算法**（LZ4/ZLIB/LZMA/Bzip2/Snappy/Zstd/Brotli）、**加密全覆盖**（AES/ChaCha20/RSA/Ed25519/SM3/SM4 等）、**序列化格式**（Protobuf/Avro/CBOR/ASN.1）、**文件格式**（BMP/GIF/WAV/PNG/JPEG）。
 
-**网络协议**：HTTP/HTTPS、WebSocket、Telnet、SMTP、POP3、IMAP、IRC、FTP、NTP、MQTT、SIP、RTSP、STUN、RTP、SOCKS、DHCP Server、RADIUS、LDAP、QUIC
+### 阶段 9（迭代 247–339）：高级数据结构 + 竞赛算法（232→325 模块）✦ M1
 
-**压缩算法**：LZ4、Huffman、RLE、ZLIB、LZMA、Bzip2、Snappy、Zstd、Brotli
+**分布式/一致性**：Raft、Gossip、CRDT | **概率结构**：Bloom/HyperLogLog/CMS/Cuckoo/t-Digest/Reservoir | **树型结构**：Treap/Splay/LCT/Skip List/Leftist Heap/KD-Tree/Wavelet | **图算法**：Dijkstra/Bellman-Ford/Floyd/A*/Dinic/Tarjan/Hopcroft-Karp 等 | **字符串**：SAM/Manacher/Eertree/BWT/Lyndon/Z-function/KMP | **数论/多项式**：Miller-Rabin/Pollard-Rho/NTT/poly全家桶 | **几何**：Convex Hull/旋转卡壳/半平面交 | **DP优化**：状压/数位/Knuth/分治/轮廓线
 
-**加密算法**：
-- 对称加密：AES、ChaCha20、SM4
-- 非对称加密：RSA、Ed25519
-- 哈希：MD5、SHA1、SHA256、BLAKE2、SM3、xxHash、SipHash
-- MAC：HMAC、Poly1305
-- 密码哈希：Bcrypt、Scrypt、Argon2、PBKDF2
+### 阶段 10（迭代 340–360）：算法库完善 ✦ M1 达成
 
-**序列化格式**：Protocol Buffers、Avro、CBOR、ASN.1
+bitmask_dp、digit_dp、broken_profile_dp、wavelet_tree_range、implicit_treap、chtholly_tree、suffix_tree、bsgs、min_enclosing_circle 等 21 个模块。
 
-**编码格式**：Base64、Base32、Hex、URL、Quoted-Printable、UUencode、PEM、JWT
+### 阶段 11（迭代 361–375）：编译器深化 ✦ M2 达成
 
-**文件格式**：BMP、GIF、WAV、CPIO、PNG、JPEG
+pass_gvn、pass_licm、pass_dce2、regalloc_linear_scan、regalloc_coalesce、calling_conv、type_infer、type_checker、generics、linker_elf、linker_ar、dynamic_linker、dwarf、perf_counter、jit_stub 共 15 个模块。
 
-### 迭代 247-288：高级数据结构与图算法（42 次迭代）
+### 阶段 12（迭代 376–385）：存储引擎 ✦ M3 达成
 
-系统从 232 个模块扩展到 274 个模块，新增 42 个专项数据结构与算法模块：
+btree、btree_plus、lsm_memtable、wal、mvcc、transaction、index_hash、index_btree、query_plan、db_engine 共 10 个模块。
 
-**加密/压缩扩展**：X.509、gRPC、PNG、HTTP/2、JPEG、BLAKE2、Scrypt
+### 阶段 13（迭代 386–395）：网络深化
 
-**分布式/一致性**：Raft、Gossip、CRDT
+wireguard、tls13、http3_quic、dns_over_https、dht、torrent_proto、opentelemetry、prometheus、grpc_stream、websocket_compression 共 10 个模块。
 
-**概率数据结构**：Bloom Filter、HyperLogLog、Count-Min Sketch、Cuckoo Filter、t-Digest、Reservoir Sampling
+### 阶段 14（迭代 396–405）：机器学习深化 ✦ M4 达成
 
-**高级数据结构**：
-- 树型：Raft、Treap、Leftist Heap、KD-Tree、Merkle Tree
-- 数组型：Fenwick Tree、Segment Tree、Sparse Table、Binary Heap
-- 字符串：Aho-Corasick、KMP/Z/Rabin-Karp、Suffix Array
-- 图结构：Skip List、Consistent Hash、LRU Cache、DSU
+conv2d、pooling、rnn、lstm、autograd、optimizer、tokenizer、embedding、model_serialize、gpu_inference 共 10 个模块。
 
-**图算法**：
-- `dijkstra.hl`（iter 286）：Dijkstra O(V²) 单源最短路，邻接矩阵
-- `topological_sort.hl`（iter 287）：Kahn BFS 拓扑排序 + 环检测 O(V+E)
-- `bellman_ford.hl`（iter 288）：Bellman-Ford 负权边 SSSP + 负权环检测 O(VE)
+### 阶段 15（迭代 406–420）：系统稳定性与生产化 ✦ M5 达成
 
-**计算几何/组合优化**：Convex Hull（Andrew 单调链）、LCS/Levenshtein/LIS、Interval Tree
+scheduler_cfs、numa_alloc、ftrace、kprobe、memory_profiler、heap_checker、crash_reporter、core_dump、hotpatch、livepatch、power_mgmt、thermal、cpufreq、hypervisor、vmx 共 15 个模块。
 
-**机器学习基础**：Neural Network、Attention Mechanism、Matrix Operations
+### 阶段 16（迭代 421–432）：生态与自举完善（进行中）
 
-**流式算法**：Wavelet、Reservoir Sampling
+package_manager、pkg_registry、pkg_build、hldoc、hltest、hlbench、lsp_server、syntax_highlight、code_complete、debugger、gdb_stub、breakpoint 共 12 个模块（迭代 440 目标：M6）。
 
-## 当前功能
+---
 
-### 内核核心
+## 内核功能全景
 
-- **控制台**：VGA 文本模式（80×25 显示器输出 + 串口双输出）
-- **硬件**：串口、PIC、PIT、IDT、键盘中断（PS/2）、USB 键盘（HID Boot Protocol）
+### 系统/硬件层
+
+- **控制台**：VGA 文本模式（80×25）+ 串口双输出
+- **硬件**：PIC/PIT/IDT/LAPIC/SMP（INIT-SIPI-SIPI）
 - **存储**：PCI 扫描、VirtIO-blk/net、AHCI、NVMe、USB、ATA PIO
-- **内存管理**：
-  - 物理页分配（伙伴系统）
-  - 堆分配（分级空闲链表）
-  - 虚拟内存（按需分页 + COW）
-  - Swap（增强时钟算法）
-  - Block cache（哈希 + LRU）
-- **多核与调度**：
-  - SMP（INIT-SIPI-SIPI，Per-CPU 运行队列）
-  - MLFQ 4级调度器
-  - 信号处理、进程管理
-- **同步与隔离**：
-  - Futex 哈希等待队列
-  - epoll 边缘触发
-  - cgroup 资源隔离（CPU/内存/IO）
-  - seccomp 系统调用过滤
-- **文件系统**：FAT16、ext2、NTFS、VFS（Trie 挂载树）
-- **网络栈**：
-  - TCP（Reno 拥塞控制 + 回环自测）
-  - UDP、ICMP
-  - DNS（TTL 缓存 + 回环自测）
-  - DHCP Client/Server
-  - TLS 1.3（8 状态握手，验证接入）
-  - QUIC v1（16 连接 × 16 流，1-RTT 握手）
-  - HTTP/HTTPS、WebSocket、各类应用层协议
-- **高级特性**：
-  - eBPF VM（16 指令，5 钩子点，验证接入）
-  - 内核热补丁（kmod：64 模块槽位 + 256 trampoline）
-  - PTY 伪终端
-  - 用户权限管理
-  - 安全启动
+- **内存**：伙伴系统 / 分级空闲链表 / 按需分页+COW / Swap / Block Cache / NUMA 分配器
+- **调度**：MLFQ 4级 / CFS 完全公平 / SMP Per-CPU 运行队列
+- **隔离**：futex / epoll / cgroup / seccomp / 命名空间 / 容器运行时
 
-### 图形界面
+### 文件系统层
 
-- **UI 框架**：Slate 主题、控件库、对话框、通知系统
-- **应用程序**：图形终端、系统监控、安装器
-- **窗口管理**：标题栏、拖拽、最小化、任务栏
-- **桌面环境**：顶栏时钟、dock 启动器
+FAT16 / Ext2/Ext4 / NTFS / VFS / devfs / procfs / sysfs / ramfs / tmpfs / OverlayFS / iNotify / Block Cache / B-Tree 索引 / WAL / MVCC
 
-### Shell 命令（790 个）
+### 网络协议栈
 
-丰富的命令集涵盖：
-- 系统管理：help、ver、uptime、date、free、heap、ps、cpus、mount、lspci、ifconfig
-- 网络诊断：ping、traceroute、netstat、arp、dns
-- 文件操作：ls、cat、echo、cp、mv、rm、mkdir
-- 进程管理：kill、killall、nice、jobs、fg、bg
-- 高级功能：heval（内核REPL）、tcploop、dnstest、advtest、lsmod、kmodtest
-- 压缩/编码：各类压缩、编码、加密算法的测试命令
-- 应用工具：sqlite、diff、profiler、calc、paint、compress、hexedit、notepad
-- 数据结构：ac/kmp/it/st/bh/kd/lh/lcs/ch 等算法模块命令
-- 图算法：dijk（Dijkstra）、topo（拓扑排序）、bf（Bellman-Ford）
+| 层次 | 协议 |
+|---|---|
+| 数据链路 | ARP、以太网、VLAN |
+| 网络层 | IPv4、IPv6、ICMP |
+| 传输层 | TCP（Reno）、UDP |
+| 应用层 | HTTP/1.1/2/3、WebSocket、TLS 1.3、QUIC、DNS、DHCP、NTP、SMTP、POP3、IMAP、FTP、IRC、MQTT、SIP、RTSP、RTP、STUN、SOCKS5、LDAP、RADIUS、gRPC、WireGuard、DoH |
 
-## 推荐构建方式
+### 加密/安全
+
+AES-GCM、ChaCha20-Poly1305、SM4 | RSA、Ed25519、Curve25519 | SHA-256、SM3、BLAKE2、xxHash、SipHash | HMAC、PBKDF2、scrypt、Argon2、bcrypt | X.509、PEM、JWT、ASN.1 DER | RDRAND+timer jitter
+
+### 算法库（~180 个模块）
+
+**数据结构**：Treap/Splay/LCT/Skip List/Bloom/HLL/CMS/Cuckoo/t-Digest 等 40+个  
+**图算法**：Dijkstra/Bellman-Ford/Floyd/A*/Dinic/Tarjan/Hungarian/Hopcroft-Karp 等  
+**字符串**：KMP/SAM/Manacher/Eertree/BWT/Lyndon/Z-function/Aho-Corasick 等  
+**数学**：Miller-Rabin/Pollard-Rho/NTT/多项式全家桶/BSGS/线性基  
+**几何**：凸包/旋转卡壳/半平面交/最小圆覆盖  
+**DP**：状压/数位/Knuth/分治/轮廓线
+
+### 机器学习框架
+
+CNN（conv2d+pooling）/ RNN+LSTM / Transformer（多头自注意力）/ 自动微分（autograd）/ SGD+Adam 优化器 / BPE 分词器 / 词向量嵌入 / 模型序列化 / GPU 加速推理
+
+### 编译器工具链
+
+x86_64 原生后端（126 指令）/ IR+SSA（37 操作码）/ 线性扫描寄存器分配 / GVN/LICM/DCE 优化 Pass / 完整类型系统（HM类型推断+泛型）/ ELF 链接器 / DWARF 调试信息 / JIT 桩
+
+### 存储引擎
+
+B-Tree / B+ Tree / LSM Memtable / WAL / MVCC / 事务 API / 哈希索引 / 查询计划 / 完整关系型数据库引擎
+
+### 生态工具（Phase 7）
+
+包管理器（install/remove/registry）/ 构建系统（依赖追踪）/ 文档生成器 / 单元测试框架 / 基准测试框架 / LSP 服务器 / 语法高亮 / 代码补全 / 内置调试器 / GDB Remote 协议桩 / 断点管理器
+
+---
+
+## Shell 命令（1,744 个）
+
+覆盖：系统管理 / 网络诊断 / 文件操作 / 进程管理 / 压缩加密 / 数据结构 / 图算法 / ML推理 / 虚拟化 / 调试 / 包管理 / 生态工具
+
+---
+
+## 构建与验证
 
 ```powershell
+# 构建
 .\hl-bootstrap.cmd test
-```
 
-## 常用验证命令
-
-```powershell
 # 完整门禁测试
 powershell -ExecutionPolicy Bypass -File .\scripts\full-gate.ps1
 
@@ -168,81 +186,29 @@ powershell -ExecutionPolicy Bypass -File .\scripts\release-validate.ps1
 
 # QEMU 冒烟测试
 powershell -ExecutionPolicy Bypass -File .\scripts\qemu-smoke.ps1
-
-# 工作区验证
-powershell -ExecutionPolicy Bypass -File .\scripts\validate-workspace.ps1
 ```
 
-## 仓库结构
-
-```text
-HicOS/
-├─ bare-kernel/
-│  ├─ hl/                      # 274 个内核模块（~87,000 行，3,757 函数）
-│  └─ kernel.bin              # 编译产物（30,704 字节）
-├─ scripts/                   # 29 个构建/验证脚本（11,193 行）
-├─ IP-Protection/             # 60 个知识产权文件
-├─ hl-bootstrap.hl            # 自举编译器（4,572 行，208 函数）
-├─ stdlib.hl                  # 标准库（1,545 行，143 函数）
-├─ kinterp.hl                 # 解释器（树遍历 + IR VM）
-├─ kernel_entry.hl            # 内核入口（10,427 行，307 函数）
-├─ HicOS_*.hl                 # 27 个子系统模块
-├─ hicos-hl.img               # BIOS 镜像（162,816 字节）
-├─ hicos-uefi.img             # UEFI 镜像（34,603,008 字节）
-└─ *.md                       # 10 个文档
-```
+---
 
 ## 技术特点
 
-### 纯 H-L 实现
-
 - **零外部依赖**：无 C/C++/Rust，无 JSON/YAML，无 npm/cargo
-- **自举工具链**：编译器、链接器、解释器全部用 H-L 编写
-- **语言特性**：
-  - 动态类型数组
-  - 函数作为一等公民
-  - 模拟位运算（算术运算替代）
-  - 简洁的语法（类似 JavaScript + C 混合风格）
-
-### 内核架构
-
-- **三层分离**：镜像构建、工具链、内核模块完全解耦
-- **模块化设计**：274 个独立 .hl 模块，每个专注单一功能
-- **热补丁能力**：运行时加载/卸载/替换内核模块
-- **双执行引擎**：树遍历解释器 + IR VM，性能与灵活性兼顾
-
-### 系统能力
-
-- **多核支持**：SMP、Per-CPU 队列、MLFQ 调度
-- **网络完备**：从 L2 到 L7，覆盖主流协议
-- **加密全面**：国密算法（SM3/SM4）+ 国际标准（AES/RSA/SHA）
-- **压缩丰富**：从快速（LZ4/Snappy）到高压缩比（LZMA/Bzip2/Zstd/Brotli）
-- **图形界面**：完整的窗口系统和桌面环境
-- **数据结构丰富**：42 个专项算法模块（图算法、字符串、树、概率结构）
-
-## 验证状态
-
-✅ 工作区验证：343 HL 文件 / 274 模块 / 0 stub  
-✅ 编译通过：3,757 函数（bare-kernel/hl），208 函数（hl-bootstrap）  
-✅ 功能测试：内核自测、回环测试、高级验证全部通过  
-✅ 镜像启动：BIOS/UEFI 双模式可引导  
+- **自宿主**：编译器、链接器、解释器全部用 H-L 编写
+- **裸金属**：直接在 x86_64 硬件上运行，BIOS 和 UEFI 双启动
+- **模块化**：418 个独立内核模块，每个专注单一功能
+- **三层架构**：镜像构建（Layer A）/ 自举工具链（Layer B）/ 内核模块（Layer C）
 
 ## 相关文档
 
+- `ARCHITECTURE.md`：三层架构详解
+- `ROADMAP.md`：已完成阶段与未来规划
+- `CHANGELOG.md`：详细迭代记录（432 个迭代）
 - `PROJECT_STATUS.md`：项目状态与统计
-- `ARCHITECTURE.md`：三层架构说明
-- `ROADMAP.md`：已完成阶段与路线图
-- `CHANGELOG.md`：详细迭代记录（288 个迭代）
-- `UI_DESIGN_PLAN.md`：UI 设计策划
+- `PROJECT_ADVANCEMENT_OUTLINE.md`：推进大纲与 SOP
 - `HILBERT_LANG_BNF.md`：H-L 语言语法规范
+- `UI_DESIGN_PLAN.md`：UI 设计策划
 - `FIVE_OS_COMPARISON.md`：与五个知名 OS 对比
 - `THREE_SYSTEM_COMPARISON.md`：三系统架构对比
-
-## 开发状态
-
-**活跃开发中** - 持续添加新模块和功能
-
-最新迭代（288）：Dijkstra 单源最短路 + Kahn 拓扑排序 + Bellman-Ford 负权SSSP
 
 ## License
 

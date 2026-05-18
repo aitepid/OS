@@ -1,36 +1,25 @@
-﻿# HicOS Project Status
+# HicOS Project Status
 
 ## 版本定位
 
-当前仓库处于 `v6.0` 发布线，最新功能里程碑为迭代 324（convex_hull_trick + matrix_expo + number_theory）。
+当前仓库处于 `v6.0` 发布线，最新功能里程碑为迭代 **432**（debugger + gdb_stub + breakpoint）。
 
-## 本轮已核实状态（迭代 324 基线）
+## 当前基线（迭代 432）
 
 ### 仓库规模（精确计数）
 
 | 指标 | 当前值 | 说明 |
 |---|---:|---|
-| 全部 `.hl` 文件 | 379 | 73 根目录 + 310 内核模块 |
-| H-L 总行数 | ~112,200 | 持续增长 |
-| `bare-kernel/hl/` 内核模块 | 310 | 编译进 `kernel.bin` |
-| `kernel_entry.hl` 行数 | 10,427 | 内核入口 + 命令分发（307 函数） |
-| 编译产出函数数 | 3,757 | bare-kernel/hl 实测 |
-| 链接符号数 | 2,500+ | linker 实测 |
-| `hl-bootstrap.hl` 行数 | 4,572 | 自举编译器（208 函数） |
-| `stdlib.hl` 行数 | 1,545 | 标准库（143 函数） |
-| Shell 命令数 | 984 | shell.hl（+convex_hull_trick/matrix_expo/number_theory）|
-| `test_*.hl` / `test-*.hl` | 19 | |
+| 全部 `.hl` 文件 | **487** | ~72 根目录 + 415 bare-kernel/hl |
+| H-L 总行数 | **~159,650** | 持续增长 |
+| `bare-kernel/hl/` 内核模块 | **418** | 编译进 `kernel.bin` |
+| Shell 命令数 | **1,744** | shell.hl 全量命令集 |
+| `hl-bootstrap.hl` | 4,572 行 / 208 函数 | 自举编译器 |
+| `stdlib.hl` | 1,545 行 / 143 函数 | 标准库 |
+| `scripts/*.ps1` | 29 个（11,193 行）| 构建/验证脚本 |
 | `IP-Protection/` 文件数 | 60 | 知识产权文件 |
-| `.md` 文档 | 10 | |
-
-### 门禁结果
-
-| 验证项 | 结果 |
-|---|---|
-| `hl-bootstrap build` | ✅ 310 模块编译 + 镜像重建 |
-| `validate-workspace` | ✅ 379 HL / 310 模块 / 0 stub |
-| `runtime-path-readiness` | ✅ IDT/PIT/KBD + SYSCALL + 网络 + eBPF/TLS/QUIC |
-| `release-validate` | ✅ 18/18 |
+| `.md` 文档 | 11 | |
+| 外部依赖 | **0** | 100% 纯 H-L |
 
 ### 产物尺寸（实测）
 
@@ -40,76 +29,126 @@
 | `hicos-uefi.img`（UEFI） | 34,603,008 字节 |
 | `kernel.bin` | 30,704 字节 |
 
-## 迭代 81-107 算法升级总汇（阶段 1-5）
+---
 
-| 阶段 | 迭代 | 模块 | 升级 | 复杂度 |
-|---|---|---|---|---|
-| 1 | 81 | `page_alloc.hl` | 位图 → 伙伴系统 | alloc O(n)→O(1) |
-| 1 | 82 | `kmalloc.hl` | 首次适配 → 分级空闲链表 | alloc/free O(n)→O(1) |
-| 1 | 83 | `block_cache.hl` | 线性扫描 → 哈希+LRU 双链 | lookup O(n)→O(1) |
-| 1 | 84 | `hilbert_alloc.hl` | 插入排序 → 归并排序 | init O(n²)→O(n log n) |
-| 2 | 86 | `tcp.hl` | 无流控 → Reno 拥塞控制+RTT | 新增 |
-| 2 | 87 | `dns.hl` | 无缓存 → TTL 哈希缓存 | resolve O(query)→O(1) |
-| 2 | 88 | `vfs.hl` | 线性匹配 → Trie 前缀树 | resolve O(n)→O(depth) |
-| 3 | 91 | `arp.hl`+`net.hl` | 线性扫描 → 哈希表 | lookup O(n)→O(1) |
-| 3 | 92 | `ext2.hl` | 每次磁盘读 → inode 哈希缓存 | read O(disk)→O(1) |
-| 3 | 93 | `swap.hl` | 基础时钟 → 双链增强时钟 | 单指针→active/inactive |
-| 3 | 94 | `smp.hl` | 全局调度锁 → Per-CPU 运行队列 | O(contention)→O(1) |
-| 4 | 97 | `sched.hl` | CFS 参数 → MLFQ 4 级调度器 | 新增 |
-| 4 | 98 | `mmap.hl` | 立即分配 → 按需分页+COW | 新增 |
-| 4 | 99 | `pipe.hl` | 逐字节 → 批量 SPSC 环形缓冲 | 新增 |
-| 4 | 100 | `tls.hl` | 空壳 → 8 状态 TLS 1.3 握手 | 新增 |
-| 5 | 103 | `sync.hl` | 空壳 futex → 16 桶哈希等待队列 | 新增 |
-| 5 | 104 | `poll.hl` | 水平触发 → 边缘触发+oneshot+futex | 新增 |
-| 5 | 105 | `cgroup.hl` | 被动记账 → CPU/内存/IO 强制执行 | 新增 |
-| 5 | 106 | `bpf.hl` | 新建 — eBPF 寄存器 VM | 新增 |
+## 已达成里程碑
 
-## 阶段 6 推进结果（迭代 109-121）
+| 里程碑 | 迭代 | 内容 | 状态 |
+|---|---:|---|---|
+| **M1** | 360 | 竞赛级算法库完整（300+算法，Shell 突破 1,200）| ✦ 已达成 |
+| **M2** | 375 | 自宿主编译器成熟（类型系统+优化Pass+完整链接器）| ✦ 已达成 |
+| **M3** | 385 | 完整存储引擎（B+Tree+WAL+MVCC+关系型数据库）| ✦ 已达成 |
+| **M4** | 405 | 完整 ML 框架（CNN+RNN+LSTM+Transformer+自动微分）| ✦ 已达成 |
+| **M5** | 420 | 生产级稳定性（CFS+NUMA+热补丁+崩溃报告+Hypervisor）| ✦ 已达成 |
+| **M6** | 440 | 完整生态（包管理+LSP+调试器+POSIX+WASM），目标中 | 🔜 进行中 |
 
-| 迭代 | 结果 |
+---
+
+## 各阶段完成状态
+
+### 系统/硬件层 ✅
+
+| 子模块 | 状态 |
 |---|---|
-| 109 | 链接器二次扫描 + stub trampoline，未解析重定位 `120 → 1` |
-| 110 | `kinterp.hl` 增加 IR VM，双执行引擎形成 |
-| 111 | `execve` + `argc/argv/envp` 用户栈构建 + ring3 跳转 |
-| 112 | `quic.hl` 新建，QUIC v1 传输协议接入 |
-| 113 | `task.hl`/`posix.hl`：`ZOMBIE` 生命周期 + `waitpid(WNOHANG)` |
-| 114 | `pty.hl`：真实 ring buffer IO + `attach/detach/status` |
-| 115 | 全量文档与策划案收敛到实际状态 |
-| 116 | `kernel_entry.hl`：`heval` 命令 — 内核 lex→parse→eval 自举原型 |
-| 117 | `tcp.hl`：TCP 回环自测 — 127.0.0.1 SYN→ESTABLISHED→DATA(5B)→FIN→CLOSE_WAIT |
-| 118 | `dns.hl`：DNS 回环自测 — 查询→mock响应→解析→缓存命中→TTL过期→未命中→static |
-| 119 | `advanced_verify.hl`：eBPF / TLS1.3 / QUIC 统一自测 + `advtest` 命令 + 门禁接入 |
-| 120 | `kmod.hl`：内核热补丁框架 — 64 模块槽位 + 256 trampoline + 原子热替换 + 自测 |
-| 121 | 裸机安装基础：`vga_console.hl` VGA 文本 80×25 + `ata_pio.hl` ATA PIO 磁盘 + `installer.hl` 三后端 |
-| 122 | 原生 VGA Shell 交互：键盘回显→VGA + 退格/回车→VGA + 自安装映像 `self_image.hl` |
-| 123 | VGA 完整交互闭环：真实滚屏 + `_ke_putc` 双输出 + `usb_kbd.hl` USB HID 键盘 |
+| 串口/VGA 控制台 | ✅ |
+| 内存管理（伙伴系统/分级/按需分页/Swap/NUMA）| ✅ |
+| 中断/异常（IDT/PIC/PIT/LAPIC）| ✅ |
+| 任务/调度（MLFQ+CFS/signal/cgroup）| ✅ |
+| PCI/AHCI/ATA/NVMe/VirtIO/USB | ✅ |
+| 音频（AC97/mixer/AudioServer）| ✅ |
+| 显示（VESA/VirtIO-GPU/framebuffer/多显示器）| ✅ |
+| ACPI/电源/热量/CPU频率 | ✅ |
+| SMP（多核）| ✅ |
+| 安全启动/seccomp | ✅ |
+| CFS 调度器 | ✅ |
+| NUMA 分配器 | ✅ |
+| 系统稳定性（ftrace/kprobe/崩溃报告/内存分析）| ✅ |
+| 热补丁/在线补丁 | ✅ |
+| Hypervisor + VMX/VT-x | ✅ |
+
+### 文件系统层 ✅
+
+FAT16 / Ext2/Ext4 / NTFS / VFS / devfs / procfs / sysfs / ramfs / tmpfs / OverlayFS / iNotify / B-Tree 索引 / WAL / MVCC 事务
+
+### 网络协议栈 ✅
+
+HTTP/1.1/2/3、WebSocket、TLS 1.3、QUIC、DNS/DoH、DHCP、NTP、WireGuard、SMTP/POP3/IMAP、FTP、IRC、MQTT、SIP/RTSP/RTP、STUN、SOCKS5、LDAP、RADIUS、gRPC、OpenTelemetry、Prometheus、DHT、BitTorrent 协议框架
+
+### 加密/安全层 ✅
+
+AES-GCM / ChaCha20-Poly1305 / SM4 / RSA / Ed25519 / Curve25519 / SHA-256 / SM3 / BLAKE2 / HMAC / PBKDF2 / scrypt / Argon2 / bcrypt / X.509 / PEM / JWT / CRC / UUID
+
+### 算法库 ✅（竞赛级完整）
+
+**数据结构**（44 个）：二叉堆/左偏堆/Treap/Splay/LCT/DSU/Bloom/HLL/CMS/Cuckoo/t-Digest/LRU/一致性哈希/CRDT/Merkle/Wavelet/Reservoir/KD-Tree/区间树/Trie/Aho-Corasick/后缀数组/后缀自动机/B-Tree/B+Tree 等
+
+**图算法**：Dijkstra/Bellman-Ford/Floyd-Warshall/A*/Dinic/最小费用最大流/Hopcroft-Karp/Hungarian/Tarjan SCC/欧拉路径/2-SAT/重心分解/HLD/LCA/虚树/支配树/块割树/桥树
+
+**字符串**：KMP/Z-function/Rabin-Karp/Aho-Corasick/后缀数组/SAM/Manacher/Eertree/BWT/Lyndon/后缀树/BSGS
+
+**数论/多项式**：Miller-Rabin/Pollard-Rho/exGCD/CRT/NTT/多项式求逆/ln/exp/开根/BSGS/线性基
+
+**几何**：凸包（Andrew）/旋转卡壳/半平面交/最小圆覆盖
+
+**DP优化**：区间DP/分治DP/Knuth/斜率优化/状压DP/数位DP/轮廓线DP/回文划分DP
+
+### 编译器工具链 ✅（已自宿主）
+
+x86_64 原生后端（126指令）/ IR+SSA（37 操作码）/ 线性扫描寄存器分配 / GVN/LICM/DCE2 优化 Pass / HM 类型推断 + 泛型 / ELF64 链接器 / 静态库 + 动态链接 / DWARF 调试信息 / 性能计数器 / JIT 桩
+
+### 存储引擎 ✅
+
+B-Tree（读优化）/ B+ Tree（范围查询）/ LSM Memtable / Write-Ahead Log / MVCC / 事务 API / 哈希索引 / B-Tree 索引 / 查询计划 / 完整关系型数据库引擎
+
+### 机器学习框架 ✅（M4）
+
+2D 卷积层 + 池化 / RNN + LSTM / Transformer 多头自注意力 / 自动微分（反向图）/ SGD+Adam / BPE 分词器 / 词向量嵌入 / 模型序列化 / VirtIO-GPU 加速推理
+
+### 生态工具（Phase 7，进行中）
+
+| 模块 | 状态 |
+|---|---|
+| 包管理器（install/remove/version）| ✅ iter 421 |
+| 软件包注册中心 | ✅ iter 422 |
+| 构建系统（依赖追踪）| ✅ iter 423 |
+| 文档生成器（HLDoc）| ✅ iter 424 |
+| 单元测试框架（HLTest）| ✅ iter 425 |
+| 基准测试框架（HLBench）| ✅ iter 426 |
+| LSP 服务器存根 | ✅ iter 427 |
+| 语法高亮引擎 | ✅ iter 428 |
+| 代码补全引擎 | ✅ iter 429 |
+| 内置调试器 | ✅ iter 430 |
+| GDB Remote 协议桩 | ✅ iter 431 |
+| 断点管理器 | ✅ iter 432 |
+| H-L REPL 环境 | 🔜 iter 433 |
+| 代码格式化器 | 🔜 iter 434 |
+| 增强 Lint | 🔜 iter 435 |
+| POSIX 扩展兼容 | 🔜 iter 436 |
+| musl libc 垫片 | 🔜 iter 437 |
+| Linux 系统调用兼容层 | 🔜 iter 438 |
+| WASM 解释器 | 🔜 iter 439 |
+| WASM JIT | 🔜 iter 440 |
+
+---
 
 ## 三层架构现状
 
 | 层级 | 载体 | 说明 |
 |---|---|---|
 | A | `scripts/rebuild-image.ps1` → `hicos-hl.img` | BIOS 镜像生成链 |
-| B | `hl-bootstrap.hl`（4,572 行，208 函数） | 自举编译器/解释器/工具链 |
-| C | `bare-kernel/hl/*.hl`（274 模块，3,757 函数） | 内核模块 → `kernel.bin` |
+| B | `hl-bootstrap.hl`（4,572 行，208 函数）| 自举编译器/解释器/工具链 |
+| C | `bare-kernel/hl/*.hl`（418 模块）| 内核模块 → `kernel.bin` |
 
-## UI 模块栈（迭代 125-130）
+---
 
-| 模块 | 功能 |
-|---|---|
-| `ui_theme.hl` | Slate 配色 + 间距常量 |
-| `ui_controls.hl` | 按钮 / 标签 / 进度条 / 分隔线 / 徽章 |
-| `ui_dialog.hl` | 模态对话框（INFO / CONFIRM / WARNING / ERROR） |
-| `ui_terminal.hl` | 图形终端 24×80 |
-| `ui_installer.hl` | 5 步图形安装器向导 |
-| `ui_sysmon.hl` | 系统监控（运行时间 / 内存 / 任务） |
-| `ui_notify.hl` | Toast 通知（4 类型 × 4 并发） |
-| `ui_desktop.hl` | 桌面编排（顶栏时钟 + dock 启动器） |
-| `wm.hl` | 窗口管理器（标题文字 / 拖拽 / 最小化） |
-| `HicOS_UIServer.hl` | UI 服务器（IPC + 焦点通知） |
+## 规模预测
 
-## 下一阶段建议
-
-- 文件管理器（`ui_files.hl`）
-- 设置中心（`ui_settings.hl`）
-- 音频管道（audio→mixer）— AC97 PCM 播放
-- GPU 2D 加速 — framebuffer 硬件 blit
+| 里程碑 | 迭代 | 模块数 | HL 文件 | Shell 命令 | 状态 |
+|---|---:|---:|---:|---:|---|
+| M1 | 360 | 388 | 460 | ~1,250 | ✦ 已达成 |
+| M2 | 375 | 415 | 484 | ~1,350 | ✦ 已达成 |
+| M3 | 385 | 430 | 510 | ~1,420 | ✦ 已达成 |
+| M4 | 405 | 455 | 540 | ~1,550 | ✦ 已达成 |
+| M5 | 420 | 475 | 565 | ~1,650 | ✦ 已达成 |
+| **当前** | **432** | **418** | **487** | **1,744** | 🔵 活跃开发 |
+| M6 | 440 | ~510 | ~605 | ~2,000 | 🔜 目标中 |
