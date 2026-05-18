@@ -1,0 +1,230 @@
+// regalloc_linear_scan.hl -- Linear Scan register allocator with spill (iter 364)
+// Buffer: 0x1A30000
+// RLS_MAXVARS=32 virtual regs, RLS_NREGS=8 physical regs
+// Each var has a live interval [start, end]; intervals sorted by start
+// Algorithm: Poletto & Sarkar 1999
+//   active = set of intervals currently occupying a physical reg
+//   On interval start: expire old, assign free reg or spill
+// Spill heuristic: evict the interval with latest end
+
+let RLS_MAXVARS = 32;
+let RLS_NREGS   = 8;
+
+// Live intervals per virtual register
+let rls_start   = array(32, 0);
+let rls_end     = array(32, 0);
+let rls_n       = 0;          // number of virtual regs
+
+// Results
+let rls_reg     = array(32, 0);   // vreg -> physical reg (-1 = spilled)
+let rls_spill   = array(32, 0);   // vreg -> 1 if spilled
+let rls_spill_cnt = 0;
+
+// Active set: sorted by end point (max RLS_NREGS entries)
+let rls_active_vr  = array(8, 0);  // virtual reg in active slot
+let rls_active_end = array(8, 0);  // end of that interval
+let rls_active_n   = 0;
+
+// Free register pool
+let rls_free   = array(8, 0);   // free[i] = physical reg index
+let rls_free_n = 0;
+
+fn rls_init() {
+    rls_n         = 0;
+    rls_spill_cnt = 0;
+    rls_active_n  = 0;
+    let i = 0;
+    while i < RLS_MAXVARS {
+        set_at(rls_reg,   i, 0 - 1);
+        set_at(rls_spill, i, 0);
+        i += 1;
+    }
+    // All physical regs start free
+    rls_free_n = RLS_NREGS;
+    i = 0;
+    while i < RLS_NREGS {
+        set_at(rls_free, i, i);
+        i += 1;
+    }
+    return 0;
+}
+
+fn rls_add_interval(start, end_val) {
+    let id = rls_n;
+    set_at(rls_start, id, start);
+    set_at(rls_end,   id, end_val);
+    rls_n += 1;
+    return id;
+}
+
+fn _rls_sort_by_start() {
+    // Insertion sort on rls_start[0..rls_n-1] carrying end + id
+    // We sort index array separately for simplicity
+    // In-place: sort rls_start, rls_end together
+    let i = 1;
+    while i < rls_n {
+        let ks = rls_start[i];
+        let ke = rls_end[i];
+        let j = i - 1;
+        let go = 1;
+        while go == 1 {
+            if j < 0 { go = 0; }
+            if go == 1 {
+                if rls_start[j] <= ks { go = 0; }
+                if go == 1 {
+                    set_at(rls_start, j + 1, rls_start[j]);
+                    set_at(rls_end,   j + 1, rls_end[j]);
+                    j -= 1;
+                }
+            }
+        }
+        set_at(rls_start, j + 1, ks);
+        set_at(rls_end,   j + 1, ke);
+        i += 1;
+    }
+    return 0;
+}
+
+fn _rls_expire_old(cur_start) {
+    // Remove from active all intervals that ended before cur_start
+    let i = 0;
+    while i < rls_active_n {
+        if rls_active_end[i] < cur_start {
+            // Return physical reg to free pool
+            let freed_preg = rls_reg[rls_active_vr[i]];
+            set_at(rls_free, rls_free_n, freed_preg);
+            rls_free_n += 1;
+            // Remove from active (shift left)
+            let j = i;
+            while j < rls_active_n - 1 {
+                set_at(rls_active_vr,  j, rls_active_vr[j + 1]);
+                set_at(rls_active_end, j, rls_active_end[j + 1]);
+                j += 1;
+            }
+            rls_active_n -= 1;
+            // Don't advance i (new element at i)
+        } else {
+            i += 1;
+        }
+    }
+    return 0;
+}
+
+fn _rls_active_insert(vr, end_val) {
+    // Insert keeping sorted by end (ascending)
+    let pos = rls_active_n;
+    let i = 0;
+    while i < rls_active_n {
+        if rls_active_end[i] > end_val { pos = i; i = rls_active_n; }
+        else { i += 1; }
+    }
+    // Shift right from pos
+    let j = rls_active_n - 1;
+    while j >= pos {
+        set_at(rls_active_vr,  j + 1, rls_active_vr[j]);
+        set_at(rls_active_end, j + 1, rls_active_end[j]);
+        j -= 1;
+    }
+    set_at(rls_active_vr,  pos, vr);
+    set_at(rls_active_end, pos, end_val);
+    rls_active_n += 1;
+    return 0;
+}
+
+fn _rls_spill_at_interval(vr, end_val) {
+    // Spill the interval with latest end if it's later than vr
+    let spill_idx = rls_active_n - 1;
+    if rls_active_end[spill_idx] > end_val {
+        // Spill that one, give its reg to vr
+        let spilled_vr = rls_active_vr[spill_idx];
+        let preg = rls_reg[spilled_vr];
+        set_at(rls_reg,   vr, preg);
+        set_at(rls_spill, spilled_vr, 1);
+        rls_spill_cnt += 1;
+        // Replace in active
+        set_at(rls_active_vr,  spill_idx, vr);
+        set_at(rls_active_end, spill_idx, end_val);
+        // Re-sort active by end
+        // (single element changed; just re-sort last entry leftward)
+        let j = spill_idx;
+        let go = 1;
+        while go == 1 {
+            if j <= 0 { go = 0; }
+            if go == 1 {
+                if rls_active_end[j] >= rls_active_end[j - 1] { go = 0; }
+                if go == 1 {
+                    let tv = rls_active_vr[j];  let te = rls_active_end[j];
+                    set_at(rls_active_vr,  j, rls_active_vr[j - 1]);
+                    set_at(rls_active_end, j, rls_active_end[j - 1]);
+                    set_at(rls_active_vr,  j - 1, tv);
+                    set_at(rls_active_end, j - 1, te);
+                    j -= 1;
+                }
+            }
+        }
+    } else {
+        // Spill vr itself
+        set_at(rls_reg,   vr, 0 - 1);
+        set_at(rls_spill, vr, 1);
+        rls_spill_cnt += 1;
+    }
+    return 0;
+}
+
+fn rls_run() {
+    _rls_sort_by_start();
+    rls_spill_cnt = 0;
+    rls_active_n  = 0;
+    // Re-init free pool
+    rls_free_n = RLS_NREGS;
+    let i = 0;
+    while i < RLS_NREGS { set_at(rls_free, i, i); i += 1; }
+
+    i = 0;
+    while i < rls_n {
+        let vr = i;
+        let s  = rls_start[vr];
+        let e  = rls_end[vr];
+        _rls_expire_old(s);
+        if rls_free_n == 0 {
+            _rls_spill_at_interval(vr, e);
+        } else {
+            rls_free_n -= 1;
+            let preg = rls_free[rls_free_n];
+            set_at(rls_reg, vr, preg);
+            _rls_active_insert(vr, e);
+        }
+        i += 1;
+    }
+    return rls_spill_cnt;
+}
+
+fn rls_test() {
+    // 10 intervals, only 8 regs: at most 2 spills
+    rls_init();
+    rls_add_interval(0, 10);
+    rls_add_interval(1, 3);
+    rls_add_interval(2, 8);
+    rls_add_interval(3, 5);
+    rls_add_interval(4, 12);
+    rls_add_interval(5, 7);
+    rls_add_interval(6, 9);
+    rls_add_interval(7, 11);
+    rls_add_interval(1, 6);   // overlaps multiple
+    rls_add_interval(2, 4);
+    let spills = rls_run();
+    print("rls_test: n=" + to_string(rls_n) + " spills=" + to_string(spills));
+    if spills >= 0 {
+        if spills <= 2 {
+            print("rls_test: PASS");
+            return 1;
+        }
+    }
+    print("rls_test: FAIL");
+    return 0;
+}
+
+fn rls_get_reg(vr)    { return rls_reg[vr]; }
+fn rls_is_spilled(vr) { return rls_spill[vr]; }
+
+print("regalloc_linear_scan.hl loaded");

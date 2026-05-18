@@ -2,11 +2,38 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`418`（76 根目录 + 349 内核模块）
-- H-L 总行数：`~123,500`
-- 内核模块：`349`
-- Shell 命令：`1261`
-- 最近完成功能迭代：`363`（pass_gvn + pass_licm + pass_dce2）
+- `.hl` 文件：`421`（76 根目录 + 352 内核模块）
+- H-L 总行数：`~126,000`
+- 内核模块：`352`
+- Shell 命令：`1282`
+- 最近完成功能迭代：`366`（regalloc_linear_scan + regalloc_coalesce + calling_conv）
+
+## Iteration 366 — calling_conv.hl：System V AMD64 调用约定
+
+- **`calling_conv.hl`**（Buffer: 0x1A50000）：完整 System V AMD64 ABI 建模
+  - 整数参数寄存器：RDI RSI RDX RCX R8 R9（前 6），其余压栈
+  - 浮点参数寄存器：XMM0-XMM7（前 8），其余压栈
+  - `cc_compute_frame(locals, n_callee)`：帧大小 16 字节对齐（含返回地址）
+  - `cc_is_callee_saved(r)` / `cc_is_caller_saved(r)`：寄存器保存分类查询
+  - 测试：8 个整数参数，前 6 在寄存器，后 2 在栈；帧 32+16+8=56→64 → PASS
+
+## Iteration 365 — regalloc_coalesce.hl：寄存器合并（Briggs + George）
+
+- **`regalloc_coalesce.hl`**（Buffer: 0x1A40000）：RC_MAXVARS=32，K=8 颜色
+  - `rc_add_interfere(u,v)` / `rc_add_copy(u,v)`：构建干涉图 + 复制提示
+  - `_rc_briggs_ok(u,v)`：合并结果高度节点数 < K 则安全
+  - `_rc_george_ok(u,v)`：v 的每个高度邻居也干涉 u 则安全
+  - Union-Find 维护合并集合；后续图着色复用合并代表的颜色
+  - 测试：4 个变量，2 对复制无干涉 → 合并 ≥1 → PASS
+
+## Iteration 364 — regalloc_linear_scan.hl：线性扫描寄存器分配
+
+- **`regalloc_linear_scan.hl`**（Buffer: 0x1A30000）：RLS_MAXVARS=32，RLS_NREGS=8
+  - `rls_add_interval(start, end)` + `rls_run()`：Poletto & Sarkar 1999 算法
+  - `_rls_expire_old(pos)`：释放结束早于当前位置的活跃区间归还寄存器
+  - `_rls_spill_at_interval(vr, end)`：无空闲寄存器时驱逐结束最晚的区间
+  - 活跃集按 end 排序维护；溢出计数返回
+  - 测试：10 个区间，8 个寄存器 → spills ≤ 2 → PASS
 
 ## Iteration 363 — pass_dce2.hl：增强死代码消除（SSA Phi 节点感知）
 

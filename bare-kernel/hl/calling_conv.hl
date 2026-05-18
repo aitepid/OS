@@ -1,0 +1,202 @@
+// calling_conv.hl -- System V AMD64 calling convention (iter 366)
+// Buffer: 0x1A50000
+// Models complete call ABI: argument passing, return values, caller/callee-saved regs
+// CC_MAXARGS=16 arguments, CC_MAXREGS=16 named physical regs
+// Integer args: RDI RSI RDX RCX R8 R9 (first 6), rest on stack
+// Float args: XMM0-XMM7 (first 8), rest on stack
+// Return: RAX (int), XMM0 (float), RDX:RAX (128-bit int)
+// Callee-saved: RBX, RBP, R12-R15; Caller-saved: RAX, RCX, RDX, RSI, RDI, R8-R11
+// Provides: frame layout, arg slot query, save/restore lists
+
+let CC_MAXARGS = 16;
+let CC_NIREGS  = 6;   // integer arg regs: RDI..R9
+let CC_NFREGS  = 8;   // float arg regs: XMM0..XMM7
+
+// Physical register indices (System V AMD64)
+// 0=RAX 1=RCX 2=RDX 3=RBX 4=RSP 5=RBP 6=RSI 7=RDI
+// 8=R8  9=R9  10=R10 11=R11 12=R12 13=R13 14=R14 15=R15
+let CC_RAX = 0;  let CC_RCX = 1;  let CC_RDX = 2;  let CC_RBX = 3;
+let CC_RSP = 4;  let CC_RBP = 5;  let CC_RSI = 6;  let CC_RDI = 7;
+let CC_R8  = 8;  let CC_R9  = 9;  let CC_R10 = 10; let CC_R11 = 11;
+let CC_R12 = 12; let CC_R13 = 13; let CC_R14 = 14; let CC_R15 = 15;
+
+// Integer arg register sequence: RDI RSI RDX RCX R8 R9
+let cc_iarg_regs = array(6, 0);
+
+// Callee-saved mask (bit i = reg i is callee-saved)
+let cc_callee_saved = array(16, 0);
+// Caller-saved mask
+let cc_caller_saved = array(16, 0);
+
+// Argument layout for a call site
+let cc_arg_kind   = array(16, 0);  // 0=int, 1=float
+let cc_arg_reg    = array(16, 0);  // physical reg (-1 = stack)
+let cc_arg_stack  = array(16, 0);  // stack offset in bytes (if on stack)
+let cc_nargs      = 0;
+let cc_stack_size = 0;  // stack bytes used for overflow args
+
+// Red zone: 128 bytes below RSP usable by leaf functions
+let CC_RED_ZONE = 128;
+
+// Frame layout
+let cc_frame_locals   = 0;    // bytes for local variables
+let cc_frame_saved    = 0;    // bytes for callee-saved pushes
+let cc_frame_total    = 0;    // total frame size (aligned to 16)
+
+fn cc_init() {
+    // Integer arg registers: RDI RSI RDX RCX R8 R9
+    set_at(cc_iarg_regs, 0, CC_RDI);
+    set_at(cc_iarg_regs, 1, CC_RSI);
+    set_at(cc_iarg_regs, 2, CC_RDX);
+    set_at(cc_iarg_regs, 3, CC_RCX);
+    set_at(cc_iarg_regs, 4, CC_R8);
+    set_at(cc_iarg_regs, 5, CC_R9);
+
+    // Callee-saved: RBX=3, RBP=5, R12-R15=12..15
+    let i = 0;
+    while i < 16 {
+        set_at(cc_callee_saved, i, 0);
+        set_at(cc_caller_saved, i, 0);
+        i += 1;
+    }
+    set_at(cc_callee_saved, CC_RBX, 1);
+    set_at(cc_callee_saved, CC_RBP, 1);
+    set_at(cc_callee_saved, CC_R12, 1);
+    set_at(cc_callee_saved, CC_R13, 1);
+    set_at(cc_callee_saved, CC_R14, 1);
+    set_at(cc_callee_saved, CC_R15, 1);
+
+    // Caller-saved: RAX RCX RDX RSI RDI R8-R11
+    set_at(cc_caller_saved, CC_RAX, 1);
+    set_at(cc_caller_saved, CC_RCX, 1);
+    set_at(cc_caller_saved, CC_RDX, 1);
+    set_at(cc_caller_saved, CC_RSI, 1);
+    set_at(cc_caller_saved, CC_RDI, 1);
+    set_at(cc_caller_saved, CC_R8,  1);
+    set_at(cc_caller_saved, CC_R9,  1);
+    set_at(cc_caller_saved, CC_R10, 1);
+    set_at(cc_caller_saved, CC_R11, 1);
+
+    cc_nargs      = 0;
+    cc_stack_size = 0;
+    cc_frame_locals = 0;
+    cc_frame_saved  = 0;
+    cc_frame_total  = 0;
+    return 0;
+}
+
+fn cc_reset_call() {
+    cc_nargs = 0;
+    cc_stack_size = 0;
+    let i = 0;
+    while i < CC_MAXARGS {
+        set_at(cc_arg_kind,  i, 0);
+        set_at(cc_arg_reg,   i, 0 - 1);
+        set_at(cc_arg_stack, i, 0);
+        i += 1;
+    }
+    return 0;
+}
+
+fn cc_add_int_arg() {
+    let idx = cc_nargs;
+    set_at(cc_arg_kind, idx, 0);
+    if idx < CC_NIREGS {
+        set_at(cc_arg_reg,   idx, cc_iarg_regs[idx]);
+        set_at(cc_arg_stack, idx, 0 - 1);
+    } else {
+        set_at(cc_arg_reg,   idx, 0 - 1);
+        set_at(cc_arg_stack, idx, cc_stack_size);
+        cc_stack_size += 8;
+    }
+    cc_nargs += 1;
+    return idx;
+}
+
+fn cc_add_float_arg() {
+    let idx = cc_nargs;
+    set_at(cc_arg_kind, idx, 1);
+    // Float args use XMM0..XMM7 (treated as reg indices 16..23 here)
+    // Count prior float args
+    let fcnt = 0;
+    let i = 0;
+    while i < idx {
+        if cc_arg_kind[i] == 1 { fcnt += 1; }
+        i += 1;
+    }
+    if fcnt < CC_NFREGS {
+        set_at(cc_arg_reg,   idx, 16 + fcnt);  // XMM0=16..XMM7=23
+        set_at(cc_arg_stack, idx, 0 - 1);
+    } else {
+        set_at(cc_arg_reg,   idx, 0 - 1);
+        set_at(cc_arg_stack, idx, cc_stack_size);
+        cc_stack_size += 8;
+    }
+    cc_nargs += 1;
+    return idx;
+}
+
+fn cc_compute_frame(local_bytes, n_callee_saved) {
+    cc_frame_locals = local_bytes;
+    cc_frame_saved  = n_callee_saved * 8;
+    // Total must be 16-byte aligned; include return address (8) already pushed
+    let raw = cc_frame_locals + cc_frame_saved + 8;
+    let rem = raw - (raw / 16) * 16;
+    if rem == 0 {
+        cc_frame_total = raw;
+    } else {
+        cc_frame_total = raw + (16 - rem);
+    }
+    return cc_frame_total;
+}
+
+fn cc_is_callee_saved(reg) {
+    if reg < 0 { return 0; }
+    if reg >= 16 { return 0; }
+    return cc_callee_saved[reg];
+}
+
+fn cc_is_caller_saved(reg) {
+    if reg < 0 { return 0; }
+    if reg >= 16 { return 0; }
+    return cc_caller_saved[reg];
+}
+
+fn cc_arg_location(idx) {
+    // Returns reg or -1 (check cc_arg_stack[idx] for stack offset)
+    return cc_arg_reg[idx];
+}
+
+fn cc_test() {
+    cc_init();
+    cc_reset_call();
+    // 8 int args: first 6 in regs, last 2 on stack
+    let i = 0;
+    while i < 8 { cc_add_int_arg(); i += 1; }
+    // Check: arg[0]=RDI=7, arg[5]=R9=9, arg[6]=stack offset 0, arg[7]=stack offset 8
+    let a0  = cc_arg_reg[0];
+    let a5  = cc_arg_reg[5];
+    let a6r = cc_arg_reg[6];
+    let a6s = cc_arg_stack[6];
+    let a7s = cc_arg_stack[7];
+    print("cc_test: arg0=r" + to_string(a0) + " arg5=r" + to_string(a5) + " arg6=stack+" + to_string(a6s) + " arg7=stack+" + to_string(a7s));
+    // Frame: 32 bytes locals, 2 callee-saved = 8+8=16; total=32+16+8=56 -> align16 -> 64
+    let fsz = cc_compute_frame(32, 2);
+    print("cc_test: frame=" + to_string(fsz));
+    if a0 == CC_RDI {
+        if a5 == CC_R9 {
+            if a6r == 0 - 1 {
+                if a6s == 0 {
+                    if fsz == 64 {
+                        print("cc_test: PASS");
+                        return 1;
+                    }
+                }
+            }
+        }
+    }
+    print("cc_test: FAIL");
+    return 0;
+}
+
+print("calling_conv.hl loaded");
