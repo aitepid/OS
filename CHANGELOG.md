@@ -2,14 +2,53 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`490`（~72 根目录 + 421 内核模块）
-- H-L 总行数：`~160,800`
-- 内核模块：`421`
-- Shell 命令：`1765`
-- 最近完成功能迭代：`435`（hl_repl + hl_fmt + hl_lint2）
+- `.hl` 文件：`493`（~72 根目录 + 424 内核模块）
+- H-L 总行数：`~162,200`
+- 内核模块：`424`
+- Shell 命令：`1786`
+- 最近完成功能迭代：`438`（posix_compat + musl_shim + linux_syscall）
 - 当前阶段：第七阶段·生态完善（Phase 7）
 - **Milestone M4 已达成**（iter 405，完整 ML 推理框架）
 - **Milestone M5 已达成**（iter 420，生产级稳定性）
+
+## Iteration 438 — linux_syscall.hl：Linux 系统调用兼容层
+
+- **`linux_syscall.hl`**（Buffer: 0x1ED0000）：LS_MAX_MAPPINGS=16，LS_MAX_CALLS=64
+  - 支持系统调用号：read(0) / write(1) / open(2) / close(3) / mmap(9) / munmap(11) / brk(12) / fork(57) / exit(60) / wait4(61) / kill(62)
+  - `ls_syscall(sysno, arg0, arg1)`：统一调度入口，结果记录到调用日志
+  - `ls_syscall(mmap)`：追踪内存映射（ls_map_addr/len/used），更新 ls_brk_ptr
+  - `ls_syscall(munmap)`：标记映射 used=0，释放槽位
+  - `ls_syscall(brk)`：若新地址更高则推进 brk 指针
+  - `ls_syscall(exit)`：记录退出码到 ls_exit_code
+  - `ls_get_total_reads()` / `ls_get_total_writes()` / `ls_get_brk()` / `ls_get_map_count()`
+  - 测试：read+write→mmap(4096)→munmap→brk(0x500000)→exit(42) → 6 calls exit=42 → PASS
+  - Shell：ls init/test/syscall/reads/writes/brk/maps（7 命令）
+
+## Iteration 437 — musl_shim.hl：musl libc 接口垫片
+
+- **`musl_shim.hl`**（Buffer: 0x1EC0000）：MS_MAX_ALLOCS=32，MS_MAX_FILES=16
+  - Slab 分配器：基址 0x1EC1000，步长 256 字节/槽
+  - `ms_malloc(size)` → 分配槽位并追踪大小；`ms_free(addr)` → 标记释放，更新 ms_total_alloc
+  - `ms_alloc_live_count()`：统计仍存活的分配数
+  - `ms_fopen(file_id, mode)` → 返回 handle；`ms_fwrite/fread/fseek/ftell/fclose`
+  - `ms_abs(v)` / `ms_min(a,b)` / `ms_max(a,b)`：数学辅助函数
+  - 测试：malloc(64)+malloc(128)→total=192→free(a1)→live=1 + fopen→fwrite(100)→fseek(0)→fread(50)=50 → PASS
+  - Shell：ms init/test/malloc/free/fopen/fwrite/fread（7 命令）
+
+## Iteration 436 — posix_compat.hl：POSIX 扩展兼容层
+
+- **`posix_compat.hl`**（Buffer: 0x1EB0000）：PC_MAX_SIGNALS=32，PC_MAX_PROCS=16
+  - 信号常量：HUP(1) / INT(2) / QUIT(3) / KILL(9) / TERM(15) / CHLD(17) / CONT(18) / STOP(19)
+  - IO 标志：O_RDONLY=0 / O_WRONLY=1 / O_RDWR=2 / O_CREAT=64 / O_TRUNC=512
+  - `pc_sigaction(signum, handler_id)`：注册信号处理函数 id
+  - `pc_raise(signum)` / `pc_signal_pending(sig)` / `pc_signal_clear(sig)` / `pc_gethandler(sig)`
+  - `pc_fork()`：创建进程记录，分配递增 pid（起始 100）
+  - `pc_waitpid(pid)`：将进程状态置为 zombie(2)
+  - `pc_kill(pid, sig)` / `pc_proc_count_running()`
+  - 测试：sigaction(INT,42)→raise(INT)→pending=1→clear→pending=0 + fork×2→running=2→waitpid→running=1 → PASS
+  - Shell：pc init/test/sigaction/raise/fork/waitpid/kill（7 命令）
+
+
 
 ## Iteration 435 — hl_lint2.hl：增强 Lint 检查器
 

@@ -1,0 +1,179 @@
+// posix_compat.hl -- POSIX Extension Compatibility Layer
+// Iteration 436 | Buffer: 0x1EB0000
+//
+// Provides POSIX-compatible signal/process/IO interface stubs.
+// Features:
+// - Signal registration and delivery (POSIX signals 1-31)
+// - Process group / session tracking
+// - POSIX IO flags (O_RDONLY / O_WRONLY / O_RDWR / O_CREAT / O_TRUNC)
+// - waitpid / kill / getpid / getppid stubs
+//
+// Testing: posix_compat_test() → validates signal dispatch, process tracking
+
+let PC_MAX_SIGNALS = 32;
+let PC_MAX_PROCS   = 16;
+
+let PC_SIG_NONE    = 0;
+let PC_SIG_HUP     = 1;
+let PC_SIG_INT     = 2;
+let PC_SIG_QUIT    = 3;
+let PC_SIG_KILL    = 9;
+let PC_SIG_TERM    = 15;
+let PC_SIG_CHLD    = 17;
+let PC_SIG_CONT    = 18;
+let PC_SIG_STOP    = 19;
+
+let PC_O_RDONLY    = 0;
+let PC_O_WRONLY    = 1;
+let PC_O_RDWR      = 2;
+let PC_O_CREAT     = 64;
+let PC_O_TRUNC     = 512;
+
+// Signal handler table: handler_id per signal (0 = SIG_DFL)
+let pc_sig_handlers  = array(PC_MAX_SIGNALS, 0);
+let pc_sig_pending   = array(PC_MAX_SIGNALS, 0);
+let pc_sig_count     = 0;
+
+// Process table
+let pc_proc_pid      = array(PC_MAX_PROCS, 0);
+let pc_proc_ppid     = array(PC_MAX_PROCS, 0);
+let pc_proc_pgid     = array(PC_MAX_PROCS, 0);
+let pc_proc_status   = array(PC_MAX_PROCS, 0);  // 0=running 1=stopped 2=zombie
+let pc_proc_count    = 0;
+
+let pc_next_pid      = 100;
+
+fn pc_sigaction(signum, handler_id) {
+    if signum <= 0 { return 0 - 1; }
+    if signum >= PC_MAX_SIGNALS { return 0 - 1; }
+    set_at(pc_sig_handlers, signum, handler_id);
+    return signum;
+}
+
+fn pc_raise(signum) {
+    if signum <= 0 { return 0 - 1; }
+    if signum >= PC_MAX_SIGNALS { return 0 - 1; }
+    set_at(pc_sig_pending, signum, 1);
+    set_at(pc_sig_count, 0, pc_sig_count + 1);
+    return signum;
+}
+
+fn pc_signal_pending(signum) {
+    if signum <= 0 { return 0; }
+    if signum >= PC_MAX_SIGNALS { return 0; }
+    return pc_sig_pending[signum];
+}
+
+fn pc_signal_clear(signum) {
+    if signum <= 0 { return 0; }
+    if signum >= PC_MAX_SIGNALS { return 0; }
+    set_at(pc_sig_pending, signum, 0);
+    return 1;
+}
+
+fn pc_gethandler(signum) {
+    if signum <= 0 { return 0; }
+    if signum >= PC_MAX_SIGNALS { return 0; }
+    return pc_sig_handlers[signum];
+}
+
+fn pc_fork() {
+    if pc_proc_count >= PC_MAX_PROCS { return 0 - 1; }
+    let idx   = pc_proc_count;
+    let child = pc_next_pid;
+    set_at(pc_proc_pid,    idx, child);
+    set_at(pc_proc_ppid,   idx, pc_next_pid - 1);
+    set_at(pc_proc_pgid,   idx, child);
+    set_at(pc_proc_status, idx, 0);
+    set_at(pc_next_pid,    0,   pc_next_pid + 1);
+    set_at(pc_proc_count,  0,   pc_proc_count + 1);
+    return child;
+}
+
+fn pc_getpid(idx) {
+    if idx < 0 { return 0 - 1; }
+    if idx >= pc_proc_count { return 0 - 1; }
+    return pc_proc_pid[idx];
+}
+
+fn pc_getppid(idx) {
+    if idx < 0 { return 0 - 1; }
+    if idx >= pc_proc_count { return 0 - 1; }
+    return pc_proc_ppid[idx];
+}
+
+fn pc_kill(pid, signum) {
+    return pc_raise(signum);
+}
+
+fn pc_waitpid(pid) {
+    let i = 0;
+    {
+        if i >= pc_proc_count { return 0 - 1; }
+        if pc_proc_pid[i] == pid {
+            set_at(pc_proc_status, i, 2);
+            return pid;
+        }
+        set_at(i, 0, i + 1);
+    }
+}
+
+fn pc_proc_count_running() {
+    let cnt = 0;
+    let i = 0;
+    {
+        if i >= pc_proc_count { return cnt; }
+        if pc_proc_status[i] == 0 { set_at(cnt, 0, cnt + 1); }
+        set_at(i, 0, i + 1);
+    }
+}
+
+fn posix_compat_init() {
+    set_at(pc_proc_count, 0, 0);
+    set_at(pc_sig_count,  0, 0);
+    set_at(pc_next_pid,   0, 100);
+    let i = 0;
+    {
+        if i >= PC_MAX_SIGNALS { return 0; }
+        set_at(pc_sig_handlers, i, 0);
+        set_at(pc_sig_pending,  i, 0);
+        set_at(i, 0, i + 1);
+    }
+}
+
+fn posix_compat_test() {
+    posix_compat_init();
+    let pass = 1;
+
+    // signal registration + raise
+    pc_sigaction(PC_SIG_INT, 42);
+    let h = pc_gethandler(PC_SIG_INT);
+    if h != 42 { set_at(pass, 0, 0); }
+
+    pc_raise(PC_SIG_INT);
+    let pend = pc_signal_pending(PC_SIG_INT);
+    if pend != 1 { set_at(pass, 0, 0); }
+
+    pc_signal_clear(PC_SIG_INT);
+    let pend2 = pc_signal_pending(PC_SIG_INT);
+    if pend2 != 0 { set_at(pass, 0, 0); }
+
+    // process fork + wait
+    let pid1 = pc_fork();
+    let pid2 = pc_fork();
+    if pc_proc_count != 2 { set_at(pass, 0, 0); }
+
+    let running = pc_proc_count_running();
+    if running != 2 { set_at(pass, 0, 0); }
+
+    pc_waitpid(pid1);
+    let running2 = pc_proc_count_running();
+    if running2 != 1 { set_at(pass, 0, 0); }
+
+    if pass == 1 { print("posix_compat_test PASS"); }
+    if pass == 0 { print("posix_compat_test FAIL"); }
+    return pass;
+}
+
+posix_compat_test();
+print("posix_compat.hl loaded");

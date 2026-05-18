@@ -1,0 +1,195 @@
+// linux_syscall.hl -- Linux System Call Compatibility Layer
+// Iteration 438 | Buffer: 0x1ED0000
+//
+// Emulates key Linux x86_64 syscall numbers and dispatch.
+// Syscalls implemented (by number):
+//   0=read  1=write  2=open  3=close  9=mmap  11=munmap
+//   12=brk  57=fork  60=exit  61=wait4  62=kill
+//
+// Testing: linux_syscall_test() → validates dispatch table, brk/mmap tracking
+
+let LS_MAX_MAPPINGS = 16;
+let LS_MAX_CALLS    = 64;
+
+let LS_SYS_READ   = 0;
+let LS_SYS_WRITE  = 1;
+let LS_SYS_OPEN   = 2;
+let LS_SYS_CLOSE  = 3;
+let LS_SYS_MMAP   = 9;
+let LS_SYS_MUNMAP = 11;
+let LS_SYS_BRK    = 12;
+let LS_SYS_FORK   = 57;
+let LS_SYS_EXIT   = 60;
+let LS_SYS_WAIT4  = 61;
+let LS_SYS_KILL   = 62;
+
+// Call log
+let ls_call_num    = array(LS_MAX_CALLS, 0);
+let ls_call_arg0   = array(LS_MAX_CALLS, 0);
+let ls_call_result = array(LS_MAX_CALLS, 0);
+let ls_call_count  = 0;
+
+// Memory mappings
+let ls_map_addr    = array(LS_MAX_MAPPINGS, 0);
+let ls_map_len     = array(LS_MAX_MAPPINGS, 0);
+let ls_map_used    = array(LS_MAX_MAPPINGS, 0);
+let ls_map_count   = 0;
+
+// brk pointer
+let ls_brk_ptr     = 0x400000;
+
+// Counters
+let ls_total_reads  = 0;
+let ls_total_writes = 0;
+let ls_exit_code    = 0 - 1;
+
+fn ls_log(sysno, arg0, result) {
+    if ls_call_count >= LS_MAX_CALLS { return 0 - 1; }
+    let idx = ls_call_count;
+    set_at(ls_call_num,    idx, sysno);
+    set_at(ls_call_arg0,   idx, arg0);
+    set_at(ls_call_result, idx, result);
+    set_at(ls_call_count,  0,   ls_call_count + 1);
+    return idx;
+}
+
+fn ls_syscall(sysno, arg0, arg1) {
+    let result = 0 - 1;
+
+    if sysno == LS_SYS_READ {
+        set_at(ls_total_reads, 0, ls_total_reads + 1);
+        set_at(result, 0, arg1);
+    }
+
+    if sysno == LS_SYS_WRITE {
+        set_at(ls_total_writes, 0, ls_total_writes + 1);
+        set_at(result, 0, arg1);
+    }
+
+    if sysno == LS_SYS_OPEN {
+        set_at(result, 0, ls_call_count + 3);
+    }
+
+    if sysno == LS_SYS_CLOSE {
+        set_at(result, 0, 0);
+    }
+
+    if sysno == LS_SYS_MMAP {
+        if ls_map_count < LS_MAX_MAPPINGS {
+            let mi = ls_map_count;
+            set_at(ls_map_addr, mi, ls_brk_ptr);
+            set_at(ls_map_len,  mi, arg1);
+            set_at(ls_map_used, mi, 1);
+            set_at(ls_brk_ptr,  0,  ls_brk_ptr + arg1);
+            set_at(ls_map_count, 0, ls_map_count + 1);
+            set_at(result, 0, ls_map_addr[mi]);
+        }
+    }
+
+    if sysno == LS_SYS_MUNMAP {
+        let i = 0;
+        {
+            if i >= ls_map_count { set_at(i, 0, ls_map_count); }
+            if i < ls_map_count {
+                if ls_map_addr[i] == arg0 {
+                    set_at(ls_map_used, i, 0);
+                    set_at(result, 0, 0);
+                    set_at(i, 0, ls_map_count);
+                }
+                if ls_map_addr[i] != arg0 { set_at(i, 0, i + 1); }
+            }
+        }
+    }
+
+    if sysno == LS_SYS_BRK {
+        if arg0 > ls_brk_ptr {
+            set_at(ls_brk_ptr, 0, arg0);
+        }
+        set_at(result, 0, ls_brk_ptr);
+    }
+
+    if sysno == LS_SYS_FORK {
+        set_at(result, 0, 1000 + ls_call_count);
+    }
+
+    if sysno == LS_SYS_EXIT {
+        set_at(ls_exit_code, 0, arg0);
+        set_at(result, 0, 0);
+    }
+
+    if sysno == LS_SYS_WAIT4 {
+        set_at(result, 0, arg0);
+    }
+
+    if sysno == LS_SYS_KILL {
+        set_at(result, 0, 0);
+    }
+
+    ls_log(sysno, arg0, result);
+    return result;
+}
+
+fn ls_get_call_count()    { return ls_call_count; }
+fn ls_get_total_reads()   { return ls_total_reads; }
+fn ls_get_total_writes()  { return ls_total_writes; }
+fn ls_get_exit_code()     { return ls_exit_code; }
+fn ls_get_brk()           { return ls_brk_ptr; }
+fn ls_get_map_count()     { return ls_map_count; }
+
+fn ls_active_map_count() {
+    let cnt = 0;
+    let i   = 0;
+    {
+        if i >= ls_map_count { return cnt; }
+        if ls_map_used[i] == 1 { set_at(cnt, 0, cnt + 1); }
+        set_at(i, 0, i + 1);
+    }
+}
+
+fn linux_syscall_init() {
+    set_at(ls_call_count,   0, 0);
+    set_at(ls_map_count,    0, 0);
+    set_at(ls_total_reads,  0, 0);
+    set_at(ls_total_writes, 0, 0);
+    set_at(ls_exit_code,    0, 0 - 1);
+    set_at(ls_brk_ptr,      0, 0x400000);
+}
+
+fn linux_syscall_test() {
+    linux_syscall_init();
+    let pass = 1;
+
+    // read + write
+    ls_syscall(LS_SYS_READ,  0, 512);
+    ls_syscall(LS_SYS_WRITE, 1, 256);
+    if ls_get_total_reads()  != 1 { set_at(pass, 0, 0); }
+    if ls_get_total_writes() != 1 { set_at(pass, 0, 0); }
+
+    // mmap
+    let mapped = ls_syscall(LS_SYS_MMAP, 0, 4096);
+    if mapped != 0x400000 { set_at(pass, 0, 0); }
+    if ls_get_map_count() != 1 { set_at(pass, 0, 0); }
+
+    // munmap
+    ls_syscall(LS_SYS_MUNMAP, mapped, 4096);
+    let active = ls_active_map_count();
+    if active != 0 { set_at(pass, 0, 0); }
+
+    // brk
+    let brk1 = ls_syscall(LS_SYS_BRK, 0x500000, 0);
+    if brk1 != 0x500000 { set_at(pass, 0, 0); }
+
+    // exit
+    ls_syscall(LS_SYS_EXIT, 42, 0);
+    if ls_get_exit_code() != 42 { set_at(pass, 0, 0); }
+
+    let total_calls = ls_get_call_count();
+    if total_calls != 6 { set_at(pass, 0, 0); }
+
+    if pass == 1 { print("linux_syscall_test PASS"); }
+    if pass == 0 { print("linux_syscall_test FAIL"); }
+    return pass;
+}
+
+linux_syscall_test();
+print("linux_syscall.hl loaded");

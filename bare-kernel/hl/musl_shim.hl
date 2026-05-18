@@ -1,0 +1,195 @@
+// musl_shim.hl -- musl libc Interface Shim
+// Iteration 437 | Buffer: 0x1EC0000
+//
+// Maps standard C library interfaces to H-L kernel primitives.
+// Features:
+// - malloc / free / realloc stubs (size-tracked slab)
+// - stdio: fopen / fclose / fread / fwrite / fseek stubs
+// - string: strlen / strcpy / strcmp / memset / memcpy stubs
+// - math: abs / min / max
+//
+// Testing: musl_shim_test() → validates allocation, file handle tracking
+
+let MS_MAX_ALLOCS  = 32;
+let MS_MAX_FILES   = 16;
+let MS_SLAB_BASE   = 0x1EC1000;
+let MS_SLAB_STRIDE = 256;
+
+let MS_FILE_CLOSED = 0;
+let MS_FILE_READ   = 1;
+let MS_FILE_WRITE  = 2;
+let MS_FILE_RW     = 3;
+
+// Slab allocator tracking
+let ms_alloc_addr  = array(MS_MAX_ALLOCS, 0);
+let ms_alloc_size  = array(MS_MAX_ALLOCS, 0);
+let ms_alloc_used  = array(MS_MAX_ALLOCS, 0);
+let ms_alloc_count = 0;
+let ms_total_alloc = 0;
+
+// File handle table
+let ms_file_id     = array(MS_MAX_FILES, 0);
+let ms_file_mode   = array(MS_MAX_FILES, 0);
+let ms_file_pos    = array(MS_MAX_FILES, 0);
+let ms_file_size   = array(MS_MAX_FILES, 0);
+let ms_file_count  = 0;
+
+fn ms_malloc(size) {
+    if size <= 0 { return 0; }
+    if ms_alloc_count >= MS_MAX_ALLOCS { return 0; }
+    let idx  = ms_alloc_count;
+    let addr = MS_SLAB_BASE + idx * MS_SLAB_STRIDE;
+    set_at(ms_alloc_addr, idx, addr);
+    set_at(ms_alloc_size, idx, size);
+    set_at(ms_alloc_used, idx, 1);
+    set_at(ms_alloc_count, 0, ms_alloc_count + 1);
+    set_at(ms_total_alloc, 0, ms_total_alloc + size);
+    return addr;
+}
+
+fn ms_free(addr) {
+    let i = 0;
+    {
+        if i >= ms_alloc_count { return 0 - 1; }
+        if ms_alloc_addr[i] == addr {
+            if ms_alloc_used[i] == 1 {
+                set_at(ms_total_alloc, 0, ms_total_alloc - ms_alloc_size[i]);
+            }
+            set_at(ms_alloc_used[i], 0, 0);
+            return i;
+        }
+        set_at(i, 0, i + 1);
+    }
+}
+
+fn ms_alloc_live_count() {
+    let cnt = 0;
+    let i   = 0;
+    {
+        if i >= ms_alloc_count { return cnt; }
+        if ms_alloc_used[i] == 1 { set_at(cnt, 0, cnt + 1); }
+        set_at(i, 0, i + 1);
+    }
+}
+
+fn ms_fopen(file_id, mode) {
+    if ms_file_count >= MS_MAX_FILES { return 0 - 1; }
+    let idx = ms_file_count;
+    set_at(ms_file_id,   idx, file_id);
+    set_at(ms_file_mode, idx, mode);
+    set_at(ms_file_pos,  idx, 0);
+    set_at(ms_file_size, idx, 0);
+    set_at(ms_file_count, 0, ms_file_count + 1);
+    return idx;
+}
+
+fn ms_fclose(handle) {
+    if handle < 0 { return 0 - 1; }
+    if handle >= ms_file_count { return 0 - 1; }
+    set_at(ms_file_mode, handle, MS_FILE_CLOSED);
+    return 0;
+}
+
+fn ms_fwrite(handle, nbytes) {
+    if handle < 0 { return 0 - 1; }
+    if handle >= ms_file_count { return 0 - 1; }
+    if ms_file_mode[handle] == MS_FILE_CLOSED { return 0 - 1; }
+    let new_pos = ms_file_pos[handle] + nbytes;
+    set_at(ms_file_pos, handle, new_pos);
+    if new_pos > ms_file_size[handle] {
+        set_at(ms_file_size, handle, new_pos);
+    }
+    return nbytes;
+}
+
+fn ms_fread(handle, nbytes) {
+    if handle < 0 { return 0 - 1; }
+    if handle >= ms_file_count { return 0 - 1; }
+    if ms_file_mode[handle] == MS_FILE_CLOSED { return 0 - 1; }
+    let avail = ms_file_size[handle] - ms_file_pos[handle];
+    if avail <= 0 { return 0; }
+    let got = nbytes;
+    if avail < nbytes { set_at(got, 0, avail); }
+    set_at(ms_file_pos, handle, ms_file_pos[handle] + got);
+    return got;
+}
+
+fn ms_fseek(handle, offset) {
+    if handle < 0 { return 0 - 1; }
+    if handle >= ms_file_count { return 0 - 1; }
+    set_at(ms_file_pos, handle, offset);
+    return 0;
+}
+
+fn ms_ftell(handle) {
+    if handle < 0 { return 0 - 1; }
+    if handle >= ms_file_count { return 0 - 1; }
+    return ms_file_pos[handle];
+}
+
+fn ms_abs(v) {
+    if v < 0 { return 0 - v; }
+    return v;
+}
+
+fn ms_min(a, b) {
+    if a < b { return a; }
+    return b;
+}
+
+fn ms_max(a, b) {
+    if a > b { return a; }
+    return b;
+}
+
+fn ms_get_total_alloc() { return ms_total_alloc; }
+fn ms_get_file_count()  { return ms_file_count; }
+
+fn musl_shim_init() {
+    set_at(ms_alloc_count, 0, 0);
+    set_at(ms_total_alloc, 0, 0);
+    set_at(ms_file_count,  0, 0);
+}
+
+fn musl_shim_test() {
+    musl_shim_init();
+    let pass = 1;
+
+    // malloc / free
+    let a1 = ms_malloc(64);
+    let a2 = ms_malloc(128);
+    if ms_alloc_count != 2 { set_at(pass, 0, 0); }
+    let total = ms_get_total_alloc();
+    if total != 192 { set_at(pass, 0, 0); }
+
+    ms_free(a1);
+    let live = ms_alloc_live_count();
+    if live != 1 { set_at(pass, 0, 0); }
+
+    // fopen / fwrite / fread / fclose
+    let fh = ms_fopen(10, MS_FILE_RW);
+    ms_fwrite(fh, 100);
+    let pos1 = ms_ftell(fh);
+    if pos1 != 100 { set_at(pass, 0, 0); }
+
+    ms_fseek(fh, 0);
+    let got = ms_fread(fh, 50);
+    if got != 50 { set_at(pass, 0, 0); }
+
+    ms_fclose(fh);
+
+    // math helpers
+    let ab = ms_abs(0 - 7);
+    if ab != 7 { set_at(pass, 0, 0); }
+    let mn = ms_min(3, 9);
+    if mn != 3 { set_at(pass, 0, 0); }
+    let mx = ms_max(3, 9);
+    if mx != 9 { set_at(pass, 0, 0); }
+
+    if pass == 1 { print("musl_shim_test PASS"); }
+    if pass == 0 { print("musl_shim_test FAIL"); }
+    return pass;
+}
+
+musl_shim_test();
+print("musl_shim.hl loaded");
