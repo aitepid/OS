@@ -315,13 +315,16 @@ fn shell_handle(cmd) {
         serial_print("CPUFreq:       cf init  cf test  cf gov <cpu> <g>  cf load <cpu> <pct>  cf adjust <cpu>  cf freq <cpu>  cf info");
         serial_print("Hypervisor:    hv init  hv test  hv create <vcpus> <mb>  hv start <id>  hv pause <id>  hv stop <id>  hv info <id>");
         serial_print("VMX:           vx init  vx test  vx setup <vcpu> <rip> <rsp>  vx write <vcpu> <f> <v>  vx read <vcpu> <f>  vx launch <vcpu>  vx info <vcpu>");
+        serial_print("PkgMgr:        pm init  pm test  pm install <id> <ver>  pm remove <id>  pm find <id>  pm version <id>  pm count");
+        serial_print("PkgRegistry:   pr init  pr test  pr register <id> <ver> <sz>  pr lookup <id>  pr version <id>  pr size <id>  pr count");
+        serial_print("PkgBuild:      pb init  pb test  pb add <id>  pb dep <target> <dep>  pb build <id>  pb status <id>  pb count");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
     }
 
     if cmd == "ver" {
-        return "HicOS 6.0 -- Hilbert-Lang Kernel (406 modules, pure H-L, zero deps)";
+        return "HicOS 6.0 -- Hilbert-Lang Kernel (409 modules, pure H-L, zero deps)";
     }
 
     if cmd == "uptime" {
@@ -8278,6 +8281,93 @@ fn shell_handle_ext(cmd) {
         let vxivc = to_int(str_sub(cmd, 8, len(cmd)));
         return "vx: vcpu=" + to_string(vxivc) + " exits=" + to_string(vx_get_exits(vxivc)) + " reason=" + to_string(vx_get_exit_reason(vxivc)) + " rip=" + to_string(vx_vmread(vxivc, VX_F_RIP));
     }
+
+    // --- Package Manager ---
+    if cmd == "pm init"  { pm_init(); return "pm: init"; }
+    if cmd == "pm test"  { let pmr = pm_test(); return "pm: " + to_string(pmr); }
+    if cmd == "pm count" { return "pm: installed=" + to_string(pm_count_installed()); }
+    if _starts_with(cmd, "pm install ") {
+        let pmia  = str_sub(cmd, 11, len(cmd));
+        let pmis  = _find_space(pmia);
+        let pmiid = to_int(str_sub(pmia, 0, pmis));
+        let pmiv  = to_int(str_sub(pmia, pmis + 1, len(pmia)));
+        let pmir  = pm_install(pmiid, pmiv);
+        return "pm: installed id=" + to_string(pmiid) + " ver=" + to_string(pmiv) + " slot=" + to_string(pmir);
+    }
+    if _starts_with(cmd, "pm remove ") {
+        let pmrid = to_int(str_sub(cmd, 10, len(cmd)));
+        pm_remove(pmrid);
+        return "pm: removed id=" + to_string(pmrid);
+    }
+    if _starts_with(cmd, "pm find ") {
+        let pmfid = to_int(str_sub(cmd, 8, len(cmd)));
+        let pmfi  = pm_find(pmfid);
+        return "pm: id=" + to_string(pmfid) + " idx=" + to_string(pmfi);
+    }
+    if _starts_with(cmd, "pm version ") {
+        let pmvid = to_int(str_sub(cmd, 11, len(cmd)));
+        let pmvv  = pm_get_version(pmvid);
+        return "pm: id=" + to_string(pmvid) + " ver=" + to_string(pmvv);
+    }
+
+    // --- Package Registry ---
+    if cmd == "pr init"  { pr_init(); return "pr: init"; }
+    if cmd == "pr test"  { let prr = pr_test(); return "pr: " + to_string(prr); }
+    if cmd == "pr count" { return "pr: entries=" + to_string(pr_count()); }
+    if _starts_with(cmd, "pr register ") {
+        let prra  = str_sub(cmd, 12, len(cmd));
+        let prrs0 = _find_space(prra);
+        let prrid = to_int(str_sub(prra, 0, prrs0));
+        let prra2 = str_sub(prra, prrs0 + 1, len(prra));
+        let prrs1 = _find_space(prra2);
+        let prrv  = to_int(str_sub(prra2, 0, prrs1));
+        let prsz  = to_int(str_sub(prra2, prrs1 + 1, len(prra2)));
+        let prri  = pr_register(prrid, prrv, prsz);
+        return "pr: registered id=" + to_string(prrid) + " ver=" + to_string(prrv) + " slot=" + to_string(prri);
+    }
+    if _starts_with(cmd, "pr lookup ") {
+        let prlid = to_int(str_sub(cmd, 10, len(cmd)));
+        let prli  = pr_lookup(prlid);
+        return "pr: id=" + to_string(prlid) + " idx=" + to_string(prli);
+    }
+    if _starts_with(cmd, "pr version ") {
+        let prvid = to_int(str_sub(cmd, 11, len(cmd)));
+        let prvv  = pr_get_version(prvid);
+        return "pr: id=" + to_string(prvid) + " ver=" + to_string(prvv);
+    }
+    if _starts_with(cmd, "pr size ") {
+        let prsid = to_int(str_sub(cmd, 8, len(cmd)));
+        let prssz = pr_get_size(prsid);
+        return "pr: id=" + to_string(prsid) + " size=" + to_string(prssz) + "KB";
+    }
+
+    // --- Package Build System ---
+    if cmd == "pb init"     { pb_init(); return "pb: init"; }
+    if cmd == "pb test"     { let pbr = pb_test(); return "pb: " + to_string(pbr); }
+    if cmd == "pb count"    { return "pb: targets=" + to_string(pb_count()); }
+    if _starts_with(cmd, "pb add ") {
+        let pbaid = to_int(str_sub(cmd, 7, len(cmd)));
+        let pbas  = pb_add_target(pbaid);
+        return "pb: target added id=" + to_string(pbaid) + " slot=" + to_string(pbas);
+    }
+    if _starts_with(cmd, "pb dep ") {
+        let pbda  = str_sub(cmd, 7, len(cmd));
+        let pbds  = _find_space(pbda);
+        let pbdtid = to_int(str_sub(pbda, 0, pbds));
+        let pbddid = to_int(str_sub(pbda, pbds + 1, len(pbda)));
+        pb_add_dep(pbdtid, pbddid);
+        return "pb: dep added target=" + to_string(pbdtid) + " dep=" + to_string(pbddid);
+    }
+    if _starts_with(cmd, "pb build ") {
+        let pbbid = to_int(str_sub(cmd, 9, len(cmd)));
+        let pbbs  = pb_build(pbbid);
+        return "pb: target=" + to_string(pbbid) + " status=" + to_string(pbbs);
+    }
+    if _starts_with(cmd, "pb status ") {
+        let pbsid = to_int(str_sub(cmd, 10, len(cmd)));
+        let pbss  = pb_get_status(pbsid);
+        return "pb: target=" + to_string(pbsid) + " status=" + to_string(pbss);
+    }
 }
 
 // Self-test
@@ -8288,7 +8378,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 1660 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld + lca + virtualtree + dominator + sam + manacher + eertree + bwt + lyndon + zfunction + ir + regalloc + codegen + ioring + persistseg + rollbackdsu + splaytree + mo + sqrtdecomp + cht + matrixexpo + numtheory + strhash + intervaldp + gametheory + trie + lichao + dcdp + monoqueue + segbeats + lct + quickselect + ntt + segmerge + palindromedp + knuthdp + bitset + millerrabin + pollardrho + linearbasis + geometry2d + rotcalip + halfplane + dinic + blockcuttree + bridgetree + polyinv + polylnexp + polysqrt + bitmaskdp + digitdp + brokenprofiledp + wavelettree + implicittreap + chtholly + suffixtree + bsgs + minencircle + gvn + licm + dce2 + linearscandra + regcoalesce + callingconv + typeinfer + typechecker + generics + linkerelf + linkerar + dynlinker + dwarf + perfcounter + jitstub + btree + btreeplus + lsmmemtable + wal + mvcc + transaction + indexhash + indexbtree + queryplan + dbengine + wireguard + tls13 + http3quic + doh + dht + bittorrent + opentelemetry + prometheus + grpc_stream + websocket_compression + conv2d + pooling + rnn + lstm + autograd + optimizer + tokenizer + embedding + model_serialize + gpu_inference + scheduler_cfs + numa_alloc + ftrace + kprobe + memory_profiler + heap_checker + crash_reporter + core_dump + hotpatch + livepatch + power_mgmt + thermal + cpufreq + hypervisor + vmx");
+print("shell.hl loaded -- 1681 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld + lca + virtualtree + dominator + sam + manacher + eertree + bwt + lyndon + zfunction + ir + regalloc + codegen + ioring + persistseg + rollbackdsu + splaytree + mo + sqrtdecomp + cht + matrixexpo + numtheory + strhash + intervaldp + gametheory + trie + lichao + dcdp + monoqueue + segbeats + lct + quickselect + ntt + segmerge + palindromedp + knuthdp + bitset + millerrabin + pollardrho + linearbasis + geometry2d + rotcalip + halfplane + dinic + blockcuttree + bridgetree + polyinv + polylnexp + polysqrt + bitmaskdp + digitdp + brokenprofiledp + wavelettree + implicittreap + chtholly + suffixtree + bsgs + minencircle + gvn + licm + dce2 + linearscandra + regcoalesce + callingconv + typeinfer + typechecker + generics + linkerelf + linkerar + dynlinker + dwarf + perfcounter + jitstub + btree + btreeplus + lsmmemtable + wal + mvcc + transaction + indexhash + indexbtree + queryplan + dbengine + wireguard + tls13 + http3quic + doh + dht + bittorrent + opentelemetry + prometheus + grpc_stream + websocket_compression + conv2d + pooling + rnn + lstm + autograd + optimizer + tokenizer + embedding + model_serialize + gpu_inference + scheduler_cfs + numa_alloc + ftrace + kprobe + memory_profiler + heap_checker + crash_reporter + core_dump + hotpatch + livepatch + power_mgmt + thermal + cpufreq + hypervisor + vmx + package_manager + pkg_registry + pkg_build");
 
 // Main shell loop (called from kernel_init)
 

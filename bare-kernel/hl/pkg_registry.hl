@@ -1,0 +1,101 @@
+// pkg_registry.hl -- H-L Package Registry (Phase 7: 生态与自举完善, iter 422)
+// Buffer: 0x1DD0000
+// Remote package registry: register/lookup packages by ID, version, size
+// PR_MAX_ENTRIES=32; pr_register/lookup/version/size/count
+// Shell: pr register/lookup/version/size/count/test/init (7 commands)
+
+let PR_MAX_ENTRIES = 32;
+
+let pr_pkg_id    = array(32, 0);   // registered package IDs
+let pr_pkg_ver   = array(32, 0);   // latest available version
+let pr_pkg_size  = array(32, 0);   // package size in KB
+let pr_n_entries = 0;
+
+fn pr_init() {
+    let i = 0;
+    while i < PR_MAX_ENTRIES {
+        set_at(pr_pkg_id,   i, 0);
+        set_at(pr_pkg_ver,  i, 0);
+        set_at(pr_pkg_size, i, 0);
+        i += 1;
+    }
+    pr_n_entries = 0;
+    return 0;
+}
+
+fn pr_lookup(pkg_id) {
+    let i = 0;
+    while i < pr_n_entries {
+        if pr_pkg_id[i] == pkg_id { return i; }
+        i += 1;
+    }
+    return 0 - 1;
+}
+
+fn pr_register(pkg_id, version, size) {
+    let idx = pr_lookup(pkg_id);
+    if idx >= 0 {
+        set_at(pr_pkg_ver,  idx, version);
+        set_at(pr_pkg_size, idx, size);
+        return idx;
+    }
+    if pr_n_entries >= PR_MAX_ENTRIES { return 0 - 1; }
+    let slot = pr_n_entries;
+    set_at(pr_pkg_id,   slot, pkg_id);
+    set_at(pr_pkg_ver,  slot, version);
+    set_at(pr_pkg_size, slot, size);
+    pr_n_entries += 1;
+    return slot;
+}
+
+fn pr_get_version(pkg_id) {
+    let idx = pr_lookup(pkg_id);
+    if idx < 0 { return 0 - 1; }
+    return pr_pkg_ver[idx];
+}
+
+fn pr_get_size(pkg_id) {
+    let idx = pr_lookup(pkg_id);
+    if idx < 0 { return 0 - 1; }
+    return pr_pkg_size[idx];
+}
+
+fn pr_count() { return pr_n_entries; }
+
+fn pr_test() {
+    pr_init();
+    pr_register(100, 3, 128);
+    pr_register(200, 1, 64);
+
+    let cnt   = pr_count();            // 2
+    let v100  = pr_get_version(100);   // 3
+    let s200  = pr_get_size(200);      // 64
+    let miss  = pr_lookup(999);        // -1
+
+    // Update pkg 100 version
+    pr_register(100, 4, 128);
+    let v100b = pr_get_version(100);   // 4
+
+    print("pr_test: cnt=" + to_string(cnt)
+          + " v100=" + to_string(v100)
+          + " s200=" + to_string(s200)
+          + " miss=" + to_string(miss)
+          + " v100b=" + to_string(v100b));
+
+    if cnt == 2 {
+        if v100 == 3 {
+            if s200 == 64 {
+                if miss == 0 - 1 {
+                    if v100b == 4 {
+                        print("pr_test: PASS");
+                        return 1;
+                    }
+                }
+            }
+        }
+    }
+    print("pr_test: FAIL");
+    return 0;
+}
+
+print("pkg_registry.hl loaded");

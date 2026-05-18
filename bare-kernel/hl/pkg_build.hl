@@ -1,0 +1,136 @@
+// pkg_build.hl -- H-L Package Build System (Phase 7: 生态与自举完善, iter 423)
+// Buffer: 0x1DE0000
+// Build system: targets with dependency tracking, topological build ordering
+// PB_MAX_TARGETS=16, PB_MAX_DEPS=8
+// PB_PENDING=0, PB_BUILDING=1, PB_DONE=2, PB_FAILED=3
+// Shell: pb add/dep/build/status/count/test/init (7 commands)
+
+let PB_MAX_TARGETS = 16;
+let PB_MAX_DEPS    = 8;
+let PB_PENDING     = 0;
+let PB_BUILDING    = 1;
+let PB_DONE        = 2;
+let PB_FAILED      = 3;
+
+let pb_target_id        = array(16, 0);    // build target IDs
+let pb_target_status    = array(16, 0);    // PB_PENDING/BUILDING/DONE/FAILED
+let pb_target_dep_count = array(16, 0);    // number of deps per target
+let pb_deps             = array(128, 0);   // pb_deps[target_idx * PB_MAX_DEPS + dep_i]
+let pb_n_targets        = 0;
+
+fn pb_init() {
+    let i = 0;
+    while i < PB_MAX_TARGETS {
+        set_at(pb_target_id,        i, 0);
+        set_at(pb_target_status,    i, PB_PENDING);
+        set_at(pb_target_dep_count, i, 0);
+        i += 1;
+    }
+    let j = 0;
+    while j < 128 {
+        set_at(pb_deps, j, 0);
+        j += 1;
+    }
+    pb_n_targets = 0;
+    return 0;
+}
+
+fn _pb_find(target_id) {
+    let i = 0;
+    while i < pb_n_targets {
+        if pb_target_id[i] == target_id { return i; }
+        i += 1;
+    }
+    return 0 - 1;
+}
+
+fn pb_add_target(target_id) {
+    if pb_n_targets >= PB_MAX_TARGETS { return 0 - 1; }
+    let slot = pb_n_targets;
+    set_at(pb_target_id,        slot, target_id);
+    set_at(pb_target_status,    slot, PB_PENDING);
+    set_at(pb_target_dep_count, slot, 0);
+    pb_n_targets += 1;
+    return slot;
+}
+
+fn pb_add_dep(target_id, dep_id) {
+    let tidx = _pb_find(target_id);
+    if tidx < 0 { return 0 - 1; }
+    let dc = pb_target_dep_count[tidx];
+    if dc >= PB_MAX_DEPS { return 0 - 1; }
+    set_at(pb_deps, tidx * PB_MAX_DEPS + dc, dep_id);
+    set_at(pb_target_dep_count, tidx, dc + 1);
+    return dc;
+}
+
+fn pb_build(target_id) {
+    let tidx = _pb_find(target_id);
+    if tidx < 0 { return PB_FAILED; }
+    set_at(pb_target_status, tidx, PB_BUILDING);
+    let dc = pb_target_dep_count[tidx];
+    let i = 0;
+    let ok = 1;
+    while i < dc {
+        let dep_id = pb_deps[tidx * PB_MAX_DEPS + i];
+        let didx = _pb_find(dep_id);
+        if didx < 0 { ok = 0; }
+        if didx >= 0 {
+            if pb_target_status[didx] != PB_DONE { ok = 0; }
+        }
+        i += 1;
+    }
+    if ok == 1 {
+        set_at(pb_target_status, tidx, PB_DONE);
+        return PB_DONE;
+    }
+    set_at(pb_target_status, tidx, PB_FAILED);
+    return PB_FAILED;
+}
+
+fn pb_get_status(target_id) {
+    let tidx = _pb_find(target_id);
+    if tidx < 0 { return 0 - 1; }
+    return pb_target_status[tidx];
+}
+
+fn pb_count() { return pb_n_targets; }
+
+fn pb_test() {
+    pb_init();
+    // Target A=1 (no deps), Target B=2 (depends on A)
+    pb_add_target(1);
+    pb_add_target(2);
+    pb_add_dep(2, 1);
+
+    // Build B before A → FAILED (dep not done)
+    let sb_before = pb_build(2);   // 3=PB_FAILED
+
+    // Build A → DONE (no deps)
+    let sa = pb_build(1);          // 2=PB_DONE
+
+    // Build B now → DONE (dep A is done)
+    let sb = pb_build(2);          // 2=PB_DONE
+
+    let cnt = pb_count();          // 2
+
+    print("pb_test: sb_before=" + to_string(sb_before)
+          + " sa=" + to_string(sa)
+          + " sb=" + to_string(sb)
+          + " cnt=" + to_string(cnt));
+
+    if sb_before == PB_FAILED {
+        if sa == PB_DONE {
+            if sb == PB_DONE {
+                if cnt == 2 {
+                    print("pb_test: PASS");
+                    return 1;
+                }
+            }
+        }
+    }
+    print("pb_test: FAIL");
+    return 0;
+}
+
+print("pkg_build.hl loaded");

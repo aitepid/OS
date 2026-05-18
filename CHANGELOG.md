@@ -2,14 +2,45 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`475`（76 根目录 + 406 内核模块）
-- H-L 总行数：`~158,200`
-- 内核模块：`406`
-- Shell 命令：`1660`
-- 最近完成功能迭代：`420`（cpufreq + hypervisor + vmx）
+- `.hl` 文件：`478`（76 根目录 + 409 内核模块）
+- H-L 总行数：`~158,600`
+- 内核模块：`409`
+- Shell 命令：`1681`
+- 最近完成功能迭代：`423`（package_manager + pkg_registry + pkg_build）
 - 当前阶段：第七阶段·生态完善（Phase 7）
 - **Milestone M4 已达成**（iter 405，完整 ML 推理框架）
 - **Milestone M5 已达成**（iter 420，生产级稳定性）
+
+## Iteration 423 — pkg_build.hl：H-L 构建系统
+
+- **`pkg_build.hl`**（Buffer: 0x1DE0000）：PB_MAX_TARGETS=16，PB_MAX_DEPS=8
+  - 状态：PB_PENDING=0 / PB_BUILDING=1 / PB_DONE=2 / PB_FAILED=3
+  - `pb_add_target(id)`：注册构建目标
+  - `pb_add_dep(target_id, dep_id)`：添加目标依赖（平铺数组 [target_idx*8+dep_i]）
+  - `pb_build(id)`：检查所有依赖已 DONE，否则返回 FAILED
+  - `pb_get_status(id)` / `pb_count()`
+  - 测试：target B 依赖 A → build B 先→FAILED；build A→DONE；build B→DONE；cnt=2 → PASS
+  - Shell：pb add/dep/build/status/count/test/init（7 命令）
+
+## Iteration 422 — pkg_registry.hl：软件包注册中心
+
+- **`pkg_registry.hl`**（Buffer: 0x1DD0000）：PR_MAX_ENTRIES=32
+  - `pr_register(pkg_id, version, size)`：注册/更新包（已存在则覆盖版本）
+  - `pr_lookup(pkg_id)`：查找索引（-1=未注册）
+  - `pr_get_version(pkg_id)` / `pr_get_size(pkg_id)` / `pr_count()`
+  - 测试：register(100,v3,128)+register(200,v1,64)→update(100,v4) → cnt=2 v100=3 s200=64 miss=-1 v100b=4 → PASS
+  - Shell：pr register/lookup/version/size/count/test/init（7 命令）
+
+## Iteration 421 — package_manager.hl：H-L 包管理器
+
+- **`package_manager.hl`**（Buffer: 0x1DC0000）：PM_MAX_PKGS=16
+  - 状态：PM_NONE=0 / PM_INSTALLED=1 / PM_REMOVED=2
+  - `pm_install(pkg_id, version)`：安装或升级包（已存在则更新版本+状态）
+  - `pm_remove(pkg_id)`：标记为 REMOVED（不释放槽位）
+  - `pm_get_version(pkg_id)`：已移除包返回 -1
+  - `pm_count_installed()`：统计 INSTALLED 状态包数
+  - 测试：install(10,v1)+install(20,v2)→remove(10) → cnt=2 v10=1 v20=2 cnt2=1 v10b=-1 → PASS
+  - Shell：pm install/remove/find/version/count/test/init（7 命令）
 
 ## Iteration 420 — vmx.hl：VMX/VT-x 硬件虚拟化（Milestone M5 ✦）
 

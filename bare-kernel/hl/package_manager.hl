@@ -1,0 +1,113 @@
+// package_manager.hl -- H-L Package Manager (Phase 7: 生态与自举完善, iter 421)
+// Buffer: 0x1DC0000
+// Manages installed H-L packages: install/remove/find/version queries
+// PM_MAX_PKGS=16; PM_NONE=0, PM_INSTALLED=1, PM_REMOVED=2
+// Shell: pm install/remove/find/version/count/test/init (7 commands)
+
+let PM_MAX_PKGS   = 16;
+let PM_NONE       = 0;
+let PM_INSTALLED  = 1;
+let PM_REMOVED    = 2;
+
+let pm_pkg_id     = array(16, 0);   // package IDs
+let pm_pkg_ver    = array(16, 0);   // package versions
+let pm_pkg_status = array(16, 0);   // PM_NONE/PM_INSTALLED/PM_REMOVED
+let pm_n_pkgs     = 0;
+
+fn pm_init() {
+    let i = 0;
+    while i < PM_MAX_PKGS {
+        set_at(pm_pkg_id,     i, 0);
+        set_at(pm_pkg_ver,    i, 0);
+        set_at(pm_pkg_status, i, PM_NONE);
+        i += 1;
+    }
+    pm_n_pkgs = 0;
+    return 0;
+}
+
+fn pm_find(pkg_id) {
+    let i = 0;
+    while i < pm_n_pkgs {
+        if pm_pkg_id[i] == pkg_id { return i; }
+        i += 1;
+    }
+    return 0 - 1;
+}
+
+fn pm_install(pkg_id, version) {
+    let idx = pm_find(pkg_id);
+    if idx >= 0 {
+        set_at(pm_pkg_ver,    idx, version);
+        set_at(pm_pkg_status, idx, PM_INSTALLED);
+        return idx;
+    }
+    if pm_n_pkgs >= PM_MAX_PKGS { return 0 - 1; }
+    let slot = pm_n_pkgs;
+    set_at(pm_pkg_id,     slot, pkg_id);
+    set_at(pm_pkg_ver,    slot, version);
+    set_at(pm_pkg_status, slot, PM_INSTALLED);
+    pm_n_pkgs += 1;
+    return slot;
+}
+
+fn pm_remove(pkg_id) {
+    let idx = pm_find(pkg_id);
+    if idx < 0 { return 0 - 1; }
+    set_at(pm_pkg_status, idx, PM_REMOVED);
+    return idx;
+}
+
+fn pm_get_version(pkg_id) {
+    let idx = pm_find(pkg_id);
+    if idx < 0 { return 0 - 1; }
+    if pm_pkg_status[idx] == PM_INSTALLED { return pm_pkg_ver[idx]; }
+    return 0 - 1;
+}
+
+fn pm_count_installed() {
+    let count = 0;
+    let i = 0;
+    while i < pm_n_pkgs {
+        if pm_pkg_status[i] == PM_INSTALLED { count += 1; }
+        i += 1;
+    }
+    return count;
+}
+
+fn pm_test() {
+    pm_init();
+    pm_install(10, 1);
+    pm_install(20, 2);
+
+    let cnt  = pm_count_installed();  // 2
+    let v10  = pm_get_version(10);    // 1
+    let v20  = pm_get_version(20);    // 2
+
+    pm_remove(10);
+    let cnt2 = pm_count_installed();  // 1
+    let v10b = pm_get_version(10);    // -1 (removed)
+
+    print("pm_test: cnt=" + to_string(cnt)
+          + " v10=" + to_string(v10)
+          + " v20=" + to_string(v20)
+          + " cnt2=" + to_string(cnt2)
+          + " v10b=" + to_string(v10b));
+
+    if cnt == 2 {
+        if v10 == 1 {
+            if v20 == 2 {
+                if cnt2 == 1 {
+                    if v10b == 0 - 1 {
+                        print("pm_test: PASS");
+                        return 1;
+                    }
+                }
+            }
+        }
+    }
+    print("pm_test: FAIL");
+    return 0;
+}
+
+print("package_manager.hl loaded");
