@@ -1,0 +1,132 @@
+// optimizer.hl -- SGD and Adam Optimizers (Phase 5: ML深化, iter 401)
+// Buffer: 0x1C80000
+// Fixed-point: values scaled by OP_SCALE=256
+// SGD:  param -= lr * grad / scale
+// Adam: m = beta1*m/scale + (scale-beta1)*g/scale
+//       v = beta2*v/scale + (scale-beta2)*g^2/scale^2
+//       param -= lr * m / (isqrt(v) + 1)
+// Defaults: lr=25(≈0.098), beta1=230(≈0.9), beta2=245(≈0.957)
+// OP_MAXPARAMS=16
+
+let OP_MAXPARAMS = 16;
+let OP_SCALE     = 256;
+
+let op_param  = array(16, 0);
+let op_grad   = array(16, 0);
+let op_m      = array(16, 0);   // Adam 1st moment (mean of gradients)
+let op_v      = array(16, 0);   // Adam 2nd moment (unscaled variance)
+let op_n_params = 0;
+
+let op_lr    = 25;    // learning rate in FP units
+let op_beta1 = 230;   // ≈ 0.9  in scale-256
+let op_beta2 = 245;   // ≈ 0.957 in scale-256
+let op_step  = 0;
+
+fn op_init() {
+    let i = 0;
+    while i < OP_MAXPARAMS {
+        set_at(op_param, i, 0);
+        set_at(op_grad,  i, 0);
+        set_at(op_m,     i, 0);
+        set_at(op_v,     i, 0);
+        i += 1;
+    }
+    op_n_params = 0;
+    op_lr    = 25;
+    op_beta1 = 230;
+    op_beta2 = 245;
+    op_step  = 0;
+    return 0;
+}
+
+fn op_set_param(id, val) { set_at(op_param, id, val); return 0; }
+fn op_set_grad(id, val)  { set_at(op_grad,  id, val); return 0; }
+fn op_get_param(id)      { return op_param[id]; }
+fn op_set_lr(val)        { op_lr = val; return 0; }
+
+fn _op_isqrt(x) {
+    if x <= 0 { return 0; }
+    let r = x;
+    let i = 0;
+    while i < 12 {
+        let r2 = (r + x / r) / 2;
+        if r2 >= r { return r; }
+        r = r2;
+        i += 1;
+    }
+    return r;
+}
+
+fn op_sgd_step() {
+    let i = 0;
+    while i < op_n_params {
+        let p = op_param[i] - op_lr * op_grad[i] / OP_SCALE;
+        set_at(op_param, i, p);
+        i += 1;
+    }
+    op_step += 1;
+    return op_param[0];
+}
+
+fn op_adam_step() {
+    let i = 0;
+    while i < op_n_params {
+        let g = op_grad[i];
+        // First moment: m = beta1*m/scale + (scale-beta1)*g/scale
+        let m_new = op_beta1 * op_m[i] / OP_SCALE + (OP_SCALE - op_beta1) * g / OP_SCALE;
+        // Second moment: v = beta2*v/scale + (scale-beta2)*g²/scale²
+        let v_new = op_beta2 * op_v[i] / OP_SCALE + (OP_SCALE - op_beta2) * g * g / OP_SCALE / OP_SCALE;
+        set_at(op_m, i, m_new);
+        set_at(op_v, i, v_new);
+        // param -= lr * m / (isqrt(v) + 1)
+        let update = op_lr * m_new / (_op_isqrt(v_new) + 1);
+        set_at(op_param, i, op_param[i] - update);
+        i += 1;
+    }
+    op_step += 1;
+    return op_param[0];
+}
+
+fn op_test() {
+    // SGD: param=256(=1.0), grad=128(=0.5), lr=25
+    // step: param = 256 - 25*128/256 = 256 - 12 = 244
+    op_init();
+    op_n_params = 1;
+    op_set_param(0, 256);
+    op_set_grad(0, 128);
+    let sgd_p = op_sgd_step();
+
+    // Adam: param=512, grad=256, zero moments
+    // m = (256-230)*256/256 = 26
+    // v = (256-245)*256*256/256/256 = 11
+    // isqrt(11) = 3
+    // update = 25*26/(3+1) = 650/4 = 162
+    // param = 512 - 162 = 350
+    op_init();
+    op_n_params = 1;
+    op_set_param(0, 512);
+    op_set_grad(0, 256);
+    let adam_p = op_adam_step();
+    let m0 = op_m[0];
+    let v0 = op_v[0];
+
+    print("op_test: sgd_p=" + to_string(sgd_p)
+          + " adam_p=" + to_string(adam_p)
+          + " m0=" + to_string(m0)
+          + " v0=" + to_string(v0));
+
+    if sgd_p == 244 {
+        if adam_p == 350 {
+            if m0 == 26 {
+                if v0 == 11 {
+                    print("op_test: PASS");
+                    return 1;
+                }
+            }
+        }
+    }
+    print("op_test: FAIL");
+    return 0;
+}
+
+print("optimizer.hl loaded");

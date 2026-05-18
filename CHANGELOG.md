@@ -2,13 +2,42 @@
 
 ## Current Snapshot
 
-- `.hl` 文件：`454`（76 根目录 + 385 内核模块）
-- H-L 总行数：`~153,000`
-- 内核模块：`385`
-- Shell 命令：`1513`
-- 最近完成功能迭代：`399`（pooling + rnn + lstm）
+- `.hl` 文件：`457`（76 根目录 + 388 内核模块）
+- H-L 总行数：`~153,800`
+- 内核模块：`388`
+- Shell 命令：`1534`
+- 最近完成功能迭代：`402`（autograd + optimizer + tokenizer）
 - 当前阶段：第五阶段·ML深化（Phase 5）
 - **Milestone M3 已达成**（iter 385，完整存储引擎）
+
+## Iteration 402 — tokenizer.hl：BPE 分词器
+
+- **`tokenizer.hl`**（Buffer: 0x1C90000）：TK_VOCAB_SIZE=64，基础字符 0-26（0=pad，1-26=a-z）
+  - `tk_vocab_a[id]` / `tk_vocab_b[id]`：词汇表条目（b=0 为基础字符，b>0 为合并对）
+  - `_tk_find_best_pair()`：O(n²) 扫描最高频相邻对，结果存入 tk_best_a/tk_best_b
+  - `_tk_apply_merge(a, b, new_id)`：就地替换所有 (a,b) 对为 new_id（via tk_new_buf）
+  - `tk_bpe_train(n_rounds)`：n 轮 BPE；cnt<2 时提前返回
+  - `tk_encode()`：重置工作缓冲区后逐轮应用合并规则直到无变化
+  - 测试："ababab"=[1,2,1,2,1,2]，2 轮 → vocab=29，tokens=[28,27] → PASS
+
+## Iteration 401 — optimizer.hl：SGD / Adam 优化器
+
+- **`optimizer.hl`**（Buffer: 0x1C80000）：OP_MAXPARAMS=16，OP_SCALE=256
+  - 默认：lr=25(≈0.098)，beta1=230(≈0.9)，beta2=245(≈0.957)
+  - `op_sgd_step()`：`param -= lr * grad / scale`
+  - `op_adam_step()`：更新一阶矩 m、二阶矩 v，`param -= lr*m / (isqrt(v)+1)`
+  - `_op_isqrt(x)`：Newton 迭代整数平方根（最多 12 次）
+  - 测试：SGD → 244；Adam(m=26, v=11, isqrt=3) → 350 → PASS
+
+## Iteration 400 — autograd.hl：反向模式自动微分
+
+- **`autograd.hl`**（Buffer: 0x1C70000）：AG_MAXNODES=32，AG_SCALE=256
+  - 节点类型：CONST/INPUT/ADD/MUL/RELU/TANH（0-5）
+  - `ag_const/ag_input/ag_add/ag_mul/ag_relu/ag_tanh_node`：构建计算图
+  - `ag_forward()`：按创建顺序正向计算所有节点值
+  - `ag_backward_from(loss_id)`：清零梯度 → 设 grad[loss]=1.0 → 反向传播
+  - MUL 反向：`grad[a] += g * val[b]/scale`；TANH 反向：`g * (SCALE - tanh²)/scale`
+  - 测试：d=a\*b+b (a=0.5,b=1.0) → vc=128 vd=384 grad_a=256 grad_b=384 → PASS
 
 ## Iteration 399 — lstm.hl：LSTM 门控循环单元
 

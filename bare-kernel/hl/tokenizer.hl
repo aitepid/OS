@@ -1,0 +1,221 @@
+// tokenizer.hl -- BPE (Byte Pair Encoding) Tokenizer (Phase 5: ML深化, iter 402)
+// Buffer: 0x1C90000
+// Vocabulary: TK_VOCAB_SIZE=64 entries; base chars 0-26 (0=pad,1=a..26=z)
+// tk_vocab_a[id]=left component, tk_vocab_b[id]=right (0=base char, >0=merge)
+// Training: tk_bpe_train(n_rounds) — find most frequent pair, merge, repeat
+// Encoding: tk_encode() — greedy left-to-right merge application
+
+let TK_VOCAB_SIZE = 64;
+let TK_MAXTEXT    = 64;
+
+// Vocabulary: first 27 entries are base chars (id=char code)
+let tk_vocab_a = array(64, 0);   // left part of token (char code or token id)
+let tk_vocab_b = array(64, 0);   // right part (0 = base char; >0 = merge right token)
+let tk_vocab_n = 27;             // 0..26 = base; merges start at 27
+
+// Input text and working buffers
+let tk_text     = array(64, 0);
+let tk_text_n   = 0;
+let tk_work     = array(64, 0);   // working token sequence for BPE
+let tk_work_n   = 0;
+let tk_new_buf  = array(64, 0);   // temp buffer for merge application
+
+// Encoded output
+let tk_tokens   = array(64, 0);
+let tk_token_n  = 0;
+
+// Best pair from _tk_find_best_pair()
+let tk_best_a = 0;
+let tk_best_b = 0;
+
+fn tk_init() {
+    let i = 0;
+    while i < TK_VOCAB_SIZE {
+        set_at(tk_vocab_a, i, i);
+        set_at(tk_vocab_b, i, 0);
+        i += 1;
+    }
+    tk_vocab_n = 27;
+    tk_text_n  = 0;
+    tk_work_n  = 0;
+    tk_token_n = 0;
+    return 0;
+}
+
+fn tk_set_text(idx, val) {
+    set_at(tk_text, idx, val);
+    return 0;
+}
+
+fn tk_set_text_len(n) {
+    tk_text_n = n;
+    return 0;
+}
+
+fn tk_get_token(i)  { return tk_tokens[i]; }
+fn tk_get_vocab_n() { return tk_vocab_n; }
+fn tk_get_token_n() { return tk_token_n; }
+
+fn _tk_find_best_pair() {
+    // O(n²): scan all adjacent pairs, return count of most frequent
+    let best_cnt = 0;
+    tk_best_a = 0 - 1;
+    tk_best_b = 0 - 1;
+    let i = 0;
+    while i < tk_work_n - 1 {
+        let a = tk_work[i];
+        let b = tk_work[i + 1];
+        let cnt = 0;
+        let j = 0;
+        while j < tk_work_n - 1 {
+            if tk_work[j] == a {
+                if tk_work[j + 1] == b { cnt += 1; }
+            }
+            j += 1;
+        }
+        if cnt > best_cnt {
+            best_cnt = cnt;
+            tk_best_a = a;
+            tk_best_b = b;
+        }
+        i += 1;
+    }
+    return best_cnt;
+}
+
+fn _tk_apply_merge(a, b, new_id) {
+    // Replace all adjacent (a, b) pairs in tk_work with new_id
+    let new_n = 0;
+    let i = 0;
+    while i < tk_work_n {
+        let merged = 0;
+        if i < tk_work_n - 1 {
+            if tk_work[i] == a {
+                if tk_work[i + 1] == b {
+                    set_at(tk_new_buf, new_n, new_id);
+                    new_n += 1;
+                    i += 2;
+                    merged = 1;
+                }
+            }
+        }
+        if merged == 0 {
+            set_at(tk_new_buf, new_n, tk_work[i]);
+            new_n += 1;
+            i += 1;
+        }
+    }
+    let k = 0;
+    while k < new_n {
+        set_at(tk_work, k, tk_new_buf[k]);
+        k += 1;
+    }
+    tk_work_n = new_n;
+    return new_n;
+}
+
+fn tk_bpe_train(n_rounds) {
+    // Initialize work buffer from text
+    let i = 0;
+    while i < tk_text_n {
+        set_at(tk_work, i, tk_text[i]);
+        i += 1;
+    }
+    tk_work_n = tk_text_n;
+
+    let round = 0;
+    while round < n_rounds {
+        let best_cnt = _tk_find_best_pair();
+        if best_cnt < 2 { return round; }
+
+        // Add merge to vocabulary
+        let new_id = tk_vocab_n;
+        set_at(tk_vocab_a, new_id, tk_best_a);
+        set_at(tk_vocab_b, new_id, tk_best_b);
+        tk_vocab_n += 1;
+
+        _tk_apply_merge(tk_best_a, tk_best_b, new_id);
+        round += 1;
+    }
+    return n_rounds;
+}
+
+fn tk_encode() {
+    // Reset work buffer from original text
+    let i = 0;
+    while i < tk_text_n {
+        set_at(tk_work, i, tk_text[i]);
+        i += 1;
+    }
+    tk_work_n = tk_text_n;
+
+    // Repeatedly apply all merge rules until no change
+    let changed = 1;
+    while changed == 1 {
+        changed = 0;
+        let m = 27;
+        while m < tk_vocab_n {
+            let b = tk_vocab_b[m];
+            if b > 0 {
+                let prev_n = tk_work_n;
+                _tk_apply_merge(tk_vocab_a[m], b, m);
+                if tk_work_n < prev_n { changed = 1; }
+            }
+            m += 1;
+        }
+    }
+
+    i = 0;
+    while i < tk_work_n {
+        set_at(tk_tokens, i, tk_work[i]);
+        i += 1;
+    }
+    tk_token_n = tk_work_n;
+    return tk_token_n;
+}
+
+fn tk_test() {
+    tk_init();
+
+    // Text: [1,2,1,2,1,2] = "ababab" (a=1, b=2)
+    tk_set_text(0, 1); tk_set_text(1, 2);
+    tk_set_text(2, 1); tk_set_text(3, 2);
+    tk_set_text(4, 1); tk_set_text(5, 2);
+    tk_set_text_len(6);
+
+    // BPE round 1: best pair=(1,2) cnt=3 → vocab[27]=(1,2), work=[27,27,27]
+    // BPE round 2: best pair=(27,27) cnt=2 → vocab[28]=(27,27), work=[28,27]
+    let rounds = tk_bpe_train(2);
+    let vocab_n = tk_get_vocab_n();
+
+    // Encode: work=[1,2,1,2,1,2]
+    //   Apply m=27 (1,2)→27: [27,27,27]
+    //   Apply m=28 (27,27)→28: [28,27]
+    //   No more changes → token_n=2
+    let n  = tk_encode();
+    let t0 = tk_get_token(0);
+    let t1 = tk_get_token(1);
+
+    print("tk_test: rounds=" + to_string(rounds)
+          + " vocab_n=" + to_string(vocab_n)
+          + " n=" + to_string(n)
+          + " t0=" + to_string(t0)
+          + " t1=" + to_string(t1));
+
+    if rounds == 2 {
+        if vocab_n == 29 {
+            if n == 2 {
+                if t0 == 28 {
+                    if t1 == 27 {
+                        print("tk_test: PASS");
+                        return 1;
+                    }
+                }
+            }
+        }
+    }
+    print("tk_test: FAIL");
+    return 0;
+}
+
+print("tokenizer.hl loaded");

@@ -294,13 +294,16 @@ fn shell_handle(cmd) {
         serial_print("Pooling:       pool init  pool test  pool set <r> <c> <ch> <v>  pool get <r> <c> <ch>  pool max <in_ch> <psz> <str>  pool avg <in_ch> <psz> <str>  pool info");
         serial_print("RNN:           rnn init  rnn test  rnn wxh <i> <j> <v>  rnn whh <i> <j> <v>  rnn input <i> <v>  rnn step  rnn hidden <j>");
         serial_print("LSTM:          lstm init  lstm test  lstm wxi <i> <j> <v>  lstm wxg <i> <j> <v>  lstm input <i> <v>  lstm step  lstm hidden <j>");
+        serial_print("Autograd:      ag init  ag test  ag const <v>  ag add <a> <b>  ag mul <a> <b>  ag run <loss_id>  ag grad <id>");
+        serial_print("Optimizer:     op init  op test  op set <id> <v>  op setgrad <id> <v>  op sgd  op adam  op get <id>");
+        serial_print("Tokenizer:     tk init  tk test  tk char <idx> <v>  tk textlen <n>  tk train <rounds>  tk encode  tk token <idx>");
         serial_print("Pipe:     cmd1 | grep <pat>   cmd1 | wc   cmd1 | head   cmd1 | tail");
         serial_print("Debug:    hilbert dmesg trace panic rand history");
         return "";
     }
 
     if cmd == "ver" {
-        return "HicOS 6.0 -- Hilbert-Lang Kernel (385 modules, pure H-L, zero deps)";
+        return "HicOS 6.0 -- Hilbert-Lang Kernel (388 modules, pure H-L, zero deps)";
     }
 
     if cmd == "uptime" {
@@ -7613,6 +7616,99 @@ fn shell_handle_ext(cmd) {
         let lmhid = to_int(str_sub(cmd, 12, len(cmd)));
         return "lstm: hidden[" + to_string(lmhid) + "]=" + to_string(lm_get_hidden(lmhid));
     }
+
+    // --- Autograd ---
+    if cmd == "ag init" { ag_init(); return "ag: init"; }
+    if cmd == "ag test" { let agr = ag_test(); return "ag: " + to_string(agr); }
+    if _starts_with(cmd, "ag const ") {
+        let agcv = to_int(str_sub(cmd, 9, len(cmd)));
+        let agci = ag_const(agcv);
+        return "ag: node=" + to_string(agci);
+    }
+    if _starts_with(cmd, "ag add ") {
+        let agaa  = str_sub(cmd, 7, len(cmd));
+        let agas0 = _find_space(agaa);
+        let agaa0 = to_int(str_sub(agaa, 0, agas0));
+        let agab0 = to_int(str_sub(agaa, agas0 + 1, len(agaa)));
+        let agaid = ag_add(agaa0, agab0);
+        return "ag: node=" + to_string(agaid);
+    }
+    if _starts_with(cmd, "ag mul ") {
+        let agma  = str_sub(cmd, 7, len(cmd));
+        let agms0 = _find_space(agma);
+        let agma0 = to_int(str_sub(agma, 0, agms0));
+        let agmb0 = to_int(str_sub(agma, agms0 + 1, len(agma)));
+        let agmid = ag_mul(agma0, agmb0);
+        return "ag: node=" + to_string(agmid);
+    }
+    if cmd == "ag forward" { let agfn = ag_forward(); return "ag: nodes=" + to_string(agfn); }
+    if _starts_with(cmd, "ag run ") {
+        let aglid = to_int(str_sub(cmd, 7, len(cmd)));
+        ag_forward();
+        ag_backward_from(aglid);
+        return "ag: val=" + to_string(ag_get_val(aglid)) + " grad_done";
+    }
+    if _starts_with(cmd, "ag grad ") {
+        let aggid = to_int(str_sub(cmd, 8, len(cmd)));
+        return "ag: grad[" + to_string(aggid) + "]=" + to_string(ag_get_grad(aggid));
+    }
+
+    // --- Optimizer ---
+    if cmd == "op init" { op_init(); return "op: init"; }
+    if cmd == "op test" { let opr = op_test(); return "op: " + to_string(opr); }
+    if _starts_with(cmd, "op set ") {
+        let opsa  = str_sub(cmd, 7, len(cmd));
+        let opss0 = _find_space(opsa);
+        let opsi  = to_int(str_sub(opsa, 0, opss0));
+        let opsv  = to_int(str_sub(opsa, opss0 + 1, len(opsa)));
+        op_set_param(opsi, opsv);
+        if opsi >= op_n_params { op_n_params = opsi + 1; }
+        return "op: param set";
+    }
+    if _starts_with(cmd, "op setgrad ") {
+        let opga  = str_sub(cmd, 11, len(cmd));
+        let opgs0 = _find_space(opga);
+        let opgi  = to_int(str_sub(opga, 0, opgs0));
+        let opgv  = to_int(str_sub(opga, opgs0 + 1, len(opga)));
+        op_set_grad(opgi, opgv);
+        return "op: grad set";
+    }
+    if cmd == "op sgd"  { let opsp = op_sgd_step();  return "op: param[0]=" + to_string(opsp); }
+    if cmd == "op adam" { let opap = op_adam_step(); return "op: param[0]=" + to_string(opap); }
+    if _starts_with(cmd, "op get ") {
+        let opgid = to_int(str_sub(cmd, 7, len(cmd)));
+        return "op: param[" + to_string(opgid) + "]=" + to_string(op_get_param(opgid));
+    }
+
+    // --- Tokenizer ---
+    if cmd == "tk init" { tk_init(); return "tk: init"; }
+    if cmd == "tk test" { let tkr = tk_test(); return "tk: " + to_string(tkr); }
+    if _starts_with(cmd, "tk char ") {
+        let tkca  = str_sub(cmd, 8, len(cmd));
+        let tkcs0 = _find_space(tkca);
+        let tkci  = to_int(str_sub(tkca, 0, tkcs0));
+        let tkcv  = to_int(str_sub(tkca, tkcs0 + 1, len(tkca)));
+        tk_set_text(tkci, tkcv);
+        return "tk: text set";
+    }
+    if _starts_with(cmd, "tk textlen ") {
+        let tkln = to_int(str_sub(cmd, 11, len(cmd)));
+        tk_set_text_len(tkln);
+        return "tk: text_len=" + to_string(tkln);
+    }
+    if _starts_with(cmd, "tk train ") {
+        let tktr  = to_int(str_sub(cmd, 9, len(cmd)));
+        let tktrd = tk_bpe_train(tktr);
+        return "tk: rounds=" + to_string(tktrd) + " vocab=" + to_string(tk_get_vocab_n());
+    }
+    if cmd == "tk encode" {
+        let tken = tk_encode();
+        return "tk: tokens=" + to_string(tken);
+    }
+    if _starts_with(cmd, "tk token ") {
+        let tktid = to_int(str_sub(cmd, 9, len(cmd)));
+        return "tk: token[" + to_string(tktid) + "]=" + to_string(tk_get_token(tktid));
+    }
 }
 
 // Self-test
@@ -7623,7 +7719,7 @@ print(shell_handle("hilbert"));
 print(shell_handle("fib 10"));
 print(shell_handle("ps"));
 print(shell_handle_ext("whoami"));
-print("shell.hl loaded -- 1513 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld + lca + virtualtree + dominator + sam + manacher + eertree + bwt + lyndon + zfunction + ir + regalloc + codegen + ioring + persistseg + rollbackdsu + splaytree + mo + sqrtdecomp + cht + matrixexpo + numtheory + strhash + intervaldp + gametheory + trie + lichao + dcdp + monoqueue + segbeats + lct + quickselect + ntt + segmerge + palindromedp + knuthdp + bitset + millerrabin + pollardrho + linearbasis + geometry2d + rotcalip + halfplane + dinic + blockcuttree + bridgetree + polyinv + polylnexp + polysqrt + bitmaskdp + digitdp + brokenprofiledp + wavelettree + implicittreap + chtholly + suffixtree + bsgs + minencircle + gvn + licm + dce2 + linearscandra + regcoalesce + callingconv + typeinfer + typechecker + generics + linkerelf + linkerar + dynlinker + dwarf + perfcounter + jitstub + btree + btreeplus + lsmmemtable + wal + mvcc + transaction + indexhash + indexbtree + queryplan + dbengine + wireguard + tls13 + http3quic + doh + dht + bittorrent + opentelemetry + prometheus + grpc_stream + websocket_compression + conv2d + pooling + rnn + lstm");
+print("shell.hl loaded -- 1534 commands + pipe(|) + echo>redirect + inotify + pty + audio + aus + gpu + cp/mv + ns + seccomp + ctr + clipboard + overlay + httpd + calc + paint + json + ws + telnet + regex + browse + smtp + cron + imgview + ntp + tar + hexedit + pop3 + irc + cal + compress + sqlite + diff + clock + base64 + ini + profiler + csv + ping + taskman + traceroute + sem + notepad + imap + mqtt + lz4 + ftp + cbor + syslogd + cpio + qp + uu + asn1 + pem + jwt + bmp + gif + wav + base32 + hex + url + crc + md5 + sha1 + hmac + pbkdf2 + uuid + rle + rss + ldap + aes + huffman + radius + sha256 + dhcpsrv + sip + bcrypt + rtsp + stun + rtp + socks + zlib + lzma + protobuf + chacha20 + rsa + ed25519 + avro + bzip2 + scrypt + blake2 + snappy + argon2 + poly1305 + xxhash + siphash + zstd + brotli + sm3 + sm4 + curve25519 + aesgcm + cp1305 + x509 + grpc + png + http2 + jpeg + raft + gossip + matrix + neural + attention + bloom + crdt + skiplist + hll + chash + cms + lru + merkle + tdigest + wavelet + reservoir + fenwick + segtree + cuckoo + dsu + treap + suffixarray + ahocorasick + kmp + intervaltree + sparsetable + binaryheap + kdtree + leftistheap + lcs + convexhull + dijkstra + toposort + bellmanford + prim + kruskal + floydwarshall + astar + maxflow + bipartitematch + tarjanscc + articulation + eulerpath + 2sat + hungarian + hopcroftcarp + mincostflow + centroid + hld + lca + virtualtree + dominator + sam + manacher + eertree + bwt + lyndon + zfunction + ir + regalloc + codegen + ioring + persistseg + rollbackdsu + splaytree + mo + sqrtdecomp + cht + matrixexpo + numtheory + strhash + intervaldp + gametheory + trie + lichao + dcdp + monoqueue + segbeats + lct + quickselect + ntt + segmerge + palindromedp + knuthdp + bitset + millerrabin + pollardrho + linearbasis + geometry2d + rotcalip + halfplane + dinic + blockcuttree + bridgetree + polyinv + polylnexp + polysqrt + bitmaskdp + digitdp + brokenprofiledp + wavelettree + implicittreap + chtholly + suffixtree + bsgs + minencircle + gvn + licm + dce2 + linearscandra + regcoalesce + callingconv + typeinfer + typechecker + generics + linkerelf + linkerar + dynlinker + dwarf + perfcounter + jitstub + btree + btreeplus + lsmmemtable + wal + mvcc + transaction + indexhash + indexbtree + queryplan + dbengine + wireguard + tls13 + http3quic + doh + dht + bittorrent + opentelemetry + prometheus + grpc_stream + websocket_compression + conv2d + pooling + rnn + lstm + autograd + optimizer + tokenizer");
 
 // Main shell loop (called from kernel_init)
 
