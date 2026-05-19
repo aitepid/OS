@@ -77,7 +77,7 @@ fn _ke_has_cpu_err(vec) {
 fn _ke_putc(ch) {
     let cap_flag = mem_read_u64(3608576);  // PIPE_CAP_FLAG_ADDR = 0x371000
     if cap_flag == 1 {
-        let pos = mem_read_u64(3608584);  // PIPE_CAP_POS_ADDR = 0x371008
+        let mut pos = mem_read_u64(3608584);  // PIPE_CAP_POS_ADDR = 0x371008
         if pos < 4096 {
             mem_write_u8(3604480 + pos, ch);  // PIPE_CAP_BUF = 0x370000
             mem_write_u64(3608584, pos + 1);
@@ -407,7 +407,7 @@ fn _ke_idt_build() {
 // PCI config space via I/O ports 0xCF8 (address) / 0xCFC (data)
 
 fn _ke_pci_read32(bus, dev, func, offset) {
-    let addr = 2147483648       // bit 31 = enable (0x80000000)
+    let mut addr = 2147483648       // bit 31 = enable (0x80000000)
              + bus * 65536      // bits 23:16
              + dev * 2048       // bits 15:11
              + func * 256       // bits 10:8
@@ -438,7 +438,7 @@ fn _ke_pci_subclass(bus, dev, func) {
 
 // Print hex nibble (0-F) via serial
 fn _ke_put_hex4(val) {
-    let n = val % 16;
+    let mut n = val % 16;
     if n < 10 {
         _ke_putc(48 + n);      // '0'-'9'
     } else {
@@ -508,7 +508,7 @@ fn _ke_pci_scan() {
 
 fn _ke_pa_init() {
     let bm = 4194304;           // 0x400000: bitmap addr
-    let total = 32768;          // 128MB / 4KB = 32768 pages
+    let mut total = 32768;          // 128MB / 4KB = 32768 pages
     let bm_bytes = 4096;        // 32768 / 8 = 4096 bytes
     let reserved = 1536;        // pages 0..1535 reserved
 
@@ -534,7 +534,7 @@ fn _ke_pa_init() {
 // Allocate one 4KB page, return physical address or 0
 fn _ke_pa_alloc() {
     let bm = 4194304;
-    let total = mem_read_u32(4198396);  // read total from 0x400FFC
+    let mut total = mem_read_u32(4198396);  // read total from 0x400FFC
     let mut page = 1536;                // start at first free page
     while page < total {
         let bidx = page / 8;
@@ -560,7 +560,7 @@ fn _ke_pa_alloc() {
 // Allocate N contiguous pages, return base physical address or 0
 fn _ke_pa_alloc_n(count) {
     let bm = 4194304;
-    let total = mem_read_u32(4198396);
+    let mut total = mem_read_u32(4198396);
     let mut start = 1536;
     while start + count <= total {
         let mut ok = 1;
@@ -605,7 +605,7 @@ fn _ke_pa_alloc_n(count) {
 fn _ke_pa_free(addr) {
     let page = addr / 4096;
     if page < 1536 { return 0; }
-    let total = mem_read_u32(4198396);
+    let mut total = mem_read_u32(4198396);
     if page >= total { return 0; }
     let bm = 4194304;
     let bidx = page / 8;
@@ -630,7 +630,7 @@ fn _ke_pa_free_count() {
 
 // Print memory status
 fn _ke_cmd_pmem() {
-    let total = mem_read_u32(4198396);
+    let mut total = mem_read_u32(4198396);
     let free = mem_read_u32(4198392);
     let used = total - free;
     // "MEM: T=NNNNN F=NNNNN U=NNNNN\r\n"
@@ -681,7 +681,7 @@ fn _ke_put_dec(val) {
 // Command: palloc N — allocate N pages, show address
 fn _ke_cmd_palloc(n) {
     if n < 1 { n = 1; }
-    let addr = 0;
+    let mut addr = 0;
     if n == 1 {
         addr = _ke_pa_alloc();
     } else {
@@ -704,7 +704,7 @@ fn _ke_cmd_palloc(n) {
 
 // Command: pfree ADDR — free page (hex addr parsed from 2nd char onward)
 fn _ke_cmd_pfree(addr) {
-    let result = _ke_pa_free(addr);
+    let mut result = _ke_pa_free(addr);
     if result == 1 {
         _ke_putc(79); _ke_putc(75); _ke_putc(13); _ke_putc(10);
     } else {
@@ -828,7 +828,7 @@ fn _ke_kfree(ptr) {
 // Command: malloc N — allocate N bytes
 fn _ke_cmd_malloc(size) {
     if size < 1 { size = 64; }
-    let ptr = _ke_kmalloc(size);
+    let mut ptr = _ke_kmalloc(size);
     if ptr == 0 {
         _ke_putc(79); _ke_putc(79); _ke_putc(77); _ke_putc(13); _ke_putc(10);
     } else {
@@ -848,11 +848,11 @@ fn _ke_cmd_malloc(size) {
 
 // Command: mfree — free last malloc'd block
 fn _ke_cmd_mfree() {
-    let ptr = mem_read_u64(3211336);  // 0x310048
+    let mut ptr = mem_read_u64(3211336);  // 0x310048
     if ptr == 0 {
         _ke_putc(69); _ke_putc(82); _ke_putc(82); _ke_putc(13); _ke_putc(10);
     } else {
-        let result = _ke_kfree(ptr);
+        let mut result = _ke_kfree(ptr);
         mem_write_u64(3211336, 0);
         if result == 1 {
             _ke_putc(79); _ke_putc(75); _ke_putc(13); _ke_putc(10);
@@ -899,11 +899,11 @@ fn _ke_task_init() {
 // Create a new task (returns tid or -1)
 fn _ke_task_create(entry, name_ch) {
     let tbl = 3276800;
-    let count = mem_read_u64(3277832);
+    let mut count = mem_read_u64(3277832);
     if count >= 16 { return 0; }
 
     let tid = count;
-    let base = tbl + tid * 64;
+    let mut base = tbl + tid * 64;
 
     // Allocate 4KB stack
     let stack = _ke_pa_alloc();
@@ -923,8 +923,8 @@ fn _ke_task_create(entry, name_ch) {
 // Command: ps — show task list (with signal pending count)
 fn _ke_cmd_ps() {
     let tbl = 3276800;
-    let count = mem_read_u64(3277832);
-    let cur = mem_read_u64(3277828);
+    let mut count = mem_read_u64(3277832);
+    let mut cur = mem_read_u64(3277828);
     // "PID ST VRT  SIG NAME\r\n"
     _ke_putc(80); _ke_putc(73); _ke_putc(68); _ke_putc(32);
     _ke_putc(83); _ke_putc(84); _ke_putc(32);
@@ -935,8 +935,8 @@ fn _ke_cmd_ps() {
 
     let mut tid = 0;
     while tid < count {
-        let base = tbl + tid * 64;
-        let state = mem_read_u64(base);
+        let mut base = tbl + tid * 64;
+        let mut state = mem_read_u64(base);
         if state > 0 {
             // TID
             _ke_put_dec(tid); _ke_putc(32); _ke_putc(32); _ke_putc(32);
@@ -1100,8 +1100,8 @@ fn _ke_ip_cksum(addr) {
     let mut sum = 0;
     let mut i = 0;
     while i < 20 {
-        let hi = mem_read_u8(addr + i);
-        let lo = mem_read_u8(addr + i + 1);
+        let mut hi = mem_read_u8(addr + i);
+        let mut lo = mem_read_u8(addr + i + 1);
         sum = sum + hi * 256 + lo;
         i = i + 2;
     }
@@ -1236,7 +1236,7 @@ fn _ke_cmd_tcptest() {
 
 fn _ke_cmd_wget() {
     let tcb = 8388608;
-    let state = mem_read_u64(tcb);
+    let mut state = mem_read_u64(tcb);
 
     if state != 4 {
         // Not ESTABLISHED — run tcptest first
@@ -1443,7 +1443,7 @@ fn _ke_cmd_mouse() {
 
 // Helper: store 16 bytes of glyph data for one character
 fn _ke_fc(ch, v0, v1, v2, v3) {
-    let addr = 3211520 + (ch - 32) * 16;
+    let mut addr = 3211520 + (ch - 32) * 16;
     _ke_mem_w32(addr, v0);
     _ke_mem_w32(addr + 4, v1);
     _ke_mem_w32(addr + 8, v2);
@@ -1453,7 +1453,7 @@ fn _ke_fc(ch, v0, v1, v2, v3) {
 
 // Initialize 8x16 VGA bitmap font (ASCII 32-126) at 0x310100
 fn _ke_font_init() {
-    let b = 3211520;
+    let mut b = 3211520;
     let mut i = 0;
     while i < 1520 { mem_write_u8(b + i, 0); i = i + 1; }
     // 33-47: punctuation
@@ -1572,7 +1572,7 @@ fn _ke_vesa_draw_char(px, py, ch, fg, bg) {
         let mut col = 0;
         while col < 8 {
             let paddr = fb + (py + row) * 4096 + (px + col) * 4;
-            let shift = 7 - col;
+            let mut shift = 7 - col;
             let mut mask = 1;
             let mut si = 0;
             while si < shift { mask = mask * 2; si = si + 1; }
@@ -1590,7 +1590,7 @@ fn _ke_vesa_draw_char(px, py, ch, fg, bg) {
 fn _ke_cmd_gfxtest() {
     let fg = 16777215;
     let bg = 64;
-    let y = 100;
+    let mut y = 100;
     let mut x = 100;
     _ke_vesa_draw_char(x, y, 72, fg, bg); x = x + 8;
     _ke_vesa_draw_char(x, y, 105, fg, bg); x = x + 8;
@@ -1634,10 +1634,10 @@ fn _ke_wm_draw_cursor(cx, cy) {
     let fb = 4244635648;
     let mut i = 0;
     while i < 10 {
-        let w = i / 2 + 1;
+        let mut w = i / 2 + 1;
         let mut j = 0;
         while j < w {
-            let addr = fb + (cy + i) * 4096 + (cx + j) * 4;
+            let mut addr = fb + (cy + i) * 4096 + (cx + j) * 4;
             if j == 0 { _ke_mem_w32(addr, 0); }
             if j > 0 { _ke_mem_w32(addr, 16777215); }
             if j == w - 1 { _ke_mem_w32(addr, 0); }
@@ -1730,7 +1730,7 @@ fn _ke_lapic_w(off, val) {
 
 // Build AP trampoline at 0x8000 (real→PM→LM, signals via 0x300040)
 fn _ke_smp_trampoline() {
-    let t = 32768;
+    let mut t = 32768;
     let mut i = 0;
     while i < 256 { mem_write_u8(t + i, 0); i = i + 1; }
 
@@ -1843,7 +1843,7 @@ fn _ke_cmd_smp() {
     _ke_put_dec(apic_id);
     _ke_putc(13); _ke_putc(10);
     let ap_count = _ke_smp_boot();
-    let total = 1 + ap_count;
+    let mut total = 1 + ap_count;
     // "CPUs: N online\r\n"
     _ke_putc(67); _ke_putc(80); _ke_putc(85); _ke_putc(115);
     _ke_putc(58); _ke_putc(32);
@@ -1897,7 +1897,7 @@ fn _ke_cmd_ahci() {
     let mut ahci_devid = 0;
     let mut d = 0;
     while d < 32 {
-        let v = _ke_pci_vendor(0, d, 0);
+        let mut v = _ke_pci_vendor(0, d, 0);
         if v != 65535 {
             let cls = _ke_pci_class(0, d, 0);
             let sub = _ke_pci_subclass(0, d, 0);
@@ -2016,7 +2016,7 @@ fn _ke_cmd_usb() {
     let mut usb_devid = 0;
     let mut d = 0;
     while d < 32 {
-        let v = _ke_pci_vendor(0, d, 0);
+        let mut v = _ke_pci_vendor(0, d, 0);
         if v != 65535 {
             let cls = _ke_pci_class(0, d, 0);
             let sub = _ke_pci_subclass(0, d, 0);
@@ -2116,7 +2116,7 @@ fn _ke_acpi_find_rsdp() {
     // Scan 0xE0000 - 0xFFFFF (128 KB) at 16-byte boundaries
     let mut addr = 917504;
     while addr < 1048576 {
-        let lo = mem_read_u64(addr);
+        let mut lo = mem_read_u64(addr);
         // "RSD PTR " in little-endian: 0x2052545020445352
         // = 32+82*256+... too complex, check bytes instead
         let b0 = mem_read_u8(addr);
@@ -2245,7 +2245,7 @@ fn _ke_cmd_acpi() {
 
 // Write 32 bits to PCI config space
 fn _ke_pci_write32(bus, dev, func, offset, val) {
-    let addr = 2147483648 + bus * 65536 + dev * 2048 + func * 256 + (offset / 4) * 4;
+    let mut addr = 2147483648 + bus * 65536 + dev * 2048 + func * 256 + (offset / 4) * 4;
     port_out_u32(3320, addr);
     port_out_u32(3324, val);
     return 0;
@@ -2395,7 +2395,7 @@ fn _ke_cmd_time() {
     // Wait for update-in-progress to clear (Status Register A bit 7)
     let mut timeout = 10000;
     while timeout > 0 {
-        let a = _ke_rtc_read(10);
+        let mut a = _ke_rtc_read(10);
         if (a / 128) % 2 == 0 { timeout = 0; }
         else { timeout = timeout - 1; }
     }
@@ -2408,7 +2408,7 @@ fn _ke_cmd_time() {
     let raw_year = _ke_rtc_read(9);
 
     let sec = _ke_bcd2bin(raw_sec);
-    let min = _ke_bcd2bin(raw_min);
+    let mut min = _ke_bcd2bin(raw_min);
     let hour = _ke_bcd2bin(raw_hour);
     let day = _ke_bcd2bin(raw_day);
     let month = _ke_bcd2bin(raw_month);
@@ -2444,8 +2444,8 @@ fn _ke_cmd_time() {
 
 // Read 16-bit little-endian from memory
 fn _ke_mem_r16(addr) {
-    let lo = mem_read_u8(addr);
-    let hi = mem_read_u8(addr + 1);
+    let mut lo = mem_read_u8(addr);
+    let mut hi = mem_read_u8(addr + 1);
     return hi * 256 + lo;
 }
 
@@ -2571,7 +2571,7 @@ fn _ke_virtio_blk_read(sector) {
     let old_used = _ke_mem_r16(used_base + 2);
     let mut timeout = 10000000;
     while timeout > 0 {
-        let cur = _ke_mem_r16(used_base + 2);
+        let mut cur = _ke_mem_r16(used_base + 2);
         if cur != old_used { return mem_read_u8(status); }
         timeout = timeout - 1;
     }
@@ -2607,14 +2607,14 @@ fn _ke_cmd_disk() {
     _ke_putc(13); _ke_putc(10);
 
     // Read sector 0
-    let result = _ke_virtio_blk_read(0);
+    let mut result = _ke_virtio_blk_read(0);
     if result == 0 {
         // "Sect0: " + first 16 bytes hex
         _ke_putc(83); _ke_putc(48); _ke_putc(58); _ke_putc(32);
         let data = 9576704;  // 0x922100
         let mut i = 0;
         while i < 16 {
-            let b = mem_read_u8(data + i);
+            let mut b = mem_read_u8(data + i);
             _ke_put_hex4(b / 16); _ke_put_hex4(b);
             _ke_putc(32);
             i = i + 1;
@@ -2749,7 +2749,7 @@ fn _ke_virtio_blk_write(sector) {
     let old_used = _ke_mem_r16(used_base + 2);
     let mut timeout = 10000000;
     while timeout > 0 {
-        let cur = _ke_mem_r16(used_base + 2);
+        let mut cur = _ke_mem_r16(used_base + 2);
         if cur != old_used { return mem_read_u8(status); }
         timeout = timeout - 1;
     }
@@ -2864,12 +2864,12 @@ fn _ke_cmd_ls() {
     let mut sect = 132;  // root dir start
 
     while sect < 164 {
-        let result = _ke_virtio_blk_read(sect);
+        let mut result = _ke_virtio_blk_read(sect);
         if result != 0 { sect = 164; } else {
             // Parse 16 entries per sector
             let mut e = 0;
             while e < 16 {
-                let off = data + e * 32;
+                let mut off = data + e * 32;
                 let b0 = mem_read_u8(off);
                 // End of directory
                 if b0 == 0 { e = 16; sect = 163; }
@@ -2959,7 +2959,7 @@ fn _ke_parse_83name(addr, length) {
     if dot_pos < length {
         i = 0;
         while i < 3 {
-            let pos = dot_pos + 1 + i;
+            let mut pos = dot_pos + 1 + i;
             if pos < length {
                 let mut ch = mem_read_u8(addr + pos);
                 if ch >= 97 { if ch <= 122 { ch = ch - 32; } }
@@ -3071,7 +3071,7 @@ fn _ke_cmd_mkfile(buf_addr, buf_len) {
             let mut de = 0;
             while de < 16 {
                 if wrote_dir == 0 {
-                    let off = data + de * 32;
+                    let mut off = data + de * 32;
                     let b0 = mem_read_u8(off);
                     if b0 == 0 {
                         // Write 8.3 name
@@ -3150,7 +3150,7 @@ fn _ke_cmd_cat(buf_addr, buf_len) {
             let mut de = 0;
             while de < 16 {
                 if found_cluster == 0 {
-                    let off = data + de * 32;
+                    let mut off = data + de * 32;
                     let b0 = mem_read_u8(off);
                     if b0 != 0 {
                         if b0 != 229 {
@@ -3230,7 +3230,7 @@ fn _ke_cmd_cat(buf_addr, buf_len) {
 // Supported syntax:
 //   print("string literal");
 //   print(integer);
-//   let x = expr;   (x stored in variable table)
+//   let mut x = expr;   (x stored in variable table)
 //   print(x);       (variable lookup)
 //   Expressions: number, +, -, *, /
 //
@@ -3253,7 +3253,7 @@ fn _ke_load_file(fname_addr, fname_len) {
             let mut de = 0;
             while de < 16 {
                 if found_cluster == 0 {
-                    let off = data + de * 32;
+                    let mut off = data + de * 32;
                     let b0 = mem_read_u8(off);
                     if b0 != 0 { if b0 != 229 {
                         let attr = mem_read_u8(off + 11);
@@ -3394,7 +3394,7 @@ fn _ke_eval_expr(fbuf, pos, limit) {
     // Number literal
     if ch >= 48 { if ch <= 57 {
         while pos < limit {
-            let d = mem_read_u8(fbuf + pos);
+            let mut d = mem_read_u8(fbuf + pos);
             if d >= 48 { if d <= 57 { val = val * 10 + d - 48; pos = pos + 1; }
             else { pos = limit + 1; } }
             else { pos = limit + 1; }
@@ -3405,7 +3405,7 @@ fn _ke_eval_expr(fbuf, pos, limit) {
     else if ch >= 97 { if ch <= 122 {
         let var_start = pos;
         while pos < limit {
-            let d = mem_read_u8(fbuf + pos);
+            let mut d = mem_read_u8(fbuf + pos);
             if d >= 97 { if d <= 122 { pos = pos + 1; } else { pos = limit + 1; } }
             else if d >= 48 { if d <= 57 { pos = pos + 1; } else { pos = limit + 1; } }
             else if d == 95 { pos = pos + 1; }
@@ -3497,7 +3497,7 @@ fn _ke_cmd_run(buf_addr, buf_len) {
 
                     if is_print == 1 {
                         pos = pos + 6;
-                        let next = mem_read_u8(fbuf + pos);
+                        let mut next = mem_read_u8(fbuf + pos);
                         // print("string")
                         if next == 34 {
                             pos = pos + 1;
@@ -3520,7 +3520,7 @@ fn _ke_cmd_run(buf_addr, buf_len) {
                                 else { end = end + 1; }
                             }
                             if end > fsize { end = end - fsize - 1 + fsize; }
-                            let val = _ke_eval_expr(fbuf, pos, end);
+                            let mut val = _ke_eval_expr(fbuf, pos, end);
                             _ke_put_dec(val);
                             _ke_putc(13); _ke_putc(10);
                             pos = end + 1;
@@ -3561,7 +3561,7 @@ fn _ke_cmd_run(buf_addr, buf_len) {
                         // Parse variable name
                         let vname_start = pos;
                         while pos < fsize {
-                            let d = mem_read_u8(fbuf + pos);
+                            let mut d = mem_read_u8(fbuf + pos);
                             if d >= 97 { if d <= 122 { pos = pos + 1; } else { pos = fsize + 1; } }
                             else if d >= 48 { if d <= 57 { pos = pos + 1; } else { pos = fsize + 1; } }
                             else if d == 95 { pos = pos + 1; }
@@ -3586,7 +3586,7 @@ fn _ke_cmd_run(buf_addr, buf_len) {
                         }
                         if expr_end > fsize { expr_end = expr_end - fsize - 1 + fsize; }
 
-                        let val = _ke_eval_expr(fbuf, pos, expr_end);
+                        let mut val = _ke_eval_expr(fbuf, pos, expr_end);
                         _ke_var_set(vh, val);
                         pos = expr_end + 1;
                     } else { pos = pos + 1; }
@@ -3716,7 +3716,7 @@ fn _ke_mem_r32be(addr) {
 
 // Write 32-bit big-endian to memory
 fn _ke_mem_w32be(addr, val) {
-    let v = val % 4294967296;
+    let mut v = val % 4294967296;
     mem_write_u8(addr, (v / 16777216) % 256);
     mem_write_u8(addr + 1, (v / 65536) % 256);
     mem_write_u8(addr + 2, (v / 256) % 256);
@@ -3751,8 +3751,8 @@ fn _ke_put_hex32(val) {
 
 // 32-bit right rotate
 fn _ke_sha256_rotr(val, bits) {
-    let mask = 4294967295;
-    let v = val % 4294967296;
+    let mut mask = 4294967295;
+    let mut v = val % 4294967296;
     // v >> bits
     let mut divisor = 1;
     let mut i = 0;
@@ -3768,7 +3768,7 @@ fn _ke_sha256_rotr(val, bits) {
 
 // 32-bit right shift
 fn _ke_sha256_shr(val, bits) {
-    let v = val % 4294967296;
+    let mut v = val % 4294967296;
     let mut divisor = 1;
     let mut i = 0;
     while i < bits { divisor = divisor * 2; i = i + 1; }
@@ -3777,7 +3777,7 @@ fn _ke_sha256_shr(val, bits) {
 
 // Initialize SHA-256 K constants at 0x940000 (64 × 4 bytes, LE)
 fn _ke_sha256_init_k() {
-    let base = 9699328; // 0x940000
+    let mut base = 9699328; // 0x940000
     // K[0..63] — SHA-256 round constants (first 32 bits of fractional parts of cube roots of first 64 primes)
     _ke_mem_w32(base +   0, 1116352408);  _ke_mem_w32(base +   4, 1899447441);
     _ke_mem_w32(base +   8, 3049323471);  _ke_mem_w32(base +  12, 3921009573);
@@ -3869,8 +3869,8 @@ fn _ke_sha256_hash(data_addr, data_len) {
         // Parse 16 words from block (big-endian → native u32)
         let mut wi = 0;
         while wi < 16 {
-            let addr = pad_base + boff + wi * 4;
-            let word = _ke_mem_r32be(addr);
+            let mut addr = pad_base + boff + wi * 4;
+            let mut word = _ke_mem_r32be(addr);
             _ke_mem_w32(w_base + wi * 4, word);
             wi = wi + 1;
         }
@@ -4066,7 +4066,7 @@ fn _ke_cmd_sha256(buf_addr, buf_len) {
     let out_base = 9700000; // 0x9402A0
     let mut i = 0;
     while i < 32 {
-        let byte = mem_read_u8(out_base + i);
+        let mut byte = mem_read_u8(out_base + i);
         _ke_put_hex8(byte);
         i = i + 1;
     }
@@ -4326,7 +4326,7 @@ fn _ke_cmd_hmac(buf_addr, buf_len) {
     let hmac_out = 9700416; // 0x940440
     let mut i = 0;
     while i < 32 {
-        let byte = mem_read_u8(hmac_out + i);
+        let mut byte = mem_read_u8(hmac_out + i);
         _ke_put_hex8(byte);
         i = i + 1;
     }
@@ -4368,7 +4368,7 @@ fn _ke_cmd_hkdf() {
     let okm_out = 9700640; // 0x940520
     let mut i = 0;
     while i < 32 {
-        let byte = mem_read_u8(okm_out + i);
+        let mut byte = mem_read_u8(okm_out + i);
         _ke_put_hex8(byte);
         i = i + 1;
     }
@@ -4466,7 +4466,7 @@ fn _ke_aes_sb(val) {
 fn _ke_aes_sub_bytes(state) {
     let mut i = 0;
     while i < 16 {
-        let b = mem_read_u8(state + i);
+        let mut b = mem_read_u8(state + i);
         mem_write_u8(state + i, _ke_aes_sb(b));
         i = i + 1;
     }
@@ -4477,7 +4477,7 @@ fn _ke_aes_sub_bytes(state) {
 // State is column-major: state[row + 4*col]
 fn _ke_aes_shift_rows(state) {
     // Row 1: shift left 1
-    let t = mem_read_u8(state + 1);
+    let mut t = mem_read_u8(state + 1);
     mem_write_u8(state + 1, mem_read_u8(state + 5));
     mem_write_u8(state + 5, mem_read_u8(state + 9));
     mem_write_u8(state + 9, mem_read_u8(state + 13));
@@ -4500,7 +4500,7 @@ fn _ke_aes_shift_rows(state) {
 
 // GF(2^8) multiply by 2 (xtime)
 fn _ke_aes_xtime(a) {
-    let v = a % 256;
+    let mut v = a % 256;
     let shifted = (v * 2) % 256;
     if v >= 128 {
         return _ke_xor_byte(shifted, 27); // XOR with 0x1B (irreducible poly)
@@ -4529,7 +4529,7 @@ fn _ke_aes_gmul(a, b) {
 fn _ke_aes_mix_columns(state) {
     let mut c = 0;
     while c < 4 {
-        let off = c * 4;
+        let mut off = c * 4;
         let s0 = mem_read_u8(state + off);
         let s1 = mem_read_u8(state + off + 1);
         let s2 = mem_read_u8(state + off + 2);
@@ -4554,8 +4554,8 @@ fn _ke_aes_add_round_key(state, round) {
     let rk_off = rk_base + round * 16;
     let mut i = 0;
     while i < 16 {
-        let s = mem_read_u8(state + i);
-        let k = mem_read_u8(rk_off + i);
+        let mut s = mem_read_u8(state + i);
+        let mut k = mem_read_u8(rk_off + i);
         mem_write_u8(state + i, _ke_xor_byte(s, k));
         i = i + 1;
     }
@@ -4579,8 +4579,8 @@ fn _ke_aes_key_expand(key_addr) {
     // Generate round keys 1-10
     let mut rnd = 1;
     while rnd <= 10 {
-        let prev = rk + (rnd - 1) * 16;
-        let cur = rk + rnd * 16;
+        let mut prev = rk + (rnd - 1) * 16;
+        let mut cur = rk + rnd * 16;
 
         // RotWord + SubWord on last 4 bytes of previous round key
         let t0 = _ke_aes_sb(mem_read_u8(prev + 13));
@@ -4640,7 +4640,7 @@ fn _ke_aes128_encrypt(state) {
 // Command: aes — encrypt NIST test vector and print ciphertext
 fn _ke_cmd_aes() {
     _ke_aes_init_sbox();
-    let state = 9765552;  // 0x9502B0
+    let mut state = 9765552;  // 0x9502B0
     let key_tmp = 9765568; // 0x9502C0
 
     // NIST test key: 2b7e151628aed2a6abf7158809cf4f3c
@@ -4687,8 +4687,8 @@ fn _ke_cmd_aes() {
 fn _ke_xor16(dst, src) {
     let mut i = 0;
     while i < 16 {
-        let d = mem_read_u8(dst + i);
-        let s = mem_read_u8(src + i);
+        let mut d = mem_read_u8(dst + i);
+        let mut s = mem_read_u8(src + i);
         mem_write_u8(dst + i, _ke_xor_byte(d, s));
         i = i + 1;
     }
@@ -4700,7 +4700,7 @@ fn _ke_gcm_inc32(blk) {
     let mut carry = 1;
     let mut i = 15;
     while i >= 12 {
-        let v = mem_read_u8(blk + i) + carry;
+        let mut v = mem_read_u8(blk + i) + carry;
         mem_write_u8(blk + i, v % 256);
         carry = v / 256;
         i = i - 1;
@@ -4739,8 +4739,8 @@ fn _ke_ghash_mul(dst, x_addr, y_addr) {
         let lsb = mem_read_u8(v_buf + 15) % 2;
         i = 15;
         while i > 0 {
-            let cur = mem_read_u8(v_buf + i);
-            let prev = mem_read_u8(v_buf + i - 1);
+            let mut cur = mem_read_u8(v_buf + i);
+            let mut prev = mem_read_u8(v_buf + i - 1);
             mem_write_u8(v_buf + i, (cur / 2) + (prev % 2) * 128);
             i = i - 1;
         }
@@ -4764,7 +4764,7 @@ fn _ke_ghash(h_addr, ct_addr, ct_len, tag_addr) {
     let mut i = 0;
     while i < 16 { mem_write_u8(tag_addr + i, 0); i = i + 1; }
 
-    let tmp = 9765968; // 0x950510: temp for ghash_mul result
+    let mut tmp = 9765968; // 0x950510: temp for ghash_mul result
 
     // Process ciphertext blocks
     let nblocks = ct_len / 16;
@@ -4835,8 +4835,8 @@ fn _ke_aes_gcm_encrypt(key_addr, iv_addr, pt_addr, pt_len, ct_addr, tag_addr) {
         while i < 16 {
             let pt_off = b * 16 + i;
             if pt_off < pt_len {
-                let p = mem_read_u8(pt_addr + pt_off);
-                let e = mem_read_u8(enc_buf + i);
+                let mut p = mem_read_u8(pt_addr + pt_off);
+                let mut e = mem_read_u8(enc_buf + i);
                 mem_write_u8(ct_addr + pt_off, _ke_xor_byte(p, e));
             }
             i = i + 1;
@@ -5332,7 +5332,7 @@ fn _ke_cmd_https() {
 
 // Initialize graphical terminal
 fn _ke_gterm_init() {
-    let state = 9830400; // 0x970000 — wait, let me recalculate
+    let mut state = 9830400; // 0x970000 — wait, let me recalculate
     // 0x970000 = 9*1048576 + 7*65536 = 9437184 + 458752 = 9895936
     let ts = 9895936; // 0x970000
     // cursor_x=0, cursor_y=0
@@ -5390,7 +5390,7 @@ fn _ke_gterm_render() {
         while col < 80 {
             let ch = mem_read_u8(chbuf + row * 80 + col);
             let px = col * 8 + 80;  // 80px left margin for centering
-            let py = row * 16 + 8;  // 8px top margin
+            let mut py = row * 16 + 8;  // 8px top margin
             _ke_vesa_draw_char(px, py, ch, fg, bg);
             col = col + 1;
         }
@@ -5476,7 +5476,7 @@ fn _ke_gterm_vt100(buf_addr, buf_len) {
     let mut num = 0;
     let mut i = 2;
     while i < buf_len {
-        let b = mem_read_u8(buf_addr + i);
+        let mut b = mem_read_u8(buf_addr + i);
         if b >= 48 {
             if b <= 57 {
                 num = num * 10 + (b - 48);
@@ -5611,7 +5611,7 @@ fn _ke_ext2_read_inode(ino) {
     // block group = (ino - 1) / ipg
     let bg = (ino - 1) / ipg;
     // index within group
-    let idx = (ino - 1) % ipg;
+    let mut idx = (ino - 1) % ipg;
 
     // Group descriptor table starts at block 2 (for 1k blocks) or 1 (for 4k)
     let bs = _ke_ext2_block_size();
@@ -5992,7 +5992,7 @@ fn _ke_lex_peek() {
     let ls = 10092544;
     let src = _ke_mem_r32(ls);
     let slen = _ke_mem_r32(ls + 4);
-    let pos = _ke_mem_r32(ls + 8);
+    let mut pos = _ke_mem_r32(ls + 8);
     if pos >= slen { return 0; }
     return mem_read_u8(src + pos);
 }
@@ -6000,7 +6000,7 @@ fn _ke_lex_peek() {
 // Advance position by 1
 fn _ke_lex_adv() {
     let ls = 10092544;
-    let pos = _ke_mem_r32(ls + 8);
+    let mut pos = _ke_mem_r32(ls + 8);
     _ke_mem_w32(ls + 8, pos + 1);
     return 0;
 }
@@ -6008,10 +6008,10 @@ fn _ke_lex_adv() {
 // Add a token to the token array
 fn _ke_lex_emit(tok_type, start, len) {
     let ls = 10092544;
-    let count = _ke_mem_r32(ls + 16);
+    let mut count = _ke_mem_r32(ls + 16);
     if count >= 512 { return 0; } // overflow guard
     let tb = 10092576; // 0x9A0020
-    let off = count * 8;
+    let mut off = count * 8;
     _ke_mem_w32(tb + off, tok_type);
     _ke_mem_w32(tb + off + 4, start * 65536 + (len % 65536));
     _ke_mem_w32(ls + 16, count + 1);
@@ -6045,37 +6045,37 @@ fn _ke_lex_match_kw(addr, len) {
     let src = _ke_mem_r32(ls);
     // "fn" = 102 110
     if len == 2 {
-        let a = mem_read_u8(src + addr); let b = mem_read_u8(src + addr + 1);
+        let mut a = mem_read_u8(src + addr); let mut b = mem_read_u8(src + addr + 1);
         if a == 102 { if b == 110 { return 1; } } // fn
         if a == 105 { if b == 102 { return 4; } } // if
     }
     // "let" = 108 101 116
     if len == 3 {
-        let a = mem_read_u8(src + addr); let b = mem_read_u8(src + addr + 1);
-        let c = mem_read_u8(src + addr + 2);
+        let mut a = mem_read_u8(src + addr); let mut b = mem_read_u8(src + addr + 1);
+        let mut c = mem_read_u8(src + addr + 2);
         if a == 108 { if b == 101 { if c == 116 { return 2; } } } // let
         if a == 109 { if b == 117 { if c == 116 { return 3; } } } // mut
     }
     // "else" "true"
     if len == 4 {
-        let a = mem_read_u8(src + addr); let b = mem_read_u8(src + addr + 1);
-        let c = mem_read_u8(src + addr + 2); let d = mem_read_u8(src + addr + 3);
+        let mut a = mem_read_u8(src + addr); let mut b = mem_read_u8(src + addr + 1);
+        let mut c = mem_read_u8(src + addr + 2); let mut d = mem_read_u8(src + addr + 3);
         if a == 101 { if b == 108 { if c == 115 { if d == 101 { return 5; } } } } // else
         if a == 116 { if b == 114 { if c == 117 { if d == 101 { return 8; } } } } // true
     }
     // "while" "false"
     if len == 5 {
-        let a = mem_read_u8(src + addr); let b = mem_read_u8(src + addr + 1);
-        let c = mem_read_u8(src + addr + 2); let d = mem_read_u8(src + addr + 3);
-        let e = mem_read_u8(src + addr + 4);
+        let mut a = mem_read_u8(src + addr); let mut b = mem_read_u8(src + addr + 1);
+        let mut c = mem_read_u8(src + addr + 2); let mut d = mem_read_u8(src + addr + 3);
+        let mut e = mem_read_u8(src + addr + 4);
         if a == 119 { if b == 104 { if c == 105 { if d == 108 { if e == 101 { return 6; } } } } } // while
         if a == 102 { if b == 97 { if c == 108 { if d == 115 { if e == 101 { return 9; } } } } } // false
     }
     // "return"
     if len == 6 {
-        let a = mem_read_u8(src + addr); let b = mem_read_u8(src + addr + 1);
-        let c = mem_read_u8(src + addr + 2); let d = mem_read_u8(src + addr + 3);
-        let e = mem_read_u8(src + addr + 4); let f = mem_read_u8(src + addr + 5);
+        let mut a = mem_read_u8(src + addr); let mut b = mem_read_u8(src + addr + 1);
+        let mut c = mem_read_u8(src + addr + 2); let mut d = mem_read_u8(src + addr + 3);
+        let mut e = mem_read_u8(src + addr + 4); let mut f = mem_read_u8(src + addr + 5);
         if a == 114 { if b == 101 { if c == 116 { if d == 117 { if e == 114 { if f == 110 { return 7; } } } } } } // return
     }
     return 10; // IDENT
@@ -6089,7 +6089,7 @@ fn _ke_lex_tokenize() {
 
     while _ke_mem_r32(ls + 8) < slen {
         let ch = _ke_lex_peek();
-        let pos = _ke_mem_r32(ls + 8);
+        let mut pos = _ke_mem_r32(ls + 8);
 
         // Skip whitespace
         if ch == 32 { _ke_lex_adv(); }
@@ -6261,7 +6261,7 @@ fn _ke_cmd_lex(buf_addr, buf_len) {
     }
 
     _ke_lex_init(text_start, text_len);
-    let count = _ke_lex_tokenize();
+    let mut count = _ke_lex_tokenize();
 
     // Print "LEX: <count> tokens\r\n"
     _ke_putc(76); _ke_putc(69); _ke_putc(88); _ke_putc(58); _ke_putc(32);
@@ -6277,7 +6277,7 @@ fn _ke_cmd_lex(buf_addr, buf_len) {
     while i < count {
         if i >= 32 { i = count; } // limit output
         else {
-            let off = i * 8;
+            let mut off = i * 8;
             let ttype = _ke_mem_r32(tb + off);
             _ke_putc(32); _ke_putc(32);
             _ke_lex_print_tok_type(ttype);
@@ -6396,7 +6396,7 @@ fn _ke_posix_write(fd, buf_addr, count) {
     }
 
     // Update position
-    let pos = _ke_mem_r32(fdt + fd * 16 + 4);
+    let mut pos = _ke_mem_r32(fdt + fd * 16 + 4);
     _ke_mem_w32(fdt + fd * 16 + 4, pos + count);
     return count;
 }
@@ -6536,7 +6536,7 @@ fn _ke_edit_render() {
     let lbuf = 10289184;
     let cy = _ke_mem_r32(es + 4);
     let scroll = _ke_mem_r32(es + 8);
-    let total = _ke_mem_r32(es + 20);
+    let mut total = _ke_mem_r32(es + 20);
 
     // Render to serial (simpler for demo)
     // Print header: "--- EDIT ---\r\n"
@@ -6635,7 +6635,7 @@ fn _ke_parse_init() {
 // Get current token type
 fn _ke_parse_cur_type() {
     let ps = 10354688;
-    let pos = _ke_mem_r32(ps);
+    let mut pos = _ke_mem_r32(ps);
     let tb = 10092576; // 0x9A0020 token buffer
     return _ke_mem_r32(tb + pos * 8);
 }
@@ -6643,7 +6643,7 @@ fn _ke_parse_cur_type() {
 // Advance parser to next token
 fn _ke_parse_advance() {
     let ps = 10354688;
-    let pos = _ke_mem_r32(ps);
+    let mut pos = _ke_mem_r32(ps);
     _ke_mem_w32(ps, pos + 1);
     return 0;
 }
@@ -6651,10 +6651,10 @@ fn _ke_parse_advance() {
 // Allocate AST node, returns node index
 fn _ke_ast_alloc(ntype, left, right, value) {
     let ps = 10354688;
-    let count = _ke_mem_r32(ps + 8);
+    let mut count = _ke_mem_r32(ps + 8);
     if count >= 256 { return 0; }
     let ab = 10354720; // 0x9E0020
-    let off = count * 16;
+    let mut off = count * 16;
     _ke_mem_w32(ab + off, ntype);
     _ke_mem_w32(ab + off + 4, left);
     _ke_mem_w32(ab + off + 8, right);
@@ -6670,11 +6670,11 @@ fn _ke_parse_primary() {
     // Number literal
     if tt == 11 {
         let ps = 10354688;
-        let pos = _ke_mem_r32(ps);
+        let mut pos = _ke_mem_r32(ps);
         let tb = 10092576;
         let packed = _ke_mem_r32(tb + pos * 8 + 4);
         let start = packed / 65536;
-        let len = packed % 65536;
+        let mut len = packed % 65536;
         // Parse number value from source
         let ls = 10092544;
         let src = _ke_mem_r32(ls);
@@ -6691,7 +6691,7 @@ fn _ke_parse_primary() {
     // Identifier
     if tt == 10 {
         let ps = 10354688;
-        let pos = _ke_mem_r32(ps);
+        let mut pos = _ke_mem_r32(ps);
         let tb = 10092576;
         let packed = _ke_mem_r32(tb + pos * 8 + 4);
         _ke_parse_advance();
@@ -6712,7 +6712,7 @@ fn _ke_parse_primary() {
     // String literal
     if tt == 12 {
         let ps = 10354688;
-        let pos = _ke_mem_r32(ps);
+        let mut pos = _ke_mem_r32(ps);
         let tb = 10092576;
         let packed = _ke_mem_r32(tb + pos * 8 + 4);
         _ke_parse_advance();
@@ -6775,12 +6775,12 @@ fn _ke_parse_stmt() {
         if _ke_parse_cur_type() == 3 { _ke_parse_advance(); } // skip mut
         let name = _ke_parse_cur_type();
         let ps = 10354688;
-        let pos = _ke_mem_r32(ps);
+        let mut pos = _ke_mem_r32(ps);
         let tb = 10092576;
         let packed = _ke_mem_r32(tb + pos * 8 + 4);
         _ke_parse_advance(); // skip ident
         if _ke_parse_cur_type() == 35 { _ke_parse_advance(); } // skip =
-        let val = _ke_parse_expr();
+        let mut val = _ke_parse_expr();
         if _ke_parse_cur_type() == 26 { _ke_parse_advance(); } // skip ;
         return _ke_ast_alloc(20, val, 0, packed); // LET_STMT
     }
@@ -6823,7 +6823,7 @@ fn _ke_parse_stmt() {
     // return expr;
     if tt == 7 { // KW_RETURN
         _ke_parse_advance();
-        let val = _ke_parse_expr();
+        let mut val = _ke_parse_expr();
         if _ke_parse_cur_type() == 26 { _ke_parse_advance(); }
         return _ke_ast_alloc(24, val, 0, 0); // RETURN_STMT
     }
@@ -6832,7 +6832,7 @@ fn _ke_parse_stmt() {
     if tt == 1 { // KW_FN
         _ke_parse_advance();
         let ps = 10354688;
-        let pos = _ke_mem_r32(ps);
+        let mut pos = _ke_mem_r32(ps);
         let tb = 10092576;
         let packed = _ke_mem_r32(tb + pos * 8 + 4);
         _ke_parse_advance(); // skip name
@@ -6886,11 +6886,11 @@ fn _ke_ast_print_type(t) {
 // Print AST tree (recursive-style, iterative for depth 0-1)
 fn _ke_ast_print(idx, depth) {
     let ab = 10354720; // 0x9E0020
-    let off = idx * 16;
+    let mut off = idx * 16;
     let ntype = _ke_mem_r32(ab + off);
     let left = _ke_mem_r32(ab + off + 4);
     let right = _ke_mem_r32(ab + off + 8);
-    let value = _ke_mem_r32(ab + off + 12);
+    let mut value = _ke_mem_r32(ab + off + 12);
 
     // Indent
     let mut d = 0;
@@ -6966,7 +6966,7 @@ fn _ke_cmd_parse(buf_addr, buf_len) {
 
 // Command: files — list FAT16 files with selection
 fn _ke_cmd_files() {
-    let state = 10420224; // 0x9F0000
+    let mut state = 10420224; // 0x9F0000
     _ke_mem_w32(state, 0);     // selected = 0
     _ke_mem_w32(state + 4, 0); // file count = 0
 
@@ -6984,7 +6984,7 @@ fn _ke_cmd_files() {
         _ke_virtio_blk_read(sect);
         let mut e = 0;
         while e < 16 {
-            let off = e * 32;
+            let mut off = e * 32;
             let b0 = mem_read_u8(vbuf + off);
             if b0 == 0 { e = 16; sect = 136; } // end of dir
             else {
@@ -7197,7 +7197,7 @@ fn _ke_cg_create(name_packed, mem_limit, cpu_quota) {
     let ct = 10421248; // 0x9F0400
     let mut i = 0;
     while i < 8 {
-        let off = i * 32;
+        let mut off = i * 32;
         let flags = _ke_mem_r32(ct + off + 28);
         if flags == 0 { // free slot
             _ke_mem_w32(ct + off, i + 1);       // id
@@ -7220,7 +7220,7 @@ fn _ke_cg_attach(cg_id, pid) {
     let ct = 10421248;
     if cg_id < 1 { return 0 - 1; }
     if cg_id > 8 { return 0 - 1; }
-    let off = (cg_id - 1) * 32;
+    let mut off = (cg_id - 1) * 32;
     let pc = _ke_mem_r32(ct + off + 4);
     _ke_mem_w32(ct + off + 4, pc + 1);
     return 0;
@@ -7231,7 +7231,7 @@ fn _ke_cg_stat(cg_id) {
     let ct = 10421248;
     if cg_id < 1 { return 0; }
     if cg_id > 8 { return 0; }
-    let off = (cg_id - 1) * 32;
+    let mut off = (cg_id - 1) * 32;
     let flags = _ke_mem_r32(ct + off + 28);
     if flags == 0 { return 0; }
 
@@ -7324,7 +7324,7 @@ fn _ke_cgen_init() {
 // Emit one byte to output buffer
 fn _ke_cgen_emit8(val) {
     let cs = 10485760;
-    let pos = _ke_mem_r32(cs);
+    let mut pos = _ke_mem_r32(cs);
     if pos >= 4096 { return 0; }
     let ob = 10485792;
     mem_write_u8(ob + pos, val % 256);
@@ -7412,11 +7412,11 @@ fn _ke_cgen_epilogue() {
 // Generate code for AST expression node
 fn _ke_cgen_expr(idx) {
     let ab = 10354720; // 0x9E0020 AST buffer
-    let off = idx * 16;
+    let mut off = idx * 16;
     let ntype = _ke_mem_r32(ab + off);
     let left = _ke_mem_r32(ab + off + 4);
     let right = _ke_mem_r32(ab + off + 8);
-    let value = _ke_mem_r32(ab + off + 12);
+    let mut value = _ke_mem_r32(ab + off + 12);
 
     // NUM_LIT → MOV RAX, value
     if ntype == 1 {
@@ -7618,7 +7618,7 @@ fn _ke_user_find(name_addr, name_len) {
     let ut = 10498048;
     let mut u = 0;
     while u < 8 {
-        let off = u * 64;
+        let mut off = u * 64;
         let flags = _ke_mem_r32(ut + off + 4);
         if flags == 1 {
             // Compare name
@@ -7717,7 +7717,7 @@ fn _ke_pipe_create() {
     let pt = 10502144; // 0xA04000
     let mut i = 0;
     while i < 4 {
-        let off = i * 128;
+        let mut off = i * 128;
         let flags = _ke_mem_r32(pt + off);
         if flags == 0 {
             _ke_mem_w32(pt + off, 1);      // flags = active
@@ -7736,13 +7736,13 @@ fn _ke_pipe_write(pipe_id, data_addr, data_len) {
     if pipe_id < 0 { return 0 - 1; }
     if pipe_id >= 4 { return 0 - 1; }
     let pt = 10502144;
-    let off = pipe_id * 128;
+    let mut off = pipe_id * 128;
     let flags = _ke_mem_r32(pt + off);
     if flags == 0 { return 0 - 1; }
 
     let mut written = 0;
     while written < data_len {
-        let count = _ke_mem_r32(pt + off + 12);
+        let mut count = _ke_mem_r32(pt + off + 12);
         if count >= 112 { written = data_len; } // buffer full
         else {
             let wp = _ke_mem_r32(pt + off + 8);
@@ -7760,13 +7760,13 @@ fn _ke_pipe_read(pipe_id, buf_addr, max_len) {
     if pipe_id < 0 { return 0 - 1; }
     if pipe_id >= 4 { return 0 - 1; }
     let pt = 10502144;
-    let off = pipe_id * 128;
+    let mut off = pipe_id * 128;
     let flags = _ke_mem_r32(pt + off);
     if flags == 0 { return 0 - 1; }
 
     let mut rd = 0;
     while rd < max_len {
-        let count = _ke_mem_r32(pt + off + 12);
+        let mut count = _ke_mem_r32(pt + off + 12);
         if count == 0 { rd = max_len; } // empty
         else {
             let rp = _ke_mem_r32(pt + off + 4);
@@ -7858,7 +7858,7 @@ fn _ke_user_add(name_addr, name_len) {
     let ut = 10498048; // 0xA03000
     let mut slot = 0;
     while slot < 8 {
-        let off = slot * 64;
+        let mut off = slot * 64;
         if _ke_mem_r32(ut + off + 4) == 0 {
             _ke_mem_w32(ut + off, slot);
             _ke_mem_w32(ut + off + 4, 1);
@@ -7945,7 +7945,7 @@ fn _ke_cmd_service() {
     _ke_putc(13); _ke_putc(10);
     let mut i = 0;
     while i < 4 {
-        let off = i * 16;
+        let mut off = i * 16;
         _ke_putc(32); _ke_putc(32);
         _ke_service_print_name(_ke_mem_r32(st + off));
         _ke_putc(32);
@@ -8003,7 +8003,7 @@ fn _ke_msg_send(chan, buf_addr, buf_len) {
     if chan < 0 { return 0 - 1; }
     if chan >= 4 { return 0 - 1; }
     let mt = 10506240;
-    let off = chan * 128;
+    let mut off = chan * 128;
     let mut count = _ke_mem_r32(mt + off + 12);
     let mut wp = _ke_mem_r32(mt + off + 8);
     let mut i = 0;
@@ -8025,7 +8025,7 @@ fn _ke_msg_recv(chan, buf_addr, max_len) {
     if chan < 0 { return 0 - 1; }
     if chan >= 4 { return 0 - 1; }
     let mt = 10506240;
-    let off = chan * 128;
+    let mut off = chan * 128;
     let mut count = _ke_mem_r32(mt + off + 12);
     let mut rp = _ke_mem_r32(mt + off + 4);
     let mut i = 0;
@@ -8049,9 +8049,9 @@ fn _ke_cmd_msg() {
     while i < 512 { mem_write_u8(mt + i, 0); i = i + 1; }
     let sb = 10506752;
     mem_write_u8(sb + 0, 80); mem_write_u8(sb + 1, 73); mem_write_u8(sb + 2, 78); mem_write_u8(sb + 3, 71);
-    let n = _ke_msg_send(0, sb, 4);
+    let mut n = _ke_msg_send(0, sb, 4);
     let rb = 10506768;
-    let m = _ke_msg_recv(0, rb, 4);
+    let mut m = _ke_msg_recv(0, rb, 4);
     _ke_putc(77); _ke_putc(83); _ke_putc(71); _ke_putc(58); _ke_putc(32);
     let mut j = 0;
     while j < m { _ke_putc(mem_read_u8(rb + j)); j = j + 1; }
@@ -8119,7 +8119,7 @@ fn _ke_env_find(key_addr, key_len) {
     let et = 10510336;
     let mut slot = 0;
     while slot < 16 {
-        let base = et + slot * 128;
+        let mut base = et + slot * 128;
         let flags = _ke_mem_r32(base);
         if flags == 1 {
             let kl = _ke_mem_r32(base + 4);
@@ -8142,10 +8142,10 @@ fn _ke_env_find(key_addr, key_len) {
 }
 
 fn _ke_env_get(key_addr, key_len, dst_addr) {
-    let slot = _ke_env_find(key_addr, key_len);
+    let mut slot = _ke_env_find(key_addr, key_len);
     if slot < 0 { return 0; }
     let et = 10510336;
-    let base = et + slot * 128;
+    let mut base = et + slot * 128;
     let vl = _ke_mem_r32(base + 8);
     let mut i = 0;
     while i < vl {
@@ -8161,7 +8161,7 @@ fn _ke_env_set(key_addr, key_len, val_addr, val_len) {
     let et = 10510336;
     let existing = _ke_env_find(key_addr, key_len);
     if existing >= 0 {
-        let base = et + existing * 128;
+        let mut base = et + existing * 128;
         _ke_mem_w32(base + 8, val_len);
         let mut i = 0;
         while i < val_len {
@@ -8173,7 +8173,7 @@ fn _ke_env_set(key_addr, key_len, val_addr, val_len) {
     }
     let mut slot = 0;
     while slot < 16 {
-        let base = et + slot * 128;
+        let mut base = et + slot * 128;
         let flags = _ke_mem_r32(base);
         if flags == 0 {
             _ke_mem_w32(base + 0, 1);
@@ -8199,7 +8199,7 @@ fn _ke_cmd_env() {
     let mut slot = 0;
     let mut count = 0;
     while slot < 16 {
-        let base = et + slot * 128;
+        let mut base = et + slot * 128;
         let flags = _ke_mem_r32(base);
         if flags == 1 {
             let kl = _ke_mem_r32(base + 4);
@@ -8334,10 +8334,10 @@ fn _ke_signal_send(target_tid, signum) {
     if signum < 1 { return 0; }
     if signum > 31 { return 0; }
     let tbl = 3276800;  // 0x320000
-    let count = mem_read_u64(3277832);  // task count
+    let mut count = mem_read_u64(3277832);  // task count
     if target_tid >= count { return 0; }
-    let base = tbl + target_tid * 64;
-    let state = mem_read_u64(base);
+    let mut base = tbl + target_tid * 64;
+    let mut state = mem_read_u64(base);
     if state == 0 { return 0; }  // free slot
 
     // SIGKILL (9): immediately kill
@@ -8416,7 +8416,7 @@ fn _ke_signal_send(target_tid, signum) {
 
 fn _ke_signal_pending(tid) {
     let tbl = 3276800;
-    let base = tbl + tid * 64;
+    let mut base = tbl + tid * 64;
     let pending = mem_read_u64(base + 48);
     let blocked = mem_read_u64(base + 56);
     // deliverable = pending & ~blocked (signals pending and not blocked)
@@ -8429,8 +8429,8 @@ fn _ke_signal_block(tid, signum) {
     if signum == 9 { return 0; }  // cannot block SIGKILL
     if signum == 19 { return 0; } // cannot block SIGSTOP
     let tbl = 3276800;
-    let base = tbl + tid * 64;
-    let mask = mem_read_u64(base + 56);
+    let mut base = tbl + tid * 64;
+    let mut mask = mem_read_u64(base + 56);
     let bit = _ke_sig_bit(signum);
     if (mask / bit) % 2 == 0 {
         mem_write_u64(base + 56, mask + bit);
@@ -8440,8 +8440,8 @@ fn _ke_signal_block(tid, signum) {
 
 fn _ke_signal_unblock(tid, signum) {
     let tbl = 3276800;
-    let base = tbl + tid * 64;
-    let mask = mem_read_u64(base + 56);
+    let mut base = tbl + tid * 64;
+    let mut mask = mem_read_u64(base + 56);
     let bit = _ke_sig_bit(signum);
     if (mask / bit) % 2 == 1 {
         mem_write_u64(base + 56, mask - bit);
@@ -8452,7 +8452,7 @@ fn _ke_signal_unblock(tid, signum) {
 // Check and deliver pending signals for a task (called on task switch)
 fn _ke_signal_deliver(tid) {
     let tbl = 3276800;
-    let base = tbl + tid * 64;
+    let mut base = tbl + tid * 64;
     let pending = mem_read_u64(base + 48);
     let blocked = mem_read_u64(base + 56);
     if pending == 0 { return 0; }
@@ -8577,7 +8577,7 @@ fn _ke_cmd_kill(buf_addr, buf_len) {
     _ke_putc(32); _ke_putc(45); _ke_putc(62); _ke_putc(32);
     _ke_sig_name(sig);
     _ke_putc(13); _ke_putc(10);
-    let result = _ke_signal_send(pid, sig);
+    let mut result = _ke_signal_send(pid, sig);
     if result == 0 {
         // "no such task\r\n"
         _ke_putc(110); _ke_putc(111); _ke_putc(32); _ke_putc(115);
@@ -8894,7 +8894,7 @@ fn _ke_print_ip(ip) {
 fn _ke_print_mac(addr) {
     let mut i = 0;
     while i < 6 {
-        let b = mem_read_u8(addr + i);
+        let mut b = mem_read_u8(addr + i);
         _ke_put_hex8(b);
         if i < 5 { _ke_putc(58); }  // ':'
         i = i + 1;
@@ -8940,8 +8940,8 @@ fn _ke_cmd_netstat() {
     let mut count = 0;
     let mut i = 0;
     while i < max_tcp {
-        let addr = tcb_base + i * tcb_size;
-        let state = mem_read_u64(addr);
+        let mut addr = tcb_base + i * tcb_size;
+        let mut state = mem_read_u64(addr);
         if state != 0 {
             // "tcp  "
             _ke_putc(116); _ke_putc(99); _ke_putc(112);
@@ -8995,7 +8995,7 @@ fn _ke_cmd_netstat() {
 
 // Command: arp — display ARP cache
 fn _ke_cmd_arp() {
-    let count = mem_read_u64(ARP_NATIVE_COUNT_ADDR);
+    let mut count = mem_read_u64(ARP_NATIVE_COUNT_ADDR);
 
     // Header: "IP Address       MAC Address       Flags\r\n"
     _ke_putc(73); _ke_putc(80); _ke_putc(32);  // "IP "
@@ -9094,7 +9094,7 @@ fn _ke_pipe_cap_stop() {
 fn _ke_putc_pipe(ch) {
     let capturing = mem_read_u64(PIPE_CAP_FLAG_ADDR);
     if capturing == 1 {
-        let pos = mem_read_u64(PIPE_CAP_POS_ADDR);
+        let mut pos = mem_read_u64(PIPE_CAP_POS_ADDR);
         if pos < PIPE_CAP_SIZE {
             mem_write_u8(PIPE_CAP_BUF + pos, ch);
             mem_write_u64(PIPE_CAP_POS_ADDR, pos + 1);
@@ -9297,7 +9297,7 @@ fn _ke_cmd_grep(buf_addr, buf_len) {
 
 // === Iteration 117: tcploop — TCP loopback self-test ===
 fn _ke_cmd_tcploop() {
-    let result = tcp_loopback_test();
+    let mut result = tcp_loopback_test();
     if result == 1 {
         // "TCP loopback: OK\r\n"
         _ke_putc(84); _ke_putc(67); _ke_putc(80); _ke_putc(32);
@@ -9334,7 +9334,7 @@ fn _ke_cmd_tcploop() {
 
 // === Iteration 118: dnstest — DNS loopback self-test ===
 fn _ke_cmd_dnstest() {
-    let result = dns_loopback_test();
+    let mut result = dns_loopback_test();
     if result == 1 {
         // "DNS loopback: OK\r\n"
         _ke_putc(68); _ke_putc(78); _ke_putc(83); _ke_putc(32);
@@ -9421,7 +9421,7 @@ fn _ke_cmd_heval(buf_addr, buf_len) {
     _ke_putc(62); _ke_putc(32);
 
     // Execute via tree-walk interpreter
-    let result = kinterp_exec(expr);
+    let mut result = kinterp_exec(expr);
 
     // Print result
     let result_str = to_string(result);
@@ -9938,8 +9938,8 @@ fn _ke_hist_init() {
 // Save command to history ring buffer
 fn _ke_hist_push(buf_addr, buf_len) {
     if buf_len == 0 { return 0; }
-    let count = mem_read_u64(HIST_COUNT_ADDR);
-    let slot = count % HIST_MAX;
+    let mut count = mem_read_u64(HIST_COUNT_ADDR);
+    let mut slot = count % HIST_MAX;
     let dest = HIST_BASE + slot * HIST_ENTRY_SIZE;
     // Clear slot
     let mut i = 0;
@@ -9961,7 +9961,7 @@ fn _ke_hist_push(buf_addr, buf_len) {
 
 // Get length of a history entry
 fn _ke_hist_entry_len(slot) {
-    let base = HIST_BASE + slot * HIST_ENTRY_SIZE;
+    let mut base = HIST_BASE + slot * HIST_ENTRY_SIZE;
     let mut l = 0;
     while l < HIST_ENTRY_SIZE - 1 {
         if mem_read_u8(base + l) == 0 { return l; }
@@ -9972,7 +9972,7 @@ fn _ke_hist_entry_len(slot) {
 
 // Load history entry into command buffer, return its length
 fn _ke_hist_load(buf_addr, index) {
-    let count = mem_read_u64(HIST_COUNT_ADDR);
+    let mut count = mem_read_u64(HIST_COUNT_ADDR);
     if count == 0 { return 0; }
     // Clamp index
     let max_back = count;
@@ -9981,7 +9981,7 @@ fn _ke_hist_load(buf_addr, index) {
     if index < 1 { return 0; }
     // Map: index=1 → most recent, index=max_back → oldest
     let abs_idx = count - index;
-    let slot = abs_idx % HIST_MAX;
+    let mut slot = abs_idx % HIST_MAX;
     let src = HIST_BASE + slot * HIST_ENTRY_SIZE;
     let entry_len = _ke_hist_entry_len(slot);
     // Copy to command buffer
@@ -10017,7 +10017,7 @@ fn _ke_line_reprint(buf_addr, buf_len) {
 
 // Print history listing (called by "history" command dispatch)
 fn _ke_cmd_history() {
-    let count = mem_read_u64(HIST_COUNT_ADDR);
+    let mut count = mem_read_u64(HIST_COUNT_ADDR);
     if count == 0 {
         // "  (empty)\r\n"
         _ke_putc(32); _ke_putc(32); _ke_putc(40);
@@ -10031,7 +10031,7 @@ fn _ke_cmd_history() {
     let start = count - show;
     let mut idx = start;
     while idx < count {
-        let slot = idx % HIST_MAX;
+        let mut slot = idx % HIST_MAX;
         let entry_len = _ke_hist_entry_len(slot);
         // Print index number
         _ke_putc(32); _ke_putc(32);
@@ -10080,7 +10080,7 @@ fn _ke_shell() {
                 if sc < 128 {
                     if sc == 72 {
                         // Up arrow (0x48): navigate history backward
-                        let count = mem_read_u64(HIST_COUNT_ADDR);
+                        let mut count = mem_read_u64(HIST_COUNT_ADDR);
                         let max_back = count;
                         if max_back > HIST_MAX { max_back = HIST_MAX; }
                         if hist_nav < max_back {
@@ -10287,7 +10287,7 @@ fn _ke_fib(n) {
     let mut b = 1;
     let mut i = 0;
     while i < n {
-        let t = a + b;
+        let mut t = a + b;
         a = b;
         b = t;
         i = i + 1;
@@ -10298,7 +10298,7 @@ print(_ke_fib(10));
 
 fn _ke_gcd(a, b) {
     while b != 0 {
-        let t = b;
+        let mut t = b;
         b = a % b;
         a = t;
     }

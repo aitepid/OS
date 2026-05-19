@@ -12,7 +12,7 @@ let pinv_t1 = array(16, 0);
 let pinv_t2 = array(16, 0);
 
 fn pinv_init() {
-    let i = 0;
+    let mut i = 0;
     while i < PINV_N {
         set_at(pinv_f,  i, 0); set_at(pinv_g,  i, 0);
         set_at(pinv_t1, i, 0); set_at(pinv_t2, i, 0);
@@ -22,12 +22,12 @@ fn pinv_init() {
 }
 
 fn _pinv_mod(x) { return x - (x / PINV_P) * PINV_P; }
-fn _pinv_add(a, b) { let s = a + b; if s >= PINV_P { s = s - PINV_P; } return s; }
+fn _pinv_add(a, b) { let mut s = a + b; if s >= PINV_P { s = s - PINV_P; } return s; }
 fn _pinv_sub(a, b) { if a >= b { return a - b; } return a - b + PINV_P; }
 fn _pinv_mul(a, b) { return _pinv_mod(a * b); }
 
 fn _pinv_powmod(base, exp) {
-    let r = 1; let b = base; let e = exp;
+    let mut r = 1; let mut b = base; let mut e = exp;
     while e > 0 {
         if e - (e / 2) * 2 == 1 { r = _pinv_mul(r, b); }
         b = _pinv_mul(b, b);
@@ -38,15 +38,15 @@ fn _pinv_powmod(base, exp) {
 
 // Newton step: pinv_g = pinv_g * (2 - pinv_f * pinv_g) mod x^n
 fn _pinv_step(n) {
-    let i = 0;
+    let mut i = 0;
     while i < n { set_at(pinv_t1, i, 0); i += 1; }
     // t1 = f * g mod x^n
     i = 0;
     while i < n {
-        let j = 0;
+        let mut j = 0;
         while j < n {
             if i + j < n {
-                let idx = i + j;
+                let mut idx = i + j;
                 set_at(pinv_t1, idx, _pinv_add(pinv_t1[idx], _pinv_mul(pinv_f[i], pinv_g[j])));
             }
             j += 1;
@@ -62,10 +62,10 @@ fn _pinv_step(n) {
     while i < n { set_at(pinv_t1, i, 0); i += 1; }
     i = 0;
     while i < n {
-        let j = 0;
+        let mut j = 0;
         while j < n {
             if i + j < n {
-                let idx = i + j;
+                let mut idx = i + j;
                 set_at(pinv_t1, idx, _pinv_add(pinv_t1[idx], _pinv_mul(pinv_g[i], pinv_t2[j])));
             }
             j += 1;
@@ -78,11 +78,11 @@ fn _pinv_step(n) {
 }
 
 fn pinv_compute(n) {
-    let i = 0;
+    let mut i = 0;
     while i < PINV_N { set_at(pinv_g, i, 0); i += 1; }
     set_at(pinv_g, 0, _pinv_powmod(pinv_f[0], PINV_P - 2));
-    let cur = 1;
-    let go = 1;
+    let mut cur = 1;
+    let mut go = 1;
     while go == 1 {
         if cur >= n { go = 0; }
         if go == 1 {
@@ -102,10 +102,10 @@ fn pinv_test() {
     set_at(pinv_f, 1, 1);
     pinv_compute(4);
     let ok = 1;
-    let k = 0;
+    let mut k = 0;
     while k < 4 {
-        let s = 0;
-        let i = 0;
+        let mut s = 0;
+        let mut i = 0;
         while i <= k {
             s = _pinv_add(s, _pinv_mul(pinv_f[i], pinv_g[k - i]));
             i += 1;

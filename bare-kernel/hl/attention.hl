@@ -74,10 +74,10 @@ fn attn_config(d_model, n_heads, d_ff) {
     attn_d_v     = d_model / n_heads;
     attn_d_ff    = d_ff;
     // Initialize weight matrices with small deterministic values
-    let i = 0;
+    let mut i = 0;
     while i < d_model * attn_d_k {
         let seed = i * 1031 + 7919;
-        let w = (seed - ((seed / 61) * 61)) - 30;  // [-30, +30] / SCALE ≈ ±0.03
+        let mut w = (seed - ((seed / 61) * 61)) - 30;  // [-30, +30] / SCALE ≈ ±0.03
         set_at(attn_W_Q, i, w);
         set_at(attn_W_K, i, w + 1);
         set_at(attn_W_V, i, w - 1);
@@ -124,15 +124,15 @@ fn attn_config(d_model, n_heads, d_ff) {
 // Sinusoidal positional encoding: PE(pos,2i) = sin(pos/10000^(2i/d)), PE(pos,2i+1) = cos(...)
 // Approximated with integer arithmetic
 fn _attn_precompute_pos_enc() {
-    let pos = 0;
+    let mut pos = 0;
     while pos < ATTN_MAX_SEQ {
-        let i = 0;
+        let mut i = 0;
         while i < ATTN_MAX_DIM {
             // Frequency = 1 / 10000^(i/d_model) -- simplified as ATTN_SCALE / (1 + pos*i)
             let freq_denom = 1 + pos * (i + 1);
             let angle = (pos * ATTN_SCALE) / freq_denom;
             // Approximate sin/cos with triangle wave for simplicity
-            let v = angle - ((angle / ATTN_SCALE) * ATTN_SCALE);  // angle mod ATTN_SCALE
+            let mut v = angle - ((angle / ATTN_SCALE) * ATTN_SCALE);  // angle mod ATTN_SCALE
             let pe = 0;
             if (i - ((i / 2) * 2)) == 0 {
                 // Even index: sin-like (rises then falls)
@@ -156,8 +156,8 @@ fn _attn_precompute_pos_enc() {
 // Layer normalization: (x - mean) / sqrt(var + eps) * gamma + beta
 fn attn_layer_norm(x, n) {
     // Compute mean
-    let sum = 0;
-    let i = 0;
+    let mut sum = 0;
+    let mut i = 0;
     while i < n { sum = sum + x[i]; i = i + 1; }
     let mean = sum / n;
     // Compute variance
@@ -179,7 +179,7 @@ fn attn_layer_norm(x, n) {
     }
     if std < 1 { std = 1; }
     // Normalize
-    let result = [];
+    let mut result = [];
     i = 0;
     while i < n {
         let norm = ((x[i] - mean) * ATTN_SCALE) / std;
@@ -193,13 +193,13 @@ fn attn_layer_norm(x, n) {
 // Softmax over 1D array of length n (in-place via returned array)
 fn _attn_softmax(scores, n) {
     let max_s = scores[0];
-    let i = 1;
+    let mut i = 1;
     while i < n { if scores[i] > max_s { max_s = scores[i]; } i = i + 1; }
     let exps = [];
-    let sum = 0;
+    let mut sum = 0;
     i = 0;
     while i < n {
-        let e = scores[i] - max_s;
+        let mut e = scores[i] - max_s;
         let ev = ATTN_SCALE;
         if e < 0 { ev = ATTN_SCALE * ATTN_SCALE / (ATTN_SCALE - e / 4); }
         set_at(exps, i, ev);
@@ -207,7 +207,7 @@ fn _attn_softmax(scores, n) {
         i = i + 1;
     }
     if sum == 0 { sum = 1; }
-    let result = [];
+    let mut result = [];
     i = 0;
     while i < n {
         set_at(result, i, (exps[i] * ATTN_SCALE) / sum);
@@ -218,11 +218,11 @@ fn _attn_softmax(scores, n) {
 
 // Project input vector x (d_model) with weight matrix W (d_model × d_out) → output (d_out)
 fn _attn_linear(x, W, d_in, d_out) {
-    let out = [];
-    let i = 0;
+    let mut out = [];
+    let mut i = 0;
     while i < d_out {
-        let s = 0;
-        let j = 0;
+        let mut s = 0;
+        let mut j = 0;
         while j < d_in {
             s = s + (x[j] * W[i * d_in + j]) / ATTN_SCALE;
             j = j + 1;
@@ -255,7 +255,7 @@ fn _attn_scaled_dot_product(Q_flat, K_flat, V_flat, seq, dk, dv) {
         let ki = 0;
         while ki < seq {
             let dot = 0;
-            let d = 0;
+            let mut d = 0;
             while d < dk {
                 dot = dot + (Q_flat[qi * dk + d] * K_flat[ki * dk + d]) / ATTN_SCALE;
                 d = d + 1;
@@ -292,11 +292,11 @@ fn attn_multihead_forward(input_seq, seq) {
     let dm = attn_d_model;
     // Add positional encoding
     let x_pos = [];
-    let si = 0;
+    let mut si = 0;
     while si < seq {
-        let di = 0;
+        let mut di = 0;
         while di < dm {
-            let val = 0;
+            let mut val = 0;
             if si * dm + di < len(input_seq) { val = input_seq[si * dm + di]; }
             let pe = attn_pos_enc[si * ATTN_MAX_DIM + di];
             set_at(x_pos, si * dm + di, val + pe);
@@ -354,16 +354,16 @@ fn attn_multihead_forward(input_seq, seq) {
 // Feed-forward sublayer: FFN(x) = max(0, xW1+b1)W2+b2
 fn attn_feedforward(x, dm) {
     let ff_hidden = [];
-    let i = 0;
+    let mut i = 0;
     while i < attn_d_ff {
-        let s = attn_b_ff1[i];
-        let j = 0;
+        let mut s = attn_b_ff1[i];
+        let mut j = 0;
         while j < dm { s = s + (x[j] * attn_W_ff1[i * dm + j]) / ATTN_SCALE; j = j + 1; }
         if s < 0 { s = 0; }  // ReLU
         set_at(ff_hidden, i, s);
         i = i + 1;
     }
-    let out = [];
+    let mut out = [];
     i = 0;
     while i < dm {
         let s2 = attn_b_ff2[i];
@@ -402,7 +402,7 @@ fn attention_test() {
     let attn_out = attn_multihead_forward(input_seq, seq);
     // Feed-forward for first token
     let tok0 = [];
-    let i = 0;
+    let mut i = 0;
     while i < dm { set_at(tok0, i, attn_out[i]); i = i + 1; }
     let ff_out = attn_feedforward(tok0, dm);
     // Check output is non-zero

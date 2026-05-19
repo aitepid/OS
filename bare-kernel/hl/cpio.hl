@@ -59,7 +59,7 @@ fn _cpio_parse_hex(buf_addr, offset, len) {
     let mut val = 0;
     let mut i = 0;
     while i < len {
-        let c = mem_read_byte(buf_addr + offset + i);
+        let mut c = mem_read_byte(buf_addr + offset + i);
         val = val * 16 + _cpio_hex_digit(c);
         i = i + 1;
     }
@@ -81,7 +81,7 @@ fn cpio_parse_buf() {
         if magic != 458753 { return cpio_count; }  // 070701 in decimal
 
         let inode = _cpio_parse_hex(CPIO_BUF, offset + 6, 8);
-        let mode = _cpio_parse_hex(CPIO_BUF, offset + 14, 8);
+        let mut mode = _cpio_parse_hex(CPIO_BUF, offset + 14, 8);
         let uid = _cpio_parse_hex(CPIO_BUF, offset + 22, 8);
         let gid = _cpio_parse_hex(CPIO_BUF, offset + 30, 8);
         let nlink = _cpio_parse_hex(CPIO_BUF, offset + 38, 8);
@@ -99,7 +99,7 @@ fn cpio_parse_buf() {
         let mut name = "";
         let mut ni = 0;
         while ni < namesize - 1 {
-            let c = mem_read_byte(CPIO_BUF + offset + ni);
+            let mut c = mem_read_byte(CPIO_BUF + offset + ni);
             if c == 0 { ni = namesize; }
             name = name + str_from_code(c);
             ni = ni + 1;
@@ -128,7 +128,7 @@ fn cpio_load(path) {
     let fd = vfs_open(path, 0);
     if fd < 0 { return 0 - 1; }
 
-    let n = vfs_read(fd, CPIO_BUF, CPIO_BUF_SZ);
+    let mut n = vfs_read(fd, CPIO_BUF, CPIO_BUF_SZ);
     vfs_close(fd);
 
     if n < 110 { return 0 - 2; }
@@ -144,7 +144,7 @@ fn cpio_list() {
     while i < cpio_count {
         let name = cpio_names[i];
         let size = cpio_sizes[i];
-        let mode = cpio_modes[i];
+        let mut mode = cpio_modes[i];
         out = out + "  " + name + "  " + to_string(size) + " bytes  mode=" + to_string(mode) + "\n";
         i = i + 1;
     }
@@ -161,7 +161,7 @@ fn cpio_extract(index, dest_path) {
     let fd = vfs_open(dest_path, 1);
     if fd < 0 { return 0 - 2; }
 
-    let w = vfs_write(fd, CPIO_BUF + offset, size);
+    let mut w = vfs_write(fd, CPIO_BUF + offset, size);
     vfs_close(fd);
 
     if w != size { return 0 - 3; }
@@ -214,7 +214,7 @@ fn cpio_selftest() {
     }
     mem_write_byte(CPIO_BUF + 110 + 8, 0);
 
-    let n = cpio_parse_buf();
+    let mut n = cpio_parse_buf();
     if n < 1 { return "cpio selftest: parse failed"; }
 
     return "cpio selftest: pass";

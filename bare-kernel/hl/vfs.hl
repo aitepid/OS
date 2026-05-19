@@ -58,7 +58,7 @@ fn _trie_init() {
 
 fn _trie_add_child(parent, label) {
     if _trie_count >= TRIE_MAX_NODES { return 0 - 1; }
-    let idx = _trie_count;
+    let mut idx = _trie_count;
     push(_trie_label, label);
     push(_trie_children, []);
     push(_trie_mount, 0 - 1);
@@ -102,7 +102,7 @@ fn _vfs_split_path(path) {
     let mut cur = "";
     let mut i = 0;
     while i < len(path) {
-        let c = char_at(path, i);
+        let mut c = char_at(path, i);
         if c == "/" {
             if len(cur) > 0 {
                 push(parts, cur);
@@ -173,7 +173,7 @@ fn vfs_mount_ext4(mount_path, ahci_port) {
 
 fn vfs_mount(path_prefix, fs_type, device_id) {
     if mount_count >= MAX_MOUNTS { return 0; }
-    let addr = MOUNT_TABLE + mount_count * 64;
+    let mut addr = MOUNT_TABLE + mount_count * 64;
     mem_write_u64(addr, 1);
     mem_write_string(addr + 8, path_prefix);
     mem_write_u64(addr + 16, fs_type);
@@ -201,7 +201,7 @@ fn vfs_mount_fat16(mount_path, device_id) {
         i = i + 1;
     }
     page_free(boot_buf);
-    let result = fat16_init(boot_sector);
+    let mut result = fat16_init(boot_sector);
     if result == 1 {
         vfs_mount(mount_path, 1, device_id);
         print("Mounted FAT16 at " + mount_path);
@@ -222,8 +222,8 @@ fn vfs_open(path, flags) {
 
     let mut fd = 0;
     while fd < MAX_OPEN_FILES {
-        let addr = VFS_TABLE + fd * VFS_ENTRY_SIZE;
-        let f = mem_read_u64(addr);
+        let mut addr = VFS_TABLE + fd * VFS_ENTRY_SIZE;
+        let mut f = mem_read_u64(addr);
         if f == 0 {
             mem_write_u64(addr, 1);
             mem_write_u64(addr + 8, fs_type);
@@ -257,10 +257,10 @@ fn vfs_open(path, flags) {
 fn vfs_read(fd, buf, count) {
     if fd < 0 { return 0; }
     if fd >= MAX_OPEN_FILES { return 0; }
-    let addr = VFS_TABLE + fd * VFS_ENTRY_SIZE;
+    let mut addr = VFS_TABLE + fd * VFS_ENTRY_SIZE;
     let fs_type = mem_read_u64(addr + 8);
     let inode = mem_read_u64(addr + 16);
-    let pos = mem_read_u64(addr + 24);
+    let mut pos = mem_read_u64(addr + 24);
     let size = mem_read_u64(addr + 32);
     let mut bytes_read = 0;
     if fs_type == 0 {
@@ -271,7 +271,7 @@ fn vfs_read(fd, buf, count) {
     }
     if fs_type == 3 {
         // ext4: read file into EXT4_BLOCK_BUF, then return substring
-        let total = ext4_read_file(inode, 0);
+        let mut total = ext4_read_file(inode, 0);
         if total > 0 {
             let want = count;
             if pos + want > total { bytes_read = total - pos; }
@@ -301,10 +301,10 @@ fn vfs_read(fd, buf, count) {
 fn vfs_write(fd, data, count) {
     if fd < 0 { return 0; }
     if fd >= MAX_OPEN_FILES { return 0; }
-    let addr = VFS_TABLE + fd * VFS_ENTRY_SIZE;
+    let mut addr = VFS_TABLE + fd * VFS_ENTRY_SIZE;
     let fs_type = mem_read_u64(addr + 8);
     let inode = mem_read_u64(addr + 16);
-    let pos = mem_read_u64(addr + 24);
+    let mut pos = mem_read_u64(addr + 24);
     let mut bytes_written = 0;
     if fs_type == 0 {
         bytes_written = ramfs_write(inode, data, pos, count);
@@ -327,15 +327,15 @@ fn vfs_write(fd, data, count) {
 
 fn vfs_close(fd) {
     if fd < 0 { return 0; }
-    let addr = VFS_TABLE + fd * VFS_ENTRY_SIZE;
+    let mut addr = VFS_TABLE + fd * VFS_ENTRY_SIZE;
     mem_write_u64(addr, 0);
     return 0;
 }
 
 fn vfs_seek(fd, offset, whence) {
     if fd < 0 { return 0; }
-    let addr = VFS_TABLE + fd * VFS_ENTRY_SIZE;
-    let cur = mem_read_u64(addr + 24);
+    let mut addr = VFS_TABLE + fd * VFS_ENTRY_SIZE;
+    let mut cur = mem_read_u64(addr + 24);
     let size = mem_read_u64(addr + 32);
     let mut new_pos = cur;
     if whence == 0 { new_pos = offset; }
@@ -451,7 +451,7 @@ fn vfs_readdir(path) {
 fn vfs_mkdir(path) {
     let mount_info = vfs_resolve(path);
     let fs_type = mem_read_u64(MOUNT_TABLE + mount_info[0] * 64 + 16);
-    let result = 0 - 1;
+    let mut result = 0 - 1;
     if fs_type == 0 { result = ramfs_mkdir(path); }
     if fs_type == 1 { result = fat16_create_file(path, 1); }
     if fs_type == 3 { return 0 - 1; }  // ext4 is read-only
@@ -472,7 +472,7 @@ fn vfs_mkdir(path) {
 fn vfs_unlink(path) {
     let mount_info = vfs_resolve(path);
     let fs_type = mem_read_u64(MOUNT_TABLE + mount_info[0] * 64 + 16);
-    let result = 0 - 1;
+    let mut result = 0 - 1;
     if fs_type == 0 { result = ramfs_unlink(path); }
     if fs_type == 1 {
         let files = fat16_list_root();

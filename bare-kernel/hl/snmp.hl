@@ -107,7 +107,7 @@ fn _snmp_write_int(off, val) {
 }
 
 fn _snmp_write_octstr(off, s) {
-    let n = len(s);
+    let mut n = len(s);
     mem_write_u8(SNMP_BUF + off, 4);   // OctetString tag
     let lbytes = _snmp_write_len(off + 1, n);
     let mut i = 0;
@@ -139,10 +139,10 @@ fn _snmp_encode_oid(off, oid_str) {
     // Parse arcs from dotted string
     let mut arcs = [];
     let mut cur = "";
-    let n = len(oid_str);
+    let mut n = len(oid_str);
     let mut k = 0;
     while k < n {
-        let c = str_char_code(oid_str, k);
+        let mut c = str_char_code(oid_str, k);
         if c == 46 {   // '.'
             push(arcs, parse_int(cur));
             cur = "";
@@ -240,7 +240,7 @@ fn snmp_get(host, community, oid) {
     // Build GetRequest PDU (simplified: send OID, wait for response string)
     // For simulation: query local MIB if host is loopback
     if host == "127.0.0.1" {
-        let val = _snmp_mib_get(oid);
+        let mut val = _snmp_mib_get(oid);
         if len(val) == 0 { return "noSuchObject"; }
         return val;
     }
@@ -264,7 +264,7 @@ fn snmp_walk(host, community) {
     let mut out = "SNMP walk " + host + " community=" + community + ":\n";
     let mut i = 0;
     while i < len(oids) {
-        let val = snmp_get(host, community, oids[i]);
+        let mut val = snmp_get(host, community, oids[i]);
         out = out + "  " + labels[i] + " (" + oids[i] + ") = " + val + "\n";
         i = i + 1;
     }
@@ -272,8 +272,8 @@ fn snmp_walk(host, community) {
 }
 
 fn snmp_status() {
-    let state = "stopped";
-    if snmp_agent_on == 1 { let state = "running"; }
+    let mut state = "stopped";
+    if snmp_agent_on == 1 { let mut state = "running"; }
     return "snmp: agent " + state + " port=" + to_string(SNMP_PORT)
         + " community=" + snmp_community
         + " requests=" + to_string(snmp_req_count);

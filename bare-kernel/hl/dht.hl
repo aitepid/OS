@@ -45,17 +45,17 @@ let dht_result_dist = array(8, 0);
 let dht_result_n    = 0;
 
 fn dht_init() {
-    let i = 0;
+    let mut i = 0;
     while i < DHT_MAXNODES {
         set_at(dht_node_id,   i, 0);
         set_at(dht_node_addr, i, 0);
         set_at(dht_node_live, i, 0);
         i += 1;
     }
-    let b = 0;
+    let mut b = 0;
     while b < DHT_BITS {
         set_at(dht_kb_sz, b, 0);
-        let s = 0;
+        let mut s = 0;
         while s < DHT_K {
             set_at(dht_kb, b * DHT_KB_STRIDE + s, 0 - 1);
             s += 1;
@@ -80,12 +80,12 @@ fn dht_set_self(id) {
 
 fn _dht_xor(a, b) {
     // XOR via bit-by-bit arithmetic for 16-bit values
-    let result = 0;
+    let mut result = 0;
     let bit    = 1;
     let i      = 0;
     while i < DHT_BITS {
         // extract bit i from a and b: (val / bit) mod 2
-        let next = bit * 2;
+        let mut next = bit * 2;
         let ba   = a - (a / next) * next;
         let ba_b = ba / bit;
         let bb   = b - (b / next) * next;
@@ -102,16 +102,16 @@ fn _dht_xor(a, b) {
 fn _dht_bucket_for(dist) {
     // Bucket = position of highest set bit in dist
     if dist == 0 { return 0; }
-    let b = 0;
-    let v = dist;
+    let mut b = 0;
+    let mut v = dist;
     let bkt = 0;
     while b < DHT_BITS {
-        let next = 2;
+        let mut next = 2;
         let bit  = 1;
         let k    = 0;
         while k < b { bit = bit * 2; k += 1; }
-        let q = v / bit;
-        let r = q - (q / 2) * 2;
+        let mut q = v / bit;
+        let mut r = q - (q / 2) * 2;
         if r == 1 { bkt = b; }
         b += 1;
     }
@@ -119,7 +119,7 @@ fn _dht_bucket_for(dist) {
 }
 
 fn _dht_add_to_bucket(bkt, node_idx) {
-    let sz = dht_kb_sz[bkt];
+    let mut sz = dht_kb_sz[bkt];
     if sz < DHT_K {
         set_at(dht_kb, bkt * DHT_KB_STRIDE + sz, node_idx);
         set_at(dht_kb_sz, bkt, sz + 1);
@@ -129,14 +129,14 @@ fn _dht_add_to_bucket(bkt, node_idx) {
 
 fn dht_add_node(id, addr) {
     // Add node to local routing table
-    let idx = dht_n_nodes;
+    let mut idx = dht_n_nodes;
     set_at(dht_node_id,   idx, id);
     set_at(dht_node_addr, idx, addr);
     set_at(dht_node_live, idx, 1);
     dht_n_nodes += 1;
 
     // Add to appropriate k-bucket
-    let dist = _dht_xor(dht_self_id, id);
+    let mut dist = _dht_xor(dht_self_id, id);
     let bkt  = _dht_bucket_for(dist);
     _dht_add_to_bucket(bkt, idx);
     return idx;
@@ -145,12 +145,12 @@ fn dht_add_node(id, addr) {
 fn dht_find_node(target_id) {
     // Find k closest nodes to target_id in routing table
     dht_result_n = 0;
-    let i = 0;
+    let mut i = 0;
     while i < dht_n_nodes {
         if dht_node_live[i] == 1 {
-            let dist = _dht_xor(target_id, dht_node_id[i]);
+            let mut dist = _dht_xor(target_id, dht_node_id[i]);
             // Insert into result set (keep sorted by distance, max DHT_K)
-            let j = dht_result_n;
+            let mut j = dht_result_n;
             let inserted = 0;
             while j > 0 {
                 if dist < dht_result_dist[j - 1] {
@@ -185,10 +185,10 @@ fn dht_find_node(target_id) {
 
 fn dht_store(key, val) {
     // Store locally; in full Kademlia would also STORE on k-closest nodes
-    let slot = dht_data_n - (dht_data_n / DHT_MAXDATA) * DHT_MAXDATA;
+    let mut slot = dht_data_n - (dht_data_n / DHT_MAXDATA) * DHT_MAXDATA;
     // Check for existing key
-    let found = 0;
-    let i = 0;
+    let mut found = 0;
+    let mut i = 0;
     while i < dht_data_n {
         if dht_data_used[i] == 1 {
             if dht_data_key[i] == key {
@@ -210,7 +210,7 @@ fn dht_store(key, val) {
 
 fn dht_lookup(key) {
     // Local lookup; iterative in full Kademlia
-    let i = 0;
+    let mut i = 0;
     while i < dht_data_n {
         if dht_data_used[i] == 1 {
             if dht_data_key[i] == key {
@@ -224,7 +224,7 @@ fn dht_lookup(key) {
 
 fn dht_ping(node_id) {
     // Check if node is in routing table
-    let i = 0;
+    let mut i = 0;
     while i < dht_n_nodes {
         if dht_node_id[i] == node_id {
             if dht_node_live[i] == 1 { return 1; }

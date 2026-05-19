@@ -100,7 +100,7 @@ fn _fq_hash(addr) {
 fn _fq_alloc_entry() {
     let mut i = 0;
     while i < _FQ_MAX_WAITERS {
-        let base = i * _FQ_ENTRY_SIZE;
+        let mut base = i * _FQ_ENTRY_SIZE;
         if _fq_entries[base + 4] == 0 { return i; }
         i = i + 1;
     }
@@ -108,9 +108,9 @@ fn _fq_alloc_entry() {
 }
 
 fn _fq_enqueue(addr, task_id, timeout_tick) {
-    let slot = _fq_alloc_entry();
+    let mut slot = _fq_alloc_entry();
     if slot < 0 { return 0 - 1; }
-    let base = slot * _FQ_ENTRY_SIZE;
+    let mut base = slot * _FQ_ENTRY_SIZE;
     set_at(_fq_entries, base, addr);
     set_at(_fq_entries, base + 1, task_id);
     set_at(_fq_entries, base + 3, timeout_tick);
@@ -129,8 +129,8 @@ fn _fq_dequeue_one(addr) {
     let mut prev = 0 - 1;
     let mut cur = _fq_bucket_head[bucket];
     while cur >= 0 {
-        let base = cur * _FQ_ENTRY_SIZE;
-        let next = _fq_entries[base + 2];
+        let mut base = cur * _FQ_ENTRY_SIZE;
+        let mut next = _fq_entries[base + 2];
         if _fq_entries[base] == addr {
             if _fq_entries[base + 4] == 1 {
                 // Remove from list
@@ -163,16 +163,16 @@ fn futex_wait(addr, expected_val) {
     _fq_enqueue(addr, task_id, 0);
     // In native: set task state to BLOCKED, call schedule()
     // Interpreter: spin until woken
-    let slot = _fq_total_waits - 1;
+    let mut slot = _fq_total_waits - 1;
     let mut spin = 0;
     while spin < 100000 {
         // Check if we've been woken (entry freed)
-        let found = 0;
+        let mut found = 0;
         let bucket = _fq_hash(addr);
         let mut c = _fq_bucket_head[bucket];
         let mut still_waiting = 0;
         while c >= 0 {
-            let b = c * _FQ_ENTRY_SIZE;
+            let mut b = c * _FQ_ENTRY_SIZE;
             if _fq_entries[b + 1] == task_id {
                 if _fq_entries[b + 4] == 1 { still_waiting = 1; }
             }
@@ -210,7 +210,7 @@ fn futex_wait_timeout(addr, expected_val, timeout_ticks) {
         let mut c = _fq_bucket_head[bucket];
         let mut still_waiting = 0;
         while c >= 0 {
-            let b = c * _FQ_ENTRY_SIZE;
+            let mut b = c * _FQ_ENTRY_SIZE;
             if _fq_entries[b + 1] == task_id {
                 if _fq_entries[b + 4] == 1 { still_waiting = 1; }
             }
@@ -224,8 +224,8 @@ fn futex_wait_timeout(addr, expected_val, timeout_ticks) {
     let mut prev = 0 - 1;
     let mut cur = _fq_bucket_head[bucket];
     while cur >= 0 {
-        let base = cur * _FQ_ENTRY_SIZE;
-        let next = _fq_entries[base + 2];
+        let mut base = cur * _FQ_ENTRY_SIZE;
+        let mut next = _fq_entries[base + 2];
         if _fq_entries[base + 1] == task_id {
             if _fq_entries[base + 4] == 1 {
                 if prev < 0 { set_at(_fq_bucket_head, bucket, next); }
@@ -271,7 +271,7 @@ fn mutex_lock(mutex_addr) {
     let mut acquired = 0;
     while acquired == 0 {
         futex_wait(mutex_addr, 2);
-        let val = mem_read_u64(mutex_addr);
+        let mut val = mem_read_u64(mutex_addr);
         if val == 0 {
             mem_write_u64(mutex_addr, 2);
             acquired = 1;
@@ -310,7 +310,7 @@ fn sem_init(sem_addr, initial_count) {
 fn sem_wait(sem_addr) {
     let mut acquired = 0;
     while acquired == 0 {
-        let val = mem_read_u64(sem_addr);
+        let mut val = mem_read_u64(sem_addr);
         if val > 0 {
             mem_write_u64(sem_addr, val - 1);
             acquired = 1;
@@ -322,7 +322,7 @@ fn sem_wait(sem_addr) {
 }
 
 fn sem_post(sem_addr) {
-    let val = mem_read_u64(sem_addr);
+    let mut val = mem_read_u64(sem_addr);
     mem_write_u64(sem_addr, val + 1);
     futex_wake(sem_addr, 1);
     return 0;
@@ -340,7 +340,7 @@ fn rwlock_init(rw_addr) {
 fn rwlock_read_lock(rw_addr) {
     let mut acquired = 0;
     while acquired == 0 {
-        let val = mem_read_u64(rw_addr);
+        let mut val = mem_read_u64(rw_addr);
         if val >= 0 {
             mem_write_u64(rw_addr, val + 1);
             acquired = 1;
@@ -361,7 +361,7 @@ fn rwlock_read_unlock(rw_addr) {
 fn rwlock_write_lock(rw_addr) {
     let mut acquired = 0;
     while acquired == 0 {
-        let val = mem_read_u64(rw_addr);
+        let mut val = mem_read_u64(rw_addr);
         if val == 0 {
             mem_write_u64(rw_addr, 0 - 1);
             acquired = 1;

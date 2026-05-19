@@ -99,7 +99,7 @@ fn gossip_init(node_id, addr) {
 }
 
 fn _gossip_add_member(id, addr, state, incarnation) {
-    let idx = gossip_member_count;
+    let mut idx = gossip_member_count;
     if idx >= GOSSIP_MAX_MEMBERS { return 0 - 1; }
     set_at(gossip_member_ids,    idx, id);
     set_at(gossip_member_addrs,  idx, addr);
@@ -111,7 +111,7 @@ fn _gossip_add_member(id, addr, state, incarnation) {
 }
 
 fn _gossip_find_member(id) {
-    let i = 0;
+    let mut i = 0;
     while i < gossip_member_count {
         if gossip_member_ids[i] == id { return i; }
         i = i + 1;
@@ -130,7 +130,7 @@ fn gossip_join(seed_id, seed_addr) {
 fn gossip_leave() {
     gossip_incarnation = gossip_incarnation + 1;
     _gossip_enqueue_event(GOSSIP_MSG_LEAVE, gossip_node_id, gossip_incarnation);
-    let idx = _gossip_find_member(gossip_node_id);
+    let mut idx = _gossip_find_member(gossip_node_id);
     if idx >= 0 { set_at(gossip_member_states, idx, GOSSIP_LEFT); }
     return 0;
 }
@@ -149,9 +149,9 @@ fn _gossip_enqueue_event(etype, member_id, incarnation) {
 
 // Retransmit count = ceil(mult * log2(N+1))
 fn _gossip_retransmit_count() {
-    let n = gossip_member_count + 1;
+    let mut n = gossip_member_count + 1;
     let log2n = 0;
-    let v = n;
+    let mut v = n;
     while v > 1 { v = v / 2; log2n = log2n + 1; }
     return GOSSIP_RETRANSMIT_MULT * (log2n + 1);
 }
@@ -159,8 +159,8 @@ fn _gossip_retransmit_count() {
 // Select piggyback events (up to k events sorted by TTL descending)
 fn _gossip_select_events(max_events) {
     let selected = [];
-    let count = 0;
-    let i = 0;
+    let mut count = 0;
+    let mut i = 0;
     while i < gossip_event_count {
         if gossip_event_ttl[i] > 0 {
             if count < max_events {
@@ -175,9 +175,9 @@ fn _gossip_select_events(max_events) {
 
 // Decrement TTL of selected events
 fn _gossip_decrement_events(selected, count) {
-    let i = 0;
+    let mut i = 0;
     while i < count {
-        let idx = selected[i];
+        let mut idx = selected[i];
         set_at(gossip_event_ttl, idx, gossip_event_ttl[idx] - 1);
         i = i + 1;
     }
@@ -222,7 +222,7 @@ fn gossip_handle_ack(sender_id, sender_inc, events, event_count) {
     gossip_acks_recv = gossip_acks_recv + 1;
     _gossip_merge_events(sender_id, sender_inc, "", events, event_count);
     // Clear pending probe for this sender
-    let i = 0;
+    let mut i = 0;
     while i < gossip_pending_count {
         if gossip_pending_target[i] == sender_id {
             set_at(gossip_pending_target, i, -1);
@@ -235,7 +235,7 @@ fn gossip_handle_ack(sender_id, sender_inc, events, event_count) {
 // Merge received events into local membership view
 fn _gossip_merge_events(sender_id, sender_inc, sender_addr, events, event_count) {
     // Ensure sender is in member table
-    let idx = _gossip_find_member(sender_id);
+    let mut idx = _gossip_find_member(sender_id);
     if idx < 0 {
         if sender_addr != "" {
             _gossip_add_member(sender_id, sender_addr, GOSSIP_ALIVE, sender_inc);
@@ -252,7 +252,7 @@ fn _gossip_merge_events(sender_id, sender_inc, sender_addr, events, event_count)
 
 // Mark member as suspect (failure suspicion)
 fn gossip_suspect_member(member_id) {
-    let idx = _gossip_find_member(member_id);
+    let mut idx = _gossip_find_member(member_id);
     if idx < 0 { return 1; }
     if gossip_member_states[idx] == GOSSIP_ALIVE {
         set_at(gossip_member_states, idx, GOSSIP_SUSPECT);
@@ -265,7 +265,7 @@ fn gossip_suspect_member(member_id) {
 
 // Declare member dead
 fn gossip_declare_dead(member_id) {
-    let idx = _gossip_find_member(member_id);
+    let mut idx = _gossip_find_member(member_id);
     if idx < 0 { return 1; }
     if gossip_member_states[idx] != GOSSIP_DEAD {
         set_at(gossip_member_states, idx, GOSSIP_DEAD);
@@ -279,7 +279,7 @@ fn gossip_declare_dead(member_id) {
 // Refute suspicion by incrementing incarnation
 fn gossip_refute() {
     gossip_incarnation = gossip_incarnation + 1;
-    let idx = _gossip_find_member(gossip_node_id);
+    let mut idx = _gossip_find_member(gossip_node_id);
     if idx >= 0 {
         set_at(gossip_member_states, idx, GOSSIP_ALIVE);
         set_at(gossip_member_incs, idx, gossip_incarnation);
@@ -291,7 +291,7 @@ fn gossip_refute() {
 // Select probe target (round-robin with shuffle)
 fn _gossip_select_probe_target() {
     let alive_count = 0;
-    let i = 0;
+    let mut i = 0;
     while i < gossip_member_count {
         if gossip_member_ids[i] != gossip_node_id {
             if gossip_member_states[i] == GOSSIP_ALIVE {
@@ -319,9 +319,9 @@ fn _gossip_select_probe_target() {
 
 // Select k random members for indirect probe (excluding target and self)
 fn _gossip_select_indirect(target_id) {
-    let result = [];
-    let count = 0;
-    let i = 0;
+    let mut result = [];
+    let mut count = 0;
+    let mut i = 0;
     while i < gossip_member_count {
         let mid = gossip_member_ids[i];
         if mid != gossip_node_id { if mid != target_id {
@@ -357,7 +357,7 @@ fn gossip_tick(delta_ms) {
         }
     }
     // Advance suspicion timers
-    let i = 0;
+    let mut i = 0;
     while i < gossip_member_count {
         if gossip_member_states[i] == GOSSIP_SUSPECT {
             set_at(gossip_member_suspicion_timer, i,
@@ -374,9 +374,9 @@ fn gossip_tick(delta_ms) {
 fn gossip_list_members() {
     let state_names = ["alive", "suspect", "dead", "left"];
     print("gossip members (" + to_string(gossip_member_count) + "):");
-    let i = 0;
+    let mut i = 0;
     while i < gossip_member_count {
-        let s = gossip_member_states[i];
+        let mut s = gossip_member_states[i];
         let sname = "unknown";
         if s >= 0 { if s <= 3 { sname = state_names[s]; } }
         print("  [" + to_string(gossip_member_ids[i]) + "] "
@@ -390,7 +390,7 @@ fn gossip_list_members() {
 
 fn gossip_status() {
     let alive = 0;
-    let i = 0;
+    let mut i = 0;
     while i < gossip_member_count {
         if gossip_member_states[i] == GOSSIP_ALIVE { alive = alive + 1; }
         i = i + 1;

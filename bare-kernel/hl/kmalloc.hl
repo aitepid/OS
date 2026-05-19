@@ -64,7 +64,7 @@ fn _slab_fl_pop(cls) {
     let top = slab_fl_top[cls];
     if top <= 0 { return 0; }
     let new_top = top - 1;
-    let addr = slab_fl[cls][new_top];
+    let mut addr = slab_fl[cls][new_top];
     set_at(slab_fl_top, cls, new_top);
     return addr;
 }
@@ -79,7 +79,7 @@ fn _slab_fl_len(cls) {
 
 // Find smallest class whose total block size fits (payload + header)
 fn _slab_find_class(payload_size) {
-    let total = payload_size + HEADER_SIZE;
+    let mut total = payload_size + HEADER_SIZE;
     let mut i = 0;
     while i < SLAB_CLASSES {
         if slab_sizes[i] >= total { return i; }
@@ -93,10 +93,10 @@ fn _slab_refill(cls) {
     let block_size = slab_sizes[cls];
     let page = page_alloc();
     if page == 0 { return 0; }
-    let count = 4096 / block_size;
+    let mut count = 4096 / block_size;
     let mut i = 0;
     while i < count {
-        let addr = page + i * block_size;
+        let mut addr = page + i * block_size;
         mem_write_u64(addr, block_size);
         mem_write_u64(addr + 8, cls * 2);
         _slab_fl_push(cls, addr);
@@ -146,7 +146,7 @@ fn kmalloc(size) {
     if cls == SLAB_CLASS_LARGE {
         // Large allocation: whole pages via buddy allocator
         let pages = (size + HEADER_SIZE + 4095) / 4096;
-        let addr = page_alloc_contiguous(pages);
+        let mut addr = page_alloc_contiguous(pages);
         if addr == 0 { return 0; }
         mem_write_u64(addr, pages * 4096);
         mem_write_u64(addr + 8, SLAB_CLASS_LARGE * 2 + 1);
@@ -160,7 +160,7 @@ fn kmalloc(size) {
         if _slab_refill(cls) == 0 { return 0; }
     }
 
-    let addr = _slab_fl_pop(cls);
+    let mut addr = _slab_fl_pop(cls);
     if addr == 0 { return 0; }
     mem_write_u64(addr + 8, cls * 2 + 1);
     slab_alloc_count = slab_alloc_count + 1;
@@ -171,7 +171,7 @@ fn kmalloc(size) {
 // Free an allocation. Returns 0.
 fn kfree(ptr) {
     if ptr == 0 { return 0; }
-    let addr = ptr - HEADER_SIZE;
+    let mut addr = ptr - HEADER_SIZE;
     let total_size = mem_read_u64(addr);
     let flags = mem_read_u64(addr + 8);
     let cls = flags / 2;
@@ -225,7 +225,7 @@ fn kmalloc_stats() {
     let mut fragments = 0;
     let mut i = 0;
     while i < SLAB_CLASSES {
-        let count = _slab_fl_len(i);
+        let mut count = _slab_fl_len(i);
         free_space = free_space + count * slab_sizes[i];
         if count > 0 { fragments = fragments + 1; }
         i = i + 1;

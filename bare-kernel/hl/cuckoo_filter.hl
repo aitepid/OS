@@ -29,8 +29,8 @@ let cf_rand  = 31337;     // LCG state for random kick direction
 let cf_initialized = 0;
 
 fn cuckoo_filter_init() {
-    let sz = CF_BUCKETS * CF_BSIZE;
-    let i = 0;
+    let mut sz = CF_BUCKETS * CF_BSIZE;
+    let mut i = 0;
     while i < sz { set_at(cf_table, i, 0); i = i + 1; }
     cf_count = 0; cf_kicks = 0; cf_full = 0; cf_rand = 31337;
     cf_initialized = 1;
@@ -39,7 +39,7 @@ fn cuckoo_filter_init() {
 
 // 8-bit fingerprint of item (non-zero, in [1..255])
 fn _cf_fp(item) {
-    let h = item * 2654435761;
+    let mut h = item * 2654435761;
     if h < 0 { h = -h; }
     let fp = h - ((h / CF_FP_RANGE) * CF_FP_RANGE);
     if fp == 0 { fp = 1; }
@@ -48,16 +48,16 @@ fn _cf_fp(item) {
 
 // Primary bucket index: hash(item) mod CF_BUCKETS
 fn _cf_h1(item) {
-    let h = item * 1234567891;
+    let mut h = item * 1234567891;
     if h < 0 { h = -h; }
     return h - ((h / CF_BUCKETS) * CF_BUCKETS);
 }
 
 // XOR of a and b restricted to 6 bits (for CF_BUCKETS=64=2^6)
 fn _cf_xor6(a, b) {
-    let result = 0;
+    let mut result = 0;
     let bit = 1;
-    let pos = 0;
+    let mut pos = 0;
     while pos < 6 {
         let ab = (a / bit) - ((a / bit / 2) * 2);
         let bb = (b / bit) - ((b / bit / 2) * 2);
@@ -70,9 +70,9 @@ fn _cf_xor6(a, b) {
 
 // Fingerprint hash → bucket offset (non-zero, in [1..CF_BUCKETS-1])
 fn _cf_fp_hash(fp) {
-    let h = fp * 2246822519;
+    let mut h = fp * 2246822519;
     if h < 0 { h = -h; }
-    let r = h - ((h / CF_BUCKETS) * CF_BUCKETS);
+    let mut r = h - ((h / CF_BUCKETS) * CF_BUCKETS);
     if r == 0 { r = 1; }
     return r;
 }
@@ -84,8 +84,8 @@ fn _cf_alternate(b, fp) {
 
 // Try to insert fp into an empty slot in bucket b (return 1 on success)
 fn _cf_bucket_try_insert(b, fp) {
-    let base = b * CF_BSIZE;
-    let i = 0;
+    let mut base = b * CF_BSIZE;
+    let mut i = 0;
     while i < CF_BSIZE {
         if cf_table[base + i] == 0 {
             set_at(cf_table, base + i, fp);
@@ -98,8 +98,8 @@ fn _cf_bucket_try_insert(b, fp) {
 
 // Check if fp is in bucket b
 fn _cf_bucket_has(b, fp) {
-    let base = b * CF_BSIZE;
-    let i = 0;
+    let mut base = b * CF_BSIZE;
+    let mut i = 0;
     while i < CF_BSIZE {
         if cf_table[base + i] == fp { return 1; }
         i = i + 1;
@@ -109,8 +109,8 @@ fn _cf_bucket_has(b, fp) {
 
 // Remove one occurrence of fp from bucket b (return 1 on success)
 fn _cf_bucket_remove(b, fp) {
-    let base = b * CF_BSIZE;
-    let i = 0;
+    let mut base = b * CF_BSIZE;
+    let mut i = 0;
     while i < CF_BSIZE {
         if cf_table[base + i] == fp {
             set_at(cf_table, base + i, 0);
@@ -139,11 +139,11 @@ fn cf_insert(item) {
         cf_count = cf_count + 1; cf_full = 0; return 1;
     }
     // Cuckoo kicks: randomly start from b1 or b2
-    let b = b1;
+    let mut b = b1;
     if _cf_rand_slot() >= 2 { b = b2; }
-    let i = 0;
+    let mut i = 0;
     while i < CF_MAX_KICKS {
-        let slot = b * CF_BSIZE + _cf_rand_slot();
+        let mut slot = b * CF_BSIZE + _cf_rand_slot();
         let evicted = cf_table[slot];
         set_at(cf_table, slot, fp);
         fp = evicted;
@@ -200,7 +200,7 @@ fn cf_status() {
 fn cuckoo_filter_test() {
     cuckoo_filter_init();
     // Insert 100 items [1..100]
-    let i = 1;
+    let mut i = 1;
     while i <= 100 { cf_insert(i); i = i + 1; }
     // All 100 must be present (true positive rate = 100%)
     let tp = 0;

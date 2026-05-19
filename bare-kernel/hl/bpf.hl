@@ -195,7 +195,7 @@ fn bpf_run(prog_id, ctx) {
 
     while pc < n_insns {
         if steps >= BPF_MAX_STEPS { return 0; } // safety limit
-        let base = pc * 4;
+        let mut base = pc * 4;
         let op = insns[base];
         let dst = insns[base + 1];
         let src = insns[base + 2];
@@ -221,12 +221,12 @@ fn bpf_run(prog_id, ctx) {
         else if op == BPF_JGT { if regs[dst] > regs[src]  { pc = pc + imm; } else { pc = pc + 1; } }
         else if op == BPF_JGE { if regs[dst] >= regs[src] { pc = pc + imm; } else { pc = pc + 1; } }
         else if op == BPF_LDX {
-            let addr = regs[src] + imm;
+            let mut addr = regs[src] + imm;
             if addr >= 0 { if addr < len(ctx) { set_at(regs, dst, ctx[addr]); } }
             pc = pc + 1;
         }
         else if op == BPF_STX {
-            let addr = regs[dst] + imm;
+            let mut addr = regs[dst] + imm;
             if addr >= 0 { if addr < len(ctx) { set_at(ctx, addr, regs[src]); } }
             pc = pc + 1;
         }
@@ -255,7 +255,7 @@ fn bpf_run_hook(attach_point, ctx) {
 fn bpf_map_set(prog_id, key, value) {
     if prog_id < 0 { return 0 - 1; }
     if prog_id >= BPF_MAX_PROGS { return 0 - 1; }
-    let m = _bpf_maps[prog_id];
+    let mut m = _bpf_maps[prog_id];
     // Find existing key or empty slot
     let mut i = 0;
     while i < BPF_MAP_SIZE {
@@ -281,7 +281,7 @@ fn bpf_map_set(prog_id, key, value) {
 fn bpf_map_get(prog_id, key) {
     if prog_id < 0 { return 0; }
     if prog_id >= BPF_MAX_PROGS { return 0; }
-    let m = _bpf_maps[prog_id];
+    let mut m = _bpf_maps[prog_id];
     let mut i = 0;
     while i < BPF_MAP_SIZE {
         if m[i * 2] == key { return m[i * 2 + 1]; }

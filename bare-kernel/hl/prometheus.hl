@@ -53,7 +53,7 @@ fn prometheus_init() {
     set_at(pm_hb_bound, 5, 500);
     set_at(pm_hb_bound, 6, 1000);
     set_at(pm_hb_bound, 7, 32767);  // +Inf sentinel
-    let i = 0;
+    let mut i = 0;
     while i < PM_MAXMETRICS {
         set_at(pm_active,  i, 0);
         set_at(pm_value,   i, 0);
@@ -87,9 +87,9 @@ fn pm_histogram(name_hash) { return _pm_alloc(PM_HISTOGRAM, name_hash); }
 fn pm_summary(name_hash)   { return _pm_alloc(PM_SUMMARY,   name_hash); }
 
 fn pm_label(id, key_hash, val_hash) {
-    let n = pm_nlabels[id];
+    let mut n = pm_nlabels[id];
     if n >= PM_MAXLABELS { return 0 - 1; }
-    let base = id * PM_LBL_STRIDE + n;
+    let mut base = id * PM_LBL_STRIDE + n;
     set_at(pm_lkey,  base, key_hash);
     set_at(pm_lval,  base, val_hash);
     set_at(pm_lused, base, 1);
@@ -120,7 +120,7 @@ fn pm_observe(id, val) {
         set_at(pm_hb_sum,   id, pm_hb_sum[id] + val);
         set_at(pm_hb_total, id, pm_hb_total[id] + 1);
         // Increment all buckets where val <= bound
-        let b = 0;
+        let mut b = 0;
         while b < PM_HIST_BUCKETS {
             if val <= pm_hb_bound[b] {
                 let bidx = id * PM_HB_STRIDE + b;
@@ -131,7 +131,7 @@ fn pm_observe(id, val) {
     } else {
         // Summary: store sample (ring buffer)
         let n   = pm_smp_n[id];
-        let slot = n - (n / PM_MAXSAMPLES) * PM_MAXSAMPLES;
+        let mut slot = n - (n / PM_MAXSAMPLES) * PM_MAXSAMPLES;
         set_at(pm_smp, id * PM_SMP_STRIDE + slot, val);
         set_at(pm_smp_n, id, n + 1);
     }
@@ -140,10 +140,10 @@ fn pm_observe(id, val) {
 
 fn _pm_sort_samples(id) {
     // Insertion sort of samples in place (max PM_MAXSAMPLES)
-    let n = pm_smp_n[id];
+    let mut n = pm_smp_n[id];
     if n > PM_MAXSAMPLES { n = PM_MAXSAMPLES; }
-    let base = id * PM_SMP_STRIDE;
-    let i = 1;
+    let mut base = id * PM_SMP_STRIDE;
+    let mut i = 1;
     while i < n {
         let key = pm_smp[base + i];
         let j   = i - 1;
@@ -168,9 +168,9 @@ fn _pm_sort_samples(id) {
 
 fn pm_quantile(id, q_pct) {
     // Returns q_pct-th percentile (0-100)
-    let n = _pm_sort_samples(id);
+    let mut n = _pm_sort_samples(id);
     if n == 0 { return 0; }
-    let idx = q_pct * n / 100;
+    let mut idx = q_pct * n / 100;
     if idx >= n { idx = n - 1; }
     return pm_smp[id * PM_SMP_STRIDE + idx];
 }

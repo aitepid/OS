@@ -107,7 +107,7 @@ fn quic_init() {
     // Zero all connection slots
     let mut i = 0;
     while i < QUIC_MAX_CONNS {
-        let addr = quic_conn_addr(i);
+        let mut addr = quic_conn_addr(i);
         mem_write_u64(addr, QUIC_IDLE);
         i = i + 1;
     }
@@ -118,7 +118,7 @@ fn quic_init() {
 fn quic_conn_alloc() {
     let mut i = 0;
     while i < QUIC_MAX_CONNS {
-        let addr = quic_conn_addr(i);
+        let mut addr = quic_conn_addr(i);
         if mem_read_u64(addr) == QUIC_IDLE {
             return i;
         }
@@ -139,7 +139,7 @@ fn quic_connect(remote_ip, remote_port) {
     let conn = quic_conn_alloc();
     if conn < 0 { return 0 - 1; }
 
-    let addr = quic_conn_addr(conn);
+    let mut addr = quic_conn_addr(conn);
     mem_write_u64(addr, QUIC_INITIAL);
     mem_write_u64(addr + 8, quic_gen_conn_id());    // local CID
     mem_write_u64(addr + 16, 0);                     // remote CID (filled on response)
@@ -180,7 +180,7 @@ fn quic_connect(remote_ip, remote_port) {
 
 // Build Initial packet (client hello)
 fn quic_send_initial(conn) {
-    let addr = quic_conn_addr(conn);
+    let mut addr = quic_conn_addr(conn);
     let pkt_num = mem_read_u64(addr + 40);
 
     // Compose QUIC Initial packet:
@@ -269,8 +269,8 @@ fn quic_build_crypto_frame(conn) {
 // Process received QUIC packet
 fn quic_recv_packet(conn, data) {
     if len(data) < 5 { return 0 - 1; }
-    let addr = quic_conn_addr(conn);
-    let state = mem_read_u64(addr);
+    let mut addr = quic_conn_addr(conn);
+    let mut state = mem_read_u64(addr);
 
     let header_byte = data[0];
     let is_long = (header_byte >> 7) & 1;
@@ -302,7 +302,7 @@ fn quic_recv_packet(conn, data) {
 }
 
 fn quic_process_server_initial(conn, data) {
-    let addr = quic_conn_addr(conn);
+    let mut addr = quic_conn_addr(conn);
     // Extract server's SCID from Initial packet
     if len(data) < 23 { return 0; }
     let scid_len = data[14];
@@ -320,7 +320,7 @@ fn quic_process_server_initial(conn, data) {
 
 fn quic_process_handshake(conn, data) {
     // Handshake complete — derive application keys (simplified)
-    let addr = quic_conn_addr(conn);
+    let mut addr = quic_conn_addr(conn);
     let local_cid = mem_read_u64(addr + 8);
     let remote_cid = mem_read_u64(addr + 16);
     // Derive key material by mixing CIDs (simplified HKDF equivalent)
@@ -332,7 +332,7 @@ fn quic_process_handshake(conn, data) {
 }
 
 fn quic_process_short(conn, data) {
-    let addr = quic_conn_addr(conn);
+    let mut addr = quic_conn_addr(conn);
     // Parse short header: 1(flags) + CID(8) + pkt_num(1-4) + payload
     if len(data) < 10 { return 0; }
     // Update largest received packet number
@@ -424,8 +424,8 @@ fn quic_stream_open(conn, stream_id) {
 
 // Send data on a stream
 fn quic_stream_send(conn, stream_id, data) {
-    let addr = quic_conn_addr(conn);
-    let state = mem_read_u64(addr);
+    let mut addr = quic_conn_addr(conn);
+    let mut state = mem_read_u64(addr);
     if state != QUIC_ESTABLISHED { return 0 - 1; }
 
     // Check connection-level flow control
@@ -434,7 +434,7 @@ fn quic_stream_send(conn, stream_id, data) {
     if data_sent + len(data) > max_remote { return 0 - 2; } // blocked
 
     // Find stream
-    let si = quic_find_stream(conn, stream_id);
+    let mut si = quic_find_stream(conn, stream_id);
     if si < 0 { return 0 - 3; }
     let saddr = quic_stream_addr(conn, si);
 
@@ -472,7 +472,7 @@ fn quic_stream_send(conn, stream_id, data) {
 
 // Receive data callback (called from packet processing)
 fn quic_stream_recv(conn, stream_id, data, off, length, fin) {
-    let si = quic_find_stream(conn, stream_id);
+    let mut si = quic_find_stream(conn, stream_id);
     if si < 0 {
         // Auto-open stream if client-initiated
         si = quic_stream_open(conn, stream_id);
@@ -495,7 +495,7 @@ fn quic_stream_recv(conn, stream_id, data, off, length, fin) {
     mem_write_u64(saddr + 24, recv_offset + length);
 
     // Update connection data_recv
-    let addr = quic_conn_addr(conn);
+    let mut addr = quic_conn_addr(conn);
     let data_recv = mem_read_u64(addr + 152);
     mem_write_u64(addr + 152, data_recv + length);
 
@@ -520,7 +520,7 @@ fn quic_find_stream(conn, stream_id) {
 // --- Short Header Packet ---
 
 fn quic_send_short(conn, payload) {
-    let addr = quic_conn_addr(conn);
+    let mut addr = quic_conn_addr(conn);
     let pkt_num = mem_read_u64(addr + 40);
     let remote_cid = mem_read_u64(addr + 16);
 
@@ -559,7 +559,7 @@ fn quic_send_short(conn, payload) {
 // --- ACK Processing ---
 
 fn quic_send_ack(conn) {
-    let addr = quic_conn_addr(conn);
+    let mut addr = quic_conn_addr(conn);
     let largest = mem_read_u64(addr + 48);
     let mut frame = [];
     push(frame, FRAME_ACK);
@@ -572,7 +572,7 @@ fn quic_send_ack(conn) {
 }
 
 fn quic_on_ack(conn, largest_ack) {
-    let addr = quic_conn_addr(conn);
+    let mut addr = quic_conn_addr(conn);
     // Update RTT estimate (simplified: assume 1-tick per RTT for now)
     let now = get_ticks();
     let last = mem_read_u64(addr + 184);
@@ -620,8 +620,8 @@ fn quic_on_ack(conn, largest_ack) {
 // --- Connection Close ---
 
 fn quic_close(conn) {
-    let addr = quic_conn_addr(conn);
-    let state = mem_read_u64(addr);
+    let mut addr = quic_conn_addr(conn);
+    let mut state = mem_read_u64(addr);
     if state == QUIC_IDLE || state == QUIC_CLOSED { return 0; }
 
     // Send CONNECTION_CLOSE frame
@@ -655,7 +655,7 @@ fn quic_status() {
     let mut established = 0;
     let mut i = 0;
     while i < QUIC_MAX_CONNS {
-        let state = mem_read_u64(quic_conn_addr(i));
+        let mut state = mem_read_u64(quic_conn_addr(i));
         if state != QUIC_IDLE && state != QUIC_CLOSED { active = active + 1; }
         if state == QUIC_ESTABLISHED { established = established + 1; }
         i = i + 1;
@@ -664,8 +664,8 @@ fn quic_status() {
 }
 
 fn quic_conn_info(conn) {
-    let addr = quic_conn_addr(conn);
-    let state = mem_read_u64(addr);
+    let mut addr = quic_conn_addr(conn);
+    let mut state = mem_read_u64(addr);
     let state_name = "UNKNOWN";
     if state == QUIC_IDLE { state_name = "IDLE"; }
     if state == QUIC_INITIAL { state_name = "INITIAL"; }

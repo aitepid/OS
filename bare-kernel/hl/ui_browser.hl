@@ -46,11 +46,11 @@ let mut uibrowse_url_focus  = 0;    // 1 = URL bar has focus
 // Strip HTML tags and decode basic entities from raw HTML
 fn _uibrowse_strip_html(html) {
     let mut out = "";
-    let n = len(html);
+    let mut n = len(html);
     let mut i = 0;
     let mut in_tag = 0;
     while i < n {
-        let c = char_at(html, i);
+        let mut c = char_at(html, i);
         if c == "<" {
             in_tag = 1;
             // Detect block-level tags: add newline for </p> <br> <li> etc.
@@ -93,11 +93,11 @@ fn _uibrowse_strip_html(html) {
 // Word-wrap text into COLS-width lines, split on '\n' first
 fn _uibrowse_wrap(text) {
     let mut lines = [];
-    let n = len(text);
+    let mut n = len(text);
     let mut line = "";
     let mut i = 0;
     while i < n {
-        let c = char_at(text, i);
+        let mut c = char_at(text, i);
         if c == "\n" {
             push(lines, line);
             line = "";
@@ -118,7 +118,7 @@ fn _uibrowse_wrap(text) {
 
 // Extract body from HTTP response (skip headers after \r\n\r\n)
 fn _uibrowse_http_body(response) {
-    let n = len(response);
+    let mut n = len(response);
     let mut i = 0;
     while i + 3 < n {
         if char_at(response, i) == "\r" {
@@ -185,7 +185,7 @@ fn uibrowse_navigate(url) {
     // Read response into buffer
     let mut resp = "";
     let buf_addr = 10158080;  // 0x9B0000 — 64 KB response buffer
-    let n = tcp_recv(tcb, buf_addr, 65535);
+    let mut n = tcp_recv(tcb, buf_addr, 65535);
     tcp_close(tcb);
 
     if n <= 0 {
@@ -199,7 +199,7 @@ fn uibrowse_navigate(url) {
     // Reconstruct string from buffer
     let mut i = 0;
     while i < n {
-        let b = mem_read_u8(buf_addr + i);
+        let mut b = mem_read_u8(buf_addr + i);
         if b > 0 { resp = resp + str_from_code(b); }
         i = i + 1;
     }
@@ -266,7 +266,7 @@ fn _uibrowse_content_draw() {
 
     vesa_fill_rect(cx, cy, cw, ch, bg);
 
-    let total = len(uibrowse_lines);
+    let mut total = len(uibrowse_lines);
     let mut row = 0;
     while row < UIBROW_PAGE_LINES {
         let li = uibrowse_scroll + row;
@@ -308,7 +308,7 @@ fn uibrowse_key(k) {
     if k == 27  { uibrowse_close(); return 1; }           // Esc = close
     if k == 13  {                                          // Enter = navigate
         if len(uibrowse_url_input) > 0 {
-            let u = uibrowse_url_input;
+            let mut u = uibrowse_url_input;
             uibrowse_url_input = "";
             uibrowse_navigate(u);
         }
@@ -329,7 +329,7 @@ fn uibrowse_key(k) {
         return 1;
     }
     if k == 338 { // Page Down
-        let max = len(uibrowse_lines) - UIBROW_PAGE_LINES;
+        let mut max = len(uibrowse_lines) - UIBROW_PAGE_LINES;
         if max > 0 {
             uibrowse_scroll = uibrowse_scroll + UIBROW_PAGE_LINES;
             if uibrowse_scroll > max { uibrowse_scroll = max; }
@@ -343,7 +343,7 @@ fn uibrowse_key(k) {
         return 1;
     }
     if k == 90 {  // 'Z' as down (arrow approx)
-        let max = len(uibrowse_lines) - UIBROW_PAGE_LINES;
+        let mut max = len(uibrowse_lines) - UIBROW_PAGE_LINES;
         if max > 0 { if uibrowse_scroll < max { uibrowse_scroll = uibrowse_scroll + 1; } }
         _uibrowse_content_draw();
         return 1;
@@ -363,7 +363,7 @@ fn uibrowse_click(mx, my) {
     let wy = UIBROW_WIN_Y + 20;
     // Toolbar button hit tests
     if ui_button_hit(wx + UIBROW_WIN_W - 132, wy + 4, 40, 20, mx, my) == 1 {
-        let u = uibrowse_url_input;
+        let mut u = uibrowse_url_input;
         if len(u) == 0 { u = uibrowse_url; }
         uibrowse_url_input = "";
         uibrowse_navigate(u);

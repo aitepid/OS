@@ -98,13 +98,13 @@ fn _ftp_send(id, line) {
 }
 
 fn _ftp_read_ctrl(id) {
-    let addr = TCP_TABLE + ftp_tcb[id] * TCB_SIZE;
+    let mut addr = TCP_TABLE + ftp_tcb[id] * TCB_SIZE;
     let rx_buf = mem_read_u64(addr + 64);
     if rx_buf == 0 { return ""; }
     let mut s = "";
     let mut j = 0;
     while j < FTP_CTRL_SZ {
-        let b = mem_read_u8(rx_buf + j);
+        let mut b = mem_read_u8(rx_buf + j);
         if b == 0 { j = FTP_CTRL_SZ + 1; }
         else { s = s + str_from_code(b); j = j + 1; }
     }
@@ -113,13 +113,13 @@ fn _ftp_read_ctrl(id) {
 }
 
 fn _ftp_read_data_tcb(dtcb) {
-    let addr = TCP_TABLE + dtcb * TCB_SIZE;
+    let mut addr = TCP_TABLE + dtcb * TCB_SIZE;
     let rx_buf = mem_read_u64(addr + 64);
     if rx_buf == 0 { return ""; }
     let mut s = "";
     let mut j = 0;
     while j < FTP_BUF_SZ {
-        let b = mem_read_u8(rx_buf + j);
+        let mut b = mem_read_u8(rx_buf + j);
         if b == 0 { j = FTP_BUF_SZ + 1; }
         else { s = s + str_from_code(b); j = j + 1; }
     }
@@ -154,7 +154,7 @@ fn _ftp_pasv_parse(resp) {
     let mut cur = "";
     let mut k = 0;
     while k < len(inner) {
-        let c = str_char_code(inner, k);
+        let mut c = str_char_code(inner, k);
         if c == 44 {   // ','
             push(nums, parse_int(cur));
             cur = "";
@@ -245,7 +245,7 @@ fn ftp_list(id, path) {
     if dtcb < 0 { return "ftp: PASV failed"; }
     if len(path) > 0 { _ftp_send(id, "LIST " + path); }
     else { _ftp_send(id, "LIST"); }
-    let r = _ftp_wait_code(id, "150", 200);
+    let mut r = _ftp_wait_code(id, "150", 200);
     if len(r) == 0 { tcp_close(dtcb); return "ftp: LIST timeout"; }
     let mut out = "";
     let deadline = get_ticks() + 400;
@@ -268,19 +268,19 @@ fn ftp_get(id, remote, localpath) {
     let dtcb = _ftp_open_data(id);
     if dtcb < 0 { return 0 - 1; }
     _ftp_send(id, "RETR " + remote);
-    let r = _ftp_wait_code(id, "150", 200);
+    let mut r = _ftp_wait_code(id, "150", 200);
     if len(r) == 0 { tcp_close(dtcb); return 0 - 1; }
     let mut total = 0;
     let deadline = get_ticks() + 1000;
     let mut done = 0;
     while done == 0 {
         if get_ticks() >= deadline { done = 1; }
-        let addr = TCP_TABLE + dtcb * TCB_SIZE;
+        let mut addr = TCP_TABLE + dtcb * TCB_SIZE;
         let rx_buf = mem_read_u64(addr + 64);
         if rx_buf != 0 {
             let mut j = 0;
             while j < FTP_BUF_SZ - total {
-                let b = mem_read_u8(rx_buf + j);
+                let mut b = mem_read_u8(rx_buf + j);
                 if b == 0 { j = FTP_BUF_SZ; }
                 else { mem_write_u8(FTP_BUF + total, b); total = total + 1; j = j + 1; }
             }
@@ -305,13 +305,13 @@ fn ftp_put(id, localpath, remote) {
     if ftp_active[id] == 0 { return 0 - 1; }
     let fd = vfs_open(localpath, 0);
     if fd < 0 { print("ftp: cannot open " + localpath); return 0 - 1; }
-    let n = vfs_read(fd, FTP_BUF, FTP_BUF_SZ);
+    let mut n = vfs_read(fd, FTP_BUF, FTP_BUF_SZ);
     vfs_close(fd);
     if n <= 0 { return 0 - 1; }
     let dtcb = _ftp_open_data(id);
     if dtcb < 0 { return 0 - 1; }
     _ftp_send(id, "STOR " + remote);
-    let r = _ftp_wait_code(id, "150", 200);
+    let mut r = _ftp_wait_code(id, "150", 200);
     if len(r) == 0 { tcp_close(dtcb); return 0 - 1; }
     let mut pkt = "";
     let mut i = 0;

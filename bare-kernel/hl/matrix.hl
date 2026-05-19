@@ -25,12 +25,12 @@ let mat_in_use = [0, 0, 0, 0, 0, 0, 0, 0];
 let mat_initialized = 0;
 
 fn matrix_init() {
-    let i = 0;
+    let mut i = 0;
     while i < MATRIX_POOL_SIZE {
         set_at(mat_rows,   i, 0);
         set_at(mat_cols,   i, 0);
         set_at(mat_in_use, i, 0);
-        let j = 0;
+        let mut j = 0;
         while j < MATRIX_MAX_SIZE {
             set_at(mat_data, i * MATRIX_MAX_SIZE + j, 0);
             j = j + 1;
@@ -45,14 +45,14 @@ fn matrix_init() {
 fn mat_alloc(rows, cols) {
     if rows > MATRIX_MAX_DIM { return 0 - 1; }
     if cols > MATRIX_MAX_DIM { return 0 - 1; }
-    let i = 0;
+    let mut i = 0;
     while i < MATRIX_POOL_SIZE {
         if mat_in_use[i] == 0 {
             set_at(mat_rows,   i, rows);
             set_at(mat_cols,   i, cols);
             set_at(mat_in_use, i, 1);
             // Zero out
-            let j = 0;
+            let mut j = 0;
             while j < rows * cols {
                 set_at(mat_data, i * MATRIX_MAX_SIZE + j, 0);
                 j = j + 1;
@@ -83,9 +83,9 @@ fn mat_set(m, r, c, val) {
 
 // Create matrix from flat array (values already scaled by MATRIX_SCALE)
 fn mat_from_array(rows, cols, values) {
-    let m = mat_alloc(rows, cols);
+    let mut m = mat_alloc(rows, cols);
     if m < 0 { return 0 - 1; }
-    let i = 0;
+    let mut i = 0;
     while i < rows * cols {
         set_at(mat_data, m * MATRIX_MAX_SIZE + i, values[i]);
         i = i + 1;
@@ -95,9 +95,9 @@ fn mat_from_array(rows, cols, values) {
 
 // Identity matrix × MATRIX_SCALE
 fn mat_identity(n) {
-    let m = mat_alloc(n, n);
+    let mut m = mat_alloc(n, n);
     if m < 0 { return 0 - 1; }
-    let i = 0;
+    let mut i = 0;
     while i < n {
         mat_set(m, i, i, MATRIX_SCALE);
         i = i + 1;
@@ -111,7 +111,7 @@ fn mat_copy(src) {
     let cols = mat_cols[src];
     let dst = mat_alloc(rows, cols);
     if dst < 0 { return 0 - 1; }
-    let i = 0;
+    let mut i = 0;
     while i < rows * cols {
         set_at(mat_data, dst * MATRIX_MAX_SIZE + i, mat_data[src * MATRIX_MAX_SIZE + i]);
         i = i + 1;
@@ -123,11 +123,11 @@ fn mat_copy(src) {
 fn mat_transpose(m) {
     let rows = mat_rows[m];
     let cols = mat_cols[m];
-    let t = mat_alloc(cols, rows);
+    let mut t = mat_alloc(cols, rows);
     if t < 0 { return 0 - 1; }
-    let r = 0;
+    let mut r = 0;
     while r < rows {
-        let c = 0;
+        let mut c = 0;
         while c < cols {
             mat_set(t, c, r, mat_get(m, r, c));
             c = c + 1;
@@ -143,9 +143,9 @@ fn mat_add(a, b) {
     let cols = mat_cols[a];
     if mat_rows[b] != rows { return 0 - 1; }
     if mat_cols[b] != cols { return 0 - 1; }
-    let c = mat_alloc(rows, cols);
+    let mut c = mat_alloc(rows, cols);
     if c < 0 { return 0 - 1; }
-    let i = 0;
+    let mut i = 0;
     while i < rows * cols {
         set_at(mat_data, c * MATRIX_MAX_SIZE + i,
                mat_data[a * MATRIX_MAX_SIZE + i] + mat_data[b * MATRIX_MAX_SIZE + i]);
@@ -160,9 +160,9 @@ fn mat_sub(a, b) {
     let cols = mat_cols[a];
     if mat_rows[b] != rows { return 0 - 1; }
     if mat_cols[b] != cols { return 0 - 1; }
-    let c = mat_alloc(rows, cols);
+    let mut c = mat_alloc(rows, cols);
     if c < 0 { return 0 - 1; }
-    let i = 0;
+    let mut i = 0;
     while i < rows * cols {
         set_at(mat_data, c * MATRIX_MAX_SIZE + i,
                mat_data[a * MATRIX_MAX_SIZE + i] - mat_data[b * MATRIX_MAX_SIZE + i]);
@@ -175,9 +175,9 @@ fn mat_sub(a, b) {
 fn mat_scale(m, scalar) {
     let rows = mat_rows[m];
     let cols = mat_cols[m];
-    let result = mat_alloc(rows, cols);
+    let mut result = mat_alloc(rows, cols);
     if result < 0 { return 0 - 1; }
-    let i = 0;
+    let mut i = 0;
     while i < rows * cols {
         set_at(mat_data, result * MATRIX_MAX_SIZE + i,
                (mat_data[m * MATRIX_MAX_SIZE + i] * scalar) / MATRIX_SCALE);
@@ -191,14 +191,14 @@ fn mat_mul(a, b) {
     let ra = mat_rows[a]; let ca = mat_cols[a];
     let rb = mat_rows[b]; let cb = mat_cols[b];
     if ca != rb { return 0 - 1; }
-    let c = mat_alloc(ra, cb);
+    let mut c = mat_alloc(ra, cb);
     if c < 0 { return 0 - 1; }
-    let i = 0;
+    let mut i = 0;
     while i < ra {
-        let j = 0;
+        let mut j = 0;
         while j < cb {
-            let sum = 0;
-            let k = 0;
+            let mut sum = 0;
+            let mut k = 0;
             while k < ca {
                 sum = sum + (mat_get(a, i, k) * mat_get(b, k, j)) / MATRIX_SCALE;
                 k = k + 1;
@@ -216,9 +216,9 @@ fn mat_hadamard(a, b) {
     let rows = mat_rows[a]; let cols = mat_cols[a];
     if mat_rows[b] != rows { return 0 - 1; }
     if mat_cols[b] != cols { return 0 - 1; }
-    let c = mat_alloc(rows, cols);
+    let mut c = mat_alloc(rows, cols);
     if c < 0 { return 0 - 1; }
-    let i = 0;
+    let mut i = 0;
     while i < rows * cols {
         set_at(mat_data, c * MATRIX_MAX_SIZE + i,
                (mat_data[a * MATRIX_MAX_SIZE + i] * mat_data[b * MATRIX_MAX_SIZE + i]) / MATRIX_SCALE);
@@ -229,11 +229,11 @@ fn mat_hadamard(a, b) {
 
 // Frobenius norm: sqrt(sum(aij^2)) × MATRIX_SCALE
 fn mat_norm_frob(m) {
-    let sum = 0;
+    let mut sum = 0;
     let rows = mat_rows[m]; let cols = mat_cols[m];
-    let i = 0;
+    let mut i = 0;
     while i < rows * cols {
-        let v = mat_data[m * MATRIX_MAX_SIZE + i];
+        let mut v = mat_data[m * MATRIX_MAX_SIZE + i];
         sum = sum + (v * v) / MATRIX_SCALE;
         i = i + 1;
     }
@@ -252,10 +252,10 @@ fn mat_norm_frob(m) {
 
 // Trace: sum of diagonal elements
 fn mat_trace(m) {
-    let n = mat_rows[m];
+    let mut n = mat_rows[m];
     if mat_cols[m] < n { n = mat_cols[m]; }
-    let sum = 0;
-    let i = 0;
+    let mut sum = 0;
+    let mut i = 0;
     while i < n { sum = sum + mat_get(m, i, i); i = i + 1; }
     return sum;
 }
@@ -263,28 +263,28 @@ fn mat_trace(m) {
 // LU decomposition (in-place, partial pivoting) — modifies matrix m
 // Returns pivot array
 fn mat_lu_decompose(m) {
-    let n = mat_rows[m];
+    let mut n = mat_rows[m];
     if mat_cols[m] != n { return []; }
     let pivot = [];
-    let i = 0;
+    let mut i = 0;
     while i < n { set_at(pivot, i, i); i = i + 1; }
     i = 0;
     while i < n {
         // Find pivot
         let max_val = 0; let max_row = i;
-        let k = i;
+        let mut k = i;
         while k < n {
-            let v = mat_get(m, k, i);
+            let mut v = mat_get(m, k, i);
             if v < 0 { v = -v; }
             if v > max_val { max_val = v; max_row = k; }
             k = k + 1;
         }
         // Swap rows i and max_row
         if max_row != i {
-            let tmp = pivot[i]; set_at(pivot, i, pivot[max_row]); set_at(pivot, max_row, tmp);
-            let j = 0;
+            let mut tmp = pivot[i]; set_at(pivot, i, pivot[max_row]); set_at(pivot, max_row, tmp);
+            let mut j = 0;
             while j < n {
-                let t = mat_get(m, i, j);
+                let mut t = mat_get(m, i, j);
                 mat_set(m, i, j, mat_get(m, max_row, j));
                 mat_set(m, max_row, j, t);
                 j = j + 1;
@@ -297,7 +297,7 @@ fn mat_lu_decompose(m) {
             while k < n {
                 let factor = (mat_get(m, k, i) * MATRIX_SCALE) / diag;
                 mat_set(m, k, i, factor);
-                let j = i + 1;
+                let mut j = i + 1;
                 while j < n {
                     let new_val = mat_get(m, k, j) - (factor * mat_get(m, i, j)) / MATRIX_SCALE;
                     mat_set(m, k, j, new_val);
@@ -313,14 +313,14 @@ fn mat_lu_decompose(m) {
 
 // Gauss-Jordan inverse (augmented matrix method, O(n³))
 fn mat_inverse(m) {
-    let n = mat_rows[m];
+    let mut n = mat_rows[m];
     if mat_cols[m] != n { return 0 - 1; }
     // Create augmented matrix [A | I]
     let aug = mat_alloc(n, n * 2);
     if aug < 0 { return 0 - 1; }
-    let i = 0;
+    let mut i = 0;
     while i < n {
-        let j = 0;
+        let mut j = 0;
         while j < n {
             mat_set(aug, i, j, mat_get(m, i, j));
             mat_set(aug, i, n + j, (i == j) * MATRIX_SCALE);
@@ -334,13 +334,13 @@ fn mat_inverse(m) {
         let pivot = mat_get(aug, i, i);
         if pivot == 0 { mat_free(aug); return 0 - 1; }  // singular
         // Normalize pivot row
-        let j = 0;
+        let mut j = 0;
         while j < n * 2 {
             mat_set(aug, i, j, (mat_get(aug, i, j) * MATRIX_SCALE) / pivot);
             j = j + 1;
         }
         // Eliminate other rows
-        let k = 0;
+        let mut k = 0;
         while k < n {
             if k != i {
                 let factor = mat_get(aug, k, i);
@@ -360,7 +360,7 @@ fn mat_inverse(m) {
     if inv < 0 { mat_free(aug); return 0 - 1; }
     i = 0;
     while i < n {
-        let j = 0;
+        let mut j = 0;
         while j < n {
             mat_set(inv, i, j, mat_get(aug, i, n + j));
             j = j + 1;
@@ -374,11 +374,11 @@ fn mat_inverse(m) {
 // Matrix-vector product: y = A × x (x is 1D array, length = cols(A))
 fn mat_vecmul(m, x) {
     let rows = mat_rows[m]; let cols = mat_cols[m];
-    let y = [];
-    let i = 0;
+    let mut y = [];
+    let mut i = 0;
     while i < rows {
-        let sum = 0;
-        let j = 0;
+        let mut sum = 0;
+        let mut j = 0;
         while j < cols {
             sum = sum + (mat_get(m, i, j) * x[j]) / MATRIX_SCALE;
             j = j + 1;
@@ -393,14 +393,14 @@ fn mat_vecmul(m, x) {
 fn mat_print(m, label) {
     let rows = mat_rows[m]; let cols = mat_cols[m];
     print(label + " [" + to_string(rows) + "x" + to_string(cols) + "]:");
-    let r = 0;
+    let mut r = 0;
     let max_r = rows; if max_r > 4 { max_r = 4; }
     while r < max_r {
         let line = "  ";
-        let c = 0;
+        let mut c = 0;
         let max_c = cols; if max_c > 4 { max_c = 4; }
         while c < max_c {
-            let v = mat_get(m, r, c);
+            let mut v = mat_get(m, r, c);
             let sign = "";
             if v < 0 { sign = "-"; v = -v; }
             let int_part = v / MATRIX_SCALE;
@@ -447,8 +447,8 @@ fn matrix_test() {
     mat_print(A, "A");
     if check >= 0 { mat_print(check, "A×A^-1"); }
     // Vector multiply
-    let x = [1000, 2000, 3000];
-    let y = mat_vecmul(A, x);
+    let mut x = [1000, 2000, 3000];
+    let mut y = mat_vecmul(A, x);
     // Cleanup
     mat_free(I); mat_free(AT); mat_free(AI);
     if Ainv >= 0 { mat_free(Ainv); }

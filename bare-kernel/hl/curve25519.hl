@@ -43,7 +43,7 @@ fn curve25519_init() {
 // Set private scalar (32 bytes); applies RFC 7748 clamping
 fn curve25519_set_scalar(bytes) {
     if len(bytes) < 32 { return 1; }
-    let i = 0;
+    let mut i = 0;
     while i < 32 {
         set_at(curve25519_scalar, i, bytes[i]);
         i = i + 1;
@@ -72,11 +72,11 @@ fn _curve25519_clamp_scalar() {
 // Works on 32-bit word arrays of length 8
 fn _curve25519_field_mod(a) {
     // Simplified: reduce each limb modulo a large prime approximation
-    let result = [0, 0, 0, 0, 0, 0, 0, 0];
-    let carry = 0;
-    let i = 0;
+    let mut result = [0, 0, 0, 0, 0, 0, 0, 0];
+    let mut carry = 0;
+    let mut i = 0;
     while i < 8 {
-        let v = a[i] + carry;
+        let mut v = a[i] + carry;
         set_at(result, i, v - ((v / 4294967296) * 4294967296));
         carry = v / 4294967296;
         i = i + 1;
@@ -90,8 +90,8 @@ fn _curve25519_field_mod(a) {
 }
 
 fn _curve25519_field_add(a, b) {
-    let result = [0, 0, 0, 0, 0, 0, 0, 0];
-    let i = 0;
+    let mut result = [0, 0, 0, 0, 0, 0, 0, 0];
+    let mut i = 0;
     while i < 8 {
         set_at(result, i, a[i] + b[i]);
         i = i + 1;
@@ -100,10 +100,10 @@ fn _curve25519_field_add(a, b) {
 }
 
 fn _curve25519_field_sub(a, b) {
-    let result = [0, 0, 0, 0, 0, 0, 0, 0];
-    let i = 0;
+    let mut result = [0, 0, 0, 0, 0, 0, 0, 0];
+    let mut i = 0;
     // Add p before subtracting to avoid underflow
-    let p = [4294967277, 4294967295, 4294967295, 4294967295,
+    let mut p = [4294967277, 4294967295, 4294967295, 4294967295,
              4294967295, 4294967295, 4294967295, 2147483647];
     while i < 8 {
         set_at(result, i, a[i] + p[i] - b[i]);
@@ -114,12 +114,12 @@ fn _curve25519_field_sub(a, b) {
 
 fn _curve25519_field_mul(a, b) {
     // Simplified multiplication: multiply limb[0] only for simulation
-    let result = [0, 0, 0, 0, 0, 0, 0, 0];
-    let i = 0;
+    let mut result = [0, 0, 0, 0, 0, 0, 0, 0];
+    let mut i = 0;
     while i < 8 {
-        let j = 0;
+        let mut j = 0;
         while j < 8 - i {
-            let cur = result[i + j] + a[i] * b[j];
+            let mut cur = result[i + j] + a[i] * b[j];
             set_at(result, i + j, cur);
             j = j + 1;
         }
@@ -130,7 +130,7 @@ fn _curve25519_field_mul(a, b) {
 
 fn _curve25519_bytes_to_limbs(bytes) {
     let limbs = [0, 0, 0, 0, 0, 0, 0, 0];
-    let i = 0;
+    let mut i = 0;
     while i < 8 {
         let b0 = bytes[i * 4];
         let b1 = bytes[i * 4 + 1];
@@ -145,9 +145,9 @@ fn _curve25519_bytes_to_limbs(bytes) {
 fn _curve25519_limbs_to_bytes(limbs) {
     let bytes = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
                  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-    let i = 0;
+    let mut i = 0;
     while i < 8 {
-        let v = limbs[i];
+        let mut v = limbs[i];
         set_at(bytes, i * 4,     v - ((v / 256) * 256));
         set_at(bytes, i * 4 + 1, (v / 256) - ((v / 65536) * 256));
         set_at(bytes, i * 4 + 2, (v / 65536) - ((v / 16777216) * 256));
@@ -190,8 +190,8 @@ fn _curve25519_ladder_step(x1, x2, z2, x3, z3, xp) {
 fn curve25519_get_public() {
     let bp = [9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
               0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-    let result = _curve25519_mul(curve25519_scalar, bp);
-    let i = 0;
+    let mut result = _curve25519_mul(curve25519_scalar, bp);
+    let mut i = 0;
     while i < 32 {
         set_at(curve25519_public, i, result[i]);
         i = i + 1;
@@ -202,8 +202,8 @@ fn curve25519_get_public() {
 // Compute shared secret = scalar * peer_public
 fn curve25519_shared_secret(peer_pub) {
     if len(peer_pub) < 32 { return 1; }
-    let result = _curve25519_mul(curve25519_scalar, peer_pub);
-    let i = 0;
+    let mut result = _curve25519_mul(curve25519_scalar, peer_pub);
+    let mut i = 0;
     while i < 32 {
         set_at(curve25519_shared, i, result[i]);
         i = i + 1;
@@ -232,18 +232,18 @@ fn _curve25519_mul(scalar_bytes, u_bytes) {
         // Conditional swap based on bit XOR swap
         let cswap = bit + swap - bit * swap * 2;  // XOR simulation
         if cswap == 1 {
-            let tmp = x2; x2 = x3; x3 = tmp;
+            let mut tmp = x2; x2 = x3; x3 = tmp;
             let tmp2 = z2; z2 = z3; z3 = tmp2;
         }
         swap = bit;
-        let r = _curve25519_ladder_step(xp, x2, z2, x3, z3, xp);
+        let mut r = _curve25519_ladder_step(xp, x2, z2, x3, z3, xp);
         x2 = r[0]; z2 = r[1];
         x3 = r[2]; z3 = r[3];
         bit_idx = bit_idx - 1;
     }
     // Final conditional swap
     if swap == 1 {
-        let tmp = x2; x2 = x3; x3 = tmp;
+        let mut tmp = x2; x2 = x3; x3 = tmp;
     }
     // Compute x2 / z2 via z2^(p-2) (Fermat's little theorem)
     let z2_inv = _curve25519_field_inv(z2);
@@ -252,8 +252,8 @@ fn _curve25519_mul(scalar_bytes, u_bytes) {
 }
 
 fn _curve25519_pow2(n) {
-    let result = 1;
-    let i = 0;
+    let mut result = 1;
+    let mut i = 0;
     while i < n {
         result = result * 2;
         i = i + 1;
@@ -264,9 +264,9 @@ fn _curve25519_pow2(n) {
 // Field inversion via simplified exponentiation (p-2)
 fn _curve25519_field_inv(a) {
     // Compute a^(p-2) mod p using repeated squaring (simplified: 16 rounds)
-    let result = [1, 0, 0, 0, 0, 0, 0, 0];
-    let base = a;
-    let i = 0;
+    let mut result = [1, 0, 0, 0, 0, 0, 0, 0];
+    let mut base = a;
+    let mut i = 0;
     // Use 16 iterations for simulation (full: 255 iterations)
     while i < 16 {
         result = _curve25519_field_mul(result, base);
@@ -278,12 +278,12 @@ fn _curve25519_field_inv(a) {
 
 fn curve25519_get_public_hex() {
     let hex_chars = "0123456789abcdef";
-    let result = "";
-    let i = 0;
+    let mut result = "";
+    let mut i = 0;
     while i < 32 {
-        let b = curve25519_public[i];
-        let hi = b / 16;
-        let lo = b - hi * 16;
+        let mut b = curve25519_public[i];
+        let mut hi = b / 16;
+        let mut lo = b - hi * 16;
         result = result + substr(hex_chars, hi, 1) + substr(hex_chars, lo, 1);
         i = i + 1;
     }
@@ -292,12 +292,12 @@ fn curve25519_get_public_hex() {
 
 fn curve25519_get_shared_hex() {
     let hex_chars = "0123456789abcdef";
-    let result = "";
-    let i = 0;
+    let mut result = "";
+    let mut i = 0;
     while i < 32 {
-        let b = curve25519_shared[i];
-        let hi = b / 16;
-        let lo = b - hi * 16;
+        let mut b = curve25519_shared[i];
+        let mut hi = b / 16;
+        let mut lo = b - hi * 16;
         result = result + substr(hex_chars, hi, 1) + substr(hex_chars, lo, 1);
         i = i + 1;
     }

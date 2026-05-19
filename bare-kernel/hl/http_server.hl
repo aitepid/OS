@@ -82,14 +82,14 @@ fn _httpd_route_status() {
 fn _httpd_serve_file(path) {
     let fd = vfs_open(path, O_RDONLY);
     if fd < 0 { return ""; }
-    let n = vfs_read(fd, HTTP_BUF_ADDR, HTTP_BUF_SIZE - 1);
+    let mut n = vfs_read(fd, HTTP_BUF_ADDR, HTTP_BUF_SIZE - 1);
     vfs_close(fd);
     if n <= 0 { return ""; }
     // Build string from buffer
     let mut s = "";
     let mut i = 0;
     while i < n {
-        let b = mem_read_u8(HTTP_BUF_ADDR + i);
+        let mut b = mem_read_u8(HTTP_BUF_ADDR + i);
         if b > 0 { s = s + str_from_code(b); }
         i = i + 1;
     }
@@ -224,7 +224,7 @@ fn httpd_tick() {
     let mut i = 0;
     while i < 32 {
         let addr  = TCP_TABLE + i * TCB_SIZE;
-        let state = mem_read_u64(addr);
+        let mut state = mem_read_u64(addr);
         let lport = mem_read_u32(addr + 12);
         if state == 4 {   // TCP_ESTABLISHED = 4
             if lport == HTTP_PORT {
@@ -238,7 +238,7 @@ fn httpd_tick() {
                     while go == 1 {
                         if j >= HTTP_MAX_REQ { go = 0; }
                         if go == 1 {
-                            let b = mem_read_u8(rx_buf + j);
+                            let mut b = mem_read_u8(rx_buf + j);
                             if b == 0 { go = 0; }
                             if go == 1 {
                                 req = req + str_from_code(b);

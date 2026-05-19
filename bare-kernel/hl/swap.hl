@@ -51,7 +51,7 @@ fn swap_alloc_slot() {
         let byte_off = i / 8;
         let bit_off = i % 8;
         let byte_val = mem_read_u8(SWAP_MAP_ADDR + byte_off);
-        let mask = _swap_mask(bit_off);
+        let mut mask = _swap_mask(bit_off);
         if (byte_val / mask) % 2 == 0 {
             mem_write_u8(SWAP_MAP_ADDR + byte_off, byte_val + mask);
             swap_used = swap_used + 1;
@@ -66,7 +66,7 @@ fn swap_free_slot(slot) {
     let byte_off = slot / 8;
     let bit_off = slot % 8;
     let byte_val = mem_read_u8(SWAP_MAP_ADDR + byte_off);
-    let mask = _swap_mask(bit_off);
+    let mut mask = _swap_mask(bit_off);
     if (byte_val / mask) % 2 == 1 {
         mem_write_u8(SWAP_MAP_ADDR + byte_off, byte_val - mask);
     }
@@ -140,8 +140,8 @@ fn _clock_init() {
 // ---- List link/unlink helpers ----
 
 fn _cl_unlink(slot, list_id) {
-    let p = _cl_prev[slot];
-    let n = _cl_next[slot];
+    let mut p = _cl_prev[slot];
+    let mut n = _cl_next[slot];
     if list_id == 1 {
         if p >= 0 { set_at(_cl_next, p, n); } else { _cl_act_head = n; }
         if n >= 0 { set_at(_cl_prev, n, p); } else { _cl_act_tail = p; }
@@ -249,7 +249,7 @@ fn swap_find_victim() {
         if _cl_hand < 0 { _cl_hand = _cl_inact_head; }
         if _cl_hand < 0 { return FIRST_FREE_PAGE; } // nothing to evict
 
-        let slot = _cl_hand;
+        let mut slot = _cl_hand;
         let ref_bit = _cl_ref[slot];
 
         if ref_bit == 0 {
@@ -281,7 +281,7 @@ fn demand_page(fault_addr) {
     let mut frame = page_alloc();
     if frame == 0 {
         let victim = swap_find_victim();
-        let slot = swap_alloc_slot();
+        let mut slot = swap_alloc_slot();
         if slot < 0 {
             print("PANIC: swap full, cannot demand page");
             return 0;

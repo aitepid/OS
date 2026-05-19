@@ -106,7 +106,7 @@ fn raft_init(node_id, cluster_size) {
     raft_appends_received = 0;
     raft_commits_applied  = 0;
     // Initialize leader state arrays
-    let i = 0;
+    let mut i = 0;
     while i < RAFT_MAX_NODES {
         set_at(raft_next_index,  i, 1);
         set_at(raft_match_index, i, 0);
@@ -119,7 +119,7 @@ fn raft_init(node_id, cluster_size) {
 }
 
 fn raft_add_peer(peer_id) {
-    let i = 0;
+    let mut i = 0;
     while i < RAFT_MAX_NODES {
         if raft_peer_active[i] == 0 {
             set_at(raft_peer_ids,    i, peer_id);
@@ -136,7 +136,7 @@ fn raft_add_peer(peer_id) {
 // Append entry to local log
 fn raft_log_append(term, entry_type, command) {
     if raft_log_count >= RAFT_MAX_LOG { return 0 - 1; }
-    let idx = raft_log_count;
+    let mut idx = raft_log_count;
     set_at(raft_log_terms,    idx, term);
     set_at(raft_log_types,    idx, entry_type);
     set_at(raft_log_commands, idx, command);
@@ -238,7 +238,7 @@ fn _raft_become_leader() {
     raft_leader_id = raft_node_id;
     raft_elections_won = raft_elections_won + 1;
     // Initialize nextIndex and matchIndex for all peers
-    let i = 0;
+    let mut i = 0;
     while i < RAFT_MAX_NODES {
         if raft_peer_active[i] == 1 {
             set_at(raft_next_index,  i, raft_log_count + 1);
@@ -338,11 +338,11 @@ fn raft_handle_append_response(peer_idx, term, success, match_index) {
 
 // Advance commit index if majority has replicated entry
 fn _raft_advance_commit() {
-    let n = raft_log_count;
+    let mut n = raft_log_count;
     while n > raft_commit_index {
         if raft_log_get_term(n) == raft_current_term {
-            let count = 1;   // count self
-            let i = 0;
+            let mut count = 1;   // count self
+            let mut i = 0;
             while i < RAFT_MAX_NODES {
                 if raft_peer_active[i] == 1 {
                     if raft_match_index[i] >= n { count = count + 1; }

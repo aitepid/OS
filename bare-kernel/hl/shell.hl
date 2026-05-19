@@ -351,14 +351,14 @@ fn shell_handle(cmd) {
     }
 
     if cmd == "date" {
-        let t = rtc_read_time();
+        let mut t = rtc_read_time();
         return to_string(t[0]) + "-" + to_string(t[1]) + "-" + to_string(t[2])
              + " " + to_string(t[3]) + ":" + to_string(t[4]) + ":" + to_string(t[5]);
     }
 
     if cmd == "free" {
         let free_pages = page_count_free();
-        let total = page_count_free() + 1025;
+        let mut total = page_count_free() + 1025;
         let free_kb = free_pages * 4;
         return "Pages: " + to_string(free_pages) + "/" + to_string(total) + " free (" + to_string(free_kb) + " KB)";
     }
@@ -373,7 +373,7 @@ fn shell_handle(cmd) {
         let mut out = "PID  STATE    NAME\n";
         let mut i = 0;
         while i < len(tasks) {
-            let t = tasks[i];
+            let mut t = tasks[i];
             let pid_s = to_string(t[0]);
             let mut ps = pid_s;
             while len(ps) < 4 { ps = ps + " "; }
@@ -549,14 +549,14 @@ fn shell_handle(cmd) {
 
     if str_starts_with(cmd, "mkdir ") {
         let path = str_sub(cmd, 6, len(cmd));
-        let r = vfs_mkdir(path);
+        let mut r = vfs_mkdir(path);
         if r == 0 { return "Created: " + path; }
         return "Error: cannot create " + path;
     }
 
     if str_starts_with(cmd, "rm ") {
         let path = str_sub(cmd, 3, len(cmd));
-        let r = vfs_unlink(path);
+        let mut r = vfs_unlink(path);
         if r == 0 { return "Removed: " + path; }
         return "Error: cannot remove " + path;
     }
@@ -567,7 +567,7 @@ fn shell_handle(cmd) {
         if sp < 0 { return "Usage: cp <src> <dst>"; }
         let src = str_sub(args, 0, sp);
         let dst = str_sub(args, sp + 1, len(args));
-        let r = vfs_copy(src, dst);
+        let mut r = vfs_copy(src, dst);
         if r >= 0 { return "Copied: " + src + " -> " + dst + " (" + to_string(r) + " bytes)"; }
         return "Error: cannot copy " + src;
     }
@@ -578,7 +578,7 @@ fn shell_handle(cmd) {
         if sp < 0 { return "Usage: mv <src> <dst>"; }
         let src = str_sub(args, 0, sp);
         let dst = str_sub(args, sp + 1, len(args));
-        let r = vfs_rename(src, dst);
+        let mut r = vfs_rename(src, dst);
         if r >= 0 { return "Moved: " + src + " -> " + dst; }
         return "Error: cannot move " + src;
     }
@@ -594,7 +594,7 @@ fn shell_handle(cmd) {
         // .hl source → interpret via kinterp
         if str_ends_with(path, ".hl") {
             print("Interpreting " + path + "...");
-            let result = kinterp_exec_file(path);
+            let mut result = kinterp_exec_file(path);
             return "Finished: " + to_string(result);
         }
         return "Error: unsupported file type (use .hl or .hlc)";
@@ -609,7 +609,7 @@ fn shell_handle(cmd) {
 
     if str_starts_with(cmd, "heval ") {
         let expr = str_sub(cmd, 6, len(cmd));
-        let result = kinterp_exec(expr);
+        let mut result = kinterp_exec(expr);
         return "keval> " + to_string(result);
     }
 
@@ -703,7 +703,7 @@ fn shell_handle_ext(cmd) {
         return "Stop: client " + to_string(cid);
     }
     if str_starts_with(cmd, "aus vol ") {
-        let v = parse_int(str_sub(cmd, 8, len(cmd)));
+        let mut v = parse_int(str_sub(cmd, 8, len(cmd)));
         aus_set_master(v);
         return "AudioServer master vol: " + to_string(v) + "%";
     }
@@ -858,13 +858,13 @@ fn shell_handle_ext(cmd) {
         return "Copied to clipboard (" + to_string(len(text)) + " chars)";
     }
     if cmd == "clip paste" {
-        let t = clipboard_get_text();
+        let mut t = clipboard_get_text();
         if len(t) == 0 { return "(clipboard empty)"; }
         return t;
     }
     if str_starts_with(cmd, "clip hist") {
-        let idx = 0;
-        let t = clipboard_history(idx);
+        let mut idx = 0;
+        let mut t = clipboard_history(idx);
         if len(t) == 0 { return "(no history)"; }
         return "hist[0]: " + t;
     }
@@ -905,7 +905,7 @@ fn shell_handle_ext(cmd) {
         return httpd_status();
     }
     if cmd == "httpd start" {
-        let r = httpd_init();
+        let mut r = httpd_init();
         if r < 0 { return "Error: httpd failed to start"; }
         return "httpd started on port " + to_string(HTTP_PORT);
     }
@@ -932,13 +932,13 @@ fn shell_handle_ext(cmd) {
 
     // --- JSON ---
     if str_starts_with(cmd, "json parse ") {
-        let s = str_sub(cmd, 11, len(cmd));
-        let v = json_parse(s);
+        let mut s = str_sub(cmd, 11, len(cmd));
+        let mut v = json_parse(s);
         return "type=" + to_string(json_type(v)) + " val=" + json_stringify(v);
     }
     if str_starts_with(cmd, "json fmt ") {
-        let s = str_sub(cmd, 9, len(cmd));
-        let v = json_parse(s);
+        let mut s = str_sub(cmd, 9, len(cmd));
+        let mut v = json_parse(s);
         return json_pretty(v, 0);
     }
 
@@ -1035,7 +1035,7 @@ fn shell_handle_ext(cmd) {
         if sp < 0 { return "Usage: regex match <pattern> <text>"; }
         let pat  = str_sub(rest, 0, sp);
         let text = str_sub(rest, sp + 1, len(rest));
-        let r = regex_match(pat, text);
+        let mut r = regex_match(pat, text);
         if r == 1 { return "match: YES"; }
         return "match: NO";
     }
@@ -1045,7 +1045,7 @@ fn shell_handle_ext(cmd) {
         if sp < 0 { return "Usage: regex find <pattern> <text>"; }
         let pat  = str_sub(rest, 0, sp);
         let text = str_sub(rest, sp + 1, len(rest));
-        let r = regex_search(pat, text);
+        let mut r = regex_search(pat, text);
         if r[0] == 0 { return "not found"; }
         return "found at [" + to_string(r[1]) + ".." + to_string(r[2]) + "]: "
             + str_sub(text, r[1], r[2]);
@@ -1096,7 +1096,7 @@ fn shell_handle_ext(cmd) {
         let sp2 = str_find(rest, " ");
         if sp2 < 0 { return "Usage: smtp auth <id> <user> <pass>"; }
         let user = str_sub(rest, 0, sp2);
-        let pass = str_sub(rest, sp2 + 1, len(rest));
+        let mut pass = str_sub(rest, sp2 + 1, len(rest));
         smtp_auth(id, user, pass);
         return "smtp[" + to_string(id) + "] auth sent";
     }
@@ -1118,7 +1118,7 @@ fn shell_handle_ext(cmd) {
         if sp4 < 0 { return "Usage: smtp send <id> <from> <to> <subject> <body>"; }
         let subj = str_sub(rest3, 0, sp4);
         let body = str_sub(rest3, sp4 + 1, len(rest3));
-        let r = smtp_send_email(id, from, to, subj, body);
+        let mut r = smtp_send_email(id, from, to, subj, body);
         if r < 0 { return "Error: smtp send failed"; }
         return "smtp[" + to_string(id) + "] email queued to " + to;
     }
@@ -1174,27 +1174,27 @@ fn shell_handle_ext(cmd) {
     if str_starts_with(cmd, "imgview ") {
         let arg = str_sub(cmd, 8, len(cmd));
         if str_starts_with(arg, "zoom ") {
-            let z = parse_int(str_sub(arg, 5, len(arg)));
+            let mut z = parse_int(str_sub(arg, 5, len(arg)));
             if z != 1 { if z != 2 { return "Error: zoom must be 1 or 2"; } }
             uiimg_zoom = z;
             return "zoom set to " + to_string(z) + "x";
         }
         if uiimg_is_open() == 0 { uiimg_open(); }
-        let r = uiimg_load(arg);
+        let mut r = uiimg_load(arg);
         if r == 0 { return "Error: failed to load " + arg; }
         return "Loaded: " + arg;
     }
 
     // --- NTP ---
     if cmd == "ntp time" {
-        let t = ntp_get_time();
+        let mut t = ntp_get_time();
         if t == 0 { return "ntp: not synced — use: ntp sync <host>"; }
         return ntp_format_time(t);
     }
     if cmd == "ntp status" { return ntp_status(); }
     if str_starts_with(cmd, "ntp sync ") {
         let host = str_sub(cmd, 9, len(cmd));
-        let t = ntp_sync(host);
+        let mut t = ntp_sync(host);
         if t == 0 { return "Error: ntp sync failed"; }
         return "ntp: synced — " + ntp_format_time(t);
     }
@@ -1222,7 +1222,7 @@ fn shell_handle_ext(cmd) {
         if sp < 0 { return "Usage: tar extract <path> <dest>"; }
         let tar_path = str_sub(args, 0, sp);
         let dest     = str_sub(args, sp + 1, len(args));
-        let n = tar_extract(tar_path, dest);
+        let mut n = tar_extract(tar_path, dest);
         if n < 0 { return "Error: extract failed"; }
         return "Extracted " + to_string(n) + " file(s) to " + dest;
     }
@@ -1235,7 +1235,7 @@ fn shell_handle_ext(cmd) {
     if str_starts_with(cmd, "hexedit ") {
         let path = str_sub(cmd, 8, len(cmd));
         if hexed_is_open() == 0 { hexed_open(); }
-        let r = hexed_load(path);
+        let mut r = hexed_load(path);
         if r == 0 { return "Error: cannot open " + path; }
         return "hexedit: loaded " + path;
     }
@@ -1261,7 +1261,7 @@ fn shell_handle_ext(cmd) {
         let sp2 = str_find(rest, " ");
         if sp2 < 0 { return "Usage: pop3 auth <id> <user> <pass>"; }
         let user = str_sub(rest, 0, sp2);
-        let pass = str_sub(rest, sp2 + 1, len(rest));
+        let mut pass = str_sub(rest, sp2 + 1, len(rest));
         pop3_auth(id, user, pass);
         return "pop3[" + to_string(id) + "] auth sent";
     }
@@ -1332,7 +1332,7 @@ fn shell_handle_ext(cmd) {
     }
     if str_starts_with(cmd, "irc recv ") {
         let id = parse_int(str_sub(cmd, 9, len(cmd)));
-        let m = irc_recv(id);
+        let mut m = irc_recv(id);
         if len(m) == 0 { return "(no messages)"; }
         return m;
     }
@@ -1359,8 +1359,8 @@ fn shell_handle_ext(cmd) {
         return "Calendar: next month"; }
     if cmd == "cal prev"  { if uical_is_open() == 0 { uical_open(); }
         let pm = uical_month - 1;
-        let py = uical_year;
-        if pm < 1 { let pm = 12; let py = py - 1; }
+        let mut py = uical_year;
+        if pm < 1 { let pm = 12; let mut py = py - 1; }
         uical_goto(pm, py);
         return "Calendar: prev month"; }
     if cmd == "cal today" { if uical_is_open() == 0 { uical_open(); }
@@ -1372,7 +1372,7 @@ fn shell_handle_ext(cmd) {
         if sp < 0 { return "Usage: cal add <day> <text>"; }
         let day  = parse_int(str_sub(args, 0, sp));
         let text = str_sub(args, sp + 1, len(args));
-        let r = uical_add_event(day, uical_month, uical_year, text);
+        let mut r = uical_add_event(day, uical_month, uical_year, text);
         if r < 0 { return "Error: event table full"; }
         return "Event added: day " + to_string(day) + " — " + text;
     }
@@ -1398,9 +1398,9 @@ fn shell_handle_ext(cmd) {
         if sp2 < 0 { return "Usage: compress <rle|lz> <src> <dst>"; }
         let src = str_sub(rest, 0, sp2);
         let dst = str_sub(rest, sp2 + 1, len(rest));
-        let n = 0 - 1;
-        if algo == "rle" { let n = compress_rle(src, dst); }
-        else { if algo == "lz" { let n = compress_lzss(src, dst); }
+        let mut n = 0 - 1;
+        if algo == "rle" { let mut n = compress_rle(src, dst); }
+        else { if algo == "lz" { let mut n = compress_lzss(src, dst); }
                else { return "Error: unknown algo (use rle or lz)"; } }
         if n < 0 { return "Error: compress failed"; }
         return "Compressed to " + dst + "  " + to_string(n) + " bytes";
@@ -1415,9 +1415,9 @@ fn shell_handle_ext(cmd) {
         if sp2 < 0 { return "Usage: decompress <rle|lz> <src> <dst>"; }
         let src = str_sub(rest, 0, sp2);
         let dst = str_sub(rest, sp2 + 1, len(rest));
-        let n = 0 - 1;
-        if algo == "rle" { let n = decompress_rle(src, dst); }
-        else { if algo == "lz" { let n = decompress_lzss(src, dst); }
+        let mut n = 0 - 1;
+        if algo == "rle" { let mut n = decompress_rle(src, dst); }
+        else { if algo == "lz" { let mut n = decompress_lzss(src, dst); }
                else { return "Error: unknown algo (use rle or lz)"; } }
         if n < 0 { return "Error: decompress failed"; }
         return "Decompressed to " + dst + "  " + to_string(n) + " bytes";
@@ -1487,7 +1487,7 @@ fn shell_handle_ext(cmd) {
         if sp < 0 { return "Usage: ns hostname <ns_id> <name>"; }
         let ns_id = parse_int(str_sub(args, 0, sp));
         let name  = str_sub(args, sp + 1, len(args));
-        let r = ns_set_hostname(ns_id, name);
+        let mut r = ns_set_hostname(ns_id, name);
         if r == 0 { return "Set hostname in ns[" + to_string(ns_id) + "] = " + name; }
         return "Error: cannot set hostname";
     }
@@ -1497,13 +1497,13 @@ fn shell_handle_ext(cmd) {
         if sp < 0 { return "Usage: ns enter <task_idx> <ns_id>"; }
         let tidx  = parse_int(str_sub(args, 0, sp));
         let ns_id = parse_int(str_sub(args, sp + 1, len(args)));
-        let r = ns_enter(tidx, ns_id);
+        let mut r = ns_enter(tidx, ns_id);
         if r == 0 { return "Task " + to_string(tidx) + " entered ns[" + to_string(ns_id) + "]"; }
         return "Error: ns_enter failed";
     }
     if str_starts_with(cmd, "ns del ") {
         let ns_id = parse_int(str_sub(cmd, 7, len(cmd)));
-        let r = ns_destroy(ns_id);
+        let mut r = ns_destroy(ns_id);
         if r == 0 { return "Destroyed ns[" + to_string(ns_id) + "]"; }
         return "Error: cannot destroy ns[" + to_string(ns_id) + "]";
     }
@@ -1740,8 +1740,8 @@ fn shell_handle_ext(cmd) {
         let rest  = str_sub(args, sp1 + 1, len(args));
         let sp2   = str_find(rest, " ");
         if sp2 < 0 { return "Usage: db where <name> <col> <val>"; }
-        let col = str_sub(rest, 0, sp2);
-        let val = str_sub(rest, sp2 + 1, len(rest));
+        let mut col = str_sub(rest, 0, sp2);
+        let mut val = str_sub(rest, sp2 + 1, len(rest));
         let id = _db_find(tname);
         if id < 0 { return "Error: table '" + tname + "' not found"; }
         return db_select_where(id, col, val);
@@ -1754,11 +1754,11 @@ fn shell_handle_ext(cmd) {
         let rest  = str_sub(args, sp1 + 1, len(args));
         let sp2   = str_find(rest, " ");
         if sp2 < 0 { return "Usage: db delete <name> <col> <val>"; }
-        let col = str_sub(rest, 0, sp2);
-        let val = str_sub(rest, sp2 + 1, len(rest));
+        let mut col = str_sub(rest, 0, sp2);
+        let mut val = str_sub(rest, sp2 + 1, len(rest));
         let id = _db_find(tname);
         if id < 0 { return "Error: table '" + tname + "' not found"; }
-        let n = db_delete_where(id, col, val);
+        let mut n = db_delete_where(id, col, val);
         return "Deleted " + to_string(n) + " row(s) from '" + tname + "'";
     }
     if str_starts_with(cmd, "db drop ") {
@@ -1823,8 +1823,8 @@ fn shell_handle_ext(cmd) {
         let args = str_sub(cmd, 12, len(cmd));
         let sp = str_find(args, " ");
         if sp < 0 { return "Usage: clock alarm <HH> <MM>"; }
-        let h = parse_int(str_sub(args, 0, sp));
-        let m = parse_int(str_sub(args, sp + 1, len(args)));
+        let mut h = parse_int(str_sub(args, 0, sp));
+        let mut m = parse_int(str_sub(args, sp + 1, len(args)));
         uiclock_set_alarm(h, m);
         return "Alarm set for " + to_string(h) + ":" + to_string(m);
     }
@@ -1836,7 +1836,7 @@ fn shell_handle_ext(cmd) {
         if sp < 0 { return "Usage: b64encode <src> <dst>"; }
         let src = str_sub(args, 0, sp);
         let dst = str_sub(args, sp + 1, len(args));
-        let n = b64_encode_file(src, dst);
+        let mut n = b64_encode_file(src, dst);
         if n < 0 { return "Error: b64encode failed"; }
         return "Encoded to " + dst + "  " + to_string(n) + " bytes";
     }
@@ -1846,7 +1846,7 @@ fn shell_handle_ext(cmd) {
         if sp < 0 { return "Usage: b64decode <src> <dst>"; }
         let src = str_sub(args, 0, sp);
         let dst = str_sub(args, sp + 1, len(args));
-        let n = b64_decode_file(src, dst);
+        let mut n = b64_decode_file(src, dst);
         if n < 0 { return "Error: b64decode failed"; }
         return "Decoded to " + dst + "  " + to_string(n) + " bytes";
     }
@@ -1858,7 +1858,7 @@ fn shell_handle_ext(cmd) {
     // === INI commands ===
     if str_starts_with(cmd, "ini load ") {
         let path = str_sub(cmd, 9, len(cmd));
-        let n = ini_load(path);
+        let mut n = ini_load(path);
         if n < 0 { return "Error: cannot open " + path; }
         return "Loaded " + to_string(n) + " entries from " + path;
     }
@@ -1869,7 +1869,7 @@ fn shell_handle_ext(cmd) {
         if sp < 0 { return "Usage: ini get <section> <key>"; }
         let sec = str_sub(args, 0, sp);
         let key = str_sub(args, sp + 1, len(args));
-        let v = ini_get(sec, key);
+        let mut v = ini_get(sec, key);
         if len(v) == 0 { return "(not found)"; }
         return v;
     }
@@ -1882,13 +1882,13 @@ fn shell_handle_ext(cmd) {
         let sp2  = str_find(rest, " ");
         if sp2 < 0 { return "Usage: ini set <section> <key> <val>"; }
         let key = str_sub(rest, 0, sp2);
-        let val = str_sub(rest, sp2 + 1, len(rest));
+        let mut val = str_sub(rest, sp2 + 1, len(rest));
         ini_set(sec, key, val);
         return "Set [" + sec + "] " + key + " = " + val;
     }
     if str_starts_with(cmd, "ini save ") {
         let path = str_sub(cmd, 9, len(cmd));
-        let n = ini_save(path);
+        let mut n = ini_save(path);
         if n < 0 { return "Error: cannot write " + path; }
         return "Saved " + to_string(n) + " bytes to " + path;
     }
@@ -1898,7 +1898,7 @@ fn shell_handle_ext(cmd) {
         if sp < 0 { return "Usage: ini del <section> <key>"; }
         let sec = str_sub(args, 0, sp);
         let key = str_sub(args, sp + 1, len(args));
-        let r = ini_delete(sec, key);
+        let mut r = ini_delete(sec, key);
         if r == 1 { return "Deleted [" + sec + "] " + key; }
         return "(not found)";
     }
@@ -1908,14 +1908,14 @@ fn shell_handle_ext(cmd) {
     if cmd == "prof reset"  { prof_reset(); return "Profiler reset"; }
     if cmd == "prof spans"  { return prof_span_report(); }
     if cmd == "prof ring"   { return prof_ring_report(); }
-    if cmd == "prof sample" { let t = prof_sample(); return "Sampled tick=" + to_string(t); }
+    if cmd == "prof sample" { let mut t = prof_sample(); return "Sampled tick=" + to_string(t); }
     if str_starts_with(cmd, "prof top ") {
-        let n = parse_int(str_sub(cmd, 9, len(cmd)));
+        let mut n = parse_int(str_sub(cmd, 9, len(cmd)));
         return prof_top(n);
     }
     if str_starts_with(cmd, "prof inc ") {
         let name = str_sub(cmd, 9, len(cmd));
-        let v = prof_inc(name);
+        let mut v = prof_inc(name);
         return name + " = " + to_string(v);
     }
     if str_starts_with(cmd, "prof get ") {
@@ -1926,21 +1926,21 @@ fn shell_handle_ext(cmd) {
     // === CSV commands ===
     if str_starts_with(cmd, "csv load ") {
         let path = str_sub(cmd, 9, len(cmd));
-        let n = csv_load(path);
+        let mut n = csv_load(path);
         if n < 0 { return "Error: cannot open " + path; }
         return "Loaded " + to_string(n) + " rows from " + path;
     }
     if cmd == "csv list" { return csv_head(10); }
     if str_starts_with(cmd, "csv list ") {
-        let n = parse_int(str_sub(cmd, 9, len(cmd)));
+        let mut n = parse_int(str_sub(cmd, 9, len(cmd)));
         return csv_head(n);
     }
     if str_starts_with(cmd, "csv get ") {
         let args = str_sub(cmd, 8, len(cmd));
         let sp = str_find(args, " ");
         if sp < 0 { return "Usage: csv get <row> <col>"; }
-        let row = parse_int(str_sub(args, 0, sp));
-        let col = parse_int(str_sub(args, sp + 1, len(args)));
+        let mut row = parse_int(str_sub(args, 0, sp));
+        let mut col = parse_int(str_sub(args, sp + 1, len(args)));
         return csv_get(row, col);
     }
     if str_starts_with(cmd, "csv set ") {
@@ -1951,14 +1951,14 @@ fn shell_handle_ext(cmd) {
         let rest = str_sub(args, sp1 + 1, len(args));
         let sp2  = str_find(rest, " ");
         if sp2 < 0 { return "Usage: csv set <row> <col> <val>"; }
-        let col = parse_int(str_sub(rest, 0, sp2));
-        let val = str_sub(rest, sp2 + 1, len(rest));
+        let mut col = parse_int(str_sub(rest, 0, sp2));
+        let mut val = str_sub(rest, sp2 + 1, len(rest));
         csv_set(row, col, val);
         return "Set [" + to_string(row) + "," + to_string(col) + "] = " + val;
     }
     if str_starts_with(cmd, "csv save ") {
         let path = str_sub(cmd, 9, len(cmd));
-        let n = csv_save(path);
+        let mut n = csv_save(path);
         if n < 0 { return "Error: cannot write " + path; }
         return "Saved " + to_string(n) + " bytes to " + path;
     }
@@ -1969,7 +1969,7 @@ fn shell_handle_ext(cmd) {
         let args = str_sub(cmd, 5, len(cmd));
         let sp = str_find(args, " ");
         let host = args;
-        let count = 4;
+        let mut count = 4;
         if sp >= 0 {
             host = str_sub(args, 0, sp);
             count = parse_int(str_sub(args, sp + 1, len(args)));
@@ -2003,26 +2003,26 @@ fn shell_handle_ext(cmd) {
         let sp = str_find(args, " ");
         if sp < 0 { return "Usage: sem create <name> <initial_val>"; }
         let nm  = str_sub(args, 0, sp);
-        let val = parse_int(str_sub(args, sp + 1, len(args)));
+        let mut val = parse_int(str_sub(args, sp + 1, len(args)));
         let id = sem_open(nm, val);
         if id < 0 { return "Error: semaphore table full or name too long"; }
         return "Semaphore '" + nm + "' created, id=" + to_string(id);
     }
     if str_starts_with(cmd, "sem wait ") {
         let id = parse_int(str_sub(cmd, 9, len(cmd)));
-        let r = sem_wait(id);
+        let mut r = sem_wait(id);
         if r < 0 { return "sem[" + to_string(id) + "]: would block (val=0)"; }
         return "sem[" + to_string(id) + "]: acquired, val=" + to_string(sem_getvalue(id));
     }
     if str_starts_with(cmd, "sem post ") {
         let id = parse_int(str_sub(cmd, 9, len(cmd)));
-        let v = sem_post(id);
+        let mut v = sem_post(id);
         if v < 0 { return "Error: invalid semaphore id"; }
         return "sem[" + to_string(id) + "]: posted, val=" + to_string(v);
     }
     if str_starts_with(cmd, "sem value ") {
         let id = parse_int(str_sub(cmd, 10, len(cmd)));
-        let v = sem_getvalue(id);
+        let mut v = sem_getvalue(id);
         if v < 0 { return "Error: invalid semaphore id"; }
         return "sem[" + to_string(id) + "] = " + to_string(v);
     }
@@ -2064,8 +2064,8 @@ fn shell_handle_ext(cmd) {
         let sp2 = str_find(rest2, " ");
         if sp2 < 0 { return "Usage: imap login <id> <user> <pass>"; }
         let user = str_sub(rest2, 0, sp2);
-        let pass = str_sub(rest2, sp2 + 1, len(rest2));
-        let r = imap_login(id, user, pass);
+        let mut pass = str_sub(rest2, sp2 + 1, len(rest2));
+        let mut r = imap_login(id, user, pass);
         if r < 0 { return "Error: imap login failed"; }
         return "imap[" + to_string(id) + "] logged in as " + user;
     }
@@ -2167,7 +2167,7 @@ fn shell_handle_ext(cmd) {
         if sp < 0 { return "Usage: lz4c <inpath> <outpath>"; }
         let inpath  = str_sub(rest, 0, sp);
         let outpath = str_sub(rest, sp + 1, len(rest));
-        let n = lz4_compress_file(inpath, outpath);
+        let mut n = lz4_compress_file(inpath, outpath);
         if n < 0 { return "Error: lz4c failed"; }
         return "lz4c: compressed " + to_string(n) + " bytes → " + outpath;
     }
@@ -2177,7 +2177,7 @@ fn shell_handle_ext(cmd) {
         if sp < 0 { return "Usage: lz4d <inpath> <outpath>"; }
         let inpath  = str_sub(rest, 0, sp);
         let outpath = str_sub(rest, sp + 1, len(rest));
-        let n = lz4_decompress_file(inpath, outpath);
+        let mut n = lz4_decompress_file(inpath, outpath);
         if n < 0 { return "Error: lz4d failed"; }
         return "lz4d: decompressed " + to_string(n) + " bytes → " + outpath;
     }
@@ -2199,8 +2199,8 @@ fn shell_handle_ext(cmd) {
         let sp2 = str_find(rest2, " ");
         if sp2 < 0 { return "Usage: ftp auth <id> <user> <pass>"; }
         let user = str_sub(rest2, 0, sp2);
-        let pass = str_sub(rest2, sp2 + 1, len(rest2));
-        let r = ftp_auth(id, user, pass);
+        let mut pass = str_sub(rest2, sp2 + 1, len(rest2));
+        let mut r = ftp_auth(id, user, pass);
         if r < 0 { return "Error: ftp auth failed"; }
         return "ftp[" + to_string(id) + "] authenticated as " + user;
     }
@@ -2222,7 +2222,7 @@ fn shell_handle_ext(cmd) {
         if sp2 < 0 { return "Usage: ftp get <id> <remote> <local>"; }
         let remote = str_sub(rest2, 0, sp2);
         let local = str_sub(rest2, sp2 + 1, len(rest2));
-        let n = ftp_get(id, remote, local);
+        let mut n = ftp_get(id, remote, local);
         if n < 0 { return "Error: ftp get failed"; }
         return "ftp: got " + to_string(n) + " bytes → " + local;
     }
@@ -2236,7 +2236,7 @@ fn shell_handle_ext(cmd) {
         if sp2 < 0 { return "Usage: ftp put <id> <local> <remote>"; }
         let local = str_sub(rest2, 0, sp2);
         let remote = str_sub(rest2, sp2 + 1, len(rest2));
-        let n = ftp_put(id, local, remote);
+        let mut n = ftp_put(id, local, remote);
         if n < 0 { return "Error: ftp put failed"; }
         return "ftp: put " + to_string(n) + " bytes → " + remote;
     }
@@ -2250,7 +2250,7 @@ fn shell_handle_ext(cmd) {
         if sp < 0 { return "Usage: ftp cd <id> <path>"; }
         let id = parse_int(str_sub(rest, 0, sp));
         let path = str_sub(rest, sp + 1, len(rest));
-        let r = ftp_cwd(id, path);
+        let mut r = ftp_cwd(id, path);
         if r < 0 { return "Error: ftp cd failed"; }
         return "ftp[" + to_string(id) + "] cd " + path;
     }
@@ -2262,25 +2262,25 @@ fn shell_handle_ext(cmd) {
 
     // === CBOR commands ===
     if str_starts_with(cmd, "cbor uint ") {
-        let n = parse_int(str_sub(cmd, 10, len(cmd)));
+        let mut n = parse_int(str_sub(cmd, 10, len(cmd)));
         cbor_begin();
         cbor_encode_uint(n);
         return "cbor: " + cbor_get_result();
     }
     if str_starts_with(cmd, "cbor neg ") {
-        let n = parse_int(str_sub(cmd, 9, len(cmd)));
+        let mut n = parse_int(str_sub(cmd, 9, len(cmd)));
         cbor_begin();
         cbor_encode_negint(n);
         return "cbor: " + cbor_get_result();
     }
     if str_starts_with(cmd, "cbor str ") {
-        let s = str_sub(cmd, 9, len(cmd));
+        let mut s = str_sub(cmd, 9, len(cmd));
         cbor_begin();
         cbor_encode_str(s);
         return "cbor: " + cbor_get_result();
     }
     if str_starts_with(cmd, "cbor bool ") {
-        let b = parse_int(str_sub(cmd, 10, len(cmd)));
+        let mut b = parse_int(str_sub(cmd, 10, len(cmd)));
         cbor_begin();
         cbor_encode_bool(b);
         return "cbor: " + cbor_get_result();
@@ -2303,7 +2303,7 @@ fn shell_handle_ext(cmd) {
     if cmd == "syslogd clear" { syslog_srv_clear(); return "syslogd: buffer cleared"; }
     if cmd == "syslogd status" { return syslog_srv_status(); }
     if str_starts_with(cmd, "syslogd last ") {
-        let n = parse_int(str_sub(cmd, 13, len(cmd)));
+        let mut n = parse_int(str_sub(cmd, 13, len(cmd)));
         return syslog_srv_list(n);
     }
 
@@ -2311,7 +2311,7 @@ fn shell_handle_ext(cmd) {
     if cmd == "cpio list" { return cpio_list(); }
     if str_starts_with(cmd, "cpio load ") {
         let path = str_sub(cmd, 10, len(cmd));
-        let n = cpio_load(path);
+        let mut n = cpio_load(path);
         if n < 0 { return "cpio: load failed"; }
         return "cpio: loaded " + to_string(n) + " entries from " + path;
     }
@@ -2319,7 +2319,7 @@ fn shell_handle_ext(cmd) {
         let args = str_sub(cmd, 13, len(cmd));
         let space = str_index_of(args, " ");
         if space < 0 { return "cpio: usage: cpio extract <index> <dest>"; }
-        let idx = parse_int(str_sub(args, 0, space));
+        let mut idx = parse_int(str_sub(args, 0, space));
         let dest = str_sub(args, space + 1, len(args));
         let res = cpio_extract(idx, dest);
         if res < 0 { return "cpio: extract failed"; }
@@ -2331,13 +2331,13 @@ fn shell_handle_ext(cmd) {
     // === Quoted-Printable commands ===
     if str_starts_with(cmd, "qp encode ") {
         let text = str_sub(cmd, 10, len(cmd));
-        let n = qp_encode(text);
+        let mut n = qp_encode(text);
         if n < 0 { return "qp: encode failed"; }
         return qp_get_result();
     }
     if str_starts_with(cmd, "qp decode ") {
         let text = str_sub(cmd, 10, len(cmd));
-        let n = qp_decode(text);
+        let mut n = qp_decode(text);
         if n < 0 { return "qp: decode failed"; }
         return qp_get_result();
     }
@@ -2351,13 +2351,13 @@ fn shell_handle_ext(cmd) {
         if space < 0 { return "uu: usage: uu encode <text> <filename>"; }
         let text = str_sub(args, 0, space);
         let fname = str_sub(args, space + 1, len(args));
-        let n = uu_encode(text, fname);
+        let mut n = uu_encode(text, fname);
         if n < 0 { return "uu: encode failed"; }
         return uu_get_result();
     }
     if str_starts_with(cmd, "uu decode ") {
         let text = str_sub(cmd, 10, len(cmd));
-        let n = uu_decode(text);
+        let mut n = uu_decode(text);
         if n < 0 { return "uu: decode failed"; }
         return uu_get_result();
     }
@@ -2367,7 +2367,7 @@ fn shell_handle_ext(cmd) {
     // === ASN.1 DER commands ===
     if str_starts_with(cmd, "asn1 int ") {
         asn1_clear();
-        let val = parse_int(str_sub(cmd, 9, len(cmd)));
+        let mut val = parse_int(str_sub(cmd, 9, len(cmd)));
         asn1_encode_integer(val);
         return asn1_get_hex();
     }
@@ -2391,13 +2391,13 @@ fn shell_handle_ext(cmd) {
     // === PEM format commands ===
     if str_starts_with(cmd, "pem parse ") {
         let data = str_sub(cmd, 10, len(cmd));
-        let n = pem_parse(data);
+        let mut n = pem_parse(data);
         if n < 0 { return "pem: parse failed"; }
         return "pem: label=" + pem_get_label() + ", decoded " + to_string(n) + " bytes";
     }
     if str_starts_with(cmd, "pem load ") {
         let path = str_sub(cmd, 9, len(cmd));
-        let n = pem_load(path);
+        let mut n = pem_load(path);
         if n < 0 { return "pem: load failed"; }
         return "pem: label=" + pem_get_label() + ", decoded " + to_string(n) + " bytes";
     }
@@ -2437,8 +2437,8 @@ fn shell_handle_ext(cmd) {
         let args = str_sub(cmd, 9, len(cmd));
         let space = str_index_of(args, " ");
         if space < 0 { return "bmp: usage: bmp show <x> <y>"; }
-        let x = parse_int(str_sub(args, 0, space));
-        let y = parse_int(str_sub(args, space + 1, len(args)));
+        let mut x = parse_int(str_sub(args, 0, space));
+        let mut y = parse_int(str_sub(args, space + 1, len(args)));
         let res = bmp_display(x, y);
         if res < 0 { return "bmp: display failed"; }
         return "bmp: displayed at (" + to_string(x) + "," + to_string(y) + ")";
@@ -2474,13 +2474,13 @@ fn shell_handle_ext(cmd) {
     // === Base32 encoding commands ===
     if str_starts_with(cmd, "base32 enc ") {
         let text = str_sub(cmd, 11, len(cmd));
-        let n = base32_encode(text);
+        let mut n = base32_encode(text);
         if n < 0 { return "base32: encode failed"; }
         return base32_get_result();
     }
     if str_starts_with(cmd, "base32 dec ") {
         let text = str_sub(cmd, 11, len(cmd));
-        let n = base32_decode(text);
+        let mut n = base32_decode(text);
         if n < 0 { return "base32: decode failed"; }
         return base32_get_result();
     }
@@ -2489,13 +2489,13 @@ fn shell_handle_ext(cmd) {
     // === Hex encoding commands ===
     if str_starts_with(cmd, "hex enc ") {
         let text = str_sub(cmd, 8, len(cmd));
-        let n = hex_encode(text);
+        let mut n = hex_encode(text);
         if n < 0 { return "hex: encode failed"; }
         return hex_get_result();
     }
     if str_starts_with(cmd, "hex dec ") {
         let text = str_sub(cmd, 8, len(cmd));
-        let n = hex_decode(text);
+        let mut n = hex_decode(text);
         if n < 0 { return "hex: decode failed"; }
         return hex_get_result();
     }
@@ -2508,13 +2508,13 @@ fn shell_handle_ext(cmd) {
     // === URL encoding commands ===
     if str_starts_with(cmd, "url enc ") {
         let text = str_sub(cmd, 8, len(cmd));
-        let n = url_encode(text);
+        let mut n = url_encode(text);
         if n < 0 { return "url: encode failed"; }
         return url_get_result();
     }
     if str_starts_with(cmd, "url dec ") {
         let text = str_sub(cmd, 8, len(cmd));
-        let n = url_decode(text);
+        let mut n = url_decode(text);
         if n < 0 { return "url: decode failed"; }
         return url_get_result();
     }
@@ -2527,17 +2527,17 @@ fn shell_handle_ext(cmd) {
     // === CRC checksum commands ===
     if str_starts_with(cmd, "crc8 ") {
         let text = str_sub(cmd, 5, len(cmd));
-        let c = crc8(text);
+        let mut c = crc8(text);
         return "crc8: " + crc_to_hex(c, 2);
     }
     if str_starts_with(cmd, "crc16 ") {
         let text = str_sub(cmd, 6, len(cmd));
-        let c = crc16(text);
+        let mut c = crc16(text);
         return "crc16: " + crc_to_hex(c, 4);
     }
     if str_starts_with(cmd, "crc32 ") {
         let text = str_sub(cmd, 6, len(cmd));
-        let c = crc32_simple(text);
+        let mut c = crc32_simple(text);
         return "crc32: " + crc_to_hex(c, 8);
     }
     if cmd == "crc test" { return crc_selftest(); }
@@ -2587,8 +2587,8 @@ fn shell_handle_ext(cmd) {
     if cmd == "uuid v4" { return uuid_v4(); }
     if cmd == "uuid nil" { return uuid_nil(); }
     if str_starts_with(cmd, "uuid validate ") {
-        let u = str_sub(cmd, 14, len(cmd));
-        let v = uuid_validate(u);
+        let mut u = str_sub(cmd, 14, len(cmd));
+        let mut v = uuid_validate(u);
         if v == 1 { return "uuid: valid"; }
         return "uuid: invalid";
     }
@@ -2603,7 +2603,7 @@ fn shell_handle_ext(cmd) {
     if str_starts_with(cmd, "rle decode ") {
         let data = str_sub(cmd, 11, len(cmd));
         let decompressed_len = rle_decode(data);
-        let result = rle_get_result();
+        let mut result = rle_get_result();
         return "rle: decoded " + to_string(len(data)) + " → " + to_string(decompressed_len) + " bytes: " + result;
     }
     if str_starts_with(cmd, "rle ratio ") {
@@ -2625,7 +2625,7 @@ fn shell_handle_ext(cmd) {
     // === RSS commands ===
     if str_starts_with(cmd, "rss parse ") {
         let xml = str_sub(cmd, 10, len(cmd));
-        let count = rss_parse(xml);
+        let mut count = rss_parse(xml);
         return "rss: parsed " + to_string(count) + " items";
     }
     if cmd == "rss channel" {
@@ -2641,7 +2641,7 @@ fn shell_handle_ext(cmd) {
         return output;
     }
     if str_starts_with(cmd, "rss item ") {
-        let idx = parse_int(str_sub(cmd, 9, len(cmd)));
+        let mut idx = parse_int(str_sub(cmd, 9, len(cmd)));
         let title = rss_get_item_title(idx);
         let link = rss_get_item_link(idx);
         let desc = rss_get_item_desc(idx);
@@ -2653,7 +2653,7 @@ fn shell_handle_ext(cmd) {
     // === LDAP commands ===
     if str_starts_with(cmd, "ldap connect ") {
         let host = str_sub(cmd, 13, len(cmd));
-        let result = ldap_connect(host);
+        let mut result = ldap_connect(host);
         if result == 0 { return "ldap: connected to " + host; }
         return "ldap: connection failed";
     }
@@ -2662,7 +2662,7 @@ fn shell_handle_ext(cmd) {
         if len(parts) >= 2 {
             let dn = parts[0];
             let password = parts[1];
-            let result = ldap_bind(dn, password);
+            let mut result = ldap_bind(dn, password);
             if result == 0 { return "ldap: bind successful"; }
             return "ldap: bind failed";
         }
@@ -2673,7 +2673,7 @@ fn shell_handle_ext(cmd) {
         if len(parts) >= 2 {
             let base_dn = parts[0];
             let filter = parts[1];
-            let result = ldap_search(base_dn, filter, 2);
+            let mut result = ldap_search(base_dn, filter, 2);
             if result == 0 { return "ldap: search request sent"; }
             return "ldap: search failed";
         }
@@ -2697,7 +2697,7 @@ fn shell_handle_ext(cmd) {
     if str_starts_with(cmd, "aes decrypt ") {
         let ciphertext = str_sub(cmd, 12, len(cmd));
         let dec_len = aes_decrypt(ciphertext);
-        let result = aes_get_result();
+        let mut result = aes_get_result();
         return "aes: decrypted " + to_string(len(ciphertext)) + " → " + to_string(dec_len) + " bytes";
     }
     if cmd == "aes hex" {
@@ -2749,7 +2749,7 @@ fn shell_handle_ext(cmd) {
         let parts = str_split(str_sub(cmd, 12, len(cmd)), " ");
         if len(parts) >= 1 {
             let server = parts[0];
-            let result = radius_send_request(server, RADIUS_PORT_AUTH);
+            let mut result = radius_send_request(server, RADIUS_PORT_AUTH);
             if result == 0 { return "radius: request sent to " + server; }
             return "radius: send failed";
         }
@@ -2757,7 +2757,7 @@ fn shell_handle_ext(cmd) {
     }
     if str_starts_with(cmd, "radius parse ") {
         let data = str_sub(cmd, 13, len(cmd));
-        let result = radius_parse_response(data);
+        let mut result = radius_parse_response(data);
         if result == 1 { return "radius: Access-Accept"; }
         if result == 0 { return "radius: Access-Reject"; }
         return "radius: parse error";
@@ -2816,7 +2816,7 @@ fn shell_handle_ext(cmd) {
             let from = parts[0];
             let to = parts[1];
             let host = parts[2];
-            let len = sip_create_invite(from, to, host);
+            let mut len = sip_create_invite(from, to, host);
             return "sip: INVITE created (" + to_string(len) + " bytes)";
         }
         return "sip: usage: sip invite <from> <to> <host>";
@@ -2826,7 +2826,7 @@ fn shell_handle_ext(cmd) {
         if len(parts) >= 2 {
             let to = parts[0];
             let host = parts[1];
-            let len = sip_create_ack(to, host);
+            let mut len = sip_create_ack(to, host);
             return "sip: ACK created (" + to_string(len) + " bytes)";
         }
         return "sip: usage: sip ack <to> <host>";
@@ -2836,7 +2836,7 @@ fn shell_handle_ext(cmd) {
         if len(parts) >= 2 {
             let to = parts[0];
             let host = parts[1];
-            let len = sip_create_bye(to, host);
+            let mut len = sip_create_bye(to, host);
             return "sip: BYE created (" + to_string(len) + " bytes)";
         }
         return "sip: usage: sip bye <to> <host>";
@@ -2846,7 +2846,7 @@ fn shell_handle_ext(cmd) {
         if len(parts) >= 2 {
             let user = parts[0];
             let registrar = parts[1];
-            let len = sip_create_register(user, registrar);
+            let mut len = sip_create_register(user, registrar);
             return "sip: REGISTER created (" + to_string(len) + " bytes)";
         }
         return "sip: usage: sip register <user> <registrar>";
@@ -2867,15 +2867,15 @@ fn shell_handle_ext(cmd) {
     }
     if str_starts_with(cmd, "bcrypt hash ") {
         let password = str_sub(cmd, 12, len(cmd));
-        let hash = bcrypt_hash(password);
+        let mut hash = bcrypt_hash(password);
         return "bcrypt: " + hash;
     }
     if str_starts_with(cmd, "bcrypt verify ") {
         let parts = str_split(str_sub(cmd, 14, len(cmd)), " ");
         if len(parts) >= 2 {
             let password = parts[0];
-            let hash = parts[1];
-            let result = bcrypt_verify(password, hash);
+            let mut hash = parts[1];
+            let mut result = bcrypt_verify(password, hash);
             if result == 1 { return "bcrypt: password matches"; }
             return "bcrypt: password does not match";
         }
@@ -2886,12 +2886,12 @@ fn shell_handle_ext(cmd) {
     // === RTSP commands ===
     if str_starts_with(cmd, "rtsp options ") {
         let url = str_sub(cmd, 13, len(cmd));
-        let len = rtsp_create_options(url);
+        let mut len = rtsp_create_options(url);
         return "rtsp: OPTIONS created (" + to_string(len) + " bytes)";
     }
     if str_starts_with(cmd, "rtsp describe ") {
         let url = str_sub(cmd, 14, len(cmd));
-        let len = rtsp_create_describe(url);
+        let mut len = rtsp_create_describe(url);
         return "rtsp: DESCRIBE created (" + to_string(len) + " bytes)";
     }
     if str_starts_with(cmd, "rtsp setup ") {
@@ -2899,41 +2899,41 @@ fn shell_handle_ext(cmd) {
         if len(parts) >= 2 {
             let url = parts[0];
             let port = parse_int(parts[1]);
-            let len = rtsp_create_setup(url, port);
+            let mut len = rtsp_create_setup(url, port);
             return "rtsp: SETUP created (" + to_string(len) + " bytes)";
         }
         return "rtsp: usage: rtsp setup <url> <client_port>";
     }
     if str_starts_with(cmd, "rtsp play ") {
         let url = str_sub(cmd, 10, len(cmd));
-        let len = rtsp_create_play(url);
+        let mut len = rtsp_create_play(url);
         return "rtsp: PLAY created (" + to_string(len) + " bytes)";
     }
     if str_starts_with(cmd, "rtsp pause ") {
         let url = str_sub(cmd, 11, len(cmd));
-        let len = rtsp_create_pause(url);
+        let mut len = rtsp_create_pause(url);
         return "rtsp: PAUSE created (" + to_string(len) + " bytes)";
     }
     if str_starts_with(cmd, "rtsp teardown ") {
         let url = str_sub(cmd, 14, len(cmd));
-        let len = rtsp_create_teardown(url);
+        let mut len = rtsp_create_teardown(url);
         return "rtsp: TEARDOWN created (" + to_string(len) + " bytes)";
     }
     if cmd == "rtsp test" { return rtsp_test(); }
 
     // === STUN commands ===
     if cmd == "stun request" {
-        let len = stun_create_binding_request();
+        let mut len = stun_create_binding_request();
         return "stun: Binding Request created (" + to_string(len) + " bytes)";
     }
     if str_starts_with(cmd, "stun parse ") {
         let data = str_sub(cmd, 11, len(cmd));
-        let result = stun_parse_response(data);
+        let mut result = stun_parse_response(data);
         if result == 0 { return "stun: response parsed successfully"; }
         return "stun: parse error";
     }
     if cmd == "stun addr" {
-        let addr = stun_get_mapped_address();
+        let mut addr = stun_get_mapped_address();
         if len(addr) > 0 { return "stun: mapped address = " + addr; }
         return "stun: no mapped address available";
     }
@@ -2958,7 +2958,7 @@ fn shell_handle_ext(cmd) {
     }
     if str_starts_with(cmd, "rtp setpt ") {
         let pt = parse_int(str_sub(cmd, 10, len(cmd)));
-        let result = rtp_set_payload_type(pt);
+        let mut result = rtp_set_payload_type(pt);
         if result == 0 { return "rtp: payload type set to " + to_string(pt) + " (" + rtp_get_payload_name(pt) + ")"; }
         return "rtp: invalid payload type";
     }
@@ -2966,7 +2966,7 @@ fn shell_handle_ext(cmd) {
         return "rtp: ssrc=" + to_string(rtp_get_ssrc()) + " seq=" + to_string(rtp_get_sequence()) + " ts=" + to_string(rtp_get_timestamp());
     }
     if cmd == "rtp test" {
-        let result = rtp_create_packet([], 160, 0);
+        let mut result = rtp_create_packet([], 160, 0);
         if result > 0 { return "rtp: test passed"; }
         return "rtp: test failed";
     }
@@ -2986,7 +2986,7 @@ fn shell_handle_ext(cmd) {
         let parts = str_split(str_sub(cmd, 11, len(cmd)), " ");
         if len(parts) >= 2 {
             let user = parts[0];
-            let pass = parts[1];
+            let mut pass = parts[1];
             socks_set_auth(user, pass);
             return "socks: authentication set";
         }
@@ -3026,8 +3026,8 @@ fn shell_handle_ext(cmd) {
         return "zlib: decompression failed (error " + to_string(decomp_len) + ")";
     }
     if str_starts_with(cmd, "zlib level ") {
-        let level = parse_int(str_sub(cmd, 11, len(cmd)));
-        let result = zlib_set_level(level);
+        let mut level = parse_int(str_sub(cmd, 11, len(cmd)));
+        let mut result = zlib_set_level(level);
         if result == 0 { return "zlib: compression level set to " + to_string(level); }
         return "zlib: invalid level (must be 1-9)";
     }
@@ -3070,8 +3070,8 @@ fn shell_handle_ext(cmd) {
         let parts = str_split(str_sub(cmd, 16, len(cmd)), " ");
         if len(parts) >= 2 {
             let field = parse_int(parts[0]);
-            let value = parse_int(parts[1]);
-            let len = protobuf_add_varint(field, value);
+            let mut value = parse_int(parts[1]);
+            let mut len = protobuf_add_varint(field, value);
             return "protobuf: added varint field " + to_string(field) + " = " + to_string(value) + " (total " + to_string(len) + " bytes)";
         }
         return "protobuf: usage: protobuf addint <field_num> <value>";
@@ -3081,7 +3081,7 @@ fn shell_handle_ext(cmd) {
         if len(parts) >= 2 {
             let field = parse_int(parts[0]);
             let str = parts[1];
-            let len = protobuf_add_string(field, str);
+            let mut len = protobuf_add_string(field, str);
             return "protobuf: added string field " + to_string(field) + " = '" + str + "' (total " + to_string(len) + " bytes)";
         }
         return "protobuf: usage: protobuf addstr <field_num> <string>";
@@ -3108,19 +3108,19 @@ fn shell_handle_ext(cmd) {
     }
     if str_starts_with(cmd, "chacha20 encrypt ") {
         let data = str_sub(cmd, 17, len(cmd));
-        let result = chacha20_crypt(data, len(data));
+        let mut result = chacha20_crypt(data, len(data));
         return "chacha20: encrypted " + to_string(len(data)) + " bytes";
     }
     if str_starts_with(cmd, "chacha20 decrypt ") {
         let data = str_sub(cmd, 17, len(cmd));
-        let result = chacha20_crypt(data, len(data));
+        let mut result = chacha20_crypt(data, len(data));
         return "chacha20: decrypted " + to_string(len(data)) + " bytes";
     }
     if cmd == "chacha20 test" { return chacha20_test(); }
 
     // === RSA commands ===
     if cmd == "rsa genkey" {
-        let result = rsa_generate_keys();
+        let mut result = rsa_generate_keys();
         if result == 0 { return "rsa: keys generated - " + rsa_get_public_key(); }
         return "rsa: key generation failed";
     }
@@ -3169,13 +3169,13 @@ fn shell_handle_ext(cmd) {
         return "avro: message started";
     }
     if str_starts_with(cmd, "avro addint ") {
-        let val = parse_int(str_sub(cmd, 12, len(cmd)));
-        let len = avro_add_int(val);
+        let mut val = parse_int(str_sub(cmd, 12, len(cmd)));
+        let mut len = avro_add_int(val);
         return "avro: added int " + to_string(val) + " (total " + to_string(len) + " bytes)";
     }
     if str_starts_with(cmd, "avro addstr ") {
         let str = str_sub(cmd, 12, len(cmd));
-        let len = avro_add_string(str);
+        let mut len = avro_add_string(str);
         return "avro: added string '" + str + "' (total " + to_string(len) + " bytes)";
     }
     if str_starts_with(cmd, "avro person ") {
@@ -3183,7 +3183,7 @@ fn shell_handle_ext(cmd) {
         if len(parts) >= 2 {
             let name = parts[0];
             let age = parse_int(parts[1]);
-            let len = avro_create_person(name, age);
+            let mut len = avro_create_person(name, age);
             return "avro: created person record (" + to_string(len) + " bytes)";
         }
         return "avro: usage: avro person <name> <age>";
@@ -3204,11 +3204,11 @@ fn shell_handle_ext(cmd) {
         return "bzip2: decompression failed (error " + to_string(decomp_len) + ")";
     }
     if cmd == "bzip2 output" {
-        let len = bzip2_get_output_len();
+        let mut len = bzip2_get_output_len();
         return "bzip2: output buffer has " + to_string(len) + " bytes";
     }
     if cmd == "bzip2 ratio" {
-        let len = bzip2_get_output_len();
+        let mut len = bzip2_get_output_len();
         return "bzip2: output = " + to_string(len) + " bytes";
     }
     if cmd == "bzip2 test" { return bzip2_test(); }
@@ -3225,8 +3225,8 @@ fn shell_handle_ext(cmd) {
         return "scrypt: usage: scrypt derive <password> <salt>";
     }
     if str_starts_with(cmd, "scrypt cost ") {
-        let n = parse_int(str_sub(cmd, 12, len(cmd)));
-        let result = scrypt_set_cost(n);
+        let mut n = parse_int(str_sub(cmd, 12, len(cmd)));
+        let mut result = scrypt_set_cost(n);
         if result == 0 { return "scrypt: cost set to " + to_string(n); }
         return "scrypt: invalid cost (must be 1-4096)";
     }
@@ -3269,11 +3269,11 @@ fn shell_handle_ext(cmd) {
         return "snappy: decompression failed";
     }
     if cmd == "snappy output" {
-        let out = snappy_get_output();
+        let mut out = snappy_get_output();
         return "snappy: output buffer ready at " + to_string(out);
     }
     if cmd == "snappy len" {
-        let len = snappy_get_output_len();
+        let mut len = snappy_get_output_len();
         return "snappy: output length = " + to_string(len) + " bytes";
     }
     if cmd == "snappy test" { return snappy_test(); }
@@ -3290,14 +3290,14 @@ fn shell_handle_ext(cmd) {
         return "argon2: usage: argon2 hash <password> <salt>";
     }
     if str_starts_with(cmd, "argon2 variant ") {
-        let v = parse_int(str_sub(cmd, 15, len(cmd)));
-        let result = argon2_set_variant(v);
+        let mut v = parse_int(str_sub(cmd, 15, len(cmd)));
+        let mut result = argon2_set_variant(v);
         if result == 0 { return "argon2: variant set to " + argon2_get_variant_name(); }
         return "argon2: invalid variant (0=Argon2d, 1=Argon2i, 2=Argon2id)";
     }
     if str_starts_with(cmd, "argon2 cost ") {
-        let t = parse_int(str_sub(cmd, 12, len(cmd)));
-        let result = argon2_set_time_cost(t);
+        let mut t = parse_int(str_sub(cmd, 12, len(cmd)));
+        let mut result = argon2_set_time_cost(t);
         if result == 0 { return "argon2: time cost set to " + to_string(t); }
         return "argon2: invalid cost (must be 1-10)";
     }
@@ -3309,13 +3309,13 @@ fn shell_handle_ext(cmd) {
     // === Poly1305 commands ===
     if str_starts_with(cmd, "poly1305 key ") {
         let key = str_sub(cmd, 13, len(cmd));
-        let result = poly1305_set_key(key);
+        let mut result = poly1305_set_key(key);
         if result == 0 { return "poly1305: key set (32 bytes)"; }
         return "poly1305: key too short (need 32 bytes)";
     }
     if str_starts_with(cmd, "poly1305 update ") {
         let msg = str_sub(cmd, 16, len(cmd));
-        let result = poly1305_update(msg, len(msg));
+        let mut result = poly1305_update(msg, len(msg));
         if result == 0 { return "poly1305: message updated"; }
         return "poly1305: update failed (error " + to_string(result) + ")";
     }
@@ -3339,12 +3339,12 @@ fn shell_handle_ext(cmd) {
     }
     if str_starts_with(cmd, "xxhash hash ") {
         let data = str_sub(cmd, 12, len(cmd));
-        let hash = xxhash32(data, len(data));
+        let mut hash = xxhash32(data, len(data));
         return "xxhash32: " + xxhash_get_hex() + " (" + to_string(hash) + ")";
     }
     if str_starts_with(cmd, "xxhash64 ") {
         let data = str_sub(cmd, 9, len(cmd));
-        let hash = xxhash64(data, len(data));
+        let mut hash = xxhash64(data, len(data));
         return "xxhash64: " + xxhash_get_hex64();
     }
     if cmd == "xxhash hex" {
@@ -3355,20 +3355,20 @@ fn shell_handle_ext(cmd) {
     // === SipHash commands ===
     if str_starts_with(cmd, "siphash key ") {
         let key = str_sub(cmd, 12, len(cmd));
-        let result = siphash_set_key(key);
+        let mut result = siphash_set_key(key);
         if result == 0 { return "siphash: key set (16 bytes)"; }
         return "siphash: key too short (need 16 bytes)";
     }
     if str_starts_with(cmd, "siphash hash ") {
         let data = str_sub(cmd, 13, len(cmd));
-        let hash = siphash(data, len(data));
+        let mut hash = siphash(data, len(data));
         return "siphash: " + siphash_get_hex() + " (" + to_string(hash) + ")";
     }
     if cmd == "siphash hex" {
         return "siphash: " + siphash_get_hex();
     }
     if cmd == "siphash result" {
-        let result = siphash_get_result();
+        let mut result = siphash_get_result();
         return "siphash: result = " + to_string(result);
     }
     if cmd == "siphash test" { return siphash_test(); }
@@ -3387,8 +3387,8 @@ fn shell_handle_ext(cmd) {
         return "zstd: decompression failed (error " + to_string(decomp_len) + ")";
     }
     if str_starts_with(cmd, "zstd level ") {
-        let level = parse_int(str_sub(cmd, 11, len(cmd)));
-        let result = zstd_set_level(level);
+        let mut level = parse_int(str_sub(cmd, 11, len(cmd)));
+        let mut result = zstd_set_level(level);
         if result == 0 { return "zstd: compression level set to " + to_string(level); }
         return "zstd: invalid level (must be 1-9)";
     }
@@ -3414,7 +3414,7 @@ fn shell_handle_ext(cmd) {
     }
     if str_starts_with(cmd, "brotli quality ") {
         let quality = parse_int(str_sub(cmd, 15, len(cmd)));
-        let result = brotli_set_quality(quality);
+        let mut result = brotli_set_quality(quality);
         if result == 0 { return "brotli: quality set to " + to_string(quality); }
         return "brotli: invalid quality (must be 0-9)";
     }
@@ -3439,7 +3439,7 @@ fn shell_handle_ext(cmd) {
     // === SM4 commands ===
     if str_starts_with(cmd, "sm4 key ") {
         let key = str_sub(cmd, 8, len(cmd));
-        let result = sm4_set_key(key);
+        let mut result = sm4_set_key(key);
         if result == 0 { return "sm4: key set (16 bytes)"; }
         return "sm4: key too short (need 16 bytes)";
     }
@@ -3461,7 +3461,7 @@ fn shell_handle_ext(cmd) {
     if str_starts_with(cmd, "curve25519 scalar ") {
         let key_str = substr(cmd, 18, len(cmd) - 18);
         let key_bytes = str_to_bytes(key_str);
-        let result = curve25519_set_scalar(key_bytes);
+        let mut result = curve25519_set_scalar(key_bytes);
         if result == 0 { return "curve25519: scalar set (" + to_string(len(key_bytes)) + " bytes)"; }
         return "curve25519: scalar too short (need 32 bytes)";
     }
@@ -3472,7 +3472,7 @@ fn shell_handle_ext(cmd) {
     if str_starts_with(cmd, "curve25519 shared ") {
         let peer_str = substr(cmd, 18, len(cmd) - 18);
         let peer_bytes = str_to_bytes(peer_str);
-        let result = curve25519_shared_secret(peer_bytes);
+        let mut result = curve25519_shared_secret(peer_bytes);
         if result == 0 { return "curve25519: shared secret computed -> " + substr(curve25519_get_shared_hex(), 0, 16) + "..."; }
         return "curve25519: peer public key too short";
     }
@@ -3483,14 +3483,14 @@ fn shell_handle_ext(cmd) {
     if str_starts_with(cmd, "aesgcm key ") {
         let key_str = substr(cmd, 11, len(cmd) - 11);
         let key_bytes = str_to_bytes(key_str);
-        let result = aes_gcm_set_key(key_bytes);
+        let mut result = aes_gcm_set_key(key_bytes);
         if result == 0 { return "aesgcm: key set (16 bytes)"; }
         return "aesgcm: key too short (need 16 bytes)";
     }
     if str_starts_with(cmd, "aesgcm nonce ") {
         let nonce_str = substr(cmd, 13, len(cmd) - 13);
         let nonce_bytes = str_to_bytes(nonce_str);
-        let result = aes_gcm_set_nonce(nonce_bytes);
+        let mut result = aes_gcm_set_nonce(nonce_bytes);
         if result == 0 { return "aesgcm: nonce set (12 bytes)"; }
         return "aesgcm: nonce too short (need 12 bytes)";
     }
@@ -3512,14 +3512,14 @@ fn shell_handle_ext(cmd) {
     if str_starts_with(cmd, "cp1305 key ") {
         let key_str = substr(cmd, 11, len(cmd) - 11);
         let key_bytes = str_to_bytes(key_str);
-        let result = chacha20_poly1305_set_key(key_bytes);
+        let mut result = chacha20_poly1305_set_key(key_bytes);
         if result == 0 { return "cp1305: key set (32 bytes)"; }
         return "cp1305: key too short (need 32 bytes)";
     }
     if str_starts_with(cmd, "cp1305 nonce ") {
         let nonce_str = substr(cmd, 13, len(cmd) - 13);
         let nonce_bytes = str_to_bytes(nonce_str);
-        let result = chacha20_poly1305_set_nonce(nonce_bytes);
+        let mut result = chacha20_poly1305_set_nonce(nonce_bytes);
         if result == 0 { return "cp1305: nonce set (12 bytes)"; }
         return "cp1305: nonce too short (need 12 bytes)";
     }
@@ -3535,28 +3535,28 @@ fn shell_handle_ext(cmd) {
     // === X.509 Certificate Parser ===
     if str_starts_with(cmd, "x509 pem ") {
         let pem_str = substr(cmd, 9, len(cmd) - 9);
-        let result = x509_parse_pem(pem_str);
+        let mut result = x509_parse_pem(pem_str);
         if result == 0 { return "x509: certificate parsed, count=" + to_string(x509_cert_count); }
         return "x509: parse failed (code=" + to_string(result) + ")";
     }
     if cmd == "x509 list" {
-        let count = x509_list();
+        let mut count = x509_list();
         return "x509: " + to_string(count) + " certificate(s) listed";
     }
     if str_starts_with(cmd, "x509 info ") {
-        let idx = to_int(substr(cmd, 10, len(cmd) - 10));
+        let mut idx = to_int(substr(cmd, 10, len(cmd) - 10));
         return x509_info(idx);
     }
     if str_starts_with(cmd, "x509 subject ") {
-        let idx = to_int(substr(cmd, 13, len(cmd) - 13));
+        let mut idx = to_int(substr(cmd, 13, len(cmd) - 13));
         return "x509: subject=" + x509_get_subject(idx);
     }
     if str_starts_with(cmd, "x509 issuer ") {
-        let idx = to_int(substr(cmd, 12, len(cmd) - 12));
+        let mut idx = to_int(substr(cmd, 12, len(cmd) - 12));
         return "x509: issuer=" + x509_get_issuer(idx);
     }
     if str_starts_with(cmd, "x509 key ") {
-        let idx = to_int(substr(cmd, 9, len(cmd) - 9));
+        let mut idx = to_int(substr(cmd, 9, len(cmd) - 9));
         return "x509: key=" + x509_get_key_info(idx);
     }
     if cmd == "x509 clear" { x509_clear(); return "x509: cleared"; }
@@ -3565,17 +3565,17 @@ fn shell_handle_ext(cmd) {
     // === gRPC Protocol ===
     if str_starts_with(cmd, "grpc svc ") {
         let name = substr(cmd, 9, len(cmd) - 9);
-        let idx = grpc_register_service(name);
+        let mut idx = grpc_register_service(name);
         return "grpc: service registered [" + to_string(idx) + "] " + name;
     }
     if str_starts_with(cmd, "grpc method ") {
         let args = substr(cmd, 12, len(cmd) - 12);
         let sp = 0;
-        let i = 0;
+        let mut i = 0;
         while i < len(args) { if args[i] == 32 { sp = i; i = len(args); } i = i + 1; }
         let svc_idx = to_int(substr(args, 0, sp));
         let method  = substr(args, sp + 1, len(args) - sp - 1);
-        let idx = grpc_register_method(svc_idx, method);
+        let mut idx = grpc_register_method(svc_idx, method);
         return "grpc: method registered [" + to_string(idx) + "] " + method;
     }
     if str_starts_with(cmd, "grpc call ") {
@@ -3588,10 +3588,10 @@ fn shell_handle_ext(cmd) {
     if str_starts_with(cmd, "grpc meta ") {
         let args = substr(cmd, 10, len(cmd) - 10);
         let sp = 0;
-        let i = 0;
+        let mut i = 0;
         while i < len(args) { if args[i] == 32 { sp = i; i = len(args); } i = i + 1; }
         let key = substr(args, 0, sp);
-        let val = substr(args, sp + 1, len(args) - sp - 1);
+        let mut val = substr(args, sp + 1, len(args) - sp - 1);
         grpc_set_metadata(key, val);
         return "grpc: metadata set " + key + "=" + val;
     }
@@ -3602,7 +3602,7 @@ fn shell_handle_ext(cmd) {
         let path = substr(cmd, 9, len(cmd) - 9);
         let data = vfs_read_file(path);
         if len(data) == 0 { return "png: file not found: " + path; }
-        let result = png_decode(data);
+        let mut result = png_decode(data);
         if result == 0 { return "png: loaded " + png_info(); }
         return "png: decode failed (code=" + to_string(result) + ")";
     }
@@ -3610,10 +3610,10 @@ fn shell_handle_ext(cmd) {
     if str_starts_with(cmd, "png pixel ") {
         let args = substr(cmd, 10, len(cmd) - 10);
         let sp = 0;
-        let i = 0;
+        let mut i = 0;
         while i < len(args) { if args[i] == 32 { sp = i; i = len(args); } i = i + 1; }
-        let x = to_int(substr(args, 0, sp));
-        let y = to_int(substr(args, sp + 1, len(args) - sp - 1));
+        let mut x = to_int(substr(args, 0, sp));
+        let mut y = to_int(substr(args, sp + 1, len(args) - sp - 1));
         let px = png_get_pixel(x, y);
         return "png: pixel(" + to_string(x) + "," + to_string(y) + ")=RGBA("
             + to_string(px[0]) + "," + to_string(px[1]) + ","
@@ -3636,7 +3636,7 @@ fn shell_handle_ext(cmd) {
     if str_starts_with(cmd, "h2 post ") {
         let args = substr(cmd, 8, len(cmd) - 8);
         let sp = 0;
-        let i = 0;
+        let mut i = 0;
         while i < len(args) { if args[i] == 32 { sp = i; i = len(args); } i = i + 1; }
         let path = substr(args, 0, sp);
         let sid = h2_alloc_stream();
@@ -3667,7 +3667,7 @@ fn shell_handle_ext(cmd) {
         let path = substr(cmd, 10, len(cmd) - 10);
         let data = vfs_read_file(path);
         if len(data) == 0 { return "jpeg: file not found: " + path; }
-        let result = jpeg_decode(data);
+        let mut result = jpeg_decode(data);
         if result == 0 { return "jpeg: loaded " + jpeg_info(); }
         return "jpeg: decode failed (code=" + to_string(result) + ")";
     }
@@ -3675,16 +3675,16 @@ fn shell_handle_ext(cmd) {
     if str_starts_with(cmd, "jpeg pixel ") {
         let args = substr(cmd, 11, len(cmd) - 11);
         let sp = 0;
-        let i = 0;
+        let mut i = 0;
         while i < len(args) { if args[i] == 32 { sp = i; i = len(args); } i = i + 1; }
-        let x = to_int(substr(args, 0, sp));
-        let y = to_int(substr(args, sp + 1, len(args) - sp - 1));
+        let mut x = to_int(substr(args, 0, sp));
+        let mut y = to_int(substr(args, sp + 1, len(args) - sp - 1));
         let px = jpeg_get_pixel(x, y);
         return "jpeg: pixel(" + to_string(x) + "," + to_string(y) + ")=RGB("
             + to_string(px[0]) + "," + to_string(px[1]) + "," + to_string(px[2]) + ")";
     }
     if cmd == "jpeg idct" {
-        let val = jpeg_idct_test();
+        let mut val = jpeg_idct_test();
         return "jpeg: IDCT(DC=128) => " + to_string(val);
     }
     if cmd == "jpeg test" { return jpeg_test(); }
@@ -3693,7 +3693,7 @@ fn shell_handle_ext(cmd) {
     if str_starts_with(cmd, "raft init ") {
         let args = substr(cmd, 10, len(cmd) - 10);
         let sp = 0;
-        let i = 0;
+        let mut i = 0;
         while i < len(args) { if args[i] == 32 { sp = i; i = len(args); } i = i + 1; }
         let nid  = to_int(substr(args, 0, sp));
         let size = to_int(substr(args, sp + 1, len(args) - sp - 1));
@@ -3702,12 +3702,12 @@ fn shell_handle_ext(cmd) {
     }
     if str_starts_with(cmd, "raft peer ") {
         let pid = to_int(substr(cmd, 10, len(cmd) - 10));
-        let idx = raft_add_peer(pid);
+        let mut idx = raft_add_peer(pid);
         return "raft: peer " + to_string(pid) + " added at slot " + to_string(idx);
     }
     if str_starts_with(cmd, "raft propose ") {
         let command = substr(cmd, 13, len(cmd) - 13);
-        let idx = raft_propose(command);
+        let mut idx = raft_propose(command);
         if idx < 0 { return "raft: not leader, cannot propose"; }
         return "raft: proposed at log index " + to_string(idx);
     }
@@ -3724,7 +3724,7 @@ fn shell_handle_ext(cmd) {
         let rest = str_slice(cmd, 12, len(cmd));
         let parts = str_split(rest, " ");
         let nid = to_int(parts[0]);
-        let addr = parts[1];
+        let mut addr = parts[1];
         gossip_init(nid, addr);
         return "gossip: initialized node=" + to_string(nid) + " addr=" + addr;
     }
@@ -3751,7 +3751,7 @@ fn shell_handle_ext(cmd) {
         let parts2 = str_split(rest2, " ");
         let rows = to_int(parts2[0]);
         let cols = to_int(parts2[1]);
-        let m = mat_alloc(rows, cols);
+        let mut m = mat_alloc(rows, cols);
         return "matrix: allocated slot " + to_string(m) + " [" + to_string(rows) + "x" + to_string(cols) + "]";
     }
     if str_starts_with(cmd, "mat identity ") {
@@ -3872,7 +3872,7 @@ fn shell_handle_ext(cmd) {
     if str_starts_with(cmd, "skip range ") {
         let rr = str_slice(cmd, 11, len(cmd));
         let pr = str_split(rr, " ");
-        let lo = to_int(pr[0]); let hi = to_int(pr[1]);
+        let mut lo = to_int(pr[0]); let mut hi = to_int(pr[1]);
         let rc = skip_range(lo, hi);
         return "skiplist: range[" + to_string(lo) + "," + to_string(hi) + "]=" + to_string(rc) + " entries";
     }
@@ -5643,11 +5643,11 @@ fn shell_handle_ext(cmd) {
     if cmd == "mr init"   { mr_init(); return "mr: init"; }
     if cmd == "mr test"   { let mrr = mr_test(); return "mr: " + to_string(mrr); }
     if _starts_with(cmd, "mr prime ") {
-        let n = to_int(str_sub(cmd, 9, len(cmd)));
+        let mut n = to_int(str_sub(cmd, 9, len(cmd)));
         return "mr: is_prime(" + to_string(n) + ")=" + to_string(mr_is_prime(n));
     }
     if _starts_with(cmd, "mr next ") {
-        let n = to_int(str_sub(cmd, 8, len(cmd)));
+        let mut n = to_int(str_sub(cmd, 8, len(cmd)));
         return "mr: next_prime(" + to_string(n) + ")=" + to_string(mr_next_prime(n));
     }
     if _starts_with(cmd, "mr count ") {
@@ -5655,7 +5655,7 @@ fn shell_handle_ext(cmd) {
         return "mr: count_primes(" + to_string(lim) + ")=" + to_string(mr_count_primes(lim));
     }
     if _starts_with(cmd, "mr wit ") {
-        let i = to_int(str_sub(cmd, 7, len(cmd)));
+        let mut i = to_int(str_sub(cmd, 7, len(cmd)));
         return "mr: wit[" + to_string(i) + "]=" + to_string(mr_wit[i]);
     }
     if cmd == "mr nwits"  { return "mr: nwits=" + to_string(MR_WITS); }
@@ -5664,18 +5664,18 @@ fn shell_handle_ext(cmd) {
     if cmd == "pr init"   { pr_init(); return "pr: init"; }
     if cmd == "pr test"   { let prr = pr_test(); return "pr: " + to_string(prr); }
     if _starts_with(cmd, "pr factor ") {
-        let n = to_int(str_sub(cmd, 10, len(cmd)));
+        let mut n = to_int(str_sub(cmd, 10, len(cmd)));
         return "pr: factor(" + to_string(n) + ")=" + to_string(pr_factor(n));
     }
     if _starts_with(cmd, "pr factorize ") {
-        let n = to_int(str_sub(cmd, 13, len(cmd)));
+        let mut n = to_int(str_sub(cmd, 13, len(cmd)));
         let cnt = pr_factorize(n);
         return "pr: factorize(" + to_string(n) + ")=" + to_string(cnt) + " factors";
     }
     if cmd == "pr product" { return "pr: product=" + to_string(pr_product()); }
     if cmd == "pr fcount"  { return "pr: fcount=" + to_string(pr_fcount); }
     if _starts_with(cmd, "pr get ") {
-        let i = to_int(str_sub(cmd, 7, len(cmd)));
+        let mut i = to_int(str_sub(cmd, 7, len(cmd)));
         return "pr: factors[" + to_string(i) + "]=" + to_string(pr_factors[i]);
     }
 
@@ -5683,14 +5683,14 @@ fn shell_handle_ext(cmd) {
     if cmd == "lb init"   { lb_init(); return "lb: init"; }
     if cmd == "lb test"   { let lbr = lb_test(); return "lb: " + to_string(lbr); }
     if _starts_with(cmd, "lb insert ") {
-        let x = to_int(str_sub(cmd, 10, len(cmd)));
+        let mut x = to_int(str_sub(cmd, 10, len(cmd)));
         let dep = lb_insert(x);
         return "lb: insert(" + to_string(x) + ")=" + to_string(dep);
     }
     if cmd == "lb max"    { return "lb: max_xor=" + to_string(lb_query_max()); }
     if cmd == "lb size"   { return "lb: size=" + to_string(lb_size()); }
     if _starts_with(cmd, "lb get ") {
-        let i = to_int(str_sub(cmd, 7, len(cmd)));
+        let mut i = to_int(str_sub(cmd, 7, len(cmd)));
         return "lb: basis[" + to_string(i) + "]=" + to_string(lb_basis[i]);
     }
     if cmd == "lb clear"  { lb_init(); return "lb: cleared"; }

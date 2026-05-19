@@ -172,7 +172,7 @@ fn percpu_addr(cpu_id) {
 }
 
 fn percpu_init(cpu_id) {
-    let addr = percpu_addr(cpu_id);
+    let mut addr = percpu_addr(cpu_id);
     mem_zero(addr, PER_CPU_SIZE);
     mem_write_u64(addr, cpu_id);
     mem_write_u64(addr + 8, 0);  // no task yet
@@ -338,7 +338,7 @@ fn sched_enqueue(task_idx) {
     let lock = _rq_lock[best_cpu];
     spin_lock(lock);
     if _rq_count[best_cpu] < _RQ_SLOTS {
-        let base = best_cpu * _RQ_SLOTS;
+        let mut base = best_cpu * _RQ_SLOTS;
         let tail = _rq_tail[best_cpu];
         set_at(_rq_buf, base + tail, task_idx);
         set_at(_rq_tail, best_cpu, (tail + 1) % _RQ_SLOTS);
@@ -357,7 +357,7 @@ fn sched_dequeue(cpu_id) {
         spin_unlock(lock);
         return 0 - 1;
     }
-    let base = cpu_id * _RQ_SLOTS;
+    let mut base = cpu_id * _RQ_SLOTS;
     let head = _rq_head[cpu_id];
     let task = _rq_buf[base + head];
     set_at(_rq_head, cpu_id, (head + 1) % _RQ_SLOTS);
@@ -388,7 +388,7 @@ fn sched_balance() {
             let lock = _rq_lock[min_cpu];
             spin_lock(lock);
             if _rq_count[min_cpu] < _RQ_SLOTS {
-                let base = min_cpu * _RQ_SLOTS;
+                let mut base = min_cpu * _RQ_SLOTS;
                 let tail = _rq_tail[min_cpu];
                 set_at(_rq_buf, base + tail, task);
                 set_at(_rq_tail, min_cpu, (tail + 1) % _RQ_SLOTS);

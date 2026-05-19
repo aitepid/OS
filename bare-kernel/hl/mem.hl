@@ -89,8 +89,8 @@ fn mem_write_byte(addr, val){ return mem_write_u8(addr, val); }
 // ============================================================
 
 fn mem_read_u16(addr) {
-    let lo = mem_read_u8(addr);
-    let hi = mem_read_u8(addr + 1);
+    let mut lo = mem_read_u8(addr);
+    let mut hi = mem_read_u8(addr + 1);
     return lo + hi * 256;
 }
 
@@ -105,8 +105,8 @@ fn mem_write_u16(addr, val) {
 // ============================================================
 
 fn mem_read_u32(addr) {
-    let lo = mem_read_u16(addr);
-    let hi = mem_read_u16(addr + 2);
+    let mut lo = mem_read_u16(addr);
+    let mut hi = mem_read_u16(addr + 2);
     return lo + hi * 65536;
 }
 
@@ -121,8 +121,8 @@ fn mem_write_u32(addr, val) {
 // ============================================================
 
 fn mem_read_u64(addr) {
-    let lo = mem_read_u32(addr);
-    let hi = mem_read_u32(addr + 4);
+    let mut lo = mem_read_u32(addr);
+    let mut hi = mem_read_u32(addr + 4);
     return lo + hi * 4294967296;
 }
 
@@ -199,7 +199,7 @@ fn mem_zero(addr, count) {
 // ============================================================
 
 fn mem_read_i16(addr) {
-    let val = mem_read_u16(addr);
+    let mut val = mem_read_u16(addr);
     if val >= 32768 { return val - 65536; }
     return val;
 }
@@ -229,7 +229,7 @@ fn mem_read_string(addr, max_len) {
     let mut result = "";
     let mut i = 0;
     while i < max_len {
-        let b = mem_read_u8(addr + i);
+        let mut b = mem_read_u8(addr + i);
         if b == 0 { return result; }
         result = result + str_from_code(b);
         i = i + 1;
@@ -248,7 +248,7 @@ fn clamp(val, lo, hi) {
 }
 
 fn char_code_at(s, i) {
-    let c = char_at(s, i);
+    let mut c = char_at(s, i);
     if c == "" { return 0; }
     return ord(c);
 }
@@ -304,22 +304,22 @@ fn e820_count() {
 }
 
 fn e820_entry_base(index) {
-    let off = E820_ADDR + 4 + index * E820_ENTRY_SIZE;
+    let mut off = E820_ADDR + 4 + index * E820_ENTRY_SIZE;
     return mem_read_u64(off);
 }
 
 fn e820_entry_length(index) {
-    let off = E820_ADDR + 4 + index * E820_ENTRY_SIZE + 8;
+    let mut off = E820_ADDR + 4 + index * E820_ENTRY_SIZE + 8;
     return mem_read_u64(off);
 }
 
 fn e820_entry_type(index) {
-    let off = E820_ADDR + 4 + index * E820_ENTRY_SIZE + 16;
+    let mut off = E820_ADDR + 4 + index * E820_ENTRY_SIZE + 16;
     return mem_read_u32(off);
 }
 
 fn e820_total_usable() {
-    let count = e820_count();
+    let mut count = e820_count();
     let mut total = 0;
     let mut i = 0;
     while i < count {
@@ -332,7 +332,7 @@ fn e820_total_usable() {
 }
 
 fn e820_find_largest_usable() {
-    let count = e820_count();
+    let mut count = e820_count();
     let mut best_base = 0;
     let mut best_len = 0;
     let mut i = 0;
@@ -350,12 +350,12 @@ fn e820_find_largest_usable() {
 }
 
 fn e820_dump() {
-    let count = e820_count();
+    let mut count = e820_count();
     print("E820 Memory Map (" + to_string(count) + " entries):");
     let type_names = ["", "Usable", "Reserved", "ACPI", "NVS", "Bad"];
     let mut i = 0;
     while i < count {
-        let base = e820_entry_base(i);
+        let mut base = e820_entry_base(i);
         let length = e820_entry_length(i);
         let etype = e820_entry_type(i);
         let mut tname = "Unknown";
@@ -363,7 +363,7 @@ fn e820_dump() {
         print("  [" + to_string(i) + "] base=0x" + format_hex(base, 8) + " len=0x" + format_hex(length, 8) + " " + tname);
         i = i + 1;
     }
-    let total = e820_total_usable();
+    let mut total = e820_total_usable();
     print("  Total usable: " + to_string(total / 1048576) + " MB");
     return count;
 }

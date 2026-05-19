@@ -70,7 +70,7 @@ fn dbg_init() {
     set_at(dbg_opcode_lens, 14, 2);
     set_at(dbg_opcode_lens, 15, 1);
 
-    let i = 0;
+    let mut i = 0;
     while i < DBG_MAX_SESSIONS {
         set_at(dbg_session_id,    i, 0);
         set_at(dbg_session_state, i, DBG_STOPPED);
@@ -80,7 +80,7 @@ fn dbg_init() {
         set_at(dbg_step_size,     i, 1);
         i += 1;
     }
-    let j = 0;
+    let mut j = 0;
     while j < 64 {
         set_at(dbg_reg_file, j, 0);
         j += 1;
@@ -98,7 +98,7 @@ fn dbg_decode_len(opcode) {
 }
 
 fn _dbg_find(session_id) {
-    let i = 0;
+    let mut i = 0;
     while i < dbg_n_sessions {
         if dbg_session_id[i] == session_id { return i; }
         i += 1;
@@ -107,7 +107,7 @@ fn _dbg_find(session_id) {
 }
 
 fn dbg_attach(session_id, rip, rsp) {
-    let idx = _dbg_find(session_id);
+    let mut idx = _dbg_find(session_id);
     if idx >= 0 {
         set_at(dbg_session_rip,   idx, rip);
         set_at(dbg_session_rsp,   idx, rsp);
@@ -115,7 +115,7 @@ fn dbg_attach(session_id, rip, rsp) {
         return idx;
     }
     if dbg_n_sessions >= DBG_MAX_SESSIONS { return 0 - 1; }
-    let slot = dbg_n_sessions;
+    let mut slot = dbg_n_sessions;
     set_at(dbg_session_id,    slot, session_id);
     set_at(dbg_session_rip,   slot, rip);
     set_at(dbg_session_rsp,   slot, rsp);
@@ -129,7 +129,7 @@ fn dbg_attach(session_id, rip, rsp) {
 // Set the byte length of the next instruction to step over (caller supplies
 // this from opcode decode or from dbg_decode_len).
 fn dbg_set_step_size(session_id, size) {
-    let idx = _dbg_find(session_id);
+    let mut idx = _dbg_find(session_id);
     if idx < 0 { return 0 - 1; }
     set_at(dbg_step_size, idx, size);
     return size;
@@ -137,9 +137,9 @@ fn dbg_set_step_size(session_id, size) {
 
 // Advance RIP by the configured step size, increment step counter.
 fn dbg_step(session_id) {
-    let idx = _dbg_find(session_id);
+    let mut idx = _dbg_find(session_id);
     if idx < 0 { return 0 - 1; }
-    let sz = dbg_step_size[idx];
+    let mut sz = dbg_step_size[idx];
     set_at(dbg_session_rip,   idx, dbg_session_rip[idx] + sz);
     set_at(dbg_step_count,    idx, dbg_step_count[idx] + 1);
     set_at(dbg_session_state, idx, DBG_STEP);
@@ -149,33 +149,33 @@ fn dbg_step(session_id) {
 }
 
 fn dbg_continue(session_id) {
-    let idx = _dbg_find(session_id);
+    let mut idx = _dbg_find(session_id);
     if idx < 0 { return 0 - 1; }
     set_at(dbg_session_state, idx, DBG_RUNNING);
     return DBG_RUNNING;
 }
 
 fn dbg_get_rip(session_id) {
-    let idx = _dbg_find(session_id);
+    let mut idx = _dbg_find(session_id);
     if idx < 0 { return 0 - 1; }
     return dbg_session_rip[idx];
 }
 
 fn dbg_get_steps(session_id) {
-    let idx = _dbg_find(session_id);
+    let mut idx = _dbg_find(session_id);
     if idx < 0 { return 0 - 1; }
     return dbg_step_count[idx];
 }
 
 fn dbg_get_state(session_id) {
-    let idx = _dbg_find(session_id);
+    let mut idx = _dbg_find(session_id);
     if idx < 0 { return 0 - 1; }
     return dbg_session_state[idx];
 }
 
 // Register access: reg_id 0-15 maps to RAX..R15.
 fn dbg_read_reg(session_id, reg_id) {
-    let idx = _dbg_find(session_id);
+    let mut idx = _dbg_find(session_id);
     if idx < 0       { return 0 - 1; }
     if reg_id < 0    { return 0 - 1; }
     if reg_id >= DBG_MAX_REGS { return 0 - 1; }
@@ -183,7 +183,7 @@ fn dbg_read_reg(session_id, reg_id) {
 }
 
 fn dbg_write_reg(session_id, reg_id, val) {
-    let idx = _dbg_find(session_id);
+    let mut idx = _dbg_find(session_id);
     if idx < 0       { return 0 - 1; }
     if reg_id < 0    { return 0 - 1; }
     if reg_id >= DBG_MAX_REGS { return 0 - 1; }
@@ -193,7 +193,7 @@ fn dbg_write_reg(session_id, reg_id, val) {
 
 fn dbg_test() {
     dbg_init();
-    let pass = 1;
+    let mut pass = 1;
 
     dbg_attach(1, 4096, 32768);
 
@@ -226,7 +226,7 @@ fn dbg_test() {
 
     // Continue → state=DBG_RUNNING
     dbg_continue(1);
-    let state = dbg_get_state(1);
+    let mut state = dbg_get_state(1);
     if state != DBG_RUNNING { pass = 0; }
 
     // Register file: write RAX=0xDEAD (r0), RBX=0xBEEF (r3)

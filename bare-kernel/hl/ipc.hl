@@ -30,7 +30,7 @@ let MAX_MQ = 16;
 fn ipc_pipe_create(reader_pid, writer_pid) {
     let mut i = 0;
     while i < MAX_PIPES {
-        let addr = PIPE_TABLE + i * PIPE_ENTRY_SIZE;
+        let mut addr = PIPE_TABLE + i * PIPE_ENTRY_SIZE;
         let flags = mem_read_u64(addr + 40);
         if flags == PIPE_CLOSED {
             mem_write_u64(addr + 0, 0);
@@ -48,7 +48,7 @@ fn ipc_pipe_create(reader_pid, writer_pid) {
 
 // Write to IPC pipe (returns bytes written)
 fn ipc_pipe_write(pipe_idx, data, data_len) {
-    let addr = PIPE_TABLE + pipe_idx * PIPE_ENTRY_SIZE;
+    let mut addr = PIPE_TABLE + pipe_idx * PIPE_ENTRY_SIZE;
     let buf_addr = addr + PIPE_META_SIZE;
     let mut write_pos = mem_read_u64(addr + 8);
     let read_pos = mem_read_u64(addr + 0);
@@ -66,7 +66,7 @@ fn ipc_pipe_write(pipe_idx, data, data_len) {
 
 // Read from IPC pipe (returns bytes read)
 fn ipc_pipe_read(pipe_idx, buf, max_len) {
-    let addr = PIPE_TABLE + pipe_idx * PIPE_ENTRY_SIZE;
+    let mut addr = PIPE_TABLE + pipe_idx * PIPE_ENTRY_SIZE;
     let buf_addr = addr + PIPE_META_SIZE;
     let mut read_pos = mem_read_u64(addr + 0);
     let write_pos = mem_read_u64(addr + 8);
@@ -83,7 +83,7 @@ fn ipc_pipe_read(pipe_idx, buf, max_len) {
 
 // Close IPC pipe
 fn ipc_pipe_close(pipe_idx) {
-    let addr = PIPE_TABLE + pipe_idx * PIPE_ENTRY_SIZE;
+    let mut addr = PIPE_TABLE + pipe_idx * PIPE_ENTRY_SIZE;
     mem_write_u64(addr + 40, PIPE_CLOSED);
     return 0;
 }
@@ -94,7 +94,7 @@ fn ipc_pipe_close(pipe_idx) {
 fn mq_create() {
     let mut i = 0;
     while i < MAX_MQ {
-        let addr = MQ_TABLE + i * MQ_ENTRY_SIZE;
+        let mut addr = MQ_TABLE + i * MQ_ENTRY_SIZE;
         let flags = mem_read_u64(addr);
         if flags == 0 {
             mem_write_u64(addr, 1);
@@ -110,8 +110,8 @@ fn mq_create() {
 
 // Send message (64 bytes max)
 fn mq_send(queue_idx, msg_data) {
-    let addr = MQ_TABLE + queue_idx * MQ_ENTRY_SIZE;
-    let count = mem_read_u64(addr + 24);
+    let mut addr = MQ_TABLE + queue_idx * MQ_ENTRY_SIZE;
+    let mut count = mem_read_u64(addr + 24);
     if count >= MQ_CAPACITY { return 0; }
     let tail = mem_read_u64(addr + 16);
     let msg_addr = addr + 64 + tail * MQ_MSG_SIZE;
@@ -132,8 +132,8 @@ fn mq_send(queue_idx, msg_data) {
 
 // Receive message
 fn mq_recv(queue_idx) {
-    let addr = MQ_TABLE + queue_idx * MQ_ENTRY_SIZE;
-    let count = mem_read_u64(addr + 24);
+    let mut addr = MQ_TABLE + queue_idx * MQ_ENTRY_SIZE;
+    let mut count = mem_read_u64(addr + 24);
     if count == 0 { return nil; }
     let head = mem_read_u64(addr + 8);
     let msg_addr = addr + 64 + head * MQ_MSG_SIZE;

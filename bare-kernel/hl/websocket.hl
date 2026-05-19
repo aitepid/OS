@@ -103,10 +103,10 @@ fn _ws_sha1_hex(data) {
     let mut h2 = 2562383102;
     let mut h3 = 271733878;
     let mut h4 = 3285377520;
-    let n = len(data);
+    let mut n = len(data);
     let mut i = 0;
     while i < n {
-        let b = char_code(char_at(data, i));
+        let mut b = char_code(char_at(data, i));
         let r0 = (h0 + b * 17 + i * 31) % 4294967296;
         let r1 = (h1 + b * 37 + h0) % 4294967296;
         let r2 = (h2 + b * 53 + h1) % 4294967296;
@@ -239,7 +239,7 @@ fn ws_frame_build(opcode, payload, mask_key) {
     // Payload (masked if mask_key != 0)
     let mut i = 0;
     while i < plen {
-        let b = char_code(char_at(payload, i));
+        let mut b = char_code(char_at(payload, i));
         if use_mask == 1 {
             let mk = [
                 (mask_key / 16777216) % 256,
@@ -259,7 +259,7 @@ fn ws_frame_build(opcode, payload, mask_key) {
 // Parse a WebSocket frame from raw bytes (as string)
 // Returns [opcode, payload_string, consumed_bytes] or [-1, "", 0] on error
 fn ws_frame_parse(data) {
-    let n = len(data);
+    let mut n = len(data);
     if n < 2 { return [0 - 1, "", 0]; }
 
     let b0 = char_code(char_at(data, 0));
@@ -423,19 +423,19 @@ fn ws_tick() {
     while i < WS_MAX_CONN {
         if ws_state[i] == WS_ST_OPEN {
             let tcb = ws_tcb[i];
-            let addr = TCP_TABLE + tcb * TCB_SIZE;
+            let mut addr = TCP_TABLE + tcb * TCB_SIZE;
             let rx_buf = mem_read_u64(addr + 64);
             if rx_buf > 0 {
                 // Read raw bytes into string
                 let mut raw = "";
                 let mut j = 0;
                 while j < 4096 {
-                    let b = mem_read_u8(rx_buf + j);
+                    let mut b = mem_read_u8(rx_buf + j);
                     if b == 0 { j = 4097; }  // break
                     else { raw = raw + str_from_code(b); j = j + 1; }
                 }
                 if len(raw) >= 2 {
-                    let r = ws_frame_parse(raw);
+                    let mut r = ws_frame_parse(raw);
                     let opcode  = r[0];
                     let payload = r[1];
                     if opcode == WS_OP_TEXT   { set_at(ws_msg_op, i, opcode); set_at(ws_msg_buf, i, payload); }

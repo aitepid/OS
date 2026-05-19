@@ -126,8 +126,8 @@ fn virtio_blk_init(pci_bus, pci_dev, pci_func) {
 
 // Internal: allocate a descriptor from free chain
 fn _vq_alloc_desc() {
-    let idx = vq_free_head;
-    let next = mem_read_u16(vq_desc_base + idx * 16 + 14);
+    let mut idx = vq_free_head;
+    let mut next = mem_read_u16(vq_desc_base + idx * 16 + 14);
     vq_free_head = next;
     return idx;
 }
@@ -142,7 +142,7 @@ fn _vq_free_desc(idx) {
 
 // Internal: write a descriptor
 fn _vq_write_desc(idx, addr, length, flags, next) {
-    let base = vq_desc_base + idx * 16;
+    let mut base = vq_desc_base + idx * 16;
     // addr (8 bytes, little-endian)
     mem_write_u32(base + 0, addr % 4294967296);
     mem_write_u32(base + 4, addr / 4294967296);
@@ -214,7 +214,7 @@ fn virtio_blk_read(sector, count, buf_addr) {
     _vq_write_desc(d2, req_status_addr, 1, VIRTQ_DESC_F_WRITE, 0);
 
     // Submit and wait
-    let result = _vq_submit_and_wait(d0);
+    let mut result = _vq_submit_and_wait(d0);
 
     // Free descriptors
     _vq_free_desc(d2);
@@ -256,7 +256,7 @@ fn virtio_blk_write(sector, count, buf_addr) {
     _vq_write_desc(d2, req_status_addr, 1, VIRTQ_DESC_F_WRITE, 0);
 
     // Submit and wait
-    let result = _vq_submit_and_wait(d0);
+    let mut result = _vq_submit_and_wait(d0);
 
     // Free descriptors
     _vq_free_desc(d2);
@@ -273,8 +273,8 @@ fn virtio_blk_write(sector, count, buf_addr) {
 // Get disk capacity in sectors
 fn virtio_blk_capacity() {
     // Device config at BAR0+0x14 (8 bytes, little-endian sector count)
-    let lo = port_in_u32(blk_bar + 20);
-    let hi = port_in_u32(blk_bar + 24);
+    let mut lo = port_in_u32(blk_bar + 20);
+    let mut hi = port_in_u32(blk_bar + 24);
     return lo + hi * 4294967296;
 }
 

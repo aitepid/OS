@@ -272,7 +272,7 @@ fn _buddy_alloc_raw(order) {
     let mut o = order;
     while o < BUDDY_MAX_ORDER {
         if _fl_len(o) > 0 {
-            let block = _fl_pop(o);
+            let mut block = _fl_pop(o);
             // Split down to target order
             while o > order {
                 o = o - 1;
@@ -298,7 +298,7 @@ fn _buddy_free_block(page, order) {
     }
     // Clear order map
     if page >= FIRST_FREE_PAGE {
-        let idx = page - FIRST_FREE_PAGE;
+        let mut idx = page - FIRST_FREE_PAGE;
         if idx < len(buddy_ord) {
             set_at(buddy_ord, idx, 0 - 1);
         }
@@ -362,7 +362,7 @@ fn page_alloc_init_e820() {
         while i < e_count {
             let etype = e820_entry_type(i);
             if etype != E820_TYPE_USABLE {
-                let base = e820_entry_base(i);
+                let mut base = e820_entry_base(i);
                 let length = e820_entry_length(i);
                 let start_page = base / PAGE_SIZE;
                 let end_page = (base + length + PAGE_SIZE - 1) / PAGE_SIZE;
@@ -397,12 +397,12 @@ fn page_alloc_init() {
 // Allocate one 4KB page. Returns physical address or 0.
 fn page_alloc() {
     if buddy_ready == 0 { page_alloc_init(); }
-    let addr = _buddy_alloc_raw(0);
+    let mut addr = _buddy_alloc_raw(0);
     if addr == 0 { return 0; }
     let page = addr / PAGE_SIZE;
     // Track as order-0 allocation
     if page >= FIRST_FREE_PAGE {
-        let idx = page - FIRST_FREE_PAGE;
+        let mut idx = page - FIRST_FREE_PAGE;
         if idx < len(buddy_ord) {
             set_at(buddy_ord, idx, 0);
         }
@@ -420,7 +420,7 @@ fn page_alloc_contiguous(count) {
     let order = _buddy_log2_ceil(count);
     if order >= BUDDY_MAX_ORDER { return 0; }
     let block_pages = _buddy_pow2(order);
-    let addr = _buddy_alloc_raw(order);
+    let mut addr = _buddy_alloc_raw(order);
     if addr == 0 { return 0; }
     let base_page = addr / PAGE_SIZE;
     // Mark each requested page as order-0 (individually freeable)
@@ -428,7 +428,7 @@ fn page_alloc_contiguous(count) {
     while i < count {
         let pg = base_page + i;
         if pg >= FIRST_FREE_PAGE {
-            let idx = pg - FIRST_FREE_PAGE;
+            let mut idx = pg - FIRST_FREE_PAGE;
             if idx < len(buddy_ord) {
                 set_at(buddy_ord, idx, 0);
             }
@@ -452,7 +452,7 @@ fn page_free(addr) {
     let page = addr / PAGE_SIZE;
     if page < FIRST_FREE_PAGE { return 0; }
     if page >= TOTAL_PAGES { return 0; }
-    let idx = page - FIRST_FREE_PAGE;
+    let mut idx = page - FIRST_FREE_PAGE;
     if idx >= len(buddy_ord) { return 0; }
     let order = buddy_ord[idx];
     if order < 0 { return 0; }

@@ -30,7 +30,7 @@ let rc_coalesce_cnt  = 0;
 fn regalloc_coal_init() {
     rc_n = 0;
     rc_coalesce_cnt = 0;
-    let i = 0;
+    let mut i = 0;
     while i < RC_MAXVARS {
         set_at(rc_parent,       i, i);
         set_at(rc_rank,         i, 0);
@@ -40,7 +40,7 @@ fn regalloc_coal_init() {
         set_at(rc_coalesce_into, i, i);
         i += 1;
     }
-    let j = 0;
+    let mut j = 0;
     while j < 1024 {
         set_at(rc_interfere, j, 0);
         set_at(rc_copy, j, 0);
@@ -65,7 +65,7 @@ fn rc_add_copy(u, v) {
 }
 
 fn _rc_find(x) {
-    let go = 1;
+    let mut go = 1;
     while go == 1 {
         if rc_parent[x] == x { go = 0; }
         if go == 1 {
@@ -81,7 +81,7 @@ fn _rc_union(x, y) {
     let ry = _rc_find(y);
     if rx == ry { return 0; }
     if rc_rank[rx] < rc_rank[ry] {
-        let tmp = rx; rx = ry; ry = tmp;
+        let mut tmp = rx; rx = ry; ry = tmp;
     }
     set_at(rc_parent, ry, rx);
     if rc_rank[rx] == rc_rank[ry] {
@@ -91,10 +91,10 @@ fn _rc_union(x, y) {
 }
 
 fn _rc_compute_degrees() {
-    let i = 0;
+    let mut i = 0;
     while i < rc_n {
         let deg = 0;
-        let j = 0;
+        let mut j = 0;
         while j < rc_n {
             if rc_interfere[i * 32 + j] == 1 { deg += 1; }
             j += 1;
@@ -107,8 +107,8 @@ fn _rc_compute_degrees() {
 
 fn _rc_briggs_ok(u, v) {
     // Briggs: number of high-degree neighbors (deg >= K) of merged node < K
-    let count = 0;
-    let i = 0;
+    let mut count = 0;
+    let mut i = 0;
     while i < rc_n {
         if i != u {
             if i != v {
@@ -133,7 +133,7 @@ fn _rc_briggs_ok(u, v) {
 
 fn _rc_george_ok(u, v) {
     // George: every high-degree neighbor of v also interferes with u
-    let i = 0;
+    let mut i = 0;
     while i < rc_n {
         if i != u {
             if i != v {
@@ -155,9 +155,9 @@ fn rc_run() {
     _rc_compute_degrees();
     rc_coalesce_cnt = 0;
     // Try to coalesce all copy pairs
-    let u = 0;
+    let mut u = 0;
     while u < rc_n {
-        let v = u + 1;
+        let mut v = u + 1;
         while v < rc_n {
             if rc_copy[u * 32 + v] == 1 {
                 if rc_interfere[u * 32 + v] == 0 {
@@ -184,23 +184,23 @@ fn rc_run() {
         u += 1;
     }
     // Greedy coloring on coalesced graph
-    let i = 0;
+    let mut i = 0;
     while i < rc_n {
         let rep = _rc_find(i);
         if rc_color[rep] == 0 - 1 {
             let used = array(8, 0);
-            let j = 0;
+            let mut j = 0;
             while j < rc_n {
                 if rc_interfere[rep * 32 + j] == 1 {
-                    let c = rc_color[_rc_find(j)];
+                    let mut c = rc_color[_rc_find(j)];
                     if c != 0 - 1 {
                         if c < RC_NREGS { set_at(used, c, 1); }
                     }
                 }
                 j += 1;
             }
-            let col = 0;
-            let go = 1;
+            let mut col = 0;
+            let mut go = 1;
             while go == 1 {
                 if col >= RC_NREGS { go = 0; }
                 if go == 1 {

@@ -74,7 +74,7 @@ let TCP_MAX_RTO = 60000;       // 60s maximum
 let mut next_ephemeral_port = 49152;
 
 fn tcp_alloc_port() {
-    let p = next_ephemeral_port;
+    let mut p = next_ephemeral_port;
     next_ephemeral_port = next_ephemeral_port + 1;
     if next_ephemeral_port > 65535 { next_ephemeral_port = 49152; }
     return p;
@@ -83,7 +83,7 @@ fn tcp_alloc_port() {
 fn tcp_alloc_tcb() {
     let mut i = 0;
     while i < MAX_TCP {
-        let state = mem_read_u64(TCP_TABLE + i * TCB_SIZE);
+        let mut state = mem_read_u64(TCP_TABLE + i * TCB_SIZE);
         if state == TCP_CLOSED { return i; }
         i = i + 1;
     }
@@ -232,10 +232,10 @@ fn tcp_build_header(src_port, dst_port, seq, ack, flags, window) {
 // ============================================================
 
 fn tcp_connect(remote_ip, remote_port) {
-    let idx = tcp_alloc_tcb();
+    let mut idx = tcp_alloc_tcb();
     if idx < 0 { return 0 - 1; }
     let local_port = tcp_alloc_port();
-    let addr = TCP_TABLE + idx * TCB_SIZE;
+    let mut addr = TCP_TABLE + idx * TCB_SIZE;
     mem_write_u64(addr + 0, TCP_SYN_SENT);
     mem_write_u32(addr + 8, ip_pack(my_ip[0],my_ip[1],my_ip[2],my_ip[3]));
     mem_write_u32(addr + 12, local_port);
@@ -249,9 +249,9 @@ fn tcp_connect(remote_ip, remote_port) {
 }
 
 fn tcp_listen(local_port) {
-    let idx = tcp_alloc_tcb();
+    let mut idx = tcp_alloc_tcb();
     if idx < 0 { return 0 - 1; }
-    let addr = TCP_TABLE + idx * TCB_SIZE;
+    let mut addr = TCP_TABLE + idx * TCB_SIZE;
     mem_write_u64(addr, TCP_LISTEN);
     mem_write_u32(addr + 12, local_port);
     _tcp_cc_init(addr);
@@ -274,7 +274,7 @@ fn tcp_input(src_ip, seg_data) {
 
     let mut i = 0;
     while i < MAX_TCP {
-        let state = mem_read_u64(TCP_TABLE + i * TCB_SIZE);
+        let mut state = mem_read_u64(TCP_TABLE + i * TCB_SIZE);
         let lport = mem_read_u32(TCP_TABLE + i * TCB_SIZE + 12);
         if lport == dst_port {
             if state != TCP_CLOSED {
@@ -288,8 +288,8 @@ fn tcp_input(src_ip, seg_data) {
 }
 
 fn tcp_process_segment(tcb_idx, src_ip, src_port, seq, ack, flags, data, data_off, rwnd) {
-    let addr = TCP_TABLE + tcb_idx * TCB_SIZE;
-    let state = mem_read_u64(addr);
+    let mut addr = TCP_TABLE + tcb_idx * TCB_SIZE;
+    let mut state = mem_read_u64(addr);
 
     let is_syn = (flags / 2) % 2;
     let is_ack = (flags / 16) % 2;
@@ -351,8 +351,8 @@ fn tcp_process_segment(tcb_idx, src_ip, src_port, seq, ack, flags, data, data_of
 // ============================================================
 
 fn tcp_send(tcb_idx, payload) {
-    let addr = TCP_TABLE + tcb_idx * TCB_SIZE;
-    let state = mem_read_u64(addr);
+    let mut addr = TCP_TABLE + tcb_idx * TCB_SIZE;
+    let mut state = mem_read_u64(addr);
     if state != TCP_ESTABLISHED { return 0; }
 
     let local_port = mem_read_u32(addr + 12);
@@ -396,8 +396,8 @@ fn tcp_send(tcb_idx, payload) {
 // ============================================================
 
 fn tcp_close(tcb_idx) {
-    let addr = TCP_TABLE + tcb_idx * TCB_SIZE;
-    let state = mem_read_u64(addr);
+    let mut addr = TCP_TABLE + tcb_idx * TCB_SIZE;
+    let mut state = mem_read_u64(addr);
     if state != TCP_ESTABLISHED {
         if state != TCP_CLOSE_WAIT { return 0; }
     }
@@ -460,7 +460,7 @@ fn build_ip_tcp_packet(dst_ip, tcp_data) {
 // ============================================================
 
 fn tcp_cc_info(tcb_idx) {
-    let addr = TCP_TABLE + tcb_idx * TCB_SIZE;
+    let mut addr = TCP_TABLE + tcb_idx * TCB_SIZE;
     let cwnd = mem_read_u64(addr + 128);
     let ssthresh = mem_read_u64(addr + 136);
     let rto = mem_read_u64(addr + 168);
@@ -595,7 +595,7 @@ fn _tcp_lo_build_seg(src_port, dst_port, seq, ack, flags, window, payload) {
 }
 
 fn tcp_loopback_status() {
-    let result = tcp_loopback_test();
+    let mut result = tcp_loopback_test();
     if result == 1 {
         return "TCP loopback: SYN>SYN_RCVD>ESTABLISHED>DATA(5B)>FIN>CLOSE_WAIT OK";
     }
@@ -609,8 +609,8 @@ fn tcp_connections_summary() {
     let mut out = "";
     let mut i = 0;
     while i < MAX_TCP {
-        let addr = TCP_TABLE + i * TCB_SIZE;
-        let state = mem_read_u64(addr);
+        let mut addr = TCP_TABLE + i * TCB_SIZE;
+        let mut state = mem_read_u64(addr);
         if state != TCP_CLOSED {
             let local_ip  = mem_read_u32(addr + 8);
             let local_port = mem_read_u32(addr + 12);

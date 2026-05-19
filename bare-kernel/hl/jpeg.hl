@@ -103,7 +103,7 @@ fn jpeg_init() {
     jpeg_pixels       = [];
     jpeg_pixel_count  = 0;
     // Initialize standard quantization tables
-    let i = 0;
+    let mut i = 0;
     while i < 64 {
         set_at(jpeg_qtable0, i, JPEG_LUMA_QT[i]);
         set_at(jpeg_qtable1, i, JPEG_CHROMA_QT[i]);
@@ -139,7 +139,7 @@ fn _jpeg_parse_sof(data, pos) {
     jpeg_width      = _jpeg_read16_be(data, pos); pos = pos + 2;
     jpeg_components = data[pos]; pos = pos + 1;
     // Component specs (component id, sampling factors, qtable id)
-    let i = 0;
+    let mut i = 0;
     while i < jpeg_components {
         pos = pos + 3;   // skip component info
         i = i + 1;
@@ -156,7 +156,7 @@ fn _jpeg_parse_dqt(data, pos) {
         let qt_info = data[pos]; pos = pos + 1;
         let qt_id   = qt_info - ((qt_info / 16) * 16);   // lower nibble
         let qt_prec = qt_info / 16;                        // upper nibble (0=8bit, 1=16bit)
-        let i = 0;
+        let mut i = 0;
         while i < 64 {
             let qv = data[pos]; pos = pos + 1;
             if qt_prec == 1 { qv = qv * 256 + data[pos]; pos = pos + 1; }
@@ -173,12 +173,12 @@ fn _jpeg_parse_dqt(data, pos) {
 // Output: 64 spatial-domain values
 fn _jpeg_idct_block(coeffs) {
     let output = [];
-    let i = 0;
+    let mut i = 0;
     while i < 64 { set_at(output, i, 0); i = i + 1; }
     // Row-wise 1D IDCT
-    let row = 0;
+    let mut row = 0;
     while row < 8 {
-        let base = row * 8;
+        let mut base = row * 8;
         let s0 = coeffs[base + 0];
         let s1 = coeffs[base + 1];
         let s2 = coeffs[base + 2];
@@ -211,7 +211,7 @@ fn _jpeg_idct_block(coeffs) {
         row = row + 1;
     }
     // Column-wise 1D IDCT
-    let col = 0;
+    let mut col = 0;
     while col < 8 {
         let s0 = output[col];       let s1 = output[col + 8];
         let s2 = output[col + 16];  let s3 = output[col + 24];
@@ -247,12 +247,12 @@ fn _jpeg_clamp(v) {
 
 // Convert YCbCr block to RGB pixels
 fn _jpeg_ycbcr_to_rgb(Y_block, Cb_block, Cr_block, dst_x, dst_y) {
-    let i = 0;
+    let mut i = 0;
     while i < 64 {
         let bx = i - ((i / 8) * 8);
         let by = i / 8;
         let px = dst_x + bx;
-        let py = dst_y + by;
+        let mut py = dst_y + by;
         if px < jpeg_width { if py < jpeg_height {
             let Y  = Y_block[i]  + 128;
             let Cb = Cb_block[i];
@@ -273,8 +273,8 @@ fn _jpeg_ycbcr_to_rgb(Y_block, Cb_block, Cr_block, dst_x, dst_y) {
 
 // Dequantize a coefficient block
 fn _jpeg_dequantize(coeffs, qtable) {
-    let result = [];
-    let i = 0;
+    let mut result = [];
+    let mut i = 0;
     while i < 64 {
         set_at(result, i, coeffs[i] * qtable[i]);
         i = i + 1;
@@ -289,7 +289,7 @@ fn jpeg_decode(data) {
     // Check SOI marker
     if data[0] != 255 { return 2; }
     if data[1] != 216 { return 2; }   // 0xD8
-    let pos = 2;
+    let mut pos = 2;
     let found_sof = 0;
     while pos < data_len - 1 {
         if data[pos] == 255 {
@@ -327,9 +327,9 @@ fn jpeg_decode(data) {
     }
     if found_sof == 0 { return 3; }
     // Generate synthetic decoded pixels for testing
-    let total = jpeg_width * jpeg_height;
+    let mut total = jpeg_width * jpeg_height;
     if total > 4096 { total = 4096; }
-    let i = 0;
+    let mut i = 0;
     while i < total {
         let bx = i - ((i / jpeg_width) * jpeg_width);
         let by = i / jpeg_width;
@@ -352,7 +352,7 @@ fn jpeg_get_pixel(x, y) {
     if jpeg_loaded == 0 { return [0, 0, 0, 255]; }
     if x >= jpeg_width  { return [0, 0, 0, 255]; }
     if y >= jpeg_height { return [0, 0, 0, 255]; }
-    let base = (y * jpeg_width + x) * 4;
+    let mut base = (y * jpeg_width + x) * 4;
     if base + 3 >= len(jpeg_pixels) { return [0, 0, 0, 255]; }
     return [jpeg_pixels[base], jpeg_pixels[base+1], jpeg_pixels[base+2], jpeg_pixels[base+3]];
 }
@@ -378,7 +378,7 @@ fn jpeg_idct_test() {
                   0,0,0,0,0,0,0,0,
                   0,0,0,0,0,0,0,0];
     set_at(coeffs, 0, 128);   // DC = 128
-    let result = _jpeg_idct_block(coeffs);
+    let mut result = _jpeg_idct_block(coeffs);
     return result[0];
 }
 
@@ -399,7 +399,7 @@ fn jpeg_test() {
                 1,                 // components=1 (grayscale)
                 1, 17, 0,          // component: id=1, sampling=1x1, qtable=0
                 255, 217];         // EOI
-    let result = jpeg_decode(data);
+    let mut result = jpeg_decode(data);
     let dc_val = jpeg_idct_test();
     return "jpeg: decode=" + to_string(result) + " " + jpeg_info()
         + " idct_dc=" + to_string(dc_val) + " [ISO 10918-1 ok]";

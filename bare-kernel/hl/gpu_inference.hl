@@ -29,7 +29,7 @@ let gi_cycles = 0;
 let gi_batch  = 1;
 
 fn gi_init() {
-    let i = 0;
+    let mut i = 0;
     while i < GI_BUF_SIZE {
         set_at(gi_tensor,  i, 0);
         set_at(gi_weights, i, 0);
@@ -69,9 +69,9 @@ fn gi_add_op(op_type, in_off, out_off, in_dim, out_dim) {
 }
 
 fn _gi_relu(in_off, out_off, n) {
-    let i = 0;
+    let mut i = 0;
     while i < n {
-        let v = gi_tensor[in_off + i];
+        let mut v = gi_tensor[in_off + i];
         if v < 0 { v = 0; }
         set_at(gi_tensor, out_off + i, v);
         i += 1;
@@ -82,10 +82,10 @@ fn _gi_relu(in_off, out_off, n) {
 
 fn _gi_linear(in_off, out_off, in_dim, out_dim) {
     // y[j] = Σ w[j*in_dim+k] * x[in_off+k] / 256 + bias[j]
-    let j = 0;
+    let mut j = 0;
     while j < out_dim {
         let acc = gi_bias[j];
-        let k = 0;
+        let mut k = 0;
         while k < in_dim {
             acc += gi_weights[j * in_dim + k] * gi_tensor[in_off + k] / 256;
             k += 1;
@@ -100,7 +100,7 @@ fn _gi_linear(in_off, out_off, in_dim, out_dim) {
 fn _gi_softmax(in_off, out_off, n) {
     // exp_fp(x) = x - max + 256  (linear shift-and-clamp approximation)
     let max_v = gi_tensor[in_off];
-    let i = 1;
+    let mut i = 1;
     while i < n {
         if gi_tensor[in_off + i] > max_v { max_v = gi_tensor[in_off + i]; }
         i += 1;
@@ -108,7 +108,7 @@ fn _gi_softmax(in_off, out_off, n) {
     let sum_exp = 0;
     i = 0;
     while i < n {
-        let x = gi_tensor[in_off + i] - max_v + 256;
+        let mut x = gi_tensor[in_off + i] - max_v + 256;
         if x < 0   { x = 0; }
         if x > 512 { x = 512; }
         set_at(gi_tensor, out_off + i, x);

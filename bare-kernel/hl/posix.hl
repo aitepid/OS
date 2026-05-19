@@ -38,7 +38,7 @@ fn fd_init_task(task_id) {
     // Close all FDs
     let mut i = 0;
     while i < MAX_FDS {
-        let addr = fd_addr(task_id, i);
+        let mut addr = fd_addr(task_id, i);
         mem_write_u64(addr, FD_CLOSED);
         mem_write_u64(addr + 8, 0);
         i = i + 1;
@@ -133,7 +133,7 @@ fn sys_exec(path) {
     elf_load_segments(elf_data, current_task);
 
     // 4. Set RIP to ELF entry point
-    let addr = task_addr(current_task);
+    let mut addr = task_addr(current_task);
     mem_write_u64(addr + 24, entry_point);
 
     // 5. Set RSP to user stack top (allocate one page)
@@ -275,7 +275,7 @@ fn sys_execve(path, argv, envp) {
     mem_write_u64(sp, argc);
 
     // 6. Update task registers
-    let addr = task_addr(current_task);
+    let mut addr = task_addr(current_task);
     mem_write_u64(addr + 24, entry_point);  // RIP
     mem_write_u64(addr + 16, sp);           // RSP
 
@@ -371,7 +371,7 @@ fn sys_exit(code) {
     // Close all FDs
     let mut i = 0;
     while i < MAX_FDS {
-        let addr = fd_addr(current_task, i);
+        let mut addr = fd_addr(current_task, i);
         mem_write_u64(addr, FD_CLOSED);
         i = i + 1;
     }
@@ -423,7 +423,7 @@ fn sys_dup2(old_fd, new_fd) {
 fn fd_alloc(task_id) {
     let mut i = 0;
     while i < MAX_FDS {
-        let addr = fd_addr(task_id, i);
+        let mut addr = fd_addr(task_id, i);
         if mem_read_u64(addr) == FD_CLOSED { return i; }
         i = i + 1;
     }

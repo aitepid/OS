@@ -31,7 +31,7 @@ let cms_hh_count = 0;
 let cms_initialized = 0;
 
 fn count_min_sketch_init() {
-    let i = 0;
+    let mut i = 0;
     while i < CMS_D * CMS_W {
         set_at(cms_counters, i, 0);
         i = i + 1;
@@ -52,7 +52,7 @@ fn count_min_sketch_init() {
 fn _cms_hash_int(key, j) {
     // Independent hash per row using different multipliers
     let seeds = [2654435769, 1664525, 22695477, 1103515245];
-    let h = key * seeds[j] + j * 1013904223 + 1;
+    let mut h = key * seeds[j] + j * 1013904223 + 1;
     h = h - ((h / CMS_W) * CMS_W);
     if h < 0 { h = -h; }
     return h - ((h / CMS_W) * CMS_W);
@@ -61,11 +61,11 @@ fn _cms_hash_int(key, j) {
 // Hash function j for string key
 fn _cms_hash_str(s, j) {
     let seeds = [5381, 31337, 6271, 49291];
-    let h = seeds[j];
-    let i = 0;
-    let n = len(s);
+    let mut h = seeds[j];
+    let mut i = 0;
+    let mut n = len(s);
     while i < n {
-        let c = char_code(s, i);
+        let mut c = char_code(s, i);
         h = h * 33 + c + j * 997;
         h = h - ((h / CMS_W) * CMS_W);
         if h < 0 { h = -h; }
@@ -76,10 +76,10 @@ fn _cms_hash_str(s, j) {
 
 // Add integer key with given count (default count=1)
 fn cms_add_int(key, count) {
-    let j = 0;
+    let mut j = 0;
     while j < CMS_D {
-        let col = _cms_hash_int(key, j);
-        let idx = j * CMS_W + col;
+        let mut col = _cms_hash_int(key, j);
+        let mut idx = j * CMS_W + col;
         set_at(cms_counters, idx, cms_counters[idx] + count);
         j = j + 1;
     }
@@ -89,10 +89,10 @@ fn cms_add_int(key, count) {
 
 // Add string key with given count
 fn cms_add_str(s, count) {
-    let j = 0;
+    let mut j = 0;
     while j < CMS_D {
-        let col = _cms_hash_str(s, j);
-        let idx = j * CMS_W + col;
+        let mut col = _cms_hash_str(s, j);
+        let mut idx = j * CMS_W + col;
         set_at(cms_counters, idx, cms_counters[idx] + count);
         j = j + 1;
     }
@@ -103,10 +103,10 @@ fn cms_add_str(s, count) {
 // Point query: estimate frequency of integer key
 fn cms_query_int(key) {
     let min_count = cms_counters[0 * CMS_W + _cms_hash_int(key, 0)];
-    let j = 1;
+    let mut j = 1;
     while j < CMS_D {
-        let col = _cms_hash_int(key, j);
-        let c = cms_counters[j * CMS_W + col];
+        let mut col = _cms_hash_int(key, j);
+        let mut c = cms_counters[j * CMS_W + col];
         if c < min_count { min_count = c; }
         j = j + 1;
     }
@@ -116,10 +116,10 @@ fn cms_query_int(key) {
 // Point query: estimate frequency of string key
 fn cms_query_str(s) {
     let min_count = cms_counters[0 * CMS_W + _cms_hash_str(s, 0)];
-    let j = 1;
+    let mut j = 1;
     while j < CMS_D {
-        let col = _cms_hash_str(s, j);
-        let c = cms_counters[j * CMS_W + col];
+        let mut col = _cms_hash_str(s, j);
+        let mut c = cms_counters[j * CMS_W + col];
         if c < min_count { min_count = c; }
         j = j + 1;
     }
@@ -130,12 +130,12 @@ fn cms_query_str(s) {
 // (min over rows of row dot products)
 fn cms_inner_product(other_counters) {
     let min_dot = 0;
-    let j = 0;
+    let mut j = 0;
     while j < CMS_D {
         let dot = 0;
-        let c = 0;
+        let mut c = 0;
         while c < CMS_W {
-            let idx = j * CMS_W + c;
+            let mut idx = j * CMS_W + c;
             dot = dot + cms_counters[idx] * other_counters[idx];
             c = c + 1;
         }
@@ -148,7 +148,7 @@ fn cms_inner_product(other_counters) {
 
 // Merge another sketch into this one (element-wise add)
 fn cms_merge(other_counters) {
-    let i = 0;
+    let mut i = 0;
     while i < CMS_D * CMS_W {
         set_at(cms_counters, i, cms_counters[i] + other_counters[i]);
         i = i + 1;
@@ -159,7 +159,7 @@ fn cms_merge(other_counters) {
 // Track heavy hitter: update or insert key with frequency estimate
 fn cms_track_hh(key, freq_est) {
     // Check if key already tracked
-    let i = 0;
+    let mut i = 0;
     while i < cms_hh_count {
         if cms_hh_keys[i] == key {
             set_at(cms_hh_freq, i, freq_est);
@@ -190,7 +190,7 @@ fn cms_track_hh(key, freq_est) {
 // Report max counter in row 0 (approximate top frequency)
 fn cms_max_freq() {
     let max_c = 0;
-    let c = 0;
+    let mut c = 0;
     while c < CMS_W {
         if cms_counters[c] > max_c { max_c = cms_counters[c]; }
         c = c + 1;
@@ -208,7 +208,7 @@ fn cms_status() {
 fn count_min_sketch_test() {
     count_min_sketch_init();
     // Add items with different frequencies
-    let i = 0;
+    let mut i = 0;
     while i < 100 { cms_add_int(1, 1); i = i + 1; }   // key 1: 100 times
     i = 0;
     while i < 50  { cms_add_int(2, 1); i = i + 1; }   // key 2: 50 times

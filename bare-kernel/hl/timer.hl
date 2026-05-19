@@ -36,7 +36,7 @@ fn sleep_ms(ms) {
     let wake_tick = get_ticks() + ms * TICK_HZ / 1000;
     // Store wakeup tick in task's reserved area (+224)
     // (avoiding +200 pending_mask, +208 blocked_mask, +216 handler_ptr from signal.hl)
-    let addr = task_addr(current_task);
+    let mut addr = task_addr(current_task);
     mem_write_u64(addr + 224, wake_tick);
     // Block the current task
     task_block(1);  // reason=1 (sleep)
@@ -49,8 +49,8 @@ fn timer_check_sleepers() {
     let now = get_ticks();
     let mut i = 0;
     while i < MAX_TASKS {
-        let addr = task_addr(i);
-        let state = mem_read_u64(addr + 0);
+        let mut addr = task_addr(i);
+        let mut state = mem_read_u64(addr + 0);
         if state == STATE_BLOCKED {
             let wake_tick = mem_read_u64(addr + 224);
             if wake_tick > 0 && now >= wake_tick {
@@ -75,7 +75,7 @@ fn timer_register(delay_ms, callback_addr, arg, repeat) {
     let fire_tick = get_ticks() + delay_ms * TICK_HZ / 1000;
     let mut i = 0;
     while i < MAX_TIMERS {
-        let addr = TIMER_TABLE + i * TIMER_ENTRY_SIZE;
+        let mut addr = TIMER_TABLE + i * TIMER_ENTRY_SIZE;
         let flags = mem_read_u64(addr + 24);
         if flags == 0 {
             mem_write_u64(addr, fire_tick);
@@ -90,7 +90,7 @@ fn timer_register(delay_ms, callback_addr, arg, repeat) {
 }
 
 fn timer_cancel(timer_id) {
-    let addr = TIMER_TABLE + timer_id * TIMER_ENTRY_SIZE;
+    let mut addr = TIMER_TABLE + timer_id * TIMER_ENTRY_SIZE;
     mem_write_u64(addr + 24, 0);
     return 0;
 }
@@ -100,7 +100,7 @@ fn timer_check() {
     let now = get_ticks();
     let mut i = 0;
     while i < MAX_TIMERS {
-        let addr = TIMER_TABLE + i * TIMER_ENTRY_SIZE;
+        let mut addr = TIMER_TABLE + i * TIMER_ENTRY_SIZE;
         let flags = mem_read_u64(addr + 24);
         if flags % 2 == 1 {
             let fire = mem_read_u64(addr);
@@ -169,7 +169,7 @@ fn rtc_read_time() {
         min = bcd_to_bin(raw_min);
         // Handle PM bit (bit 7)
         let pm = (raw_hour / 128) % 2;
-        let h = raw_hour % 128;
+        let mut h = raw_hour % 128;
         hour = bcd_to_bin(h);
         if is_12_hour == 1 {
             if pm == 1 && hour < 12 { hour = hour + 12; }

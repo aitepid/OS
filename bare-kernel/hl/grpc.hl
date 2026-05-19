@@ -88,7 +88,7 @@ fn grpc_init() {
 // Register a gRPC service
 fn grpc_register_service(name) {
     if grpc_service_count >= GRPC_MAX_SERVICES { return 0 - 1; }
-    let idx = grpc_service_count;
+    let mut idx = grpc_service_count;
     set_at(grpc_service_names, idx, name);
     grpc_service_count = grpc_service_count + 1;
     return idx;
@@ -98,7 +98,7 @@ fn grpc_register_service(name) {
 fn grpc_register_method(svc_idx, method_name) {
     if grpc_method_count >= GRPC_MAX_METHODS { return 0 - 1; }
     if svc_idx >= grpc_service_count { return 0 - 1; }
-    let idx = grpc_method_count;
+    let mut idx = grpc_method_count;
     let path = "/" + grpc_service_names[svc_idx] + "/" + method_name;
     set_at(grpc_method_paths, idx, path);
     set_at(grpc_method_svc,   idx, svc_idx);
@@ -108,7 +108,7 @@ fn grpc_register_method(svc_idx, method_name) {
 
 // Encode 5-byte gRPC LPM frame header: [compression=0, len3, len2, len1, len0]
 fn grpc_encode_frame_header(msg_len) {
-    let h = [0, 0, 0, 0, 0];
+    let mut h = [0, 0, 0, 0, 0];
     set_at(h, 0, 0);   // no compression
     set_at(h, 1, (msg_len / 16777216) - ((msg_len / 4294967296) * 256));
     set_at(h, 2, (msg_len / 65536)    - ((msg_len / 16777216)   * 256));
@@ -174,7 +174,7 @@ fn grpc_set_metadata(key, value) {
 
 // Get metadata value by key
 fn grpc_get_metadata(key) {
-    let i = 0;
+    let mut i = 0;
     while i < grpc_meta_count {
         if grpc_meta_keys[i] == key { return grpc_meta_vals[i]; }
         i = i + 1;
@@ -193,8 +193,8 @@ fn grpc_set_request(data) {
 fn grpc_call(method_path) {
     grpc_last_method = method_path;
     // Find method
-    let found = 0;
-    let i = 0;
+    let mut found = 0;
+    let mut i = 0;
     while i < grpc_method_count {
         if grpc_method_paths[i] == method_path { found = 1; i = grpc_method_count; }
         i = i + 1;
@@ -247,7 +247,7 @@ fn grpc_server_handle(raw_request) {
 
 fn grpc_list_services() {
     print("gRPC services (" + to_string(grpc_service_count) + "):");
-    let i = 0;
+    let mut i = 0;
     while i < grpc_service_count {
         print("  [" + to_string(i) + "] " + grpc_service_names[i]);
         i = i + 1;

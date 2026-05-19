@@ -55,7 +55,7 @@ let ls_n_reqs     = 0;
 let ls_ref_count = array(8, 0);
 
 fn ls_init() {
-    let i = 0;
+    let mut i = 0;
     while i < LS_MAX_DOCS {
         set_at(ls_doc_id,         i, 0);
         set_at(ls_doc_version,    i, 0);
@@ -64,12 +64,12 @@ fn ls_init() {
         set_at(ls_ref_count,      i, 0);
         i += 1;
     }
-    let j = 0;
+    let mut j = 0;
     while j < 128 {
         set_at(ls_diags, j, 0);
         j += 1;
     }
-    let k = 0;
+    let mut k = 0;
     while k < LS_MAX_REQS {
         set_at(ls_req_method, k, 0);
         set_at(ls_req_doc,    k, 0);
@@ -84,7 +84,7 @@ fn ls_init() {
 }
 
 fn ls_find(doc_id) {
-    let i = 0;
+    let mut i = 0;
     while i < ls_n_docs {
         if ls_doc_id[i] == doc_id { return i; }
         i += 1;
@@ -93,14 +93,14 @@ fn ls_find(doc_id) {
 }
 
 fn ls_open(doc_id, version) {
-    let idx = ls_find(doc_id);
+    let mut idx = ls_find(doc_id);
     if idx >= 0 {
         set_at(ls_doc_version, idx, version);
         set_at(ls_doc_open,    idx, 1);
         return idx;
     }
     if ls_n_docs >= LS_MAX_DOCS { return 0 - 1; }
-    let slot = ls_n_docs;
+    let mut slot = ls_n_docs;
     set_at(ls_doc_id,         slot, doc_id);
     set_at(ls_doc_version,    slot, version);
     set_at(ls_doc_open,       slot, 1);
@@ -111,14 +111,14 @@ fn ls_open(doc_id, version) {
 }
 
 fn ls_close(doc_id) {
-    let idx = ls_find(doc_id);
+    let mut idx = ls_find(doc_id);
     if idx < 0 { return 0 - 1; }
     set_at(ls_doc_open, idx, 0);
     return idx;
 }
 
 fn ls_add_diag(doc_id, diag_code) {
-    let idx = ls_find(doc_id);
+    let mut idx = ls_find(doc_id);
     if idx < 0 { return 0 - 1; }
     let dc = ls_doc_diag_count[idx];
     if dc >= LS_MAX_DIAGS { return 0 - 1; }
@@ -128,13 +128,13 @@ fn ls_add_diag(doc_id, diag_code) {
 }
 
 fn ls_get_diag_count(doc_id) {
-    let idx = ls_find(doc_id);
+    let mut idx = ls_find(doc_id);
     if idx < 0 { return 0 - 1; }
     return ls_doc_diag_count[idx];
 }
 
 fn ls_get_diag(doc_id, i) {
-    let idx = ls_find(doc_id);
+    let mut idx = ls_find(doc_id);
     if idx < 0 { return 0 - 1; }
     if i >= ls_doc_diag_count[idx] { return 0 - 1; }
     return ls_diags[idx * LS_MAX_DIAGS + i];
@@ -144,14 +144,14 @@ fn ls_ndocs() { return ls_n_docs; }
 
 // Add a reference to doc, bump its ref count
 fn ls_add_ref(doc_id) {
-    let idx = ls_find(doc_id);
+    let mut idx = ls_find(doc_id);
     if idx < 0 { return 0 - 1; }
     set_at(ls_ref_count, idx, ls_ref_count[idx] + 1);
     return ls_ref_count[idx];
 }
 
 fn ls_get_ref_count(doc_id) {
-    let idx = ls_find(doc_id);
+    let mut idx = ls_find(doc_id);
     if idx < 0 { return 0 - 1; }
     return ls_ref_count[idx];
 }
@@ -161,7 +161,7 @@ fn ls_get_ref_count(doc_id) {
 // Log a request and return its slot index.
 fn _ls_log_req(method, doc_id, line, col, result) {
     if ls_n_reqs >= LS_MAX_REQS { return 0 - 1; }
-    let slot = ls_n_reqs;
+    let mut slot = ls_n_reqs;
     set_at(ls_req_method, slot, method);
     set_at(ls_req_doc,    slot, doc_id);
     set_at(ls_req_line,   slot, line);
@@ -173,7 +173,7 @@ fn _ls_log_req(method, doc_id, line, col, result) {
 
 // Dispatch an LSP request; log it; return integer-encoded result.
 fn lsp_handle_request(method_id, doc_id, line, col) {
-    let result = 0 - 1;
+    let mut result = 0 - 1;
 
     if method_id == LSP_M_OPEN {
         result = ls_open(doc_id, 1);
@@ -183,7 +183,7 @@ fn lsp_handle_request(method_id, doc_id, line, col) {
     }
     if method_id == LSP_M_COMPLETION {
         // Completion: encode position as doc_id*1000+col
-        let idx = ls_find(doc_id);
+        let mut idx = ls_find(doc_id);
         if idx >= 0 {
             result = doc_id * 1000 + col;
         }
@@ -222,7 +222,7 @@ fn lsp_get_req_result(req_idx) {
 
 fn ls_test() {
     ls_init();
-    let pass = 1;
+    let mut pass = 1;
 
     // Open two documents
     ls_open(1, 1);

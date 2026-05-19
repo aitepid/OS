@@ -39,7 +39,7 @@ let wg_msg        = array(40, 0);   // 8 peers * 5 fields
 let wg_n_peers    = 0;
 
 fn wg_init() {
-    let i = 0;
+    let mut i = 0;
     while i < WG_MAXPEERS {
         set_at(wg_state,       i, WG_IDLE);
         set_at(wg_priv,        i, 0);
@@ -89,7 +89,7 @@ fn _wg_gen_eph(id) {
 
 fn _wg_mac(key, payload) {
     // Simplified MAC: (key * 31 + payload) mod 65536
-    let v = key * 31 + payload;
+    let mut v = key * 31 + payload;
     return v - (v / WG_MSG_SPACE) * WG_MSG_SPACE;
 }
 
@@ -97,7 +97,7 @@ fn wg_handshake_init(id) {
     // Build Initiation message and derive ephemeral key
     let epub = _wg_gen_eph(id);
     let mac  = _wg_mac(wg_ppub[id], epub);
-    let base = id * WG_MSG_STRIDE;
+    let mut base = id * WG_MSG_STRIDE;
     set_at(wg_msg, base,     WG_MSG_INIT);
     set_at(wg_msg, base + 1, id);
     set_at(wg_msg, base + 2, epub);
@@ -113,7 +113,7 @@ fn wg_handshake_resp(id) {
     let sk       = _wg_derive_key(wg_priv[id], wg_ppub[id], wg_psk[id]);
     set_at(wg_session_key, id, sk);
     let mac  = _wg_mac(sk, epub);
-    let base = id * WG_MSG_STRIDE;
+    let mut base = id * WG_MSG_STRIDE;
     set_at(wg_msg, base,     WG_MSG_RESP);
     set_at(wg_msg, base + 1, id);
     set_at(wg_msg, base + 2, epub);
@@ -139,7 +139,7 @@ fn wg_encrypt(id, plaintext) {
     ct = ct - (ct / WG_MSG_SPACE) * WG_MSG_SPACE;
     set_at(wg_send_ctr, id, ctr + 1);
     // pack into msg buffer
-    let base = id * WG_MSG_STRIDE;
+    let mut base = id * WG_MSG_STRIDE;
     set_at(wg_msg, base,     WG_MSG_DATA);
     set_at(wg_msg, base + 1, id);
     set_at(wg_msg, base + 2, ctr);
@@ -176,7 +176,7 @@ fn wg_test() {
     let sk_init = wg_establish(pid);
 
     // Both sides should derive same session key
-    let state = wg_peer_state(pid);
+    let mut state = wg_peer_state(pid);
 
     // Encrypt plaintext=9999, counter starts at 0
     let ct = wg_encrypt(pid, 9999);

@@ -42,7 +42,7 @@ let COMP_BUF_SZ  = 65536;      // 64 KB
 fn _comp_read_file(path) {
     let fd = vfs_open(path, O_RDONLY);
     if fd < 0 { return 0; }
-    let n = vfs_read(fd, COMP_IN_BUF, COMP_BUF_SZ);
+    let mut n = vfs_read(fd, COMP_IN_BUF, COMP_BUF_SZ);
     vfs_close(fd);
     return n;
 }
@@ -69,7 +69,7 @@ fn compress_rle(src, dst) {
     let mut out = 0;
     let mut i   = 0;
     while i < in_sz {
-        let b = _comp_rb(i);
+        let mut b = _comp_rb(i);
 
         if b == 255 {
             // Escape literal 0xFF → 0xFF 0xFF
@@ -109,7 +109,7 @@ fn compress_rle(src, dst) {
         if out >= COMP_BUF_SZ - 4 { i = in_sz; }   // output full
     }
 
-    let r = _comp_write_file(dst, out);
+    let mut r = _comp_write_file(dst, out);
     if r < 0 { return 0 - 1; }
     print("compress: RLE " + src + " → " + dst + "  " + to_string(in_sz) + " → " + to_string(out) + " bytes");
     return out;
@@ -126,11 +126,11 @@ fn decompress_rle(src, dst) {
     let mut out = 0;
     let mut i   = 0;
     while i < in_sz {
-        let b = _comp_rb(i);
+        let mut b = _comp_rb(i);
         if b == 255 {
             if i + 1 >= in_sz { i = in_sz; }
             else {
-                let next = _comp_rb(i + 1);
+                let mut next = _comp_rb(i + 1);
                 if next == 255 {
                     // Literal 0xFF
                     _comp_wb(out, 255); out = out + 1;
@@ -138,7 +138,7 @@ fn decompress_rle(src, dst) {
                 } else {
                     // Run: next = count, i+2 = byte
                     if i + 2 < in_sz {
-                        let val = _comp_rb(i + 2);
+                        let mut val = _comp_rb(i + 2);
                         let mut k = 0;
                         while k < next {
                             _comp_wb(out, val); out = out + 1;
@@ -155,7 +155,7 @@ fn decompress_rle(src, dst) {
         if out >= COMP_BUF_SZ - 4 { i = in_sz; }
     }
 
-    let r = _comp_write_file(dst, out);
+    let mut r = _comp_write_file(dst, out);
     if r < 0 { return 0 - 1; }
     print("decompress: RLE " + src + " → " + dst + "  " + to_string(in_sz) + " → " + to_string(out) + " bytes");
     return out;
@@ -226,7 +226,7 @@ fn compress_lzss(src, dst) {
             if i >= in_sz {
                 tok = 8;   // done
             } else {
-                let m = _lzss_find_match(i, in_sz);
+                let mut m = _lzss_find_match(i, in_sz);
                 let mlen = m[1];
                 if mlen >= 3 {
                     // Back-reference token
@@ -246,7 +246,7 @@ fn compress_lzss(src, dst) {
         mem_write_u8(COMP_OUT_BUF + flag_pos, flag);
     }
 
-    let r = _comp_write_file(dst, out);
+    let mut r = _comp_write_file(dst, out);
     if r < 0 { return 0 - 1; }
     print("compress: LZSS " + src + " → " + dst + "  " + to_string(in_sz) + " → " + to_string(out) + " bytes");
     return out;
@@ -264,7 +264,7 @@ fn decompress_lzss(src, dst) {
     let mut i   = 0;
 
     while i < in_sz {
-        let flag = _comp_rb(i); i = i + 1;
+        let mut flag = _comp_rb(i); i = i + 1;
         let mut tok = 0;
         while tok < 8 {
             if i >= in_sz { tok = 8; }
@@ -273,7 +273,7 @@ fn decompress_lzss(src, dst) {
                 if bit == 1 {
                     // Back-reference
                     if i + 1 < in_sz {
-                        let off = _comp_rb(i); i = i + 1;
+                        let mut off = _comp_rb(i); i = i + 1;
                         let mlen = _comp_rb(i); i = i + 1;
                         let src_pos = out - off - 1;
                         let mut k = 0;
@@ -294,7 +294,7 @@ fn decompress_lzss(src, dst) {
         }
     }
 
-    let r = _comp_write_file(dst, out);
+    let mut r = _comp_write_file(dst, out);
     if r < 0 { return 0 - 1; }
     print("decompress: LZSS " + src + " → " + dst + "  " + to_string(in_sz) + " → " + to_string(out) + " bytes");
     return out;
@@ -307,7 +307,7 @@ fn decompress_lzss(src, dst) {
 fn compress_stat(path) {
     let fd = vfs_open(path, O_RDONLY);
     if fd < 0 { return "Error: cannot open " + path; }
-    let n = vfs_read(fd, COMP_IN_BUF, COMP_BUF_SZ);
+    let mut n = vfs_read(fd, COMP_IN_BUF, COMP_BUF_SZ);
     vfs_close(fd);
 
     // Count run distribution for RLE estimate
@@ -315,7 +315,7 @@ fn compress_stat(path) {
     let mut singletons = 0;
     let mut i = 0;
     while i < n {
-        let b = _comp_rb(i);
+        let mut b = _comp_rb(i);
         let mut run = 1;
         while i + run < n {
             if _comp_rb(i + run) == b { run = run + 1; }

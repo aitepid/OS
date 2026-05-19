@@ -33,7 +33,7 @@ fn rls_init() {
     rls_n         = 0;
     rls_spill_cnt = 0;
     rls_active_n  = 0;
-    let i = 0;
+    let mut i = 0;
     while i < RLS_MAXVARS {
         set_at(rls_reg,   i, 0 - 1);
         set_at(rls_spill, i, 0);
@@ -61,12 +61,12 @@ fn _rls_sort_by_start() {
     // Insertion sort on rls_start[0..rls_n-1] carrying end + id
     // We sort index array separately for simplicity
     // In-place: sort rls_start, rls_end together
-    let i = 1;
+    let mut i = 1;
     while i < rls_n {
         let ks = rls_start[i];
         let ke = rls_end[i];
-        let j = i - 1;
-        let go = 1;
+        let mut j = i - 1;
+        let mut go = 1;
         while go == 1 {
             if j < 0 { go = 0; }
             if go == 1 {
@@ -87,7 +87,7 @@ fn _rls_sort_by_start() {
 
 fn _rls_expire_old(cur_start) {
     // Remove from active all intervals that ended before cur_start
-    let i = 0;
+    let mut i = 0;
     while i < rls_active_n {
         if rls_active_end[i] < cur_start {
             // Return physical reg to free pool
@@ -95,7 +95,7 @@ fn _rls_expire_old(cur_start) {
             set_at(rls_free, rls_free_n, freed_preg);
             rls_free_n += 1;
             // Remove from active (shift left)
-            let j = i;
+            let mut j = i;
             while j < rls_active_n - 1 {
                 set_at(rls_active_vr,  j, rls_active_vr[j + 1]);
                 set_at(rls_active_end, j, rls_active_end[j + 1]);
@@ -112,14 +112,14 @@ fn _rls_expire_old(cur_start) {
 
 fn _rls_active_insert(vr, end_val) {
     // Insert keeping sorted by end (ascending)
-    let pos = rls_active_n;
-    let i = 0;
+    let mut pos = rls_active_n;
+    let mut i = 0;
     while i < rls_active_n {
         if rls_active_end[i] > end_val { pos = i; i = rls_active_n; }
         else { i += 1; }
     }
     // Shift right from pos
-    let j = rls_active_n - 1;
+    let mut j = rls_active_n - 1;
     while j >= pos {
         set_at(rls_active_vr,  j + 1, rls_active_vr[j]);
         set_at(rls_active_end, j + 1, rls_active_end[j]);
@@ -146,8 +146,8 @@ fn _rls_spill_at_interval(vr, end_val) {
         set_at(rls_active_end, spill_idx, end_val);
         // Re-sort active by end
         // (single element changed; just re-sort last entry leftward)
-        let j = spill_idx;
-        let go = 1;
+        let mut j = spill_idx;
+        let mut go = 1;
         while go == 1 {
             if j <= 0 { go = 0; }
             if go == 1 {
@@ -177,7 +177,7 @@ fn rls_run() {
     rls_active_n  = 0;
     // Re-init free pool
     rls_free_n = RLS_NREGS;
-    let i = 0;
+    let mut i = 0;
     while i < RLS_NREGS { set_at(rls_free, i, i); i += 1; }
 
     i = 0;

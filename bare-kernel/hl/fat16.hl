@@ -63,8 +63,8 @@ fn fat16_read_fat(cluster) {
     // Read the FAT sector via block cache
     let buf = bcache_read(0, fat_sector);
     // Read 16-bit value at offset
-    let lo = mem_read_u8(buf + offset_in_sector);
-    let hi = mem_read_u8(buf + offset_in_sector + 1);
+    let mut lo = mem_read_u8(buf + offset_in_sector);
+    let mut hi = mem_read_u8(buf + offset_in_sector + 1);
     return lo + hi * 256;
 }
 
@@ -143,7 +143,7 @@ fn fat16_list_root() {
                     let mut name = "";
                     let mut ni = 0;
                     while ni < 8 {
-                        let c = mem_read_u8(buf + off + ni);
+                        let mut c = mem_read_u8(buf + off + ni);
                         if c != 32 { name = name + chr(c); }
                         ni = ni + 1;
                     }
@@ -152,7 +152,7 @@ fn fat16_list_root() {
                         name = name + ".";
                         ni = 8;
                         while ni < 11 {
-                            let c = mem_read_u8(buf + off + ni);
+                            let mut c = mem_read_u8(buf + off + ni);
                             if c != 32 { name = name + chr(c); }
                             ni = ni + 1;
                         }
@@ -230,7 +230,7 @@ fn fat16_create_file(name, is_dir) {
                 ni = 0;
                 while ni < 8 {
                     if ni < base_end {
-                        let c = ord(char_at(name, ni));
+                        let mut c = ord(char_at(name, ni));
                         // Convert to uppercase
                         if c >= 97 && c <= 122 { c = c - 32; }
                         mem_write_u8(buf + off + ni, c);
@@ -243,7 +243,7 @@ fn fat16_create_file(name, is_dir) {
                 ni = 0;
                 while ni < 3 {
                     if ext_start >= 0 && ext_start + 1 + ni < len(name) {
-                        let c = ord(char_at(name, ext_start + 1 + ni));
+                        let mut c = ord(char_at(name, ext_start + 1 + ni));
                         if c >= 97 && c <= 122 { c = c - 32; }
                         mem_write_u8(buf + off + 8 + ni, c);
                     } else {
@@ -298,7 +298,7 @@ fn fat16_write_file(first_cluster, data, data_len) {
         }
         // Need more clusters?
         if written < data_len {
-            let next = fat16_read_fat(cluster);
+            let mut next = fat16_read_fat(cluster);
             if next >= 65528 || next < 2 {
                 // Allocate new cluster
                 let new_cluster = fat16_alloc_cluster();
@@ -316,7 +316,7 @@ fn fat16_write_file(first_cluster, data, data_len) {
 // Update file size in root directory entry
 fn fat16_update_size(entry_index, new_size) {
     let sec = entry_index / (fat_bytes_per_sector / 32);
-    let off = (entry_index % (fat_bytes_per_sector / 32)) * 32;
+    let mut off = (entry_index % (fat_bytes_per_sector / 32)) * 32;
     let buf = bcache_read(0, fat_root_start + sec);
     mem_write_u32(buf + off + 28, new_size);
     bcache_write(0, fat_root_start + sec, buf);
@@ -326,7 +326,7 @@ fn fat16_update_size(entry_index, new_size) {
 // Delete a file from root directory
 fn fat16_delete_file(entry_index) {
     let sec = entry_index / (fat_bytes_per_sector / 32);
-    let off = (entry_index % (fat_bytes_per_sector / 32)) * 32;
+    let mut off = (entry_index % (fat_bytes_per_sector / 32)) * 32;
     let buf = bcache_read(0, fat_root_start + sec);
     // Get first cluster
     let cluster = mem_read_u16(buf + off + 26);
@@ -336,7 +336,7 @@ fn fat16_delete_file(entry_index) {
     // Free cluster chain
     let mut c = cluster;
     while c >= 2 && c < 65528 {
-        let next = fat16_read_fat(c);
+        let mut next = fat16_read_fat(c);
         fat16_write_fat(c, 0);  // free cluster
         c = next;
     }

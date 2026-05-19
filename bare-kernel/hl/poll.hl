@@ -87,7 +87,7 @@ fn _nd_set_color(ep, idx, v)  { _ep_nodes[ep][idx][6] = v; return 0; }
 
 // --- Rotations ---
 fn _rb_rotate_left(ep, x) {
-    let y = _nd_right(ep, x);
+    let mut y = _nd_right(ep, x);
     // x.right = y.left
     _nd_set_right(ep, x, _nd_left(ep, y));
     if _nd_left(ep, y) != _RB_NIL { _nd_set_parent(ep, _nd_left(ep, y), x); }
@@ -108,7 +108,7 @@ fn _rb_rotate_left(ep, x) {
 }
 
 fn _rb_rotate_right(ep, y) {
-    let x = _nd_left(ep, y);
+    let mut x = _nd_left(ep, y);
     _nd_set_left(ep, y, _nd_right(ep, x));
     if _nd_right(ep, x) != _RB_NIL { _nd_set_parent(ep, _nd_right(ep, x), y); }
     _nd_set_parent(ep, x, _nd_parent(ep, y));
@@ -129,7 +129,7 @@ fn _rb_rotate_right(ep, y) {
 fn _rb_insert_fixup(ep, z) {
     let mut node = z;
     while _nd_parent(ep, node) != _RB_NIL && _nd_color(ep, _nd_parent(ep, node)) == _RB_RED {
-        let p = _nd_parent(ep, node);
+        let mut p = _nd_parent(ep, node);
         let gp = _nd_parent(ep, p);
         if gp == _RB_NIL { _nd_set_color(ep, p, _RB_BLACK); return 0; }
 
@@ -252,7 +252,7 @@ fn _ep_mark_ready(ep, fd, revents, events_mask) {
     push(_ep_ready[ep], [fd, revents]);
     // Oneshot: disable fd after event
     if (events_mask / EPOLLONESHOT) % 2 == 1 {
-        let idx = _rb_find(ep, fd);
+        let mut idx = _rb_find(ep, fd);
         if idx != _RB_NIL { _ep_nodes[ep][idx][0] = 0 - 1; }
     }
     // Wake any futex waiters
@@ -304,13 +304,13 @@ fn sys_epoll_ctl(epfd, op, fd, events) {
         return 0;
     }
     if op == EPOLL_CTL_MOD {
-        let idx = _rb_find(epfd, fd);
+        let mut idx = _rb_find(epfd, fd);
         if idx == _RB_NIL { return 0 - 1; }
         _ep_nodes[epfd][idx][1] = events; // update events mask
         return 0;
     }
     if op == EPOLL_CTL_DEL {
-        let idx = _rb_find(epfd, fd);
+        let mut idx = _rb_find(epfd, fd);
         if idx == _RB_NIL { return 0 - 1; }
         // Mark node as deleted (lazy deletion: set fd = -1)
         // Full RB delete deferred to keep LOC < 250

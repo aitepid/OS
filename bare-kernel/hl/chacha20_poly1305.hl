@@ -43,7 +43,7 @@ fn chacha20_poly1305_init() {
 
 fn chacha20_poly1305_set_key(key_bytes) {
     if len(key_bytes) < 32 { return 1; }
-    let i = 0;
+    let mut i = 0;
     while i < 32 {
         set_at(cp_key, i, key_bytes[i]);
         i = i + 1;
@@ -53,7 +53,7 @@ fn chacha20_poly1305_set_key(key_bytes) {
 
 fn chacha20_poly1305_set_nonce(nonce_bytes) {
     if len(nonce_bytes) < 12 { return 1; }
-    let i = 0;
+    let mut i = 0;
     while i < 12 {
         set_at(cp_nonce, i, nonce_bytes[i]);
         i = i + 1;
@@ -77,28 +77,28 @@ fn _cp_read32_le(bytes, offset) {
 
 // Rotate left 32-bit (arithmetic simulation)
 fn _cp_rotl32(v, n) {
-    let mask = 4294967295;   // 0xFFFFFFFF
+    let mut mask = 4294967295;   // 0xFFFFFFFF
     v = v - ((v / 4294967296) * 4294967296);   // mod 2^32
-    let hi = v / _cp_pow2(32 - n);
-    let lo = (v - hi * _cp_pow2(32 - n)) * _cp_pow2(n);
+    let mut hi = v / _cp_pow2(32 - n);
+    let mut lo = (v - hi * _cp_pow2(32 - n)) * _cp_pow2(n);
     return (lo + hi) - (((lo + hi) / 4294967296) * 4294967296);
 }
 
 fn _cp_pow2(n) {
-    let r = 1;
-    let i = 0;
+    let mut r = 1;
+    let mut i = 0;
     while i < n { r = r * 2; i = i + 1; }
     return r;
 }
 
 fn _cp_add32(a, b) {
-    let s = a + b;
+    let mut s = a + b;
     return s - ((s / 4294967296) * 4294967296);
 }
 
 // XOR two 32-bit values (arithmetic simulation)
 fn _cp_xor32(a, b) {
-    let result = 0;
+    let mut result = 0;
     let bit = 0;
     while bit < 32 {
         let ba = (a / _cp_pow2(bit)) - ((a / _cp_pow2(bit + 1)) * 2);
@@ -111,8 +111,8 @@ fn _cp_xor32(a, b) {
 
 // ChaCha20 quarter round on words a, b, c, d
 fn _cp_quarter_round(state, ai, bi, ci, di) {
-    let a = state[ai]; let b = state[bi];
-    let c = state[ci]; let d = state[di];
+    let mut a = state[ai]; let mut b = state[bi];
+    let mut c = state[ci]; let mut d = state[di];
     a = _cp_add32(a, b); d = _cp_xor32(d, a); d = _cp_rotl32(d, 16);
     c = _cp_add32(c, d); b = _cp_xor32(b, c); b = _cp_rotl32(b, 12);
     a = _cp_add32(a, b); d = _cp_xor32(d, a); d = _cp_rotl32(d, 8);
@@ -124,12 +124,12 @@ fn _cp_quarter_round(state, ai, bi, ci, di) {
 
 // Build ChaCha20 initial state: [sigma | key | counter | nonce]
 fn _cp_chacha20_init_state(counter) {
-    let state = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+    let mut state = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
     // Constants
     set_at(state, 0, CP_SIGMA0); set_at(state, 1, CP_SIGMA1);
     set_at(state, 2, CP_SIGMA2); set_at(state, 3, CP_SIGMA3);
     // Key (8 words)
-    let i = 0;
+    let mut i = 0;
     while i < 8 {
         set_at(state, 4 + i, _cp_read32_le(cp_key, i * 4));
         i = i + 1;
@@ -146,7 +146,7 @@ fn _cp_chacha20_init_state(counter) {
 // Run 20-round ChaCha20 core and produce 64-byte keystream block
 fn _cp_chacha20_block(counter) {
     let init = _cp_chacha20_init_state(counter);
-    let state = [init[0],  init[1],  init[2],  init[3],
+    let mut state = [init[0],  init[1],  init[2],  init[3],
                  init[4],  init[5],  init[6],  init[7],
                  init[8],  init[9],  init[10], init[11],
                  init[12], init[13], init[14], init[15]];
@@ -166,19 +166,19 @@ fn _cp_chacha20_block(counter) {
         round = round + 1;
     }
     // Add initial state
-    let i = 0;
+    let mut i = 0;
     while i < 16 {
         set_at(state, i, _cp_add32(state[i], init[i]));
         i = i + 1;
     }
     // Serialize to 64 bytes (little-endian)
-    let block = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    let mut block = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
                  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
                  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
                  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
     i = 0;
     while i < 16 {
-        let w = state[i];
+        let mut w = state[i];
         set_at(block, i * 4,     w - ((w / 256) * 256));
         set_at(block, i * 4 + 1, (w / 256) - ((w / 65536) * 256));
         set_at(block, i * 4 + 2, (w / 65536) - ((w / 16777216) * 256));
@@ -190,9 +190,9 @@ fn _cp_chacha20_block(counter) {
 
 // Generate 32-byte Poly1305 one-time key from ChaCha20 block 0
 fn _cp_poly1305_otk() {
-    let block = _cp_chacha20_block(0);
+    let mut block = _cp_chacha20_block(0);
     let otk = [];
-    let i = 0;
+    let mut i = 0;
     while i < 32 {
         set_at(otk, i, block[i]);
         i = i + 1;
@@ -203,7 +203,7 @@ fn _cp_poly1305_otk() {
 // Poly1305 MAC computation over data using one-time key
 fn _cp_poly1305_mac(otk, data, data_len) {
     // r = otk[0..15] with clamping, s = otk[16..31]
-    let r = [otk[0],  otk[1],  otk[2],  otk[3],
+    let mut r = [otk[0],  otk[1],  otk[2],  otk[3],
              otk[4],  otk[5],  otk[6],  otk[7],
              otk[8],  otk[9],  otk[10], otk[11],
              otk[12], otk[13], otk[14], otk[15]];
@@ -223,7 +223,7 @@ fn _cp_poly1305_mac(otk, data, data_len) {
     let r3 = _cp_read32_le(r, 12);
     // Process 16-byte blocks
     let blocks = data_len / 16;
-    let bi = 0;
+    let mut bi = 0;
     while bi < blocks {
         // Add data block + 1 to accumulator
         let n0 = _cp_read32_le(data, bi * 16 + 0);
@@ -279,14 +279,14 @@ fn _cp_poly1305_mac(otk, data, data_len) {
 // Build Poly1305 input: AAD pad + ciphertext pad + lengths
 fn _cp_build_mac_input(aad, aad_len, ciphertext, ct_len) {
     let mac_data = [];
-    let idx = 0;
+    let mut idx = 0;
     // Copy AAD
     let ai = 0;
     while ai < aad_len { set_at(mac_data, idx, aad[ai]); idx = idx + 1; ai = ai + 1; }
     // Pad AAD to 16-byte boundary
     while idx - ((idx / 16) * 16) != 0 { set_at(mac_data, idx, 0); idx = idx + 1; }
     // Copy ciphertext
-    let ci = 0;
+    let mut ci = 0;
     while ci < ct_len { set_at(mac_data, idx, ciphertext[ci]); idx = idx + 1; ci = ci + 1; }
     // Pad ciphertext to 16-byte boundary
     while idx - ((idx / 16) * 16) != 0 { set_at(mac_data, idx, 0); idx = idx + 1; }
@@ -316,10 +316,10 @@ fn _cp_stream_encrypt(plaintext) {
     let plen = len(plaintext);
     let ciphertext = [];
     let block_num = 1;
-    let i = 0;
+    let mut i = 0;
     while i < plen {
         let keystream = _cp_chacha20_block(block_num);
-        let j = 0;
+        let mut j = 0;
         while j < 64 {
             if i + j < plen {
                 let ks = keystream[j];
@@ -345,7 +345,7 @@ fn chacha20_poly1305_encrypt(plaintext) {
     // Encrypt with ChaCha20 (counter 1+)
     let ciphertext = _cp_stream_encrypt(plaintext);
     cp_ct_len = plen;
-    let i = 0;
+    let mut i = 0;
     while i < plen { set_at(cp_ciphertext, i, ciphertext[i]); i = i + 1; }
     // Build MAC input and compute Poly1305 tag
     let mac_result = _cp_build_mac_input(cp_aad, cp_aad_len, ciphertext, plen);
@@ -368,7 +368,7 @@ fn chacha20_poly1305_decrypt(ciphertext) {
     let expected_tag = _cp_poly1305_mac(otk, mac_data, mac_len);
     // Verify tag (constant-time comparison)
     let diff = 0;
-    let i = 0;
+    let mut i = 0;
     while i < 16 { diff = diff + (expected_tag[i] - cp_tag[i]) * (expected_tag[i] - cp_tag[i]); i = i + 1; }
     if diff != 0 { return 1; }   // Authentication failed
     // Decrypt using stream cipher (same as encrypt)
@@ -378,12 +378,12 @@ fn chacha20_poly1305_decrypt(ciphertext) {
 
 fn chacha20_poly1305_get_tag() {
     let hex_chars = "0123456789abcdef";
-    let result = "";
-    let i = 0;
+    let mut result = "";
+    let mut i = 0;
     while i < 16 {
-        let b = cp_tag[i];
-        let hi = b / 16;
-        let lo = b - hi * 16;
+        let mut b = cp_tag[i];
+        let mut hi = b / 16;
+        let mut lo = b - hi * 16;
         result = result + substr(hex_chars, hi, 1) + substr(hex_chars, lo, 1);
         i = i + 1;
     }
@@ -392,14 +392,14 @@ fn chacha20_poly1305_get_tag() {
 
 fn chacha20_poly1305_get_ct_hex() {
     let hex_chars = "0123456789abcdef";
-    let result = "";
+    let mut result = "";
     let limit = cp_ct_len;
     if limit > 16 { limit = 16; }
-    let i = 0;
+    let mut i = 0;
     while i < limit {
-        let b = cp_ciphertext[i];
-        let hi = b / 16;
-        let lo = b - hi * 16;
+        let mut b = cp_ciphertext[i];
+        let mut hi = b / 16;
+        let mut lo = b - hi * 16;
         result = result + substr(hex_chars, hi, 1) + substr(hex_chars, lo, 1);
         i = i + 1;
     }

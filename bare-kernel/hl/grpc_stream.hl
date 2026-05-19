@@ -54,7 +54,7 @@ let gs_trailer_status = array(16, 0);
 let gs_trailer_msg    = array(16, 0);
 
 fn grpc_stream_init() {
-    let i = 0;
+    let mut i = 0;
     while i < GS_MAXSTREAMS {
         set_at(gs_state,    i, GS_IDLE);
         set_at(gs_type,     i, GS_UNARY);
@@ -73,7 +73,7 @@ fn grpc_stream_init() {
 fn _gs_lpm_encode(msg_hash) {
     // Length-Prefix Message: [0(no compress)] [len_hi][len_md][len_lo_hi][len_lo] [data]
     // Simplified: return encoded as (msg_hash mod 65521)
-    let p = 65521;
+    let mut p = 65521;
     return msg_hash - (msg_hash / p) * p;
 }
 
@@ -92,7 +92,7 @@ fn gs_open(service_hash, method_hash, stream_type) {
 }
 
 fn gs_add_meta(sid, key_hash, val_hash) {
-    let n = gs_meta_n[sid];
+    let mut n = gs_meta_n[sid];
     if n >= GS_META_STRIDE { return 0 - 1; }
     set_at(gs_meta_key, sid * GS_META_STRIDE + n, key_hash);
     set_at(gs_meta_val, sid * GS_META_STRIDE + n, val_hash);
@@ -103,13 +103,13 @@ fn gs_add_meta(sid, key_hash, val_hash) {
 fn gs_send(sid, msg_hash) {
     if gs_state[sid] != GS_OPEN { return 0 - 1; }
     let seq  = gs_send_seq[sid];
-    let slot = sid * GS_MSG_STRIDE + seq - (seq / GS_MSGBUF) * GS_MSGBUF;
+    let mut slot = sid * GS_MSG_STRIDE + seq - (seq / GS_MSGBUF) * GS_MSGBUF;
     set_at(gs_msg_send, slot, _gs_lpm_encode(msg_hash));
     set_at(gs_send_seq, sid, seq + 1);
 
     // For SERVER_STREAM and BIDI: simulate server generating N responses
     if gs_type[sid] == GS_SERVER {
-        let r = 0;
+        let mut r = 0;
         while r < 3 {
             let resp = msg_hash * (r + 1) + service_hash_for(sid);
             let p    = 65521;
@@ -137,10 +137,10 @@ fn gs_recv(sid) {
     // Pop next received message; returns -1 if none
     let seq = gs_recv_seq[sid];
     if seq == 0 { return 0 - 1; }
-    let slot = sid * GS_MSG_STRIDE;
+    let mut slot = sid * GS_MSG_STRIDE;
     let msg  = gs_msg_recv[slot];
     // Shift remaining messages
-    let i = 0;
+    let mut i = 0;
     while i < seq - 1 {
         set_at(gs_msg_recv, sid * GS_MSG_STRIDE + i,
                gs_msg_recv[sid * GS_MSG_STRIDE + i + 1]);

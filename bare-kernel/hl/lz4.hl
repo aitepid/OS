@@ -62,18 +62,18 @@ fn _lz4_hash4(src, pos) {
     let b1 = mem_read_u8(src + pos + 1);
     let b2 = mem_read_u8(src + pos + 2);
     let b3 = mem_read_u8(src + pos + 3);
-    let h = (b0 * 2654435 + b1 * 123456 + b2 * 987654 + b3 * 11111) % LZ4_HASH_SZ;
+    let mut h = (b0 * 2654435 + b1 * 123456 + b2 * 987654 + b3 * 11111) % LZ4_HASH_SZ;
     return h;
 }
 
 fn _lz4_hash_get(slot) {
-    let addr = LZ4_HASH + slot * 4;
+    let mut addr = LZ4_HASH + slot * 4;
     return mem_read_u8(addr) + mem_read_u8(addr + 1) * 256
          + mem_read_u8(addr + 2) * 65536 + mem_read_u8(addr + 3) * 16777216;
 }
 
 fn _lz4_hash_set(slot, val) {
-    let addr = LZ4_HASH + slot * 4;
+    let mut addr = LZ4_HASH + slot * 4;
     mem_write_u8(addr,     val % 256);
     mem_write_u8(addr + 1, (val / 256) % 256);
     mem_write_u8(addr + 2, (val / 65536) % 256);
@@ -82,7 +82,7 @@ fn _lz4_hash_set(slot, val) {
 }
 
 fn _lz4_hash_clear() {
-    let total = LZ4_HASH_SZ * 4;
+    let mut total = LZ4_HASH_SZ * 4;
     mem_zero(LZ4_HASH, total);
     return 0;
 }
@@ -119,12 +119,12 @@ fn lz4_compress_mem(src, slen, dst) {
         let mut match_len = 0;
 
         if sp + 4 <= slen {
-            let slot = _lz4_hash4(src, sp);
+            let mut slot = _lz4_hash4(src, sp);
             let candidate = _lz4_hash_get(slot);
             _lz4_hash_set(slot, sp);
 
             if candidate > 0 {
-                let off = sp - candidate;
+                let mut off = sp - candidate;
                 if off > 0 {
                     if off <= 65535 {
                         // Count match length
@@ -153,7 +153,7 @@ fn lz4_compress_mem(src, slen, dst) {
             // Emit sequence: literals from anchor..sp, then match
             let litlen = sp - anchor;
             let matchlen_enc = match_len - LZ4_MIN_MATCH;
-            let off = sp - match_pos;
+            let mut off = sp - match_pos;
 
             // Token byte
             let lit_nibble = litlen;
@@ -252,7 +252,7 @@ fn lz4_decompress_mem(src, slen, dst, dlim) {
 
         // Offset (little-endian 2 bytes)
         if sp + 1 >= slen { return 0 - 1; }
-        let off = mem_read_u8(src + sp) + mem_read_u8(src + sp + 1) * 256;
+        let mut off = mem_read_u8(src + sp) + mem_read_u8(src + sp + 1) * 256;
         sp = sp + 2;
         if off == 0 { return 0 - 1; }
         if off > dp { return 0 - 1; }
@@ -289,7 +289,7 @@ fn lz4_decompress_mem(src, slen, dst, dlim) {
 fn lz4_compress_file(inpath, outpath) {
     let fd_in = vfs_open(inpath, 0);
     if fd_in < 0 { print("lz4c: cannot open " + inpath); return 0 - 1; }
-    let n = vfs_read(fd_in, LZ4_IN_BUF, LZ4_BUF_SZ);
+    let mut n = vfs_read(fd_in, LZ4_IN_BUF, LZ4_BUF_SZ);
     vfs_close(fd_in);
     if n <= 0 { print("lz4c: empty input"); return 0 - 1; }
     let clen = lz4_compress_mem(LZ4_IN_BUF, n, LZ4_OUT_BUF);
@@ -307,7 +307,7 @@ fn lz4_compress_file(inpath, outpath) {
 fn lz4_decompress_file(inpath, outpath) {
     let fd_in = vfs_open(inpath, 0);
     if fd_in < 0 { print("lz4d: cannot open " + inpath); return 0 - 1; }
-    let n = vfs_read(fd_in, LZ4_IN_BUF, LZ4_BUF_SZ);
+    let mut n = vfs_read(fd_in, LZ4_IN_BUF, LZ4_BUF_SZ);
     vfs_close(fd_in);
     if n <= 0 { print("lz4d: empty input"); return 0 - 1; }
     let dlen = lz4_decompress_mem(LZ4_IN_BUF, n, LZ4_OUT_BUF, LZ4_BUF_SZ);

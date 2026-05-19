@@ -65,7 +65,7 @@ fn task_init() {
 
     // Create task 0: the kernel idle task (currently running)
     // Idle task is RUNNING, NOT in the heap — it's the fallback
-    let addr = task_addr(0);
+    let mut addr = task_addr(0);
     mem_write_u64(addr + 0, STATE_RUNNING);
     mem_write_u64(addr + 8, 0);  // pid = 0
     _tc = 1;
@@ -80,8 +80,8 @@ fn task_create(entry_point, stack_top) {
     // Find a free slot
     let mut i = 0;
     while i < MAX_TASKS {
-        let addr = task_addr(i);
-        let state = mem_read_u64(addr + 0);
+        let mut addr = task_addr(i);
+        let mut state = mem_read_u64(addr + 0);
         if state == STATE_FREE || state == STATE_DEAD {
             let pid = next_pid;
             next_pid = next_pid + 1;
@@ -111,7 +111,7 @@ fn task_create(entry_point, stack_top) {
 fn task_kill(pid) {
     let mut i = 0;
     while i < MAX_TASKS {
-        let addr = task_addr(i);
+        let mut addr = task_addr(i);
         let task_pid = mem_read_u64(addr + 8);
         if task_pid == pid {
             mem_write_u64(addr + 0, STATE_FREE);
@@ -140,7 +140,7 @@ let mut _rq_heap = [];    // run-queue min-heap
 let mut _rq_size = 0;
 
 fn _rq_swap(a, b) {
-    let tmp = _rq_heap[a];
+    let mut tmp = _rq_heap[a];
     set_at(_rq_heap, a, _rq_heap[b]);
     set_at(_rq_heap, b, tmp);
     return 0;
@@ -312,7 +312,7 @@ fn context_switch(next_idx) {
 // === Scheduler Entry Point ===
 // Called from timer ISR or when a task voluntarily yields/blocks.
 fn schedule() {
-    let next = task_pick_next();
+    let mut next = task_pick_next();
     if next != current_task {
         context_switch(next);
     }
@@ -321,7 +321,7 @@ fn schedule() {
 
 // Yield: current task voluntarily gives up CPU
 fn task_yield() {
-    let addr = task_addr(current_task);
+    let mut addr = task_addr(current_task);
     let vrt = mem_read_u64(addr + 168);
     // Bump vruntime slightly so other tasks get a chance
     mem_write_u64(addr + 168, vrt + 1);
@@ -331,7 +331,7 @@ fn task_yield() {
 
 // Block: put current task to sleep (e.g., waiting for I/O, pipe, sleep)
 fn task_block(reason) {
-    let addr = task_addr(current_task);
+    let mut addr = task_addr(current_task);
     mem_write_u64(addr + 0, STATE_BLOCKED);
     // reason is stored for debugging (not strictly needed)
     // Schedule another task immediately
@@ -341,8 +341,8 @@ fn task_block(reason) {
 
 // Unblock: wake up a specific task by index
 fn task_unblock(task_idx) {
-    let addr = task_addr(task_idx);
-    let state = mem_read_u64(addr + 0);
+    let mut addr = task_addr(task_idx);
+    let mut state = mem_read_u64(addr + 0);
     if state == STATE_BLOCKED {
         mem_write_u64(addr + 0, STATE_READY);
         let vrt = mem_read_u64(addr + 168);
@@ -357,7 +357,7 @@ fn task_unblock(task_idx) {
 // Exit: terminate current task
 // Process enters ZOMBIE state until parent calls wait()
 fn task_exit(exit_code) {
-    let addr = task_addr(current_task);
+    let mut addr = task_addr(current_task);
     mem_write_u64(addr + 232, exit_code);
 
     // Reparent orphan children to task 0 (init)
@@ -400,8 +400,8 @@ fn task_exit(exit_code) {
 fn task_find_by_pid(pid) {
     let mut i = 0;
     while i < MAX_TASKS {
-        let addr = task_addr(i);
-        let state = mem_read_u64(addr);
+        let mut addr = task_addr(i);
+        let mut state = mem_read_u64(addr);
         if state != STATE_FREE && mem_read_u64(addr + 8) == pid {
             return i;
         }
@@ -412,8 +412,8 @@ fn task_find_by_pid(pid) {
 
 // Reap a ZOMBIE task: collect exit code and free slot
 fn task_reap(task_idx) {
-    let addr = task_addr(task_idx);
-    let state = mem_read_u64(addr);
+    let mut addr = task_addr(task_idx);
+    let mut state = mem_read_u64(addr);
     if state != STATE_ZOMBIE { return 0 - 1; }
     let exit_code = mem_read_u64(addr + 232);
     mem_write_u64(addr, STATE_FREE);
@@ -423,8 +423,8 @@ fn task_reap(task_idx) {
 
 // Get task info for debugging
 fn task_info(task_idx) {
-    let addr = task_addr(task_idx);
-    let state = mem_read_u64(addr + 0);
+    let mut addr = task_addr(task_idx);
+    let mut state = mem_read_u64(addr + 0);
     let pid = mem_read_u64(addr + 8);
     let vrt = mem_read_u64(addr + 168);
     let ticks = mem_read_u64(addr + 192);
@@ -440,8 +440,8 @@ fn task_list() {
     let mut i = 0;
     let mut active = 0;
     while i < MAX_TASKS {
-        let addr = task_addr(i);
-        let state = mem_read_u64(addr + 0);
+        let mut addr = task_addr(i);
+        let mut state = mem_read_u64(addr + 0);
         if state != STATE_FREE {
             print("  " + task_info(i));
             active = active + 1;
@@ -456,7 +456,7 @@ fn task_list() {
 // Timer tick handler (called from timer ISR)
 // Increments vruntime of current task, checks if preemption needed
 fn task_timer_tick() {
-    let addr = task_addr(current_task);
+    let mut addr = task_addr(current_task);
     let vrt = mem_read_u64(addr + 168);
     let nice = mem_read_u64(addr + 176);
     let weight = nice_to_weight(nice);
@@ -465,7 +465,7 @@ fn task_timer_tick() {
     mem_write_u64(addr + 192, mem_read_u64(addr + 192) + 1);  // ticks++
 
     // Check if we should preempt
-    let next = task_pick_next();
+    let mut next = task_pick_next();
     if next != current_task {
         context_switch(next);
     }
@@ -477,7 +477,7 @@ fn task_count_active() {
     let mut count = 0;
     let mut i = 0;
     while i < MAX_TASKS {
-        let state = mem_read_u64(task_addr(i));
+        let mut state = mem_read_u64(task_addr(i));
         if state != STATE_FREE { count = count + 1; }
         i = i + 1;
     }
@@ -486,8 +486,8 @@ fn task_count_active() {
 
 // Get task name string from task name_ptr field
 fn task_name(idx) {
-    let addr = task_addr(idx);
-    let state = mem_read_u64(addr);
+    let mut addr = task_addr(idx);
+    let mut state = mem_read_u64(addr);
     if state == STATE_FREE { return ""; }
     // Name stored inline at offset 32 (16 bytes of GPR context before real name)
     // Use a fallback: read from addr+184 if non-zero, else return "task<N>"
@@ -506,8 +506,8 @@ fn task_list_all() {
     let state_names = ["free", "ready", "running", "blocked", "dead", "zombie"];
     let mut i = 0;
     while i < MAX_TASKS {
-        let addr = task_addr(i);
-        let state = mem_read_u64(addr);
+        let mut addr = task_addr(i);
+        let mut state = mem_read_u64(addr);
         if state != STATE_FREE {
             let pid = mem_read_u64(addr + 8);
             let sname = "unknown";

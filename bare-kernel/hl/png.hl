@@ -130,13 +130,13 @@ fn _png_paeth(a, b, c) {
 
 // Apply PNG filter reconstruction for one scanline
 fn _png_unfilter_row(ftype, row, prev_row, stride, bpp) {
-    let result = [];
-    let i = 0;
+    let mut result = [];
+    let mut i = 0;
     while i < stride {
         let raw = row[i];
-        let a = 0;   // left
-        let b = 0;   // above
-        let c = 0;   // above-left
+        let mut a = 0;   // left
+        let mut b = 0;   // above
+        let mut c = 0;   // above-left
         if i >= bpp { a = result[i - bpp]; }
         if len(prev_row) > i { b = prev_row[i]; }
         if i >= bpp { if len(prev_row) > i - bpp { c = prev_row[i - bpp]; } }
@@ -156,12 +156,12 @@ fn _png_unfilter_row(ftype, row, prev_row, stride, bpp) {
 // Simplified DEFLATE decompression (raw stored blocks, type 00)
 fn _png_deflate_decompress(compressed, start, comp_len) {
     let output = [];
-    let pos = start;
+    let mut pos = start;
     let out_idx = 0;
     let max_out = PNG_MAX_WIDTH * PNG_MAX_HEIGHT * 4 + PNG_MAX_HEIGHT;
     while pos < start + comp_len {
         if out_idx >= max_out { pos = start + comp_len; }
-        let byte = compressed[pos];
+        let mut byte = compressed[pos];
         // zlib header: skip 2 bytes (CMF + FLG)
         if pos == start {
             pos = pos + 2;   // skip zlib header
@@ -174,7 +174,7 @@ fn _png_deflate_decompress(compressed, start, comp_len) {
             // Stored block: skip 4 bytes LEN+NLEN then copy
             let blen = compressed[pos] + compressed[pos+1] * 256;
             pos = pos + 4;
-            let bi = 0;
+            let mut bi = 0;
             while bi < blen {
                 if pos + bi < start + comp_len {
                     set_at(output, out_idx, compressed[pos + bi]);
@@ -203,7 +203,7 @@ fn _png_reconstruct_pixels(idat_raw) {
     let row_len = stride + 1;  // +1 for filter byte
     let pixels = [];
     let prev_row = [];
-    let i = 0;
+    let mut i = 0;
     while i < stride { set_at(prev_row, i, 0); i = i + 1; }
     let row_idx = 0;
     while row_idx < png_height {
@@ -213,7 +213,7 @@ fn _png_reconstruct_pixels(idat_raw) {
             let ftype = idat_raw[row_start];
             // Extract row bytes
             let row_bytes = [];
-            let bi = 0;
+            let mut bi = 0;
             while bi < stride {
                 let src_pos = row_start + 1 + bi;
                 if src_pos < len(idat_raw) {
@@ -240,14 +240,14 @@ fn _png_reconstruct_pixels(idat_raw) {
                     set_at(pixels, out_base + 2, unfiltered[pi * 4 + 2]);
                     set_at(pixels, out_base + 3, unfiltered[pi * 4 + 3]);
                 } else if png_color_type == PNG_CT_GRAYSCALE {
-                    let g = unfiltered[pi];
+                    let mut g = unfiltered[pi];
                     set_at(pixels, out_base,     g);
                     set_at(pixels, out_base + 1, g);
                     set_at(pixels, out_base + 2, g);
                     set_at(pixels, out_base + 3, 255);
                 } else if png_color_type == PNG_CT_INDEXED {
                     let pal_idx = unfiltered[pi] * 3;
-                    let r = 128; let g = 128; let b = 128;
+                    let mut r = 128; let mut g = 128; let mut b = 128;
                     if pal_idx + 2 < png_palette_size {
                         r = png_palette[pal_idx];
                         g = png_palette[pal_idx + 1];
@@ -273,7 +273,7 @@ fn png_decode(data) {
     if data_len < 8 { return 1; }
     // Signature check
     if _png_check_signature(data) == 0 { return 2; }
-    let pos = 8;
+    let mut pos = 8;
     let idat_data = [];
     let idat_len  = 0;
     let got_ihdr  = 0;
@@ -304,7 +304,7 @@ fn png_decode(data) {
             }
             png_palette_size = chunk_len;
         } else if chunk_type == "IDAT" {
-            let ci = 0;
+            let mut ci = 0;
             while ci < chunk_len {
                 set_at(idat_data, idat_len, data[chunk_data_pos + ci]);
                 idat_len = idat_len + 1;
@@ -313,11 +313,11 @@ fn png_decode(data) {
         } else if chunk_type == "tEXt" {
             if png_text_count < 8 {
                 let key = "";
-                let val = "";
+                let mut val = "";
                 let in_key = 1;
-                let ci = 0;
+                let mut ci = 0;
                 while ci < chunk_len {
-                    let c = data[chunk_data_pos + ci];
+                    let mut c = data[chunk_data_pos + ci];
                     if c == 0 { in_key = 0; }
                     else if in_key == 1 { key = key + to_char(c); }
                     else { val = val + to_char(c); }
@@ -347,7 +347,7 @@ fn png_get_pixel(x, y) {
     if png_loaded == 0 { return [0, 0, 0, 0]; }
     if x >= png_width  { return [0, 0, 0, 0]; }
     if y >= png_height { return [0, 0, 0, 0]; }
-    let base = (y * png_width + x) * 4;
+    let mut base = (y * png_width + x) * 4;
     if base + 3 >= len(png_pixel_data) { return [0, 0, 0, 0]; }
     return [png_pixel_data[base], png_pixel_data[base+1],
             png_pixel_data[base+2], png_pixel_data[base+3]];
@@ -371,10 +371,10 @@ fn png_show_ascii(max_cols, max_rows) {
     if png_loaded == 0 { print("png: no image loaded"); return 0; }
     let cols = png_width;  if cols > max_cols { cols = max_cols; }
     let rows = png_height; if rows > max_rows { rows = max_rows; }
-    let y = 0;
+    let mut y = 0;
     while y < rows {
         let line = "";
-        let x = 0;
+        let mut x = 0;
         while x < cols {
             let pix = png_get_pixel(x, y);
             let lum = (pix[0] * 299 + pix[1] * 587 + pix[2] * 114) / 1000;
@@ -414,11 +414,11 @@ fn png_test() {
                 0, 0, 0, 0];       // CRC
     // Combine
     let png_data = sig;
-    let i = 0;
+    let mut i = 0;
     while i < len(ihdr) { set_at(png_data, 8 + i, ihdr[i]); i = i + 1; }
     i = 0;
     while i < len(iend) { set_at(png_data, 8 + len(ihdr) + i, iend[i]); i = i + 1; }
-    let result = png_decode(png_data);
+    let mut result = png_decode(png_data);
     let info = png_info();
     return "png: decode=" + to_string(result) + " " + info + " [RFC 2083 ok]";
 }

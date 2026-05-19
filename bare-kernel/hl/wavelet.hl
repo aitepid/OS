@@ -33,7 +33,7 @@ let wv_energy_out = 0;  // transform energy (should equal input for lossless)
 let wv_initialized = 0;
 
 fn wavelet_init() {
-    let i = 0;
+    let mut i = 0;
     while i < WAVELET_MAX_LEN {
         set_at(wv_signal, i, 0);
         set_at(wv_coeffs, i, 0);
@@ -52,7 +52,7 @@ fn wavelet_init() {
 fn wavelet_load(data, n) {
     if n > WAVELET_MAX_LEN { n = WAVELET_MAX_LEN; }
     wv_len = n;
-    let i = 0;
+    let mut i = 0;
     while i < n { set_at(wv_coeffs, i, data[i]); i = i + 1; }
     // Compute input energy
     wv_energy_in = 0;
@@ -68,10 +68,10 @@ fn wavelet_load(data, n) {
 // Output: first n/2 = averages (approximation), last n/2 = differences (detail)
 fn _wv_haar_forward_step(n) {
     let half = n / 2;
-    let i = 0;
+    let mut i = 0;
     while i < half {
-        let a = wv_coeffs[2 * i];
-        let b = wv_coeffs[2 * i + 1];
+        let mut a = wv_coeffs[2 * i];
+        let mut b = wv_coeffs[2 * i + 1];
         // avg = (a + b) / √2,  diff = (a - b) / √2  (scaled)
         set_at(wv_temp, i,        (a + b) * WAVELET_SCALE / WAVELET_SQRT2);
         set_at(wv_temp, half + i, (a - b) * WAVELET_SCALE / WAVELET_SQRT2);
@@ -85,7 +85,7 @@ fn _wv_haar_forward_step(n) {
 // One-level Haar inverse step on length-n prefix of wv_coeffs
 fn _wv_haar_inverse_step(n) {
     let half = n / 2;
-    let i = 0;
+    let mut i = 0;
     while i < half {
         let avg  = wv_coeffs[i];
         let diff = wv_coeffs[half + i];
@@ -103,7 +103,7 @@ fn _wv_haar_inverse_step(n) {
 fn wavelet_forward(levels) {
     if levels > WAVELET_MAX_LEVELS { levels = WAVELET_MAX_LEVELS; }
     wv_levels = levels;
-    let n = wv_len;
+    let mut n = wv_len;
     let l = 0;
     while l < levels {
         if n < 2 { l = levels; }
@@ -112,7 +112,7 @@ fn wavelet_forward(levels) {
     }
     // Compute output energy
     wv_energy_out = 0;
-    let i = 0;
+    let mut i = 0;
     while i < wv_len {
         wv_energy_out = wv_energy_out + (wv_coeffs[i] * wv_coeffs[i]) / WAVELET_SCALE;
         i = i + 1;
@@ -122,7 +122,7 @@ fn wavelet_forward(levels) {
 
 // Full multi-level inverse DWT
 fn wavelet_inverse(levels) {
-    let n = wv_len;
+    let mut n = wv_len;
     // Find starting size after forward transform
     let l = 0;
     while l < levels { n = n / 2; l = l + 1; }
@@ -144,9 +144,9 @@ fn wavelet_threshold(threshold) {
     let approx_size = wv_len;
     let l = 0;
     while l < wv_levels { approx_size = approx_size / 2; l = l + 1; }
-    let i = approx_size;  // threshold only detail coefficients
+    let mut i = approx_size;  // threshold only detail coefficients
     while i < wv_len {
-        let v = wv_coeffs[i];
+        let mut v = wv_coeffs[i];
         if v < 0 { v = -v; }
         if v < threshold { set_at(wv_coeffs, i, 0); zeroed = zeroed + 1; }
         i = i + 1;
@@ -157,7 +157,7 @@ fn wavelet_threshold(threshold) {
 // Compute compression ratio × 1000 (non-zero coefficients / total)
 fn wavelet_compression_ratio() {
     let nonzero = 0;
-    let i = 0;
+    let mut i = 0;
     while i < wv_len {
         if wv_coeffs[i] != 0 { nonzero = nonzero + 1; }
         i = i + 1;
@@ -169,11 +169,11 @@ fn wavelet_compression_ratio() {
 // matrix: flat row-major array of length n×n stored in wv_coeffs
 fn wavelet_2d_forward(n, levels) {
     // Row-wise transform
-    let r = 0;
+    let mut r = 0;
     while r < n {
         let row_start = r * n;
         // Copy row to temp, apply DWT, copy back
-        let i = 0;
+        let mut i = 0;
         while i < n { set_at(wv_temp, i, wv_coeffs[row_start + i]); i = i + 1; }
         // In-place: repoint wv_coeffs temporarily
         i = 0;

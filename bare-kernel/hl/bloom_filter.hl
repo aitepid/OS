@@ -41,7 +41,7 @@ fn bloom_init(k, capacity) {
     bloom_capacity = capacity;
     bloom_count    = 0;
     // Zero bit-array
-    let i = 0;
+    let mut i = 0;
     while i < BLOOM_WORDS {
         set_at(bloom_bits, i, 0);
         i = i + 1;
@@ -68,16 +68,16 @@ fn bloom_init(k, capacity) {
 fn _bloom_hash(item, seed) {
     // FNV-like: h = (h * FNV_PRIME + byte) mod BLOOM_BITS
     // We treat the string as a sequence of character codes
-    let h = 2166136261;  // FNV offset basis (modular)
+    let mut h = 2166136261;  // FNV offset basis (modular)
     h = h - ((h / 1000000) * 1000000);  // reduce to fit arithmetic
     let fnv_prime = 16777619;
     // Mix seed into initial hash
     h = (h + seed * 6971) - (((h + seed * 6971) / BLOOM_BITS) * BLOOM_BITS);
     // Hash each character of the item string
-    let i = 0;
+    let mut i = 0;
     let slen = len(item);
     while i < slen {
-        let c = char_code(item, i);
+        let mut c = char_code(item, i);
         h = h * fnv_prime + c;
         // Keep h in range [0, BLOOM_BITS) via mod
         h = h - ((h / BLOOM_BITS) * BLOOM_BITS);
@@ -89,7 +89,7 @@ fn _bloom_hash(item, seed) {
 
 // Alternative: hash an integer key
 fn _bloom_hash_int(key, seed) {
-    let h = key * 2654435769 + seed * 6971 + 1013904223;
+    let mut h = key * 2654435769 + seed * 6971 + 1013904223;
     h = h - ((h / BLOOM_BITS) * BLOOM_BITS);
     if h < 0 { h = -h; }
     return h - ((h / BLOOM_BITS) * BLOOM_BITS);
@@ -99,10 +99,10 @@ fn _bloom_hash_int(key, seed) {
 fn _bloom_get_bit(pos) {
     let word_idx = pos / 32;
     let bit_pos  = pos - (word_idx * 32);
-    let word = bloom_bits[word_idx];
+    let mut word = bloom_bits[word_idx];
     // Extract bit: word >> bit_pos & 1 (arithmetic simulation)
     let divisor = 1;
-    let p = 0;
+    let mut p = 0;
     while p < bit_pos { divisor = divisor * 2; p = p + 1; }
     let shifted = word / divisor;
     return shifted - ((shifted / 2) * 2);  // & 1
@@ -112,10 +112,10 @@ fn _bloom_get_bit(pos) {
 fn _bloom_set_bit(pos) {
     let word_idx = pos / 32;
     let bit_pos  = pos - (word_idx * 32);
-    let word = bloom_bits[word_idx];
+    let mut word = bloom_bits[word_idx];
     // Set bit: word | (1 << bit_pos)
-    let mask = 1;
-    let p = 0;
+    let mut mask = 1;
+    let mut p = 0;
     while p < bit_pos { mask = mask * 2; p = p + 1; }
     // Check if bit already set
     let already = (word / mask) - (((word / mask) / 2) * 2);
@@ -127,9 +127,9 @@ fn _bloom_set_bit(pos) {
 fn _bloom_clear_bit(pos) {
     let word_idx = pos / 32;
     let bit_pos  = pos - (word_idx * 32);
-    let word = bloom_bits[word_idx];
-    let mask = 1;
-    let p = 0;
+    let mut word = bloom_bits[word_idx];
+    let mut mask = 1;
+    let mut p = 0;
     while p < bit_pos { mask = mask * 2; p = p + 1; }
     let already = (word / mask) - (((word / mask) / 2) * 2);
     if already == 1 { set_at(bloom_bits, word_idx, word - mask); }
@@ -138,9 +138,9 @@ fn _bloom_clear_bit(pos) {
 
 // Insert item (string key)
 fn bloom_add(item) {
-    let i = 0;
+    let mut i = 0;
     while i < bloom_k {
-        let pos = _bloom_hash(item, i * 997 + 1);
+        let mut pos = _bloom_hash(item, i * 997 + 1);
         _bloom_set_bit(pos);
         // Counting filter: increment counter
         let cnt = bloom_counters[pos];
@@ -153,9 +153,9 @@ fn bloom_add(item) {
 
 // Insert integer key
 fn bloom_add_int(key) {
-    let i = 0;
+    let mut i = 0;
     while i < bloom_k {
-        let pos = _bloom_hash_int(key, i * 997 + 1);
+        let mut pos = _bloom_hash_int(key, i * 997 + 1);
         _bloom_set_bit(pos);
         let cnt = bloom_counters[pos];
         if cnt < 15 { set_at(bloom_counters, pos, cnt + 1); }
@@ -167,9 +167,9 @@ fn bloom_add_int(key) {
 
 // Query membership (false negatives impossible; false positives possible)
 fn bloom_query(item) {
-    let i = 0;
+    let mut i = 0;
     while i < bloom_k {
-        let pos = _bloom_hash(item, i * 997 + 1);
+        let mut pos = _bloom_hash(item, i * 997 + 1);
         if _bloom_get_bit(pos) == 0 { return 0; }
         i = i + 1;
     }
@@ -178,9 +178,9 @@ fn bloom_query(item) {
 
 // Query integer key
 fn bloom_query_int(key) {
-    let i = 0;
+    let mut i = 0;
     while i < bloom_k {
-        let pos = _bloom_hash_int(key, i * 997 + 1);
+        let mut pos = _bloom_hash_int(key, i * 997 + 1);
         if _bloom_get_bit(pos) == 0 { return 0; }
         i = i + 1;
     }
@@ -191,9 +191,9 @@ fn bloom_query_int(key) {
 fn bloom_delete(item) {
     // First verify item is present
     if bloom_query(item) == 0 { return 1; }
-    let i = 0;
+    let mut i = 0;
     while i < bloom_k {
-        let pos = _bloom_hash(item, i * 997 + 1);
+        let mut pos = _bloom_hash(item, i * 997 + 1);
         let cnt = bloom_counters[pos];
         if cnt > 0 {
             set_at(bloom_counters, pos, cnt - 1);
@@ -207,11 +207,11 @@ fn bloom_delete(item) {
 
 // Count set bits (population count — fill estimation)
 fn bloom_popcount() {
-    let total = 0;
-    let w = 0;
+    let mut total = 0;
+    let mut w = 0;
     while w < BLOOM_WORDS {
-        let word = bloom_bits[w];
-        let b = 0;
+        let mut word = bloom_bits[w];
+        let mut b = 0;
         while b < 32 {
             let divisor = 1;
             let p2 = 0;
@@ -232,7 +232,7 @@ fn bloom_fp_rate() {
     let fill_ratio = (filled * 1000) / BLOOM_BITS;  // per-mille
     // (fill_ratio/1000)^k approximated iteratively
     let fpr = fill_ratio;
-    let i = 1;
+    let mut i = 1;
     while i < bloom_k {
         fpr = (fpr * fill_ratio) / 1000;
         i = i + 1;
@@ -242,14 +242,14 @@ fn bloom_fp_rate() {
 
 // Merge two bloom filters (union — set bits from other into self)
 fn bloom_union(other_bits) {
-    let i = 0;
+    let mut i = 0;
     while i < BLOOM_WORDS {
-        let a = bloom_bits[i];
-        let b = other_bits[i];
+        let mut a = bloom_bits[i];
+        let mut b = other_bits[i];
         // a | b via arithmetic: for each bit, set if either is set
-        let result = 0;
-        let mask = 1;
-        let p = 0;
+        let mut result = 0;
+        let mut mask = 1;
+        let mut p = 0;
         while p < 32 {
             let ba = (a / mask) - (((a / mask) / 2) * 2);
             let bb = (b / mask) - (((b / mask) / 2) * 2);

@@ -31,7 +31,7 @@ let db_idx_n     = array(8, 0);    // count of indexed entries per table
 let db_scan_count = 0;   // last select scan length
 
 fn dbeng_init() {
-    let i = 0;
+    let mut i = 0;
     while i < DB_MAXTABLES {
         set_at(db_nrows,   i, 0);
         set_at(db_ncols,   i, 0);
@@ -53,7 +53,7 @@ fn db_create_table(tid, ncols) {
 // Write 4 columns (extend to more via db_set_col)
 fn dbe_insert(tid, c0, c1, c2, c3) {
     let rid  = db_nrows[tid];
-    let base = tid * DB_TBL_STRIDE + rid * DB_ROW_STRIDE;
+    let mut base = tid * DB_TBL_STRIDE + rid * DB_ROW_STRIDE;
     set_at(db_rows, base,     c0);
     set_at(db_rows, base + 1, c1);
     set_at(db_rows, base + 2, c2);
@@ -61,7 +61,7 @@ fn dbe_insert(tid, c0, c1, c2, c3) {
     set_at(db_nrows, tid, rid + 1);
     // update hash index if present
     if db_has_idx[tid] == 1 {
-        let slot = tid * DB_MAXROWS + rid;
+        let mut slot = tid * DB_MAXROWS + rid;
         set_at(db_idx_key,  slot, c0);
         set_at(db_idx_rid,  slot, rid);
         set_at(db_idx_used, slot, 1);
@@ -71,16 +71,16 @@ fn dbe_insert(tid, c0, c1, c2, c3) {
 }
 
 fn db_get_col(tid, rid, col) {
-    let base = tid * DB_TBL_STRIDE + rid * DB_ROW_STRIDE;
+    let mut base = tid * DB_TBL_STRIDE + rid * DB_ROW_STRIDE;
     return db_rows[base + col];
 }
 
 fn _db_idx_lookup(tid, key) {
     // Linear scan over table's index slots
-    let base = tid * DB_MAXROWS;
+    let mut base = tid * DB_MAXROWS;
     let i    = 0;
     while i < db_nrows[tid] {
-        let slot = base + i;
+        let mut slot = base + i;
         if db_idx_used[slot] == 1 {
             if db_idx_key[slot] == key {
                 return db_idx_rid[slot];
@@ -94,7 +94,7 @@ fn _db_idx_lookup(tid, key) {
 fn db_create_index(tid) {
     // Build hash index from existing rows
     set_at(db_has_idx, tid, 1);
-    let base = tid * DB_MAXROWS;
+    let mut base = tid * DB_MAXROWS;
     let i    = 0;
     while i < db_nrows[tid] {
         let slot  = base + i;
@@ -123,7 +123,7 @@ fn db_select_eq(tid, col, val) {
     let i    = 0;
     db_scan_count = n;
     while i < n {
-        let v = db_get_col(tid, i, col);
+        let mut v = db_get_col(tid, i, col);
         if v == val {
             return i;
         }
@@ -135,11 +135,11 @@ fn db_select_eq(tid, col, val) {
 fn db_select_range(tid, col, lo, hi) {
     // Returns count of rows with lo <= col_val <= hi
     let n     = db_nrows[tid];
-    let count = 0;
+    let mut count = 0;
     let i     = 0;
     db_scan_count = n;
     while i < n {
-        let v = db_get_col(tid, i, col);
+        let mut v = db_get_col(tid, i, col);
         let ok = 0;
         if v >= lo { if v <= hi { ok = 1; } }
         if ok == 1 { count += 1; }
@@ -150,7 +150,7 @@ fn db_select_range(tid, col, lo, hi) {
 
 fn db_delete_row(tid, rid) {
     // Mark row deleted by setting all cols to DB_NULL
-    let base = tid * DB_TBL_STRIDE + rid * DB_ROW_STRIDE;
+    let mut base = tid * DB_TBL_STRIDE + rid * DB_ROW_STRIDE;
     let j    = 0;
     while j < DB_ROW_STRIDE {
         set_at(db_rows, base + j, DB_NULL);
@@ -158,19 +158,19 @@ fn db_delete_row(tid, rid) {
     }
     // invalidate index entry
     if db_has_idx[tid] == 1 {
-        let slot = tid * DB_MAXROWS + rid;
+        let mut slot = tid * DB_MAXROWS + rid;
         set_at(db_idx_used, slot, 0);
     }
     return 0;
 }
 
 fn db_update_col(tid, rid, col, newval) {
-    let base = tid * DB_TBL_STRIDE + rid * DB_ROW_STRIDE;
+    let mut base = tid * DB_TBL_STRIDE + rid * DB_ROW_STRIDE;
     set_at(db_rows, base + col, newval);
     // rebuild index entry if col-0
     if col == 0 {
         if db_has_idx[tid] == 1 {
-            let slot = tid * DB_MAXROWS + rid;
+            let mut slot = tid * DB_MAXROWS + rid;
             set_at(db_idx_key, slot, newval);
         }
     }
@@ -179,7 +179,7 @@ fn db_update_col(tid, rid, col, newval) {
 
 fn db_explain(tid, col, use_index) {
     qp_init();
-    let n = db_nrows[tid];
+    let mut n = db_nrows[tid];
     let nd = 0;
     if use_index == 1 {
         nd = qp_scan(tid, n, 0, 1);
@@ -207,8 +207,8 @@ fn db_print_row(tid, rid) {
 }
 
 fn db_dump(tid) {
-    let n = db_nrows[tid];
-    let i = 0;
+    let mut n = db_nrows[tid];
+    let mut i = 0;
     print("db_dump table=" + to_string(tid) + " rows=" + to_string(n));
     while i < n {
         db_print_row(tid, i);
