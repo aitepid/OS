@@ -78,58 +78,58 @@ fn _uiclock_pad2(n) {
 
 // Decode unix timestamp → [y, m, d, h, min, sec]
 fn _uiclock_decode(unix) {
-    let sec  = unix % 60;
-    let tot_min = unix / 60;
-    let min  = tot_min % 60;
-    let tot_h = tot_min / 60;
-    let hour = tot_h % 24;
-    let days = tot_h / 24;
+    let mut sec = unix % 60;
+    let mut tot_min = unix / 60;
+    let mut min = tot_min % 60;
+    let mut tot_h = tot_min / 60;
+    let mut hour = tot_h % 24;
+    let mut days = tot_h / 24;
 
     // Days since 1970-01-01 → date
     let mut y = 1970;
     let mut d = days;
     let mut go = 1;
     while go == 1 {
-        let leap = 0;
-        let yr4  = y % 4;
-        let yr100 = y % 100;
-        let yr400 = y % 400;
+        let mut leap = 0;
+        let mut yr4 = y % 4;
+        let mut yr100 = y % 100;
+        let mut yr400 = y % 400;
         if yr4 == 0 {
             if yr100 == 0 {
                 if yr400 == 0 { leap = 1; }
             } else { leap = 1; }
         }
-        let ydays = 365 + leap;
+        let mut ydays = 365 + leap;
         if d >= ydays { d = d - ydays; y = y + 1; }
         else { go = 0; }
     }
-    let leap2 = 0;
-    let yr4b  = y % 4;
-    let yr100b = y % 100;
-    let yr400b = y % 400;
+    let mut leap2 = 0;
+    let mut yr4b = y % 4;
+    let mut yr100b = y % 100;
+    let mut yr400b = y % 400;
     if yr4b == 0 {
         if yr100b == 0 {
             if yr400b == 0 { leap2 = 1; }
         } else { leap2 = 1; }
     }
-    let mdays = [31, 28 + leap2, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let mut mdays = [31, 28 + leap2, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
     let mut mo = 1;
     let mut di = d;
     let mut go2 = 1;
     while go2 == 1 {
         if mo > 12 { go2 = 0; }
         else {
-            let md = mdays[mo - 1];
+            let mut md = mdays[mo - 1];
             if di >= md { di = di - md; mo = mo + 1; }
             else { go2 = 0; }
         }
     }
-    let day = di + 1;
+    let mut day = di + 1;
     return [y, mo, day, hour, min, sec];
 }
 
 fn uiclock_get_time_str() {
-    let unix = ntp_get_time();
+    let mut unix = ntp_get_time();
     if unix <= 0 { return "--:--:--"; }
     let mut t = _uiclock_decode(unix);
     let mut h = t[3];
@@ -138,16 +138,16 @@ fn uiclock_get_time_str() {
     if uiclock_mode_24h == 1 {
         return _uiclock_pad2(h) + ":" + _uiclock_pad2(m) + ":" + _uiclock_pad2(s);
     } else {
-        let h12 = h % 12;
+        let mut h12 = h % 12;
         if h12 == 0 { h12 = 12; }
-        let ampm = "AM";
+        let mut ampm = "AM";
         if h >= 12 { ampm = "PM"; }
         return _uiclock_pad2(h12) + ":" + _uiclock_pad2(m) + ":" + _uiclock_pad2(s) + " " + ampm;
     }
 }
 
 fn _uiclock_date_str() {
-    let unix = ntp_get_time();
+    let mut unix = ntp_get_time();
     if unix <= 0 { return "----/--/--"; }
     let mut t = _uiclock_decode(unix);
     return to_string(t[0]) + "-" + _uiclock_pad2(t[1]) + "-" + _uiclock_pad2(t[2]);
@@ -170,21 +170,21 @@ fn uiclock_draw() {
     ui_draw_rect(x, y, w, h, UICLOCK_FG);
 
     // Time string (large)
-    let tstr = uiclock_get_time_str();
+    let mut tstr = uiclock_get_time_str();
     uiclock_last_str = tstr;
     ui_draw_text(x + 18, y + 16, tstr, UICLOCK_FG);
 
     // Date string
-    let dstr = _uiclock_date_str();
+    let mut dstr = _uiclock_date_str();
     ui_draw_text(x + 34, y + 44, dstr, UICLOCK_DATE_FG);
 
     // Status bar
     ui_fill_rect(x, y + 62, w, 18, UICLOCK_SEL);
-    let mode_lbl = "24h";
+    let mut mode_lbl = "24h";
     if uiclock_mode_24h == 0 { mode_lbl = "12h"; }
     ui_draw_text(x + 6, y + 65, "[h]" + mode_lbl, UICLOCK_DATE_FG);
     if uiclock_alarm_h >= 0 {
-        let alm = "ALM:" + _uiclock_pad2(uiclock_alarm_h) + ":" + _uiclock_pad2(uiclock_alarm_m);
+        let mut alm = "ALM:" + _uiclock_pad2(uiclock_alarm_h) + ":" + _uiclock_pad2(uiclock_alarm_m);
         ui_draw_text(x + 90, y + 65, alm, 0xFF8800);
     } else {
         ui_draw_text(x + 90, y + 65, "no alarm", UICLOCK_DATE_FG);
@@ -229,9 +229,9 @@ fn uiclock_click(mx, my) {
 
 fn uiclock_tick() {
     if uiclock_is_open == 0 { return 0; }
-    let unix = ntp_get_time();
+    let mut unix = ntp_get_time();
     if unix <= 0 { return 0; }
-    let cur_sec = unix % 60;
+    let mut cur_sec = unix % 60;
     if cur_sec == uiclock_last_sec { return 0; }
     uiclock_last_sec = cur_sec;
     uiclock_draw();

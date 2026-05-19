@@ -63,7 +63,7 @@ fn pc_init() {
 }
 
 fn pc_add_counter(evt, umask) {
-    let id = pc_n;
+    let mut id = pc_n;
     set_at(pc_evt,   id, evt);
     set_at(pc_umask, id, umask);
     set_at(pc_en,    id, 1);
@@ -92,7 +92,7 @@ fn _pc_rdpmc(id) {
 fn pc_read(id) {
     // Read counter value, handle 48-bit wrap
     if pc_en[id] == 0 { return pc_prev[id]; }
-    let raw = _pc_rdpmc(id);
+    let mut raw = _pc_rdpmc(id);
     return raw;
 }
 
@@ -114,7 +114,7 @@ fn pc_snapshot() {
             set_at(pc_prev,  i, cur);
 
             // Accumulate to aggregates by event type
-            let evt = pc_evt[i];
+            let mut evt = pc_evt[i];
             if evt == PC_EVT_INST   { pc_total_inst   += d; }
             if evt == PC_EVT_LLC_MISS { pc_total_llc  += d; }
             if evt == PC_EVT_BR_MISS { pc_total_brmiss += d; }
@@ -170,10 +170,10 @@ fn pc_print_stats() {
 fn pc_test() {
     pc_init();
     // Configure 4 standard counters
-    let c_inst  = pc_add_counter(PC_EVT_INST,     0);
-    let c_cyc   = pc_add_counter(PC_EVT_CYCLES,   0);
-    let c_llc   = pc_add_counter(PC_EVT_LLC_MISS, 0);
-    let c_br    = pc_add_counter(PC_EVT_BR_MISS,  0);
+    let mut c_inst = pc_add_counter(PC_EVT_INST,     0);
+    let mut c_cyc = pc_add_counter(PC_EVT_CYCLES,   0);
+    let mut c_llc = pc_add_counter(PC_EVT_LLC_MISS, 0);
+    let mut c_br = pc_add_counter(PC_EVT_BR_MISS,  0);
 
     // Simulate PMU readings after "workload"
     set_at(pc_val, c_inst,  1000000);
@@ -192,8 +192,8 @@ fn pc_test() {
     pc_sample(c_inst, 0x401234);
     pc_sample(c_inst, 0x401500);
 
-    let ipc = pc_ipc();
-    let llc_rate = pc_llc_miss_rate();
+    let mut ipc = pc_ipc();
+    let mut llc_rate = pc_llc_miss_rate();
 
     print("pc_test: inst=" + to_string(pc_total_inst) + " cyc=" + to_string(pc_total_cycles));
     print("pc_test: IPC*100=" + to_string(ipc) + " LLC/1000=" + to_string(llc_rate));

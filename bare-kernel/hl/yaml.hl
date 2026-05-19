@@ -132,8 +132,8 @@ fn _yaml_detect_type(val) {
 fn _yaml_strip_quotes(s) {
     let mut n = len(s);
     if n < 2 { return s; }
-    let c0 = str_char_code(s, 0);
-    let cn = str_char_code(s, n - 1);
+    let mut c0 = str_char_code(s, 0);
+    let mut cn = str_char_code(s, n - 1);
     if c0 == 34 { if cn == 34 { return str_sub(s, 1, n - 1); } }
     if c0 == 39 { if cn == 39 { return str_sub(s, 1, n - 1); } }
     return s;
@@ -179,46 +179,46 @@ fn yaml_parse_str(s) {
     let mut line_start = 0;
     let mut li = 0;
     while li <= n {
-        let is_nl = 0;
+        let mut is_nl = 0;
         if li < n { if str_char_code(s, li) == 10 { is_nl = 1; } }
         if is_nl == 1 {
-            let line_raw = str_sub(s, line_start, li);
+            let mut line_raw = str_sub(s, line_start, li);
             line_start = li + 1;
-            let indent = _yaml_indent(line_raw);
-            let line = _yaml_trim(line_raw);
-            let ll = len(line);
+            let mut indent = _yaml_indent(line_raw);
+            let mut line = _yaml_trim(line_raw);
+            let mut ll = len(line);
             if ll > 0 {
-                let c0 = str_char_code(line, 0);
+                let mut c0 = str_char_code(line, 0);
                 if c0 == 35 { }   // '#' full-line comment — skip
                 else {
                     if c0 == 45 {   // '-' sequence item
                         if ll > 1 {
                             if str_char_code(line, 1) == 32 {
-                                let item_raw = _yaml_trim(str_sub(line, 2, ll));
-                                let item = _yaml_strip_quotes(item_raw);
-                                let key = "-" + to_string(yaml_seq_idx);
+                                let mut item_raw = _yaml_trim(str_sub(line, 2, ll));
+                                let mut item = _yaml_strip_quotes(item_raw);
+                                let mut key = "-" + to_string(yaml_seq_idx);
                                 yaml_seq_idx = yaml_seq_idx + 1;
                                 _yaml_store(key, item, _yaml_detect_type(item), indent);
                             }
                         }
                     } else {
                         // key: value  or  key:
-                        let colon_spc = str_find(line, ": ");
+                        let mut colon_spc = str_find(line, ": ");
                         if colon_spc > 0 {
-                            let key = _yaml_trim(str_sub(line, 0, colon_spc));
-                            let raw_val = _yaml_trim(str_sub(line, colon_spc + 2, ll));
+                            let mut key = _yaml_trim(str_sub(line, 0, colon_spc));
+                            let mut raw_val = _yaml_trim(str_sub(line, colon_spc + 2, ll));
                             // Strip trailing inline comment
                             let mut val_raw = raw_val;
-                            let hpos = str_find(raw_val, " #");
+                            let mut hpos = str_find(raw_val, " #");
                             if hpos > 0 { val_raw = _yaml_trim(str_sub(raw_val, 0, hpos)); }
                             let mut val = _yaml_strip_quotes(val_raw);
                             _yaml_store(key, val, _yaml_detect_type(val), indent);
                         } else {
                             // key: (block header — empty value)
-                            let colon_end = str_find(line, ":");
+                            let mut colon_end = str_find(line, ":");
                             if colon_end > 0 {
                                 if colon_end == ll - 1 {
-                                    let key = str_sub(line, 0, colon_end);
+                                    let mut key = str_sub(line, 0, colon_end);
                                     _yaml_store(key, "", "n", indent);
                                 }
                             }
@@ -237,7 +237,7 @@ fn yaml_parse_str(s) {
 // ============================================================
 
 fn yaml_load(path) {
-    let fd = vfs_open(path, 0);
+    let mut fd = vfs_open(path, 0);
     if fd < 0 { print("yaml: cannot open " + path); return 0 - 1; }
     let mut n = vfs_read(fd, YAML_BUF, YAML_BUF_SZ);
     vfs_close(fd);
@@ -249,7 +249,7 @@ fn yaml_load(path) {
         if b == 13 { i = i + 1; }
         else { text = text + str_from_code(b); i = i + 1; }
     }
-    let cnt = yaml_parse_str(text);
+    let mut cnt = yaml_parse_str(text);
     print("yaml: loaded " + path + " — " + to_string(cnt) + " entries");
     return cnt;
 }

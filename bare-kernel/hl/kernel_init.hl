@@ -14,7 +14,7 @@ fn kernel_main() {
     print("Initializing subsystems...");
 
     // === Phase 0b: Boot mode detection ===
-    let is_uefi = uefi_is_boot();
+    let mut is_uefi = uefi_is_boot();
     if is_uefi == 1 {
         print("  [ok] Boot: UEFI");
     } else {
@@ -81,9 +81,9 @@ fn kernel_main() {
     dhcp_discover();       // dhcp.hl -- IP address
     netfilter_init();      // netfilter.hl -- packet filter (INPUT/OUTPUT/FORWARD)
     // VirtIO-GPU: detect, init, and bridge to VESA framebuffer
-    let gpu_pci = gpu_detect();
+    let mut gpu_pci = gpu_detect();
     if len(gpu_pci) == 3 {
-        let gok = gpu_init(gpu_pci[0], gpu_pci[1], gpu_pci[2]);
+        let mut gok = gpu_init(gpu_pci[0], gpu_pci[1], gpu_pci[2]);
         if gok == 1 {
             vesa_gpu_mode(gpu_fb_base(), gpu_display_w, gpu_display_h);
             font_sync_fb();    // font: re-sync to new GPU-backed framebuffer
@@ -91,7 +91,7 @@ fn kernel_main() {
         }
     }
     // ext4: mount first AHCI SATA drive as root filesystem via VFS
-    let e4ok = vfs_mount_ext4("/", 0);
+    let mut e4ok = vfs_mount_ext4("/", 0);
     if e4ok == 1 {
         print("  [ok] ext4 root filesystem mounted via VFS");
     }
@@ -409,7 +409,7 @@ fn kernel_main() {
     // === Phase 8: ACPI + SMP + RTC ===
     power_init();          // power.hl -- ACPI tables
     smp_init();            // smp.hl -- boot APs
-    let boot_time = rtc_format_time();
+    let mut boot_time = rtc_format_time();
     print("  [ok] ACPI + SMP: " + to_string(smp_cpu_count()) + " core(s) | Boot Time: " + boot_time);
 
     // === Phase 9: Usermode + Security ===
@@ -422,7 +422,7 @@ fn kernel_main() {
 
     // === Phase 10: Firmware + GPT ===
     firmware_init();       // firmware.hl
-    let gpt_count = gpt_read();
+    let mut gpt_count = gpt_read();
     if gpt_count > 0 {
         print("  [ok] GPT: " + to_string(gpt_count) + " partition(s)");
     } else {

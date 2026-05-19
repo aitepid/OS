@@ -95,11 +95,11 @@ fn mime_part_body(idx) {
 fn _mime_extract_boundary(ctype) {
     let mut pos = str_find(ctype, "boundary=");
     if pos < 0 { return ""; }
-    let bstart = pos + 9;   // skip "boundary="
+    let mut bstart = pos + 9;   // skip "boundary="
     if bstart >= len(ctype) { return ""; }
-    let delim = str_char_code(ctype, bstart);
+    let mut delim = str_char_code(ctype, bstart);
     if delim == 34 {   // '"' quoted
-        let bend = str_find(str_sub(ctype, bstart + 1, len(ctype)), "\"");
+        let mut bend = str_find(str_sub(ctype, bstart + 1, len(ctype)), "\"");
         if bend < 0 { return ""; }
         return str_sub(ctype, bstart + 1, bstart + 1 + bend);
     }
@@ -122,11 +122,11 @@ fn _mime_extract_boundary(ctype) {
 fn mime_part_header(idx, key) {
     if idx < 0 { return ""; }
     if idx >= mime_part_count_n { return ""; }
-    let hdrs = mime_part_headers[idx];
-    let pattern = key + ":";
+    let mut hdrs = mime_part_headers[idx];
+    let mut pattern = key + ":";
     let mut pos = str_find(hdrs, pattern);
     if pos < 0 { return ""; }
-    let vstart = pos + len(pattern);
+    let mut vstart = pos + len(pattern);
     // Skip leading spaces
     while vstart < len(hdrs) {
         if str_char_code(hdrs, vstart) == 32 { vstart = vstart + 1; }
@@ -134,7 +134,7 @@ fn mime_part_header(idx, key) {
     }
     if vstart > len(hdrs) { vstart = vstart - len(hdrs) - 1; }
     // Find end of line
-    let nl = str_find(str_sub(hdrs, vstart, len(hdrs)), "\n");
+    let mut nl = str_find(str_sub(hdrs, vstart, len(hdrs)), "\n");
     let mut vend = len(hdrs);
     if nl >= 0 { vend = vstart + nl; }
     let mut val = str_sub(hdrs, vstart, vend);
@@ -155,21 +155,21 @@ fn mime_parse_str(s) {
     mime_clear();
     let mut n = len(s);
     // Find blank line separating headers from body
-    let hdr_end = str_find(s, "\n\n");
+    let mut hdr_end = str_find(s, "\n\n");
     if hdr_end < 0 { hdr_end = str_find(s, "\r\n\r\n"); }
     if hdr_end < 0 { return 0; }   // No body
 
-    let headers = str_sub(s, 0, hdr_end);
-    let body_start = hdr_end + 2;
+    let mut headers = str_sub(s, 0, hdr_end);
+    let mut body_start = hdr_end + 2;
     if str_char_code(s, hdr_end) == 13 { body_start = body_start + 2; }  // \r\n\r\n
-    let body = str_sub(s, body_start, n);
+    let mut body = str_sub(s, body_start, n);
 
     // Extract Content-Type to check for multipart
-    let ctype_pos = str_find(headers, "Content-Type:");
+    let mut ctype_pos = str_find(headers, "Content-Type:");
     if ctype_pos < 0 { ctype_pos = str_find(headers, "content-type:"); }
     if ctype_pos >= 0 {
-        let ct_start = ctype_pos + 13;
-        let ct_end = str_find(str_sub(headers, ct_start, len(headers)), "\n");
+        let mut ct_start = ctype_pos + 13;
+        let mut ct_end = str_find(str_sub(headers, ct_start, len(headers)), "\n");
         let mut ctype = "";
         if ct_end > 0 { ctype = str_sub(headers, ct_start, ct_start + ct_end); }
         else { ctype = str_sub(headers, ct_start, len(headers)); }
@@ -179,7 +179,7 @@ fn mime_parse_str(s) {
             mime_boundary = _mime_extract_boundary(ctype);
             if len(mime_boundary) > 0 {
                 // Split body by boundary
-                let delim = "--" + mime_boundary;
+                let mut delim = "--" + mime_boundary;
                 let mut pos = 0;
                 while pos < len(body) {
                     let mut next = str_find(str_sub(body, pos, len(body)), delim);
@@ -194,17 +194,17 @@ fn mime_parse_str(s) {
                             }
                         }
                         // Find next boundary or end
-                        let part_end = str_find(str_sub(body, pos, len(body)), delim);
+                        let mut part_end = str_find(str_sub(body, pos, len(body)), delim);
                         if part_end < 0 { part_end = len(body) - pos; }
-                        let part_text = str_sub(body, pos, pos + part_end);
+                        let mut part_text = str_sub(body, pos, pos + part_end);
                         // Split part into headers and body
-                        let part_hdr_end = str_find(part_text, "\n\n");
+                        let mut part_hdr_end = str_find(part_text, "\n\n");
                         if part_hdr_end < 0 { part_hdr_end = str_find(part_text, "\r\n\r\n"); }
                         if part_hdr_end >= 0 {
-                            let part_hdrs = str_sub(part_text, 0, part_hdr_end);
-                            let part_body_start = part_hdr_end + 2;
+                            let mut part_hdrs = str_sub(part_text, 0, part_hdr_end);
+                            let mut part_body_start = part_hdr_end + 2;
                             if str_char_code(part_text, part_hdr_end) == 13 { part_body_start = part_body_start + 2; }
-                            let part_body = str_sub(part_text, part_body_start, len(part_text));
+                            let mut part_body = str_sub(part_text, part_body_start, len(part_text));
                             // Store part
                             if mime_part_count_n < MIME_MAX {
                                 let mut slot = mime_part_count_n;
@@ -236,7 +236,7 @@ fn mime_parse_str(s) {
 // ============================================================
 
 fn mime_load(path) {
-    let fd = vfs_open(path, 0);
+    let mut fd = vfs_open(path, 0);
     if fd < 0 { print("mime: cannot open " + path); return 0 - 1; }
     let mut n = vfs_read(fd, MIME_BUF, MIME_BUF_SZ);
     vfs_close(fd);
@@ -247,7 +247,7 @@ fn mime_load(path) {
         text = text + str_from_code(mem_read_u8(MIME_BUF + i));
         i = i + 1;
     }
-    let cnt = mime_parse_str(text);
+    let mut cnt = mime_parse_str(text);
     print("mime: loaded " + path + " — " + to_string(cnt) + " parts");
     return cnt;
 }
@@ -265,8 +265,8 @@ fn mime_list() {
     let mut i = 0;
     while i < mime_part_count_n {
         out = out + "  Part " + to_string(i) + ":\n";
-        let body = mime_part_bodies[i];
-        let body_len = len(body);
+        let mut body = mime_part_bodies[i];
+        let mut body_len = len(body);
         if body_len > 60 {
             out = out + "    Body: " + str_sub(body, 0, 60) + "... (" + to_string(body_len) + " bytes)\n";
         } else {

@@ -70,12 +70,12 @@ fn _bloom_hash(item, seed) {
     // We treat the string as a sequence of character codes
     let mut h = 2166136261;  // FNV offset basis (modular)
     h = h - ((h / 1000000) * 1000000);  // reduce to fit arithmetic
-    let fnv_prime = 16777619;
+    let mut fnv_prime = 16777619;
     // Mix seed into initial hash
     h = (h + seed * 6971) - (((h + seed * 6971) / BLOOM_BITS) * BLOOM_BITS);
     // Hash each character of the item string
     let mut i = 0;
-    let slen = len(item);
+    let mut slen = len(item);
     while i < slen {
         let mut c = char_code(item, i);
         h = h * fnv_prime + c;
@@ -97,41 +97,41 @@ fn _bloom_hash_int(key, seed) {
 
 // Get bit at position pos in bloom_bits array (arithmetic simulation)
 fn _bloom_get_bit(pos) {
-    let word_idx = pos / 32;
-    let bit_pos  = pos - (word_idx * 32);
+    let mut word_idx = pos / 32;
+    let mut bit_pos = pos - (word_idx * 32);
     let mut word = bloom_bits[word_idx];
     // Extract bit: word >> bit_pos & 1 (arithmetic simulation)
-    let divisor = 1;
+    let mut divisor = 1;
     let mut p = 0;
     while p < bit_pos { divisor = divisor * 2; p = p + 1; }
-    let shifted = word / divisor;
+    let mut shifted = word / divisor;
     return shifted - ((shifted / 2) * 2);  // & 1
 }
 
 // Set bit at position pos in bloom_bits array
 fn _bloom_set_bit(pos) {
-    let word_idx = pos / 32;
-    let bit_pos  = pos - (word_idx * 32);
+    let mut word_idx = pos / 32;
+    let mut bit_pos = pos - (word_idx * 32);
     let mut word = bloom_bits[word_idx];
     // Set bit: word | (1 << bit_pos)
     let mut mask = 1;
     let mut p = 0;
     while p < bit_pos { mask = mask * 2; p = p + 1; }
     // Check if bit already set
-    let already = (word / mask) - (((word / mask) / 2) * 2);
+    let mut already = (word / mask) - (((word / mask) / 2) * 2);
     if already == 0 { set_at(bloom_bits, word_idx, word + mask); }
     return 0;
 }
 
 // Clear bit at position pos (for counting filter delete)
 fn _bloom_clear_bit(pos) {
-    let word_idx = pos / 32;
-    let bit_pos  = pos - (word_idx * 32);
+    let mut word_idx = pos / 32;
+    let mut bit_pos = pos - (word_idx * 32);
     let mut word = bloom_bits[word_idx];
     let mut mask = 1;
     let mut p = 0;
     while p < bit_pos { mask = mask * 2; p = p + 1; }
-    let already = (word / mask) - (((word / mask) / 2) * 2);
+    let mut already = (word / mask) - (((word / mask) / 2) * 2);
     if already == 1 { set_at(bloom_bits, word_idx, word - mask); }
     return 0;
 }
@@ -143,7 +143,7 @@ fn bloom_add(item) {
         let mut pos = _bloom_hash(item, i * 997 + 1);
         _bloom_set_bit(pos);
         // Counting filter: increment counter
-        let cnt = bloom_counters[pos];
+        let mut cnt = bloom_counters[pos];
         if cnt < 15 { set_at(bloom_counters, pos, cnt + 1); }
         i = i + 1;
     }
@@ -157,7 +157,7 @@ fn bloom_add_int(key) {
     while i < bloom_k {
         let mut pos = _bloom_hash_int(key, i * 997 + 1);
         _bloom_set_bit(pos);
-        let cnt = bloom_counters[pos];
+        let mut cnt = bloom_counters[pos];
         if cnt < 15 { set_at(bloom_counters, pos, cnt + 1); }
         i = i + 1;
     }
@@ -194,7 +194,7 @@ fn bloom_delete(item) {
     let mut i = 0;
     while i < bloom_k {
         let mut pos = _bloom_hash(item, i * 997 + 1);
-        let cnt = bloom_counters[pos];
+        let mut cnt = bloom_counters[pos];
         if cnt > 0 {
             set_at(bloom_counters, pos, cnt - 1);
             if cnt == 1 { _bloom_clear_bit(pos); }
@@ -213,10 +213,10 @@ fn bloom_popcount() {
         let mut word = bloom_bits[w];
         let mut b = 0;
         while b < 32 {
-            let divisor = 1;
-            let p2 = 0;
+            let mut divisor = 1;
+            let mut p2 = 0;
             while p2 < b { divisor = divisor * 2; p2 = p2 + 1; }
-            let bit = (word / divisor) - (((word / divisor) / 2) * 2);
+            let mut bit = (word / divisor) - (((word / divisor) / 2) * 2);
             total = total + bit;
             b = b + 1;
         }
@@ -228,10 +228,10 @@ fn bloom_popcount() {
 // Estimate false positive rate × 1000 (approximation)
 // FPR ≈ (filled_bits / BLOOM_BITS)^k
 fn bloom_fp_rate() {
-    let filled = bloom_popcount();
-    let fill_ratio = (filled * 1000) / BLOOM_BITS;  // per-mille
+    let mut filled = bloom_popcount();
+    let mut fill_ratio = (filled * 1000) / BLOOM_BITS;  // per-mille
     // (fill_ratio/1000)^k approximated iteratively
-    let fpr = fill_ratio;
+    let mut fpr = fill_ratio;
     let mut i = 1;
     while i < bloom_k {
         fpr = (fpr * fill_ratio) / 1000;
@@ -251,8 +251,8 @@ fn bloom_union(other_bits) {
         let mut mask = 1;
         let mut p = 0;
         while p < 32 {
-            let ba = (a / mask) - (((a / mask) / 2) * 2);
-            let bb = (b / mask) - (((b / mask) / 2) * 2);
+            let mut ba = (a / mask) - (((a / mask) / 2) * 2);
+            let mut bb = (b / mask) - (((b / mask) / 2) * 2);
             if ba == 1 { result = result + mask; } else {
                 if bb == 1 { result = result + mask; }
             }
@@ -267,13 +267,13 @@ fn bloom_union(other_bits) {
 
 // Check if filter is too full (> 50% fill → time to scale)
 fn bloom_needs_scale() {
-    let filled = bloom_popcount();
+    let mut filled = bloom_popcount();
     return filled > BLOOM_BITS / 2;
 }
 
 fn bloom_status() {
-    let filled = bloom_popcount();
-    let fpr = bloom_fp_rate();
+    let mut filled = bloom_popcount();
+    let mut fpr = bloom_fp_rate();
     return "bloom: k=" + to_string(bloom_k)
         + " bits=" + to_string(BLOOM_BITS)
         + " filled=" + to_string(filled)
@@ -290,17 +290,17 @@ fn bloom_test() {
     bloom_add_int(42);
     bloom_add_int(1337);
     // Query present items
-    let q1 = bloom_query("hello");
-    let q2 = bloom_query("world");
-    let q3 = bloom_query_int(42);
+    let mut q1 = bloom_query("hello");
+    let mut q2 = bloom_query("world");
+    let mut q3 = bloom_query_int(42);
     // Query absent items (should be 0 with high probability)
-    let q4 = bloom_query("absent_key_xyz");
-    let q5 = bloom_query_int(99999);
+    let mut q4 = bloom_query("absent_key_xyz");
+    let mut q5 = bloom_query_int(99999);
     // Delete via counting filter
     bloom_delete("hello");
-    let q6 = bloom_query("hello");   // should be 0 now
-    let filled = bloom_popcount();
-    let fpr = bloom_fp_rate();
+    let mut q6 = bloom_query("hello");   // should be 0 now
+    let mut filled = bloom_popcount();
+    let mut fpr = bloom_fp_rate();
     print("bloom test: " + bloom_status());
     print("bloom test: hello=" + to_string(q1) + " world=" + to_string(q2)
         + " 42=" + to_string(q3) + " absent=" + to_string(q4)

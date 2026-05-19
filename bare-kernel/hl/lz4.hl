@@ -58,10 +58,10 @@ fn lz4_init() {
 // ============================================================
 
 fn _lz4_hash4(src, pos) {
-    let b0 = mem_read_u8(src + pos);
-    let b1 = mem_read_u8(src + pos + 1);
-    let b2 = mem_read_u8(src + pos + 2);
-    let b3 = mem_read_u8(src + pos + 3);
+    let mut b0 = mem_read_u8(src + pos);
+    let mut b1 = mem_read_u8(src + pos + 1);
+    let mut b2 = mem_read_u8(src + pos + 2);
+    let mut b3 = mem_read_u8(src + pos + 3);
     let mut h = (b0 * 2654435 + b1 * 123456 + b2 * 987654 + b3 * 11111) % LZ4_HASH_SZ;
     return h;
 }
@@ -111,7 +111,7 @@ fn lz4_compress_mem(src, slen, dst) {
     let mut sp   = 0;    // source position
     let mut dp   = 0;    // dest position
     let mut anchor = 0;  // start of current literal run
-    let limit    = slen - LZ4_LAST_LIT;
+    let mut limit = slen - LZ4_LAST_LIT;
 
     while sp < limit {
         // Look for a match
@@ -120,7 +120,7 @@ fn lz4_compress_mem(src, slen, dst) {
 
         if sp + 4 <= slen {
             let mut slot = _lz4_hash4(src, sp);
-            let candidate = _lz4_hash_get(slot);
+            let mut candidate = _lz4_hash_get(slot);
             _lz4_hash_set(slot, sp);
 
             if candidate > 0 {
@@ -151,14 +151,14 @@ fn lz4_compress_mem(src, slen, dst) {
             sp = sp + 1;
         } else {
             // Emit sequence: literals from anchor..sp, then match
-            let litlen = sp - anchor;
-            let matchlen_enc = match_len - LZ4_MIN_MATCH;
+            let mut litlen = sp - anchor;
+            let mut matchlen_enc = match_len - LZ4_MIN_MATCH;
             let mut off = sp - match_pos;
 
             // Token byte
-            let lit_nibble = litlen;
+            let mut lit_nibble = litlen;
             if lit_nibble > 15 { let lit_nibble = 15; }
-            let mat_nibble = matchlen_enc;
+            let mut mat_nibble = matchlen_enc;
             if mat_nibble > 15 { let mat_nibble = 15; }
             mem_write_u8(dst + dp, lit_nibble * 16 + mat_nibble);
             dp = dp + 1;
@@ -194,9 +194,9 @@ fn lz4_compress_mem(src, slen, dst) {
     }
 
     // Emit final literal sequence (no match)
-    let litlen = slen - anchor;
+    let mut litlen = slen - anchor;
     if litlen > 0 {
-        let lit_nibble = litlen;
+        let mut lit_nibble = litlen;
         if lit_nibble > 15 { let lit_nibble = 15; }
         mem_write_u8(dst + dp, lit_nibble * 16);   // matchlen nibble = 0
         dp = dp + 1;
@@ -221,7 +221,7 @@ fn lz4_decompress_mem(src, slen, dst, dlim) {
     let mut sp = 0;
     let mut dp = 0;
     while sp < slen {
-        let token = mem_read_u8(src + sp);
+        let mut token = mem_read_u8(src + sp);
         sp = sp + 1;
 
         // Literal length
@@ -270,7 +270,7 @@ fn lz4_decompress_mem(src, slen, dst, dlim) {
         }
 
         // Copy match (may overlap — byte-by-byte required)
-        let match_start = dp - off;
+        let mut match_start = dp - off;
         let mut j = 0;
         while j < matchlen {
             if dp >= dlim { return 0 - 1; }
@@ -287,14 +287,14 @@ fn lz4_decompress_mem(src, slen, dst, dlim) {
 // ============================================================
 
 fn lz4_compress_file(inpath, outpath) {
-    let fd_in = vfs_open(inpath, 0);
+    let mut fd_in = vfs_open(inpath, 0);
     if fd_in < 0 { print("lz4c: cannot open " + inpath); return 0 - 1; }
     let mut n = vfs_read(fd_in, LZ4_IN_BUF, LZ4_BUF_SZ);
     vfs_close(fd_in);
     if n <= 0 { print("lz4c: empty input"); return 0 - 1; }
-    let clen = lz4_compress_mem(LZ4_IN_BUF, n, LZ4_OUT_BUF);
+    let mut clen = lz4_compress_mem(LZ4_IN_BUF, n, LZ4_OUT_BUF);
     if clen < 0 { print("lz4c: compression failed"); return 0 - 1; }
-    let fd_out = vfs_open(outpath, 1);
+    let mut fd_out = vfs_open(outpath, 1);
     if fd_out < 0 { print("lz4c: cannot create " + outpath); return 0 - 1; }
     vfs_write(fd_out, LZ4_OUT_BUF, clen);
     vfs_close(fd_out);
@@ -305,14 +305,14 @@ fn lz4_compress_file(inpath, outpath) {
 }
 
 fn lz4_decompress_file(inpath, outpath) {
-    let fd_in = vfs_open(inpath, 0);
+    let mut fd_in = vfs_open(inpath, 0);
     if fd_in < 0 { print("lz4d: cannot open " + inpath); return 0 - 1; }
     let mut n = vfs_read(fd_in, LZ4_IN_BUF, LZ4_BUF_SZ);
     vfs_close(fd_in);
     if n <= 0 { print("lz4d: empty input"); return 0 - 1; }
-    let dlen = lz4_decompress_mem(LZ4_IN_BUF, n, LZ4_OUT_BUF, LZ4_BUF_SZ);
+    let mut dlen = lz4_decompress_mem(LZ4_IN_BUF, n, LZ4_OUT_BUF, LZ4_BUF_SZ);
     if dlen < 0 { print("lz4d: decompression failed"); return 0 - 1; }
-    let fd_out = vfs_open(outpath, 1);
+    let mut fd_out = vfs_open(outpath, 1);
     if fd_out < 0 { print("lz4d: cannot create " + outpath); return 0 - 1; }
     vfs_write(fd_out, LZ4_OUT_BUF, dlen);
     vfs_close(fd_out);
@@ -327,26 +327,26 @@ fn lz4_decompress_file(inpath, outpath) {
 
 fn lz4_selftest() {
     // Write pattern: "AAABBBAAACCC..." (60 bytes with repeats)
-    let pattern = "AAABBBCCCDDDEEEFFF";
-    let plen = len(pattern);
+    let mut pattern = "AAABBBCCCDDDEEEFFF";
+    let mut plen = len(pattern);
     let mut i = 0;
     while i < 60 {
         mem_write_u8(LZ4_IN_BUF + i, str_char_code(pattern, i % plen));
         i = i + 1;
     }
-    let clen = lz4_compress_mem(LZ4_IN_BUF, 60, LZ4_OUT_BUF);
+    let mut clen = lz4_compress_mem(LZ4_IN_BUF, 60, LZ4_OUT_BUF);
     if clen < 0 { return "lz4_selftest: compress failed"; }
     if clen >= 60 { return "lz4_selftest: no compression (" + to_string(clen) + " >= 60)"; }
 
     // Decompress into IN_BUF+128 (scratch zone)
-    let dlen = lz4_decompress_mem(LZ4_OUT_BUF, clen, LZ4_IN_BUF + 128, 64);
+    let mut dlen = lz4_decompress_mem(LZ4_OUT_BUF, clen, LZ4_IN_BUF + 128, 64);
     if dlen != 60 { return "lz4_selftest: decomp size mismatch " + to_string(dlen) + " != 60"; }
 
     // Verify bytes match
     let mut j = 0;
     while j < 60 {
-        let orig = mem_read_u8(LZ4_IN_BUF + j);
-        let back = mem_read_u8(LZ4_IN_BUF + 128 + j);
+        let mut orig = mem_read_u8(LZ4_IN_BUF + j);
+        let mut back = mem_read_u8(LZ4_IN_BUF + 128 + j);
         if orig != back { return "lz4_selftest: byte mismatch at " + to_string(j); }
         j = j + 1;
     }

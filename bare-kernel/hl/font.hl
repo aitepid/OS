@@ -61,19 +61,19 @@ fn font_cursor_set(col, row) {
 
 // Scroll screen up one text row
 fn font_scroll_up() {
-    let row_bytes = FONT_HEIGHT * fb_pitch;
+    let mut row_bytes = FONT_HEIGHT * fb_pitch;
     let mut total = fb_height * fb_pitch;
     mem_copy(fb_addr, fb_addr + row_bytes, total - row_bytes);
-    let last_row_y = fb_height - FONT_HEIGHT;
-    let clear_addr = fb_addr + last_row_y * fb_pitch;
+    let mut last_row_y = fb_height - FONT_HEIGHT;
+    let mut clear_addr = fb_addr + last_row_y * fb_pitch;
     mem_set32(clear_addr, font_bg, fb_width * FONT_HEIGHT);
     return 0;
 }
 
 // Print character at cursor position, advancing cursor
 fn font_putc(ch) {
-    let cols = font_cols();
-    let rows = font_rows();
+    let mut cols = font_cols();
+    let mut rows = font_rows();
     if ch == 10 {
         font_cur_col = 0;
         font_cur_row = font_cur_row + 1;
@@ -120,17 +120,17 @@ fn font_println(s) {
 
 // Draw single character at pixel position (px, py) with color
 fn font_putchar(ch, px, py, fg_color, bg_color) {
-    let code = ch;
+    let mut code = ch;
     if code < 0 { code = 0; }
     if code >= FONT_GLYPHS { code = 63; } // '?' for out of range
-    let glyph_addr = FONT_BASE + code * FONT_HEIGHT;
+    let mut glyph_addr = FONT_BASE + code * FONT_HEIGHT;
 
     let mut row = 0;
     while row < FONT_HEIGHT {
-        let bits = mem_read_u8(glyph_addr + row);
+        let mut bits = mem_read_u8(glyph_addr + row);
         let mut col = 0;
         while col < FONT_WIDTH {
-            let pixel_addr = fb_addr + (py + row) * fb_pitch + (px + col) * 4;
+            let mut pixel_addr = fb_addr + (py + row) * fb_pitch + (px + col) * 4;
             // Bit 7 is leftmost pixel
             let mut mask = 128 / (1);  // 2^(7-col) -- need power of 2
             // Manual bit test: check if bit (7-col) is set
@@ -155,7 +155,7 @@ fn font_putstr(s, col, row, fg, bg) {
     let mut i = 0;
     let mut cx = col;
     while i < len(s) {
-        let ch = str_char_at(s, i);
+        let mut ch = str_char_at(s, i);
         if ch == 10 {
             // newline
             cx = 0;
@@ -178,7 +178,7 @@ fn font_clear_line(row, bg_color) {
     let mut y = row * FONT_HEIGHT;
     let mut r = 0;
     while r < FONT_HEIGHT {
-        let line_addr = fb_addr + (y + r) * fb_pitch;
+        let mut line_addr = fb_addr + (y + r) * fb_pitch;
         let mut x = 0;
         while x < fb_width {
             mem_write_u32(line_addr + x * 4, bg_color);
@@ -191,7 +191,7 @@ fn font_clear_line(row, bg_color) {
 
 // Clear entire screen
 fn font_clear_screen(bg_color) {
-    let rows = fb_height / FONT_HEIGHT;
+    let mut rows = fb_height / FONT_HEIGHT;
     let mut r = 0;
     while r < rows {
         font_clear_line(r, bg_color);
@@ -218,7 +218,7 @@ fn font_bake_default() {
     // Space (32) is already zeroed
 
     // Character '0' (48): simple rectangle
-    let g0 = FONT_BASE + 48 * FONT_HEIGHT;
+    let mut g0 = FONT_BASE + 48 * FONT_HEIGHT;
     mem_write_u8(g0 + 2, 60);   // 0x3C = ..####..
     mem_write_u8(g0 + 3, 102);  // 0x66 = .##..##.
     mem_write_u8(g0 + 4, 110);  // 0x6E = .##.###.
@@ -228,7 +228,7 @@ fn font_bake_default() {
     mem_write_u8(g0 + 8, 60);   // 0x3C
 
     // Character 'A' (65)
-    let gA = FONT_BASE + 65 * FONT_HEIGHT;
+    let mut gA = FONT_BASE + 65 * FONT_HEIGHT;
     mem_write_u8(gA + 2, 24);   // 0x18 = ...##...
     mem_write_u8(gA + 3, 60);   // 0x3C = ..####..
     mem_write_u8(gA + 4, 102);  // 0x66 = .##..##.
@@ -238,7 +238,7 @@ fn font_bake_default() {
     mem_write_u8(gA + 8, 102);  // 0x66
 
     // Character 'H' (72)
-    let gH = FONT_BASE + 72 * FONT_HEIGHT;
+    let mut gH = FONT_BASE + 72 * FONT_HEIGHT;
     mem_write_u8(gH + 2, 102);  // 0x66
     mem_write_u8(gH + 3, 102);
     mem_write_u8(gH + 4, 126);  // 0x7E

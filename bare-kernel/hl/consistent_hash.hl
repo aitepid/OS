@@ -83,7 +83,7 @@ fn _chash_hash_int(key) {
 
 // Hash for vnode: physical_node_id × vnode_replica_idx → ring position
 fn _chash_vnode_hash(node_id, replica) {
-    let seed = node_id * 31337 + replica * 6971 + 12345;
+    let mut seed = node_id * 31337 + replica * 6971 + 12345;
     let mut h = seed - ((seed / CHASH_RING_SIZE) * CHASH_RING_SIZE);
     if h < 0 { h = -h; }
     return h - ((h / CHASH_RING_SIZE) * CHASH_RING_SIZE);
@@ -101,9 +101,9 @@ fn _chash_insert_vnode(pos, owner) {
     while idx > 0 {
         if chash_vnode_pos[idx] < chash_vnode_pos[idx - 1] {
             // Swap
-            let tp = chash_vnode_pos[idx];
-            let to2 = chash_vnode_owner[idx];
-            let ta = chash_vnode_active[idx];
+            let mut tp = chash_vnode_pos[idx];
+            let mut to2 = chash_vnode_owner[idx];
+            let mut ta = chash_vnode_active[idx];
             set_at(chash_vnode_pos,    idx, chash_vnode_pos[idx - 1]);
             set_at(chash_vnode_owner,  idx, chash_vnode_owner[idx - 1]);
             set_at(chash_vnode_active, idx, chash_vnode_active[idx - 1]);
@@ -122,7 +122,7 @@ fn _chash_insert_vnode(pos, owner) {
 // Add a physical node to the ring
 fn chash_add_node(node_id, addr) {
     if chash_node_count >= CHASH_MAX_NODES { return 0 - 1; }
-    let nidx = chash_node_count;
+    let mut nidx = chash_node_count;
     set_at(chash_node_ids,    nidx, node_id);
     set_at(chash_node_addrs,  nidx, addr);
     set_at(chash_node_active, nidx, 1);
@@ -141,7 +141,7 @@ fn chash_add_node(node_id, addr) {
 // Remove a physical node (mark vnodes inactive)
 fn chash_remove_node(node_id) {
     // Find physical node index
-    let nidx = -1;
+    let mut nidx = -1;
     let mut i = 0;
     while i < chash_node_count {
         if chash_node_ids[i] == node_id { nidx = i; i = chash_node_count; }
@@ -181,9 +181,9 @@ fn _chash_find_successor(h) {
 fn chash_get_node_str(key) {
     if chash_vnode_count == 0 { return 0 - 1; }
     let mut h = _chash_hash_str(key);
-    let vnode = _chash_find_successor(h);
+    let mut vnode = _chash_find_successor(h);
     if vnode < 0 { return 0 - 1; }
-    let nidx = chash_vnode_owner[vnode];
+    let mut nidx = chash_vnode_owner[vnode];
     set_at(chash_load_counts, nidx, chash_load_counts[nidx] + 1);
     return nidx;
 }
@@ -192,9 +192,9 @@ fn chash_get_node_str(key) {
 fn chash_get_node_int(key) {
     if chash_vnode_count == 0 { return 0 - 1; }
     let mut h = _chash_hash_int(key);
-    let vnode = _chash_find_successor(h);
+    let mut vnode = _chash_find_successor(h);
     if vnode < 0 { return 0 - 1; }
-    let nidx = chash_vnode_owner[vnode];
+    let mut nidx = chash_vnode_owner[vnode];
     set_at(chash_load_counts, nidx, chash_load_counts[nidx] + 1);
     return nidx;
 }
@@ -204,16 +204,16 @@ fn chash_get_replicas(key, r) {
     if chash_vnode_count == 0 { return 0; }
     let mut h = _chash_hash_str(key);
     let mut found = 0;
-    let seen = [];
-    let vi = _chash_find_successor(h);
-    let steps = 0;
+    let mut seen = [];
+    let mut vi = _chash_find_successor(h);
+    let mut steps = 0;
     while found < r {
         if steps >= chash_vnode_count { found = r; }  // break
         else {
             if vi < 0 { vi = 0; }
-            let nidx = chash_vnode_owner[vi];
+            let mut nidx = chash_vnode_owner[vi];
             // Check if this physical node is already seen
-            let dup = 0;
+            let mut dup = 0;
             let mut k = 0;
             while k < found { if seen[k] == nidx { dup = 1; } k = k + 1; }
             if dup == 0 {
@@ -228,13 +228,13 @@ fn chash_get_replicas(key, r) {
 }
 
 fn chash_status() {
-    let active_nodes = 0;
+    let mut active_nodes = 0;
     let mut i = 0;
     while i < chash_node_count {
         if chash_node_active[i] == 1 { active_nodes = active_nodes + 1; }
         i = i + 1;
     }
-    let active_vnodes = 0;
+    let mut active_vnodes = 0;
     i = 0;
     while i < chash_vnode_count {
         if chash_vnode_active[i] == 1 { active_vnodes = active_vnodes + 1; }
@@ -255,29 +255,29 @@ fn consistent_hash_test() {
     chash_add_node(3, "10.0.0.3:8000");
     chash_add_node(4, "10.0.0.4:8000");
     // Route 10 string keys
-    let keys = ["user:alice", "user:bob", "order:1001", "product:42",
+    let mut keys = ["user:alice", "user:bob", "order:1001", "product:42",
                 "session:xyz", "cache:home", "queue:email", "blob:img1",
                 "meta:config", "log:2024"];
-    let distribution = [0, 0, 0, 0];
+    let mut distribution = [0, 0, 0, 0];
     let mut i = 0;
     while i < 10 {
-        let nidx = chash_get_node_str(keys[i]);
+        let mut nidx = chash_get_node_str(keys[i]);
         if nidx >= 0 { if nidx < 4 { set_at(distribution, nidx, distribution[nidx] + 1); } }
         i = i + 1;
     }
     // Route integer keys 0..99 — count distribution
-    let int_dist = [0, 0, 0, 0];
+    let mut int_dist = [0, 0, 0, 0];
     i = 0;
     while i < 100 {
-        let nidx2 = chash_get_node_int(i);
+        let mut nidx2 = chash_get_node_int(i);
         if nidx2 >= 0 { if nidx2 < 4 { set_at(int_dist, nidx2, int_dist[nidx2] + 1); } }
         i = i + 1;
     }
     // Remove node 2 and re-route
     chash_remove_node(2);
-    let after_remove = chash_get_node_str("user:alice");
+    let mut after_remove = chash_get_node_str("user:alice");
     // Replica set for a key
-    let replicas = chash_get_replicas("user:alice", 3);
+    let mut replicas = chash_get_replicas("user:alice", 3);
     print("chash test: " + chash_status());
     print("chash test: int_dist=[" + to_string(int_dist[0]) + ","
         + to_string(int_dist[1]) + "," + to_string(int_dist[2]) + ","

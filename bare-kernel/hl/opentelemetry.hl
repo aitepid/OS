@@ -83,8 +83,8 @@ fn _ot_alloc_span() {
 
 fn otel_trace_new() {
     // Create new trace, return trace_idx
-    let tid = ot_n_traces;
-    let trace_id = tid * 31 + ot_tick * 7 + 1;
+    let mut tid = ot_n_traces;
+    let mut trace_id = tid * 31 + ot_tick * 7 + 1;
     set_at(ot_trace_id,     tid, trace_id);
     set_at(ot_trace_root,   tid, 0 - 1);
     set_at(ot_trace_active, tid, 1);
@@ -96,7 +96,7 @@ fn otel_trace_new() {
 fn otel_span_start(trace_idx, parent_span, name_hash) {
     let mut slot = _ot_alloc_span();
     if slot == 0 - 1 { return 0 - 1; }
-    let span_id = ot_n_spans * 17 + ot_tick * 3 + name_hash;
+    let mut span_id = ot_n_spans * 17 + ot_tick * 3 + name_hash;
     let mut p = 65521;
     span_id = span_id - (span_id / p) * p;
     set_at(ot_span_trace,  slot, ot_trace_id[trace_idx]);
@@ -118,9 +118,9 @@ fn otel_span_start(trace_idx, parent_span, name_hash) {
 
 fn otel_span_attr(slot, key_hash, val_hash) {
     if slot == 0 - 1 { return 0 - 1; }
-    let an = ot_attr_n[slot];
+    let mut an = ot_attr_n[slot];
     if an >= OT_MAXATTRS { return 0 - 1; }
-    let ai = slot * OT_ATTR_STRIDE + an;
+    let mut ai = slot * OT_ATTR_STRIDE + an;
     set_at(ot_attr_key,  ai, key_hash);
     set_at(ot_attr_val,  ai, val_hash);
     set_at(ot_attr_used, ai, 1);
@@ -183,20 +183,20 @@ fn otel_test() {
     otel_init();
 
     // Create trace
-    let tid = otel_trace_new();
+    let mut tid = otel_trace_new();
 
     // Root span: "http.request"
-    let s0 = otel_span_start(tid, 0, 1001);
+    let mut s0 = otel_span_start(tid, 0, 1001);
     otel_span_attr(s0, 100, 200);   // http.method=GET
     otel_span_attr(s0, 101, 201);   // http.url=/api
 
     // Child span: "db.query"
-    let s1 = otel_span_start(tid, ot_span_id_of(s0), 1002);
+    let mut s1 = otel_span_start(tid, ot_span_id_of(s0), 1002);
     otel_span_attr(s1, 110, 210);   // db.statement
     otel_span_end(s1);
 
     // Child span with error: "cache.lookup"
-    let s2 = otel_span_start(tid, ot_span_id_of(s0), 1003);
+    let mut s2 = otel_span_start(tid, ot_span_id_of(s0), 1003);
     otel_span_set_status(s2, OT_STATUS_ERROR);
     otel_span_end(s2);
 
@@ -204,11 +204,11 @@ fn otel_test() {
     otel_span_end(s0);
 
     // Export
-    let n_exp = otel_export();
+    let mut n_exp = otel_export();
 
-    let dur0  = otel_span_duration(s0);
-    let stat2 = otel_span_status_of(s2);
-    let attrs1= otel_attr_count(s1);
+    let mut dur0 = otel_span_duration(s0);
+    let mut stat2 = otel_span_status_of(s2);
+    let mut attrs1 = otel_attr_count(s1);
 
     print("otel_test: tid=" + to_string(tid)
           + " s0=" + to_string(s0)

@@ -69,7 +69,7 @@ fn _ti_fresh() {
 }
 
 fn _ti_fun(arg, ret) {
-    let id = ti_fun_n;
+    let mut id = ti_fun_n;
     set_at(ti_fun_arg, id, arg);
     set_at(ti_fun_ret, id, ret);
     ti_fun_n += 1;
@@ -96,10 +96,10 @@ fn _ti_resolve(t) {
 
 fn _ti_occurs(v, t) {
     // Does TVar v occur in type t?
-    let rt = _ti_resolve(t);
+    let mut rt = _ti_resolve(t);
     if rt == 200 + v { return 1; }
     if rt >= 300 {
-        let id = rt - 300;
+        let mut id = rt - 300;
         if _ti_occurs(v, ti_fun_arg[id]) == 1 { return 1; }
         if _ti_occurs(v, ti_fun_ret[id]) == 1 { return 1; }
     }
@@ -108,8 +108,8 @@ fn _ti_occurs(v, t) {
 
 fn _ti_unify(s, t) {
     if ti_error == 1 { return 0; }
-    let rs = _ti_resolve(s);
-    let rt = _ti_resolve(t);
+    let mut rs = _ti_resolve(s);
+    let mut rt = _ti_resolve(t);
     if rs == rt { return 0; }
     // Both concrete and different
     if rs < 200 {
@@ -141,8 +141,8 @@ fn _ti_unify(s, t) {
     // Both Fun
     if rs >= 300 {
         if rt >= 300 {
-            let ids = rs - 300;
-            let idr = rt - 300;
+            let mut ids = rs - 300;
+            let mut idr = rt - 300;
             _ti_unify(ti_fun_arg[ids], ti_fun_arg[idr]);
             _ti_unify(ti_fun_ret[ids], ti_fun_ret[idr]);
             return 0;
@@ -170,7 +170,7 @@ fn _ti_env_push(name, typ) {
 }
 
 fn ti_add_node(kind, f0, f1) {
-    let id = ti_nd_n;
+    let mut id = ti_nd_n;
     set_at(ti_nd_kind, id, kind);
     set_at(ti_nd_f0,   id, f0);
     set_at(ti_nd_f1,   id, f1);
@@ -181,8 +181,8 @@ fn ti_add_node(kind, f0, f1) {
 fn _ti_infer(node) {
     if ti_error == 1 { return 0; }
     let mut k = ti_nd_kind[node];
-    let f0 = ti_nd_f0[node];
-    let f1 = ti_nd_f1[node];
+    let mut f0 = ti_nd_f0[node];
+    let mut f1 = ti_nd_f1[node];
     let mut t = 0;
 
     if k == 3 { t = TI_INT;  }   // Lit_int
@@ -194,18 +194,18 @@ fn _ti_infer(node) {
     }
     if k == 1 {
         // Lam: fresh tvar for param, infer body
-        let ptype = _ti_fresh();
+        let mut ptype = _ti_fresh();
         _ti_env_push(f0, ptype);
-        let btype = 0;
+        let mut btype = 0;
         btype = _ti_infer(f1);
         ti_env_n -= 1;
         t = _ti_fun(ptype, btype);
     }
     if k == 2 {
         // App: infer func and arg, unify func with (arg -> fresh)
-        let ftype = _ti_infer(f0);
-        let atype = _ti_infer(f1);
-        let rtype = _ti_fresh();
+        let mut ftype = _ti_infer(f0);
+        let mut atype = _ti_infer(f1);
+        let mut rtype = _ti_fresh();
         _ti_unify(ftype, _ti_fun(atype, rtype));
         t = rtype;
     }
@@ -225,11 +225,11 @@ fn ti_test() {
     // Test: (lambda x. x) 42
     // Expected: Int
     ti_init();
-    let lit  = ti_add_node(3, 0, 0);      // 42 : Int
-    let lam  = ti_add_node(1, 5, lit);    // \x. 42  (x=name 5)
-    let app  = ti_add_node(2, lam, lit);  // (\x.42) 42
-    let t    = ti_run(app);
-    let rt   = _ti_resolve(t);
+    let mut lit = ti_add_node(3, 0, 0);      // 42 : Int
+    let mut lam = ti_add_node(1, 5, lit);    // \x. 42  (x=name 5)
+    let mut app = ti_add_node(2, lam, lit);  // (\x.42) 42
+    let mut t = ti_run(app);
+    let mut rt = _ti_resolve(t);
     print("ti_test: app type=" + to_string(rt) + " error=" + to_string(ti_error));
     if ti_error == 0 {
         if rt == TI_INT {

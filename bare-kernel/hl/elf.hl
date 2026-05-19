@@ -64,46 +64,46 @@ fn elf_read64(data, off) {
 fn elf_parse_header(data) {
     if elf_check_magic(data) == 0 { return nil; }
 
-    let e_type = elf_read16(data, 16);
-    let e_machine = elf_read16(data, 18);
+    let mut e_type = elf_read16(data, 16);
+    let mut e_machine = elf_read16(data, 18);
     if e_type != ET_EXEC { return nil; }
     if e_machine != EM_X86_64 { return nil; }
 
-    let e_entry = elf_read64(data, 24);
-    let e_phoff = elf_read64(data, 32);
-    let e_phentsize = elf_read16(data, 54);
-    let e_phnum = elf_read16(data, 56);
+    let mut e_entry = elf_read64(data, 24);
+    let mut e_phoff = elf_read64(data, 32);
+    let mut e_phentsize = elf_read16(data, 54);
+    let mut e_phnum = elf_read16(data, 56);
 
     return [e_entry, e_phoff, e_phnum, e_phentsize];
 }
 
 // Load ELF into memory: map PT_LOAD segments, return entry point
 fn elf_load(data) {
-    let hdr = elf_parse_header(data);
+    let mut hdr = elf_parse_header(data);
     if hdr == nil { return 0; }
 
-    let entry = hdr[0];
-    let phoff = hdr[1];
-    let phnum = hdr[2];
-    let phentsz = hdr[3];
+    let mut entry = hdr[0];
+    let mut phoff = hdr[1];
+    let mut phnum = hdr[2];
+    let mut phentsz = hdr[3];
 
     let mut i = 0;
     while i < phnum {
         let mut off = phoff + i * phentsz;
-        let p_type = elf_read32(data, off);
+        let mut p_type = elf_read32(data, off);
 
         if p_type == PT_LOAD {
-            let p_offset = elf_read64(data, off + 8);
-            let p_vaddr  = elf_read64(data, off + 16);
-            let p_filesz = elf_read64(data, off + 32);
-            let p_memsz  = elf_read64(data, off + 40);
+            let mut p_offset = elf_read64(data, off + 8);
+            let mut p_vaddr = elf_read64(data, off + 16);
+            let mut p_filesz = elf_read64(data, off + 32);
+            let mut p_memsz = elf_read64(data, off + 40);
 
             // Allocate and map pages for this segment
-            let pages_needed = (p_memsz + 4095) / 4096;
+            let mut pages_needed = (p_memsz + 4095) / 4096;
             let mut pg = 0;
             while pg < pages_needed {
-                let vaddr = p_vaddr + pg * 4096;
-                let paddr = page_alloc();
+                let mut vaddr = p_vaddr + pg * 4096;
+                let mut paddr = page_alloc();
                 map_page(vaddr, paddr, 7); // PRESENT | WRITABLE | USER
                 pg = pg + 1;
             }
@@ -129,7 +129,7 @@ fn elf_load(data) {
 
 // Aliases for posix.hl compatibility
 fn elf_entry(data) {
-    let hdr = elf_parse_header(data);
+    let mut hdr = elf_parse_header(data);
     if hdr == nil { return 0; }
     return hdr[0];
 }

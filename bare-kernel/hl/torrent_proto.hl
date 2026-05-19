@@ -92,7 +92,7 @@ fn bt_set_torrent(info_hash, total_len, n_pieces, piece_sz) {
 }
 
 fn bt_add_peer(peer_hash) {
-    let id = bt_n_peers;
+    let mut id = bt_n_peers;
     set_at(bt_peer_hash,  id, peer_hash);
     set_at(bt_peer_state, id, BT_P_IDLE);
     bt_n_peers += 1;
@@ -115,11 +115,11 @@ fn bt_recv_bitfield(peer_id, bitfield_hash) {
     // Simplified: peer has piece i if (bitfield_hash / 2^i) mod 2 == 1
     let mut i = 0;
     while i < bt_n_pieces {
-        let bit = 1;
-        let k   = 0;
+        let mut bit = 1;
+        let mut k = 0;
         while k < i { bit = bit * 2; k += 1; }
         let mut q = bitfield_hash / bit;
-        let has = q - (q / 2) * 2;
+        let mut has = q - (q / 2) * 2;
         set_at(bt_peer_pieces, peer_id * BT_MAXPIECES + i, has);
         if has == 1 {
             set_at(bt_piece_rarity, i, bt_piece_rarity[i] + 1);
@@ -131,8 +131,8 @@ fn bt_recv_bitfield(peer_id, bitfield_hash) {
 
 fn bt_select_rarest(peer_id) {
     // Rarest-first: find piece peer has, we don't, with min rarity
-    let best_piece  = 0 - 1;
-    let best_rarity = BT_MAXPEERS + 1;
+    let mut best_piece = 0 - 1;
+    let mut best_rarity = BT_MAXPEERS + 1;
     let mut i = 0;
     while i < bt_n_pieces {
         if bt_have_piece[i] == 0 {
@@ -157,7 +157,7 @@ fn bt_request_piece(peer_id, piece_idx) {
         set_at(bt_peer_am_choke,   peer_id, 0);
     }
     // Simulate receiving PIECE response
-    let piece_data = bt_info_hash * piece_idx + bt_peer_hash[peer_id];
+    let mut piece_data = bt_info_hash * piece_idx + bt_peer_hash[peer_id];
     let mut p = 65521;
     piece_data = piece_data - (piece_data / p) * p;
     set_at(bt_piece_data, piece_idx, piece_data);
@@ -196,9 +196,9 @@ fn torrent_proto_test() {
     bt_set_torrent(12345, 1048576, 8, 131072);  // 1MB, 8 pieces, 128KB each
 
     // Add 3 peers
-    let p0 = bt_add_peer(1001);
-    let p1 = bt_add_peer(1002);
-    let p2 = bt_add_peer(1003);
+    let mut p0 = bt_add_peer(1001);
+    let mut p1 = bt_add_peer(1002);
+    let mut p2 = bt_add_peer(1003);
 
     // Handshake all
     bt_handshake(p0);
@@ -211,16 +211,16 @@ fn torrent_proto_test() {
     bt_recv_bitfield(p2, 15);   // 0000 1111 = pieces 0,1,2,3
 
     // Select rarest piece from p0 (pieces 4,6 have rarity=1)
-    let rarest = bt_select_rarest(p0);
+    let mut rarest = bt_select_rarest(p0);
 
     // Request piece 0 from p0
-    let pdata = bt_request_piece(p0, 0);
+    let mut pdata = bt_request_piece(p0, 0);
 
     // Request piece 1 from p1
     bt_request_piece(p1, 1);
 
-    let progress = bt_download_progress();
-    let complete = bt_complete_count();
+    let mut progress = bt_download_progress();
+    let mut complete = bt_complete_count();
 
     print("torrent_proto_test: rarest=" + to_string(rarest)
           + " pdata=" + to_string(pdata)

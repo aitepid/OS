@@ -60,7 +60,7 @@ fn hlc_validate(buf_addr) {
         i = i + 1;
     }
     // Check version
-    let ver = mem_read_u32(buf_addr + 4);
+    let mut ver = mem_read_u32(buf_addr + 4);
     if ver != HLC_VERSION {
         print("hlc: unsupported version " + to_string(ver));
         return 0;
@@ -70,13 +70,13 @@ fn hlc_validate(buf_addr) {
 
 // Parse .hlc header fields
 fn hlc_parse_header(buf_addr) {
-    let entry = mem_read_u64(buf_addr + 8);
-    let code_off = mem_read_u64(buf_addr + 16);
-    let code_size = mem_read_u64(buf_addr + 24);
-    let data_off = mem_read_u64(buf_addr + 32);
-    let data_size = mem_read_u64(buf_addr + 40);
-    let bss_size = mem_read_u64(buf_addr + 48);
-    let stack_size = mem_read_u64(buf_addr + 56);
+    let mut entry = mem_read_u64(buf_addr + 8);
+    let mut code_off = mem_read_u64(buf_addr + 16);
+    let mut code_size = mem_read_u64(buf_addr + 24);
+    let mut data_off = mem_read_u64(buf_addr + 32);
+    let mut data_size = mem_read_u64(buf_addr + 40);
+    let mut bss_size = mem_read_u64(buf_addr + 48);
+    let mut stack_size = mem_read_u64(buf_addr + 56);
     if stack_size == 0 { stack_size = HLC_DEFAULT_STACK; }
     return [entry, code_off, code_size, data_off, data_size, bss_size, stack_size];
 }
@@ -84,13 +84,13 @@ fn hlc_parse_header(buf_addr) {
 // Load .hlc from VFS path, create a new task, return PID or -1
 fn hlc_exec(path) {
     // Open and read file
-    let fd = vfs_open(path, 0);
+    let mut fd = vfs_open(path, 0);
     if fd < 0 {
         print("hlc: cannot open " + path);
         return 0 - 1;
     }
-    let stat = vfs_stat(path);
-    let file_size = stat[0];
+    let mut stat = vfs_stat(path);
+    let mut file_size = stat[0];
     if file_size < HLC_HEADER_SIZE {
         vfs_close(fd);
         print("hlc: file too small");
@@ -98,8 +98,8 @@ fn hlc_exec(path) {
     }
 
     // Read entire file into temp buffer
-    let pages_needed = (file_size + 4095) / 4096;
-    let buf = page_alloc_contiguous(pages_needed);
+    let mut pages_needed = (file_size + 4095) / 4096;
+    let mut buf = page_alloc_contiguous(pages_needed);
     if buf == 0 {
         vfs_close(fd);
         print("hlc: alloc failed");
@@ -118,18 +118,18 @@ fn hlc_exec(path) {
     }
 
     // Parse header
-    let hdr = hlc_parse_header(buf);
-    let entry_off = hdr[0];
-    let code_off = hdr[1];
-    let code_size = hdr[2];
-    let data_off = hdr[3];
-    let data_size = hdr[4];
-    let bss_size = hdr[5];
-    let stack_size = hdr[6];
+    let mut hdr = hlc_parse_header(buf);
+    let mut entry_off = hdr[0];
+    let mut code_off = hdr[1];
+    let mut code_size = hdr[2];
+    let mut data_off = hdr[3];
+    let mut data_size = hdr[4];
+    let mut bss_size = hdr[5];
+    let mut stack_size = hdr[6];
 
     // Allocate code pages
-    let code_pages = (code_size + 4095) / 4096;
-    let code_base = page_alloc_contiguous(code_pages);
+    let mut code_pages = (code_size + 4095) / 4096;
+    let mut code_base = page_alloc_contiguous(code_pages);
     if code_base == 0 {
         let mut p = 0;
         while p < pages_needed { page_free(buf + p * 4096); p = p + 1; }
@@ -137,9 +137,9 @@ fn hlc_exec(path) {
     }
 
     // Allocate data + bss pages
-    let data_total = data_size + bss_size;
-    let data_pages = (data_total + 4095) / 4096;
-    let data_base = page_alloc_contiguous(data_pages);
+    let mut data_total = data_size + bss_size;
+    let mut data_pages = (data_total + 4095) / 4096;
+    let mut data_base = page_alloc_contiguous(data_pages);
     if data_base == 0 {
         let mut p = 0;
         while p < code_pages { page_free(code_base + p * 4096); p = p + 1; }
@@ -148,8 +148,8 @@ fn hlc_exec(path) {
     }
 
     // Allocate stack
-    let stack_pages = (stack_size + 4095) / 4096;
-    let stack_base = page_alloc_contiguous(stack_pages);
+    let mut stack_pages = (stack_size + 4095) / 4096;
+    let mut stack_base = page_alloc_contiguous(stack_pages);
     if stack_base == 0 {
         let mut p = 0;
         while p < code_pages { page_free(code_base + p * 4096); p = p + 1; }
@@ -181,9 +181,9 @@ fn hlc_exec(path) {
     while p < pages_needed { page_free(buf + p * 4096); p = p + 1; }
 
     // Create task
-    let entry_point = code_base + entry_off;
-    let stack_top = stack_base + stack_size;
-    let pid = task_create(entry_point, stack_top);
+    let mut entry_point = code_base + entry_off;
+    let mut stack_top = stack_base + stack_size;
+    let mut pid = task_create(entry_point, stack_top);
     if pid < 0 {
         print("hlc: task_create failed");
         return 0 - 1;
@@ -196,8 +196,8 @@ fn hlc_exec(path) {
 // Build a minimal .hlc file in memory (for testing)
 fn hlc_build_test(code_bytes, code_len) {
     let mut total = HLC_HEADER_SIZE + code_len;
-    let pages = (total + 4095) / 4096;
-    let buf = page_alloc_contiguous(pages);
+    let mut pages = (total + 4095) / 4096;
+    let mut buf = page_alloc_contiguous(pages);
     if buf == 0 { return 0; }
     mem_zero(buf, total);
 

@@ -39,7 +39,7 @@ let EVT_RING_ADDR = 9052160;   // 0x8A2000
 
 fn xhci_init(pci_bus, pci_dev, pci_func) {
     // Read BAR0 (MMIO, mask low 4 bits)
-    let bar0_raw = pci_bar(pci_bus, pci_dev, pci_func, 0);
+    let mut bar0_raw = pci_bar(pci_bus, pci_dev, pci_func, 0);
     xhci_bar = (bar0_raw / 16) * 16;
 
     // Enable bus mastering + memory space
@@ -47,19 +47,19 @@ fn xhci_init(pci_bus, pci_dev, pci_func) {
 
     // Read capability registers
     xhci_cap_len = mem_read_u8(xhci_bar);
-    let hcsparams1 = mem_read_u32(xhci_bar + 4);
+    let mut hcsparams1 = mem_read_u32(xhci_bar + 4);
     xhci_max_slots = hcsparams1 % 256;
     xhci_max_ports = (hcsparams1 / 16777216) % 256;
 
-    let op = xhci_bar + xhci_cap_len;
+    let mut op = xhci_bar + xhci_cap_len;
 
     // Stop controller: clear Run/Stop (bit 0)
-    let usbcmd = mem_read_u32(op);
+    let mut usbcmd = mem_read_u32(op);
     mem_write_u32(op, (usbcmd / 2) * 2);  // clear bit 0
     // Wait for HCHalted: poll USBSTS bit 0
     let mut timeout = 10000;
     while timeout > 0 {
-        let sts = mem_read_u32(op + 4);
+        let mut sts = mem_read_u32(op + 4);
         if sts % 2 == 1 { timeout = 0; }  // HCHalted = 1, done
         timeout = timeout - 1;
     }
@@ -68,7 +68,7 @@ fn xhci_init(pci_bus, pci_dev, pci_func) {
     mem_write_u32(op, 2);
     timeout = 10000;
     while timeout > 0 {
-        let cmd = mem_read_u32(op);
+        let mut cmd = mem_read_u32(op);
         if (cmd / 2) % 2 == 0 { timeout = 0; }  // HCRST cleared
         timeout = timeout - 1;
     }
@@ -85,7 +85,7 @@ fn xhci_init(pci_bus, pci_dev, pci_func) {
     mem_write_u64(op + 24, CMD_RING_ADDR + 1);  // CRCR at +0x18, cycle bit
 
     // Start controller: set Run/Stop (bit 0)
-    let start_cmd = mem_read_u32(op);
+    let mut start_cmd = mem_read_u32(op);
     mem_write_u32(op, start_cmd + 1);
 
     print("xHCI init: " + to_string(xhci_max_ports) + " ports, " + to_string(xhci_max_slots) + " slots");
@@ -94,8 +94,8 @@ fn xhci_init(pci_bus, pci_dev, pci_func) {
 
 // Check port status
 fn xhci_port_status(port) {
-    let op = xhci_bar + xhci_cap_len;
-    let portsc = mem_read_u32(op + 1024 + port * 16);  // +0x400 + port*0x10
+    let mut op = xhci_bar + xhci_cap_len;
+    let mut portsc = mem_read_u32(op + 1024 + port * 16);  // +0x400 + port*0x10
     // bit 0 = CCS (connected), bit 1 = PED (enabled)
     // bits 10-13 = port speed (1=FS, 2=LS, 3=HS, 4=SS)
     return portsc;
@@ -115,10 +115,10 @@ fn xhci_enumerate() {
     let mut found = 0;
     let mut port = 0;
     while port < xhci_max_ports {
-        let status = xhci_port_status(port);
-        let connected = status % 2;  // CCS bit 0
+        let mut status = xhci_port_status(port);
+        let mut connected = status % 2;  // CCS bit 0
         if connected == 1 {
-            let speed = (status / 1024) % 16;  // bits 10-13
+            let mut speed = (status / 1024) % 16;  // bits 10-13
             print("  USB port " + to_string(port) + ": connected (" + xhci_speed_name(speed) + ")");
             found = found + 1;
         }
@@ -129,11 +129,11 @@ fn xhci_enumerate() {
 
 // Detect xHCI on PCI bus
 fn usb_detect() {
-    let devices = pci_scan();
+    let mut devices = pci_scan();
     let mut i = 0;
     while i < len(devices) {
-        let cls = devices[i][5];
-        let sub = devices[i][6];
+        let mut cls = devices[i][5];
+        let mut sub = devices[i][6];
         if cls == USB_CLASS && sub == USB_SUBCLASS_XHCI {
             return [devices[i][0], devices[i][1], devices[i][2]];
         }
@@ -144,7 +144,7 @@ fn usb_detect() {
 
 // Full USB initialization
 fn usb_init() {
-    let pci_info = usb_detect();
+    let mut pci_info = usb_detect();
     if len(pci_info) == 0 {
         print("No xHCI USB controller found.");
         return 0;

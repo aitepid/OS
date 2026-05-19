@@ -74,8 +74,8 @@ fn uitxed_set_line(row, s) {
 }
 
 fn uitxed_clamp_col() {
-    let line = uitxed_cur_line();
-    let max_col = len(line);
+    let mut line = uitxed_cur_line();
+    let mut max_col = len(line);
     if uitxed_cursor_col > max_col { uitxed_cursor_col = max_col; }
     if uitxed_cursor_col < 0 { uitxed_cursor_col = 0; }
     return 0;
@@ -96,7 +96,7 @@ fn uitxed_move_left() {
 }
 
 fn uitxed_move_right() {
-    let line = uitxed_cur_line();
+    let mut line = uitxed_cur_line();
     if uitxed_cursor_col < len(line) {
         uitxed_cursor_col = uitxed_cursor_col + 1;
         return 0;
@@ -125,8 +125,8 @@ fn uitxed_move_down() {
 }
 
 fn uitxed_scroll_adjust() {
-    let content_h = UITXED_WINDOW_H - UITXED_MARGIN_Y - UITXED_STATUS_H;
-    let visible_rows = content_h / UITXED_CHAR_H;
+    let mut content_h = UITXED_WINDOW_H - UITXED_MARGIN_Y - UITXED_STATUS_H;
+    let mut visible_rows = content_h / UITXED_CHAR_H;
     if uitxed_cursor_row < uitxed_scroll_top {
         uitxed_scroll_top = uitxed_cursor_row;
     }
@@ -140,10 +140,10 @@ fn uitxed_scroll_adjust() {
 
 // Insert character ch at current cursor position
 fn uitxed_insert_char(ch) {
-    let line = uitxed_cur_line();
+    let mut line = uitxed_cur_line();
     if len(line) >= UITXED_LINE_W { return 0; }
-    let before = str_sub(line, 0, uitxed_cursor_col);
-    let after  = str_sub(line, uitxed_cursor_col, len(line));
+    let mut before = str_sub(line, 0, uitxed_cursor_col);
+    let mut after = str_sub(line, uitxed_cursor_col, len(line));
     uitxed_set_line(uitxed_cursor_row, before + str_from_code(ch) + after);
     uitxed_cursor_col = uitxed_cursor_col + 1;
     uitxed_dirty = 1;
@@ -153,9 +153,9 @@ fn uitxed_insert_char(ch) {
 // Delete character before cursor (backspace)
 fn uitxed_backspace() {
     if uitxed_cursor_col > 0 {
-        let line = uitxed_cur_line();
-        let before = str_sub(line, 0, uitxed_cursor_col - 1);
-        let after  = str_sub(line, uitxed_cursor_col, len(line));
+        let mut line = uitxed_cur_line();
+        let mut before = str_sub(line, 0, uitxed_cursor_col - 1);
+        let mut after = str_sub(line, uitxed_cursor_col, len(line));
         uitxed_set_line(uitxed_cursor_row, before + after);
         uitxed_cursor_col = uitxed_cursor_col - 1;
         uitxed_dirty = 1;
@@ -165,7 +165,7 @@ fn uitxed_backspace() {
     if uitxed_cursor_row > 0 {
         let mut cur = uitxed_cur_line();
         let mut prev = uitxed_lines[uitxed_cursor_row - 1];
-        let new_col = len(prev);
+        let mut new_col = len(prev);
         uitxed_set_line(uitxed_cursor_row - 1, prev + cur);
         // Remove current line
         let mut new_lines = [];
@@ -185,10 +185,10 @@ fn uitxed_backspace() {
 
 // Delete character at cursor (Del key)
 fn uitxed_delete_char() {
-    let line = uitxed_cur_line();
+    let mut line = uitxed_cur_line();
     if uitxed_cursor_col < len(line) {
-        let before = str_sub(line, 0, uitxed_cursor_col);
-        let after  = str_sub(line, uitxed_cursor_col + 1, len(line));
+        let mut before = str_sub(line, 0, uitxed_cursor_col);
+        let mut after = str_sub(line, uitxed_cursor_col + 1, len(line));
         uitxed_set_line(uitxed_cursor_row, before + after);
         uitxed_dirty = 1;
         return 0;
@@ -213,9 +213,9 @@ fn uitxed_delete_char() {
 // Insert newline (Enter key): split current line at cursor
 fn uitxed_newline() {
     if uitxed_line_count >= UITXED_MAX_LINES { return 0; }
-    let line = uitxed_cur_line();
-    let before = str_sub(line, 0, uitxed_cursor_col);
-    let after  = str_sub(line, uitxed_cursor_col, len(line));
+    let mut line = uitxed_cur_line();
+    let mut before = str_sub(line, 0, uitxed_cursor_col);
+    let mut after = str_sub(line, uitxed_cursor_col, len(line));
     uitxed_set_line(uitxed_cursor_row, before);
     // Insert new line after current
     let mut new_lines = [];
@@ -240,10 +240,10 @@ fn uitxed_newline() {
 // --- VFS file I/O ---
 
 fn uitxed_load(path) {
-    let fd = vfs_open(path, O_RDONLY);
+    let mut fd = vfs_open(path, O_RDONLY);
     if fd < 0 { return 0 - 1; }
 
-    let buf_addr = 9699328;  // 0x940000 scratch buffer for editor
+    let mut buf_addr = 9699328;  // 0x940000 scratch buffer for editor
     let mut n = vfs_read(fd, buf_addr, 65536);
     vfs_close(fd);
     if n <= 0 { return 0; }
@@ -284,14 +284,14 @@ fn uitxed_load(path) {
 }
 
 fn uitxed_save() {
-    let fd = vfs_open(uitxed_filename, O_CREAT + O_WRONLY + O_TRUNC);
+    let mut fd = vfs_open(uitxed_filename, O_CREAT + O_WRONLY + O_TRUNC);
     if fd < 0 { return 0 - 1; }
 
-    let buf_addr = 9699328;  // 0x940000
+    let mut buf_addr = 9699328;  // 0x940000
     let mut off = 0;
     let mut i = 0;
     while i < uitxed_line_count {
-        let line = uitxed_lines[i];
+        let mut line = uitxed_lines[i];
         let mut j = 0;
         while j < len(line) {
             mem_write_u8(buf_addr + off, str_char_at(line, j));
@@ -317,39 +317,39 @@ fn uitxed_save_as(path) {
 
 fn uitxed_render(window_id) {
     let mut addr = WM_TABLE_ADDR + window_id * 128;
-    let wx = mem_read_u64(addr + 8);
-    let wy = mem_read_u64(addr + 16);
-    let ww = mem_read_u64(addr + 24);
-    let wh = mem_read_u64(addr + 32);
+    let mut wx = mem_read_u64(addr + 8);
+    let mut wy = mem_read_u64(addr + 16);
+    let mut ww = mem_read_u64(addr + 24);
+    let mut wh = mem_read_u64(addr + 32);
 
     // Background
     vesa_fill_rect(wx, wy, ww, wh, ui_theme_surface_color());
     // Titlebar
     vesa_fill_rect(wx, wy, ww, 24, ui_theme_titlebar_color());
-    let title = "Editor — " + uitxed_filename;
+    let mut title = "Editor — " + uitxed_filename;
     if uitxed_dirty == 1 { title = title + " *"; }
     ui_draw_text(wx + 8, wy + 4, title, ui_theme_text_color(), 0);
 
     // Line number gutter (40px wide)
-    let gutter_w = 40;
+    let mut gutter_w = 40;
     vesa_fill_rect(wx, wy + UITXED_MARGIN_Y, gutter_w, wh - UITXED_MARGIN_Y - UITXED_STATUS_H, ui_theme_panel_color());
     vesa_vline(wx + gutter_w, wy + UITXED_MARGIN_Y, wh - UITXED_MARGIN_Y - UITXED_STATUS_H, ui_theme_border_color());
 
     // Text area
-    let content_h = wh - UITXED_MARGIN_Y - UITXED_STATUS_H;
-    let visible_rows = content_h / UITXED_CHAR_H;
-    let text_x = wx + gutter_w + UITXED_MARGIN_X;
+    let mut content_h = wh - UITXED_MARGIN_Y - UITXED_STATUS_H;
+    let mut visible_rows = content_h / UITXED_CHAR_H;
+    let mut text_x = wx + gutter_w + UITXED_MARGIN_X;
 
     uitxed_scroll_adjust();
 
     let mut row = 0;
     while row < visible_rows {
-        let line_idx = uitxed_scroll_top + row;
+        let mut line_idx = uitxed_scroll_top + row;
         if line_idx >= uitxed_line_count { row = visible_rows; }
         if row < visible_rows {
-            let line_y = wy + UITXED_MARGIN_Y + row * UITXED_CHAR_H;
-            let lnum   = line_idx + 1;
-            let lnum_s = to_string(lnum);
+            let mut line_y = wy + UITXED_MARGIN_Y + row * UITXED_CHAR_H;
+            let mut lnum = line_idx + 1;
+            let mut lnum_s = to_string(lnum);
 
             ui_label_colored(wx + 4, line_y + 1, lnum_s, ui_theme_text_muted_color());
 
@@ -357,11 +357,11 @@ fn uitxed_render(window_id) {
                 vesa_fill_rect(wx + gutter_w + 1, line_y, ww - gutter_w - 1, UITXED_CHAR_H, ui_theme_accent_color());
             }
 
-            let line = uitxed_lines[line_idx];
+            let mut line = uitxed_lines[line_idx];
             ui_draw_text(text_x, line_y + 1, line, ui_theme_text_color(), 0);
 
             if line_idx == uitxed_cursor_row {
-                let cx = text_x + uitxed_cursor_col * UITXED_CHAR_W;
+                let mut cx = text_x + uitxed_cursor_col * UITXED_CHAR_W;
                 vesa_vline(cx, line_y, UITXED_CHAR_H, ui_theme_text_color());
             }
 
@@ -370,16 +370,16 @@ fn uitxed_render(window_id) {
     }
 
     // Status bar
-    let status_y = wy + wh - UITXED_STATUS_H;
+    let mut status_y = wy + wh - UITXED_STATUS_H;
     vesa_fill_rect(wx, status_y, ww, UITXED_STATUS_H, ui_theme_titlebar_color());
     vesa_hline(wx, status_y, ww, ui_theme_border_color());
-    let pos_s = "Ln " + to_string(uitxed_cursor_row + 1) + ", Col " + to_string(uitxed_cursor_col + 1);
-    let dirty_s = " [modified]";
-    let clean_s = " [saved]";
-    let flag_s = clean_s;
+    let mut pos_s = "Ln " + to_string(uitxed_cursor_row + 1) + ", Col " + to_string(uitxed_cursor_col + 1);
+    let mut dirty_s = " [modified]";
+    let mut clean_s = " [saved]";
+    let mut flag_s = clean_s;
     if uitxed_dirty == 1 { flag_s = dirty_s; }
     ui_draw_text(wx + 8, status_y + 2, pos_s + flag_s, ui_theme_text_color(), 0);
-    let total_s = to_string(uitxed_line_count) + " lines";
+    let mut total_s = to_string(uitxed_line_count) + " lines";
     ui_draw_text(wx + ww - 80, status_y + 2, total_s, ui_theme_text_muted_color(), 0);
 
     return 0;
@@ -402,16 +402,16 @@ fn uitxed_handle_key(key) {
         return 1;
     }
     if key == TXED_KEY_PGUP {
-        let content_h = UITXED_WINDOW_H - UITXED_MARGIN_Y - UITXED_STATUS_H;
-        let visible_rows = content_h / UITXED_CHAR_H;
+        let mut content_h = UITXED_WINDOW_H - UITXED_MARGIN_Y - UITXED_STATUS_H;
+        let mut visible_rows = content_h / UITXED_CHAR_H;
         uitxed_cursor_row = uitxed_cursor_row - visible_rows;
         if uitxed_cursor_row < 0 { uitxed_cursor_row = 0; }
         uitxed_clamp_col();
         return 1;
     }
     if key == TXED_KEY_PGDN {
-        let content_h = UITXED_WINDOW_H - UITXED_MARGIN_Y - UITXED_STATUS_H;
-        let visible_rows = content_h / UITXED_CHAR_H;
+        let mut content_h = UITXED_WINDOW_H - UITXED_MARGIN_Y - UITXED_STATUS_H;
+        let mut visible_rows = content_h / UITXED_CHAR_H;
         uitxed_cursor_row = uitxed_cursor_row + visible_rows;
         if uitxed_cursor_row >= uitxed_line_count { uitxed_cursor_row = uitxed_line_count - 1; }
         uitxed_clamp_col();
@@ -436,10 +436,10 @@ fn uitxed_handle_key(key) {
     }
     // Ctrl+V (22): paste clipboard text at cursor (single line only)
     if key == 22 {
-        let ptext = clipboard_paste();
+        let mut ptext = clipboard_paste();
         let mut ci = 0;
         while ci < len(ptext) {
-            let ch = str_char_at(ptext, ci);
+            let mut ch = str_char_at(ptext, ci);
             if ch >= 32 {
                 if ch <= 126 {
                     uitxed_insert_char(ch);
@@ -469,7 +469,7 @@ fn uitxed_handle_key(key) {
 fn uitxed_open(path) {
     uitxed_init();
     if len(path) > 0 {
-        let ok = uitxed_load(path);
+        let mut ok = uitxed_load(path);
         if ok < 0 { uitxed_filename = path; }
     }
     uitxed_window_id = wm_create_window(30, 30, UITXED_WINDOW_W, UITXED_WINDOW_H, "Editor");

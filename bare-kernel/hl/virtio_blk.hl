@@ -65,7 +65,7 @@ fn virtio_blk_init(pci_bus, pci_dev, pci_func) {
     port_out_u8(blk_bar + 18, 3);
 
     // Step 4: Read and negotiate features
-    let dev_features = port_in_u32(blk_bar + 0);
+    let mut dev_features = port_in_u32(blk_bar + 0);
     // We don't need any special features for basic read/write
     port_out_u32(blk_bar + 4, 0);
 
@@ -74,7 +74,7 @@ fn virtio_blk_init(pci_bus, pci_dev, pci_func) {
 
     // Step 6: Setup virtqueue 0
     port_out_u16(blk_bar + 14, 0);  // select queue 0
-    let queue_size = port_in_u16(blk_bar + 12);
+    let mut queue_size = port_in_u16(blk_bar + 12);
     // Use VIRTQ_SIZE or device max, whichever is smaller
     let mut actual_qsize = VIRTQ_SIZE;
     if queue_size < actual_qsize { actual_qsize = queue_size; }
@@ -82,10 +82,10 @@ fn virtio_blk_init(pci_bus, pci_dev, pci_func) {
     // Allocate virtqueue memory (page-aligned at 0x400000)
     // Descriptor table: 16 bytes per entry
     vq_desc_base = 4194304;  // 0x400000
-    let desc_size = actual_qsize * 16;
+    let mut desc_size = actual_qsize * 16;
     // Available ring: 2 + 2 + 2*qsize + 2 bytes
     vq_avail_base = vq_desc_base + desc_size;
-    let avail_size = 6 + actual_qsize * 2;
+    let mut avail_size = 6 + actual_qsize * 2;
     // Used ring: 2 + 2 + 8*qsize + 2 bytes (align to 4096)
     vq_used_base = ((vq_avail_base + avail_size + 4095) / 4096) * 4096;
 
@@ -110,7 +110,7 @@ fn virtio_blk_init(pci_bus, pci_dev, pci_func) {
     vq_avail_idx = 0;
 
     // Tell device the queue address (PFN = phys_addr / 4096)
-    let pfn = vq_desc_base / 4096;
+    let mut pfn = vq_desc_base / 4096;
     port_out_u32(blk_bar + 8, pfn);
 
     // Step 7: Set DRIVER_OK status bit
@@ -158,8 +158,8 @@ fn _vq_write_desc(idx, addr, length, flags, next) {
 // Internal: submit descriptor chain and wait for completion
 fn _vq_submit_and_wait(head_idx) {
     // Add to available ring
-    let avail_idx_off = vq_avail_base + 2;  // avail->idx offset
-    let ring_off = vq_avail_base + 4 + (vq_avail_idx % VIRTQ_SIZE) * 2;
+    let mut avail_idx_off = vq_avail_base + 2;  // avail->idx offset
+    let mut ring_off = vq_avail_base + 4 + (vq_avail_idx % VIRTQ_SIZE) * 2;
     mem_write_u16(ring_off, head_idx);
     vq_avail_idx = vq_avail_idx + 1;
     mem_write_u16(avail_idx_off, vq_avail_idx);
@@ -168,10 +168,10 @@ fn _vq_submit_and_wait(head_idx) {
     port_out_u16(blk_bar + 16, 0);
 
     // Poll used ring until our request completes
-    let used_idx_off = vq_used_base + 2;
+    let mut used_idx_off = vq_used_base + 2;
     let mut timeout = 10000000;
     while timeout > 0 {
-        let used_idx = mem_read_u16(used_idx_off);
+        let mut used_idx = mem_read_u16(used_idx_off);
         if used_idx != vq_last_used {
             vq_last_used = used_idx;
             return 0;  // completed
@@ -199,15 +199,15 @@ fn virtio_blk_read(sector, count, buf_addr) {
     mem_write_u8(req_status_addr, 255);
 
     // Allocate 3 descriptors for the chain: header -> data -> status
-    let d0 = _vq_alloc_desc();
-    let d1 = _vq_alloc_desc();
-    let d2 = _vq_alloc_desc();
+    let mut d0 = _vq_alloc_desc();
+    let mut d1 = _vq_alloc_desc();
+    let mut d2 = _vq_alloc_desc();
 
     // Descriptor 0: request header (16 bytes, device-readable)
     _vq_write_desc(d0, req_header_addr, 16, VIRTQ_DESC_F_NEXT, d1);
 
     // Descriptor 1: data buffer (count * 512 bytes, device-writable)
-    let data_len = count * SECTOR_SIZE;
+    let mut data_len = count * SECTOR_SIZE;
     _vq_write_desc(d1, buf_addr, data_len, VIRTQ_DESC_F_WRITE + VIRTQ_DESC_F_NEXT, d2);
 
     // Descriptor 2: status byte (1 byte, device-writable)
@@ -222,7 +222,7 @@ fn virtio_blk_read(sector, count, buf_addr) {
     _vq_free_desc(d0);
 
     // Check status
-    let status = mem_read_u8(req_status_addr);
+    let mut status = mem_read_u8(req_status_addr);
     if status == VIRTIO_BLK_S_OK {
         return data_len;
     }
@@ -241,15 +241,15 @@ fn virtio_blk_write(sector, count, buf_addr) {
     mem_write_u8(req_status_addr, 255);
 
     // Allocate 3 descriptors
-    let d0 = _vq_alloc_desc();
-    let d1 = _vq_alloc_desc();
-    let d2 = _vq_alloc_desc();
+    let mut d0 = _vq_alloc_desc();
+    let mut d1 = _vq_alloc_desc();
+    let mut d2 = _vq_alloc_desc();
 
     // Descriptor 0: request header (device-readable)
     _vq_write_desc(d0, req_header_addr, 16, VIRTQ_DESC_F_NEXT, d1);
 
     // Descriptor 1: data buffer (device-readable, NOT writable)
-    let data_len = count * SECTOR_SIZE;
+    let mut data_len = count * SECTOR_SIZE;
     _vq_write_desc(d1, buf_addr, data_len, VIRTQ_DESC_F_NEXT, d2);
 
     // Descriptor 2: status byte (device-writable)
@@ -263,7 +263,7 @@ fn virtio_blk_write(sector, count, buf_addr) {
     _vq_free_desc(d1);
     _vq_free_desc(d0);
 
-    let status = mem_read_u8(req_status_addr);
+    let mut status = mem_read_u8(req_status_addr);
     if status == VIRTIO_BLK_S_OK {
         return data_len;
     }

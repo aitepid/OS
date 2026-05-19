@@ -52,7 +52,7 @@ fn db_create_table(tid, ncols) {
 
 // Write 4 columns (extend to more via db_set_col)
 fn dbe_insert(tid, c0, c1, c2, c3) {
-    let rid  = db_nrows[tid];
+    let mut rid = db_nrows[tid];
     let mut base = tid * DB_TBL_STRIDE + rid * DB_ROW_STRIDE;
     set_at(db_rows, base,     c0);
     set_at(db_rows, base + 1, c1);
@@ -78,7 +78,7 @@ fn db_get_col(tid, rid, col) {
 fn _db_idx_lookup(tid, key) {
     // Linear scan over table's index slots
     let mut base = tid * DB_MAXROWS;
-    let i    = 0;
+    let mut i = 0;
     while i < db_nrows[tid] {
         let mut slot = base + i;
         if db_idx_used[slot] == 1 {
@@ -95,11 +95,11 @@ fn db_create_index(tid) {
     // Build hash index from existing rows
     set_at(db_has_idx, tid, 1);
     let mut base = tid * DB_MAXROWS;
-    let i    = 0;
+    let mut i = 0;
     while i < db_nrows[tid] {
-        let slot  = base + i;
-        let rb    = tid * DB_TBL_STRIDE + i * DB_ROW_STRIDE;
-        let key   = db_rows[rb];
+        let mut slot = base + i;
+        let mut rb = tid * DB_TBL_STRIDE + i * DB_ROW_STRIDE;
+        let mut key = db_rows[rb];
         set_at(db_idx_key,  slot, key);
         set_at(db_idx_rid,  slot, i);
         set_at(db_idx_used, slot, 1);
@@ -119,8 +119,8 @@ fn db_select_eq(tid, col, val) {
         }
     }
     // Sequential scan
-    let n    = db_nrows[tid];
-    let i    = 0;
+    let mut n = db_nrows[tid];
+    let mut i = 0;
     db_scan_count = n;
     while i < n {
         let mut v = db_get_col(tid, i, col);
@@ -134,13 +134,13 @@ fn db_select_eq(tid, col, val) {
 
 fn db_select_range(tid, col, lo, hi) {
     // Returns count of rows with lo <= col_val <= hi
-    let n     = db_nrows[tid];
+    let mut n = db_nrows[tid];
     let mut count = 0;
-    let i     = 0;
+    let mut i = 0;
     db_scan_count = n;
     while i < n {
         let mut v = db_get_col(tid, i, col);
-        let ok = 0;
+        let mut ok = 0;
         if v >= lo { if v <= hi { ok = 1; } }
         if ok == 1 { count += 1; }
         i += 1;
@@ -151,7 +151,7 @@ fn db_select_range(tid, col, lo, hi) {
 fn db_delete_row(tid, rid) {
     // Mark row deleted by setting all cols to DB_NULL
     let mut base = tid * DB_TBL_STRIDE + rid * DB_ROW_STRIDE;
-    let j    = 0;
+    let mut j = 0;
     while j < DB_ROW_STRIDE {
         set_at(db_rows, base + j, DB_NULL);
         j += 1;
@@ -180,7 +180,7 @@ fn db_update_col(tid, rid, col, newval) {
 fn db_explain(tid, col, use_index) {
     qp_init();
     let mut n = db_nrows[tid];
-    let nd = 0;
+    let mut nd = 0;
     if use_index == 1 {
         nd = qp_scan(tid, n, 0, 1);
     } else {
@@ -196,10 +196,10 @@ fn db_row_count(tid)  { return db_nrows[tid]; }
 fn db_last_scan()     { return db_scan_count; }
 
 fn db_print_row(tid, rid) {
-    let c0 = db_get_col(tid, rid, 0);
-    let c1 = db_get_col(tid, rid, 1);
-    let c2 = db_get_col(tid, rid, 2);
-    let c3 = db_get_col(tid, rid, 3);
+    let mut c0 = db_get_col(tid, rid, 0);
+    let mut c1 = db_get_col(tid, rid, 1);
+    let mut c2 = db_get_col(tid, rid, 2);
+    let mut c3 = db_get_col(tid, rid, 3);
     print("  row[" + to_string(rid) + "]: "
           + to_string(c0) + " " + to_string(c1)
           + " " + to_string(c2) + " " + to_string(c3));
@@ -236,23 +236,23 @@ fn db_test() {
     db_create_index(0);
 
     // Index lookup: col=0, val=5 → rid=4
-    let rid1 = db_select_eq(0, 0, 5);
-    let sc1  = db_last_scan();
+    let mut rid1 = db_select_eq(0, 0, 5);
+    let mut sc1 = db_last_scan();
 
     // Sequential scan: col=1, val=30 → rid=2
-    let rid2 = db_select_eq(0, 1, 30);
-    let sc2  = db_last_scan();
+    let mut rid2 = db_select_eq(0, 1, 30);
+    let mut sc2 = db_last_scan();
 
     // Range query: col=1, 20<=val<=50 → count=4
-    let cnt = db_select_range(0, 1, 20, 50);
+    let mut cnt = db_select_range(0, 1, 20, 50);
 
     // Update row 0: set col-0 = 99
     db_update_col(0, 0, 0, 99);
-    let ck = db_get_col(0, 0, 0);
+    let mut ck = db_get_col(0, 0, 0);
 
     // Explain
-    let cost_idx = db_explain(0, 0, 1);
-    let cost_seq = db_explain(0, 0, 0);
+    let mut cost_idx = db_explain(0, 0, 1);
+    let mut cost_seq = db_explain(0, 0, 0);
 
     print("db_test: rid1=" + to_string(rid1)
           + " sc1=" + to_string(sc1)

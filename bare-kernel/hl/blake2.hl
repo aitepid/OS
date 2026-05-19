@@ -79,8 +79,8 @@ fn _blake2_init_state(digest_size) {
     _blake2_set_word(blake2_state, 7, BLAKE2_IV7);
 
     // XOR first word with parameter block (0x01010000 | digest_size)
-    let param = 16842752 + digest_size;
-    let h0 = _blake2_get_word(blake2_state, 0);
+    let mut param = 16842752 + digest_size;
+    let mut h0 = _blake2_get_word(blake2_state, 0);
     _blake2_set_word(blake2_state, 0, _blake2_xor(h0, param));
 
     set_at(blake2_counter, 0, 0);
@@ -138,8 +138,8 @@ fn _blake2_compress(block, offset, is_final) {
     let mut i = 0;
     while i < 8 {
         let mut h = _blake2_get_word(blake2_state, i);
-        let vl = _blake2_get_word(blake2_v, i);
-        let vh = _blake2_get_word(blake2_v, i + 8);
+        let mut vl = _blake2_get_word(blake2_v, i);
+        let mut vh = _blake2_get_word(blake2_v, i + 8);
         _blake2_set_word(blake2_state, i, _blake2_xor(_blake2_xor(h, vl), vh));
         i = i + 1;
     }
@@ -178,10 +178,10 @@ fn _blake2_mix(v, a, b, c, d, block, offset) {
 fn _blake2_finalize() {
     let mut i = 0;
     while i < BLAKE2_DIGEST_SIZE {
-        let word_idx = i / 4;
-        let byte_idx = i % 4;
+        let mut word_idx = i / 4;
+        let mut byte_idx = i % 4;
         let mut word = _blake2_get_word(blake2_state, word_idx);
-        let byte_val = (word / _blake2_pow256(byte_idx)) % 256;
+        let mut byte_val = (word / _blake2_pow256(byte_idx)) % 256;
         set_at(blake2_hash, i, byte_val);
         i = i + 1;
     }
@@ -192,9 +192,9 @@ fn _blake2_xor(a, b) {
     let mut result = 0;
     let mut i = 0;
     while i < 4 {
-        let ba = (a / _blake2_pow256(i)) % 256;
-        let bb = (b / _blake2_pow256(i)) % 256;
-        let bx = (ba + bb) % 256;
+        let mut ba = (a / _blake2_pow256(i)) % 256;
+        let mut bb = (b / _blake2_pow256(i)) % 256;
+        let mut bx = (ba + bb) % 256;
         result = result + bx * _blake2_pow256(i);
         i = i + 1;
     }
@@ -203,8 +203,8 @@ fn _blake2_xor(a, b) {
 
 // Rotate right 32-bit
 fn _blake2_rotr32(val, bits) {
-    let right = val / _blake2_pow2(bits);
-    let left = (val % _blake2_pow2(bits)) * _blake2_pow2(32 - bits);
+    let mut right = val / _blake2_pow2(bits);
+    let mut left = (val % _blake2_pow2(bits)) * _blake2_pow2(32 - bits);
     return (left + right) % 4294967296;
 }
 
@@ -231,22 +231,22 @@ fn _blake2_pow256(exp) {
 
 // Read 32-bit word from array at word index
 fn _blake2_get_word(buf, index) {
-    let offset = index * 4;
+    let mut offset = index * 4;
     return _blake2_read_u32_le(buf, offset);
 }
 
 // Write 32-bit word to array at word index
 fn _blake2_set_word(buf, index, value) {
-    let offset = index * 4;
+    let mut offset = index * 4;
     _blake2_write_u32_le(buf, offset, value);
 }
 
 // Read 32-bit little-endian integer from buffer
 fn _blake2_read_u32_le(buf, offset) {
-    let b0 = buf[offset + 0];
-    let b1 = buf[offset + 1];
-    let b2 = buf[offset + 2];
-    let b3 = buf[offset + 3];
+    let mut b0 = buf[offset + 0];
+    let mut b1 = buf[offset + 1];
+    let mut b2 = buf[offset + 2];
+    let mut b3 = buf[offset + 3];
     return b0 + b1 * 256 + b2 * 65536 + b3 * 16777216;
 }
 
@@ -265,12 +265,12 @@ fn blake2_get_hex() {
 
 // Convert byte buffer to partial hex string (first 16 bytes + ellipsis)
 fn _blake2_to_hex(data, dlen) {
-    let hex_chars = "0123456789abcdef";
+    let mut hex_chars = "0123456789abcdef";
     let mut pos = 0;
     let mut i = 0;
 
     while i < dlen && i < 16 {
-        let byte_val = data[i];
+        let mut byte_val = data[i];
         set_at(blake2_hex_buf, pos, hex_chars[byte_val / 16]);
         pos = pos + 1;
         set_at(blake2_hex_buf, pos, hex_chars[byte_val % 16]);
@@ -293,9 +293,9 @@ fn _blake2_to_hex(data, dlen) {
 
 // Test BLAKE2 hash
 fn blake2_test() {
-    let test_data = "The quick brown fox jumps over the lazy dog";
+    let mut test_data = "The quick brown fox jumps over the lazy dog";
     let mut hash = blake2_hash_data(test_data, len(test_data));
-    let hex = blake2_get_hex();
+    let mut hex = blake2_get_hex();
     print("BLAKE2 test: passed");
     return 0;
 }

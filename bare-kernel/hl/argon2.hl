@@ -79,8 +79,8 @@ fn _argon2_init_block(blk, pwd_seed, salt_seed) {
 
 // Mix target block with reference block (add + diffusion, write-back).
 fn _argon2_mix(target, ref_blk) {
-    let tb = target * ARGON2_BLOCK_BYTES;
-    let rb = ref_blk  * ARGON2_BLOCK_BYTES;
+    let mut tb = target * ARGON2_BLOCK_BYTES;
+    let mut rb = ref_blk  * ARGON2_BLOCK_BYTES;
     let mut i = 0;
     while i < ARGON2_BLOCK_BYTES {
         let mut m = (argon2_blocks[tb + i] + argon2_blocks[rb + i]) % 256;
@@ -97,7 +97,7 @@ fn _argon2_mix(target, ref_blk) {
 
 // Select reference block index for block i at iteration pass.
 fn _argon2_ref_index(i, pass) {
-    let nb   = ARGON2_NUM_BLOCKS;
+    let mut nb = ARGON2_NUM_BLOCKS;
     let mut prev = (i + nb - 1) % nb;
     if argon2_variant == ARGON2_I {
         return (i * 7919 + pass * 1103) % nb;
@@ -126,17 +126,17 @@ fn argon2_hash(pwd_seed, salt_seed) {
     while pass < argon2_time_cost {
         let mut i = 0;
         while i < ARGON2_NUM_BLOCKS {
-            let ref_blk = _argon2_ref_index(i, pass);
+            let mut ref_blk = _argon2_ref_index(i, pass);
             _argon2_mix(i, ref_blk);
             i = i + 1;
         }
         pass = pass + 1;
     }
     // Phase 3: finalise — accumulate blocks into output
-    let o = 0;
+    let mut o = 0;
     while o < ARGON2_HASH_LENGTH {
-        let xv  = 0;
-        let blk = 0;
+        let mut xv = 0;
+        let mut blk = 0;
         while blk < ARGON2_NUM_BLOCKS {
             xv = (xv + argon2_blocks[blk * ARGON2_BLOCK_BYTES + (o % ARGON2_BLOCK_BYTES)]) % 256;
             blk = blk + 1;
@@ -160,18 +160,18 @@ fn argon2_test() {
     // Argon2id: hash(1001, 2002) twice — bytes must be identical (determinism)
     argon2_set_variant(ARGON2_ID);
     argon2_hash(1001, 2002);
-    let b0a = argon2_get_byte(0);
-    let b1a = argon2_get_byte(1);
+    let mut b0a = argon2_get_byte(0);
+    let mut b1a = argon2_get_byte(1);
 
     argon2_hash(1001, 2002);
-    let b0b = argon2_get_byte(0);
-    let b1b = argon2_get_byte(1);
+    let mut b0b = argon2_get_byte(0);
+    let mut b1b = argon2_get_byte(1);
 
     if b0a != b0b { pass = 0; }
     if b1a != b1b { pass = 0; }
 
     // Output must be non-trivially non-zero somewhere
-    let nonzero = 0;
+    let mut nonzero = 0;
     let mut k = 0;
     while k < ARGON2_HASH_LENGTH {
         if argon2_get_byte(k) != 0 { nonzero = 1; }
@@ -182,17 +182,17 @@ fn argon2_test() {
     // Argon2i variant — same seeds, different variant → likely different byte
     argon2_set_variant(ARGON2_I);
     argon2_hash(1001, 2002);
-    let b0i = argon2_get_byte(0);
+    let mut b0i = argon2_get_byte(0);
 
     // Argon2d variant
     argon2_set_variant(ARGON2_D);
     argon2_hash(1001, 2002);
-    let b0d = argon2_get_byte(0);
+    let mut b0d = argon2_get_byte(0);
 
     // Different seeds → different first output byte (probabilistic, very high confidence)
     argon2_set_variant(ARGON2_ID);
     argon2_hash(9999, 8888);
-    let b0c = argon2_get_byte(0);
+    let mut b0c = argon2_get_byte(0);
 
     print("argon2_test: b0a=" + to_string(b0a)
           + " b0i=" + to_string(b0i)

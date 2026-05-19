@@ -46,11 +46,11 @@ let mut ac97_bdl_head = 0;       // next BDL entry to fill (circular, 0-31)
 let mut ac97_bdl_queued = 0;     // number of entries queued
 
 fn ac97_detect() {
-    let devices = pci_scan();
+    let mut devices = pci_scan();
     let mut i = 0;
     while i < len(devices) {
-        let vid = devices[i][3];
-        let did = devices[i][4];
+        let mut vid = devices[i][3];
+        let mut did = devices[i][4];
         if vid == AC97_VENDOR {
             if did == AC97_DEVICE {
                 return [devices[i][0], devices[i][1], devices[i][2]];
@@ -62,14 +62,14 @@ fn ac97_detect() {
 }
 
 fn ac97_init() {
-    let pci_info = ac97_detect();
+    let mut pci_info = ac97_detect();
     if len(pci_info) == 0 {
         print("AC97 codec not found.");
         return 0;
     }
-    let pci_bus = pci_info[0];
-    let pci_dev = pci_info[1];
-    let pci_func = pci_info[2];
+    let mut pci_bus = pci_info[0];
+    let mut pci_dev = pci_info[1];
+    let mut pci_func = pci_info[2];
 
     ac97_mixer_bar = pci_bar(pci_bus, pci_dev, pci_func, 0);
     ac97_mixer_bar = (ac97_mixer_bar / 4) * 4;
@@ -77,7 +77,7 @@ fn ac97_init() {
     ac97_nabm_bar = (ac97_nabm_bar / 4) * 4;
 
     // Enable PCI bus mastering + I/O space
-    let cmd = pci_config_read16(pci_bus, pci_dev, pci_func, 4);
+    let mut cmd = pci_config_read16(pci_bus, pci_dev, pci_func, 4);
     pci_config_write16(pci_bus, pci_dev, pci_func, 4, cmd + 5);
 
     // Reset codec
@@ -114,7 +114,7 @@ fn ac97_play(samples_addr, sample_count) {
     if ac97_nabm_bar == 0 { return 0; }
 
     // Write BDL entry at head position
-    let entry = ac97_bdl_head % BDL_MAX_ENTRIES;
+    let mut entry = ac97_bdl_head % BDL_MAX_ENTRIES;
     mem_write_u32(BDL_ADDR + entry * 8, samples_addr);
     mem_write_u16(BDL_ADDR + entry * 8 + 4, sample_count);
     mem_write_u16(BDL_ADDR + entry * 8 + 6, 49152); // IOC + last entry
@@ -148,7 +148,7 @@ fn ac97_stop() {
 // Check if DMA is still running (poll SR register)
 fn ac97_is_playing() {
     if ac97_nabm_bar == 0 { return 0; }
-    let sr = port_in_u16(ac97_nabm_bar + NABM_PCMOUT_SR);
+    let mut sr = port_in_u16(ac97_nabm_bar + NABM_PCMOUT_SR);
     // Bit 1 = DCH (DMA controller halted) = done
     if (sr / 2) % 2 == 1 { ac97_playing = 0; return 0; }
     return 1;
@@ -159,8 +159,8 @@ fn ac97_status() {
     if ac97_nabm_bar == 0 {
         return "AC97: not detected";
     }
-    let sr = port_in_u16(ac97_nabm_bar + NABM_PCMOUT_SR);
-    let civ = port_in_u8(ac97_nabm_bar + NABM_PCMOUT_CIV);
+    let mut sr = port_in_u16(ac97_nabm_bar + NABM_PCMOUT_SR);
+    let mut civ = port_in_u8(ac97_nabm_bar + NABM_PCMOUT_CIV);
     return "AC97: vol=" + to_string(ac97_volume_pct) + "%" +
            " playing=" + to_string(ac97_playing) +
            " bdl_head=" + to_string(ac97_bdl_head) +
@@ -170,17 +170,17 @@ fn ac97_status() {
 
 // Generate a simple sine wave tone (for testing)
 fn ac97_beep(freq_hz, duration_ms) {
-    let sample_rate = 44100;
-    let total_samples = sample_rate * duration_ms / 1000;
+    let mut sample_rate = 44100;
+    let mut total_samples = sample_rate * duration_ms / 1000;
     // Generate samples: sin(2*pi*freq*t/sample_rate) * 32767
     // For simplicity: square wave (easier without floating point)
-    let half_period = sample_rate / (2 * freq_hz);
+    let mut half_period = sample_rate / (2 * freq_hz);
     let mut i = 0;
     let mut high = 1;
     let mut count = 0;
     while i < total_samples {
         if count >= half_period { high = 1 - high; count = 0; }
-        let sample = 0;
+        let mut sample = 0;
         if high == 1 { sample = 16384; } else { sample = 0 - 16384; }
         // Write stereo sample (L+R = 4 bytes)
         mem_write_i16(PCM_BUF_ADDR + i * 4, sample);
@@ -197,7 +197,7 @@ fn ac97_set_volume(percent) {
     if percent > 100 { percent = 100; }
     ac97_volume_pct = percent;
     // AC97 volume: 0=max, 63=min, bit 15=mute
-    let vol = 63 - (percent * 63 / 100);
+    let mut vol = 63 - (percent * 63 / 100);
     if ac97_mixer_bar != 0 {
         port_out_u16(ac97_mixer_bar + MIXER_MASTER_VOL, vol * 256 + vol);
     }

@@ -41,7 +41,7 @@ fn cuckoo_filter_init() {
 fn _cf_fp(item) {
     let mut h = item * 2654435761;
     if h < 0 { h = -h; }
-    let fp = h - ((h / CF_FP_RANGE) * CF_FP_RANGE);
+    let mut fp = h - ((h / CF_FP_RANGE) * CF_FP_RANGE);
     if fp == 0 { fp = 1; }
     return fp;
 }
@@ -56,11 +56,11 @@ fn _cf_h1(item) {
 // XOR of a and b restricted to 6 bits (for CF_BUCKETS=64=2^6)
 fn _cf_xor6(a, b) {
     let mut result = 0;
-    let bit = 1;
+    let mut bit = 1;
     let mut pos = 0;
     while pos < 6 {
-        let ab = (a / bit) - ((a / bit / 2) * 2);
-        let bb = (b / bit) - ((b / bit / 2) * 2);
+        let mut ab = (a / bit) - ((a / bit / 2) * 2);
+        let mut bb = (b / bit) - ((b / bit / 2) * 2);
         if ab != bb { result = result + bit; }
         bit = bit * 2;
         pos = pos + 1;
@@ -129,9 +129,9 @@ fn _cf_rand_slot() {
 }
 
 fn cf_insert(item) {
-    let fp = _cf_fp(item);
-    let b1 = _cf_h1(item);
-    let b2 = _cf_alternate(b1, fp);
+    let mut fp = _cf_fp(item);
+    let mut b1 = _cf_h1(item);
+    let mut b2 = _cf_alternate(b1, fp);
     if _cf_bucket_try_insert(b1, fp) == 1 {
         cf_count = cf_count + 1; cf_full = 0; return 1;
     }
@@ -144,7 +144,7 @@ fn cf_insert(item) {
     let mut i = 0;
     while i < CF_MAX_KICKS {
         let mut slot = b * CF_BSIZE + _cf_rand_slot();
-        let evicted = cf_table[slot];
+        let mut evicted = cf_table[slot];
         set_at(cf_table, slot, fp);
         fp = evicted;
         b = _cf_alternate(b, fp);
@@ -162,18 +162,18 @@ fn cf_insert(item) {
 }
 
 fn cf_contains(item) {
-    let fp = _cf_fp(item);
-    let b1 = _cf_h1(item);
-    let b2 = _cf_alternate(b1, fp);
+    let mut fp = _cf_fp(item);
+    let mut b1 = _cf_h1(item);
+    let mut b2 = _cf_alternate(b1, fp);
     if _cf_bucket_has(b1, fp) == 1 { return 1; }
     if _cf_bucket_has(b2, fp) == 1 { return 1; }
     return 0;
 }
 
 fn cf_delete(item) {
-    let fp = _cf_fp(item);
-    let b1 = _cf_h1(item);
-    let b2 = _cf_alternate(b1, fp);
+    let mut fp = _cf_fp(item);
+    let mut b1 = _cf_h1(item);
+    let mut b2 = _cf_alternate(b1, fp);
     if _cf_bucket_remove(b1, fp) == 1 { cf_count = cf_count - 1; return 1; }
     if _cf_bucket_remove(b2, fp) == 1 { cf_count = cf_count - 1; return 1; }
     return 0;
@@ -203,21 +203,21 @@ fn cuckoo_filter_test() {
     let mut i = 1;
     while i <= 100 { cf_insert(i); i = i + 1; }
     // All 100 must be present (true positive rate = 100%)
-    let tp = 0;
+    let mut tp = 0;
     i = 1;
     while i <= 100 { if cf_contains(i) == 1 { tp = tp + 1; } i = i + 1; }
     // Delete items 1..50
     i = 1;
     while i <= 50 { cf_delete(i); i = i + 1; }
     // Items 1-50 should be absent, 51-100 should be present
-    let absent = 0;
-    let present = 0;
+    let mut absent = 0;
+    let mut present = 0;
     i = 1;
     while i <= 50 { if cf_contains(i) == 0 { absent = absent + 1; } i = i + 1; }
     i = 51;
     while i <= 100 { if cf_contains(i) == 1 { present = present + 1; } i = i + 1; }
     // False positive test: items 1001..1100 (never inserted)
-    let fp_count = 0;
+    let mut fp_count = 0;
     i = 1001;
     while i <= 1100 { if cf_contains(i) == 1 { fp_count = fp_count + 1; } i = i + 1; }
     print("cuckoo test: " + cf_status());

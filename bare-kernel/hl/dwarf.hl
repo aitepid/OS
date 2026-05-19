@@ -67,7 +67,7 @@ fn dw_init() {
 }
 
 fn dw_add_file(name_id, dir_id) {
-    let id = dw_file_n;
+    let mut id = dw_file_n;
     set_at(dw_file_name, id, name_id);
     set_at(dw_file_dir,  id, dir_id);
     dw_file_n += 1;
@@ -75,7 +75,7 @@ fn dw_add_file(name_id, dir_id) {
 }
 
 fn dw_add_line(addr, file, line, col, is_stmt) {
-    let id = dw_lt_n;
+    let mut id = dw_lt_n;
     set_at(dw_lt_addr, id, addr);
     set_at(dw_lt_file, id, file);
     set_at(dw_lt_line, id, line);
@@ -86,7 +86,7 @@ fn dw_add_line(addr, file, line, col, is_stmt) {
 }
 
 fn dw_add_var(name_id, type_id, loc_kind, offset, func_id) {
-    let id = dw_vl_n;
+    let mut id = dw_vl_n;
     set_at(dw_vl_name, id, name_id);
     set_at(dw_vl_type, id, type_id);
     set_at(dw_vl_loc,  id, loc_kind);
@@ -106,7 +106,7 @@ fn _dw_emit_uleb128(v) {
     // Encode unsigned LEB128 (7 bits per byte, MSB=1 if more)
     let mut go = 1;
     while go == 1 {
-        let byte_val = v - (v / 128) * 128;   // v % 128
+        let mut byte_val = v - (v / 128) * 128;   // v % 128
         v = v / 128;
         if v != 0 {
             _dw_emit_byte(byte_val + 128);     // more bytes follow
@@ -121,15 +121,15 @@ fn _dw_emit_uleb128(v) {
 fn _dw_emit_sleb128(v) {
     // Encode signed LEB128; handle negative via two's complement simulation
     let mut go = 1;
-    let neg = 0;
+    let mut neg = 0;
     if v < 0 { neg = 1; }
     while go == 1 {
-        let byte_val = v - (v / 128) * 128;
+        let mut byte_val = v - (v / 128) * 128;
         if byte_val < 0 { byte_val = byte_val + 128; }
         v = v / 128;
         // Check if done: positive v==0 and sign bit clear, or neg v==-1 and sign set
-        let sign_bit = (byte_val / 64) - (byte_val / 64 / 2) * 2;
-        let more = 1;
+        let mut sign_bit = (byte_val / 64) - (byte_val / 64 / 2) * 2;
+        let mut more = 1;
         if v == 0 {
             if neg == 0 {
                 if sign_bit == 0 { more = 0; }
@@ -169,10 +169,10 @@ fn dw_emit_line_table() {
 
     let mut i = 0;
     while i < dw_lt_n {
-        let tgt_addr = dw_lt_addr[i];
-        let tgt_file = dw_lt_file[i];
-        let tgt_line = dw_lt_line[i];
-        let tgt_col  = dw_lt_col[i];
+        let mut tgt_addr = dw_lt_addr[i];
+        let mut tgt_file = dw_lt_file[i];
+        let mut tgt_line = dw_lt_line[i];
+        let mut tgt_col = dw_lt_col[i];
 
         // DW_LNS_SET_FILE if needed
         if tgt_file != dw_sm_file {
@@ -189,7 +189,7 @@ fn dw_emit_line_table() {
         }
 
         // DW_LNS_ADVANCE_PC
-        let pc_delta = tgt_addr - dw_sm_addr;
+        let mut pc_delta = tgt_addr - dw_sm_addr;
         if pc_delta != 0 {
             _dw_emit_byte(DW_LNS_ADVANCE_PC);
             _dw_emit_uleb128(pc_delta);
@@ -197,7 +197,7 @@ fn dw_emit_line_table() {
         }
 
         // DW_LNS_ADVANCE_LINE
-        let line_delta = tgt_line - dw_sm_line;
+        let mut line_delta = tgt_line - dw_sm_line;
         if line_delta != 0 {
             _dw_emit_byte(DW_LNS_ADVANCE_LINE);
             _dw_emit_sleb128(line_delta);
@@ -226,7 +226,7 @@ fn dw_test() {
     // Add file, record 3 line table entries, emit, check byte stream length
     // Add 2 vars: x at fbreg-8, y in reg rax=0
     dw_init();
-    let f1 = dw_add_file(100, 10);   // file index 1
+    let mut f1 = dw_add_file(100, 10);   // file index 1
     dw_add_line(0x1000, f1, 10, 0, 1);
     dw_add_line(0x1008, f1, 11, 0, 1);
     dw_add_line(0x1020, f1, 15, 4, 1);

@@ -109,10 +109,10 @@ fn _tel_alloc() {
 // ============================================================
 
 fn telnet_connect(host, port) {
-    let id = _tel_alloc();
+    let mut id = _tel_alloc();
     if id < 0 { print("telnet: no free slots"); return 0 - 1; }
-    let ip = dns_resolve(host);
-    let tcb = tcp_connect(ip, port);
+    let mut ip = dns_resolve(host);
+    let mut tcb = tcp_connect(ip, port);
     if tcb < 0 { print("telnet: tcp_connect failed"); return 0 - 1; }
     set_at(tel_active, id, 1);
     set_at(tel_tcb,    id, tcb);
@@ -128,9 +128,9 @@ fn telnet_connect(host, port) {
 }
 
 fn telnet_listen(port) {
-    let id = _tel_alloc();
+    let mut id = _tel_alloc();
     if id < 0 { return 0 - 1; }
-    let tcb = tcp_listen(port);
+    let mut tcb = tcp_listen(port);
     if tcb < 0 { return 0 - 1; }
     set_at(tel_active, id, 1);
     set_at(tel_tcb,    id, tcb);
@@ -157,7 +157,7 @@ fn telnet_close(id) {
 // ============================================================
 
 fn _tel_iac3(id, verb, opt) {
-    let frame = str_from_code(IAC) + str_from_code(verb) + str_from_code(opt);
+    let mut frame = str_from_code(IAC) + str_from_code(verb) + str_from_code(opt);
     tcp_send(tel_tcb[id], frame);
     return 0;
 }
@@ -181,7 +181,7 @@ fn _tel_handle_do(id, opt) {
     if opt == TELOPT_TTYPE { _tel_send_will(id, opt); return 0; }
     if opt == TELOPT_NAWS  {
         // Send window size: 80x24
-        let sb = str_from_code(IAC) + str_from_code(SB)
+        let mut sb = str_from_code(IAC) + str_from_code(SB)
             + str_from_code(TELOPT_NAWS)
             + str_from_code(0) + str_from_code(80)
             + str_from_code(0) + str_from_code(24)
@@ -268,7 +268,7 @@ fn _tel_parse(id, raw) {
 
     set_at(tel_state, id, st);
     // Append decoded data to session buffer
-    let old = tel_data_buf[id];
+    let mut old = tel_data_buf[id];
     set_at(tel_data_buf, id, old + data);
     return 0;
 }
@@ -277,7 +277,7 @@ fn _tel_parse(id, raw) {
 fn telnet_recv(id) {
     if id < 0 { return ""; }
     if id >= TELNET_MAX { return ""; }
-    let data = tel_data_buf[id];
+    let mut data = tel_data_buf[id];
     set_at(tel_data_buf, id, "");
     return data;
 }
@@ -290,9 +290,9 @@ fn telnet_tick() {
     let mut i = 0;
     while i < TELNET_MAX {
         if tel_active[i] == 1 {
-            let tcb = tel_tcb[i];
+            let mut tcb = tel_tcb[i];
             let mut addr = TCP_TABLE + tcb * TCB_SIZE;
-            let rx_buf = mem_read_u64(addr + 64);
+            let mut rx_buf = mem_read_u64(addr + 64);
             if rx_buf > 0 {
                 let mut raw = "";
                 let mut j = 0;
@@ -320,7 +320,7 @@ fn telnet_status(id) {
     if id < 0 { return "telnet: invalid"; }
     if id >= TELNET_MAX { return "telnet: invalid"; }
     if tel_active[id] == 0 { return "telnet[" + to_string(id) + "] free"; }
-    let role = "client";
+    let mut role = "client";
     if tel_server[id] == 1 { role = "server"; }
     return "telnet[" + to_string(id) + "] " + role
         + " tcb=" + to_string(tel_tcb[id])

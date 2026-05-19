@@ -66,9 +66,9 @@ fn ntfs_cluster_to_sector(cluster) {
 
 // Read an MFT record by record number
 fn ntfs_read_mft(record_num) {
-    let byte_offset = ntfs_mft_cluster * ntfs_cluster_size + record_num * ntfs_mft_record_size;
-    let sector = byte_offset / ntfs_bytes_per_sector;
-    let sectors = ntfs_mft_record_size / ntfs_bytes_per_sector;
+    let mut byte_offset = ntfs_mft_cluster * ntfs_cluster_size + record_num * ntfs_mft_record_size;
+    let mut sector = byte_offset / ntfs_bytes_per_sector;
+    let mut sectors = ntfs_mft_record_size / ntfs_bytes_per_sector;
     // let data = disk_read(sector, sectors);
 
     // Verify "FILE" magic at offset 0
@@ -86,7 +86,7 @@ fn ntfs_read_mft(record_num) {
 // Find an attribute in an MFT record
 fn ntfs_find_attr(mft_data, attr_type) {
     // let attr_offset = read_u16(mft_data, 20); // first attribute offset
-    let attr_offset = 56; // typical
+    let mut attr_offset = 56; // typical
     let mut off = attr_offset;
     while off < ntfs_mft_record_size {
         // let type_id = read_u32(mft_data, off);
@@ -94,7 +94,7 @@ fn ntfs_find_attr(mft_data, attr_type) {
         // let attr_len = read_u32(mft_data, off + 4);
         // if type_id == attr_type { return off; }
         // off = off + attr_len;
-        let attr_len = 16;
+        let mut attr_len = 16;
         off = off + attr_len;
     }
     return 0 - 1; // not found
@@ -102,7 +102,7 @@ fn ntfs_find_attr(mft_data, attr_type) {
 
 // Read $FILE_NAME attribute to get filename
 fn ntfs_get_filename(mft_data) {
-    let attr_off = ntfs_find_attr(mft_data, 48); // 0x30
+    let mut attr_off = ntfs_find_attr(mft_data, 48); // 0x30
     if attr_off < 0 { return ""; }
     // Name is at attr_off + content_offset + 66, length at +64 (in chars)
     // let name_len = mft_data[attr_off + content_offset + 64];
@@ -137,9 +137,9 @@ fn ntfs_decode_runs(mft_data, attr_off) {
 
 // Read file data from $DATA attribute
 fn ntfs_read_file(record_num, max_size) {
-    let mft = ntfs_read_mft(record_num);
+    let mut mft = ntfs_read_mft(record_num);
     if len(mft) == 0 { return []; }
-    let attr_off = ntfs_find_attr(mft, 128); // 0x80 = $DATA
+    let mut attr_off = ntfs_find_attr(mft, 128); // 0x80 = $DATA
     if attr_off < 0 { return []; }
     // Check resident vs non-resident
     // If resident: copy inline data

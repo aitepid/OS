@@ -38,7 +38,7 @@ fn ag_init() {
 }
 
 fn _ag_new_node(t, s0, s1) {
-    let id = ag_n_nodes;
+    let mut id = ag_n_nodes;
     set_at(ag_type, id, t);
     set_at(ag_src0, id, s0);
     set_at(ag_src1, id, s1);
@@ -47,13 +47,13 @@ fn _ag_new_node(t, s0, s1) {
 }
 
 fn ag_const(val) {
-    let id = _ag_new_node(AG_CONST, 0 - 1, 0 - 1);
+    let mut id = _ag_new_node(AG_CONST, 0 - 1, 0 - 1);
     set_at(ag_val, id, val);
     return id;
 }
 
 fn ag_input(val) {
-    let id = _ag_new_node(AG_INPUT, 0 - 1, 0 - 1);
+    let mut id = _ag_new_node(AG_INPUT, 0 - 1, 0 - 1);
     set_at(ag_val, id, val);
     return id;
 }
@@ -70,12 +70,12 @@ fn _ag_tanh_fp(x) {
 }
 
 fn ag_forward() {
-    let id = 0;
+    let mut id = 0;
     while id < ag_n_nodes {
-        let t  = ag_type[id];
-        let s0 = ag_src0[id];
-        let s1 = ag_src1[id];
-        let v  = ag_val[id];    // CONST/INPUT: keep pre-set value
+        let mut t = ag_type[id];
+        let mut s0 = ag_src0[id];
+        let mut s1 = ag_src1[id];
+        let mut v = ag_val[id];    // CONST/INPUT: keep pre-set value
         if t == AG_ADD {
             if s0 >= 0 {
                 if s1 >= 0 { v = ag_val[s0] + ag_val[s1]; }
@@ -102,10 +102,10 @@ fn ag_forward() {
 }
 
 fn _ag_backward_step(id) {
-    let t  = ag_type[id];
-    let g  = ag_grad[id];
-    let s0 = ag_src0[id];
-    let s1 = ag_src1[id];
+    let mut t = ag_type[id];
+    let mut g = ag_grad[id];
+    let mut s0 = ag_src0[id];
+    let mut s1 = ag_src1[id];
     if t == AG_ADD {
         if s0 >= 0 { set_at(ag_grad, s0, ag_grad[s0] + g); }
         if s1 >= 0 { set_at(ag_grad, s1, ag_grad[s1] + g); }
@@ -120,15 +120,15 @@ fn _ag_backward_step(id) {
     }
     if t == AG_RELU {
         if s0 >= 0 {
-            let dv = 0;
+            let mut dv = 0;
             if ag_val[id] > 0 { dv = g; }
             set_at(ag_grad, s0, ag_grad[s0] + dv);
         }
     }
     if t == AG_TANH {
         if s0 >= 0 {
-            let tv = ag_val[id];
-            let dt = AG_SCALE - tv * tv / AG_SCALE;
+            let mut tv = ag_val[id];
+            let mut dt = AG_SCALE - tv * tv / AG_SCALE;
             set_at(ag_grad, s0, ag_grad[s0] + g * dt / AG_SCALE);
         }
     }
@@ -143,7 +143,7 @@ fn ag_backward_from(loss_id) {
         i += 1;
     }
     set_at(ag_grad, loss_id, AG_SCALE);
-    let id = ag_n_nodes;
+    let mut id = ag_n_nodes;
     while id > 0 {
         id -= 1;
         _ag_backward_step(id);
@@ -161,22 +161,22 @@ fn ag_test() {
     // Build: d = a*b + b  where a=128(=0.5), b=256(=1.0)
     // Forward: c = a*b = 128*256/256 = 128
     //          d = c+b = 128+256 = 384
-    let na = ag_const(128);   // node 0: a
-    let nb = ag_const(256);   // node 1: b
-    let nc = ag_mul(na, nb);  // node 2: c = a*b
-    let nd = ag_add(nc, nb);  // node 3: d = c+b
+    let mut na = ag_const(128);   // node 0: a
+    let mut nb = ag_const(256);   // node 1: b
+    let mut nc = ag_mul(na, nb);  // node 2: c = a*b
+    let mut nd = ag_add(nc, nb);  // node 3: d = c+b
 
     ag_forward();
-    let vc = ag_get_val(nc);  // 128
-    let vd = ag_get_val(nd);  // 384
+    let mut vc = ag_get_val(nc);  // 128
+    let mut vd = ag_get_val(nd);  // 384
 
     // Backward from d (grad_d=256=1.0):
     //   ADD d=c+b:  grad_c += 256,  grad_b += 256
     //   MUL c=a*b:  grad_a += 256*256/256=256, grad_b += 256*128/256=128
     //   grad_a = 256, grad_b = 256+128 = 384
     ag_backward_from(nd);
-    let ga = ag_get_grad(na);  // 256  (∂d/∂a = b/scale = 1.0)
-    let gb = ag_get_grad(nb);  // 384  (∂d/∂b = a/scale + 1 = 1.5)
+    let mut ga = ag_get_grad(na);  // 256  (∂d/∂a = b/scale = 1.0)
+    let mut gb = ag_get_grad(nb);  // 384  (∂d/∂b = a/scale + 1 = 1.5)
 
     print("ag_test: vc=" + to_string(vc)
           + " vd=" + to_string(vd)

@@ -49,30 +49,30 @@ fn _wav_read_u16(offset) {
 }
 
 fn _wav_read_u32(offset) {
-    let b0 = mem_read_byte(WAV_BUF + offset);
-    let b1 = mem_read_byte(WAV_BUF + offset + 1);
-    let b2 = mem_read_byte(WAV_BUF + offset + 2);
-    let b3 = mem_read_byte(WAV_BUF + offset + 3);
+    let mut b0 = mem_read_byte(WAV_BUF + offset);
+    let mut b1 = mem_read_byte(WAV_BUF + offset + 1);
+    let mut b2 = mem_read_byte(WAV_BUF + offset + 2);
+    let mut b3 = mem_read_byte(WAV_BUF + offset + 3);
     return b0 + b1 * 256 + b2 * 65536 + b3 * 16777216;
 }
 
 fn _wav_read_fourcc(offset) {
-    let c0 = mem_read_byte(WAV_BUF + offset);
-    let c1 = mem_read_byte(WAV_BUF + offset + 1);
-    let c2 = mem_read_byte(WAV_BUF + offset + 2);
-    let c3 = mem_read_byte(WAV_BUF + offset + 3);
+    let mut c0 = mem_read_byte(WAV_BUF + offset);
+    let mut c1 = mem_read_byte(WAV_BUF + offset + 1);
+    let mut c2 = mem_read_byte(WAV_BUF + offset + 2);
+    let mut c3 = mem_read_byte(WAV_BUF + offset + 3);
     return str_from_code(c0) + str_from_code(c1) + str_from_code(c2) + str_from_code(c3);
 }
 
 fn wav_parse() {
     wav_clear();
 
-    let riff = _wav_read_fourcc(0);
+    let mut riff = _wav_read_fourcc(0);
     if riff != "RIFF" { return 0 - 1; }
 
-    let file_size = _wav_read_u32(4);
+    let mut file_size = _wav_read_u32(4);
 
-    let wave = _wav_read_fourcc(8);
+    let mut wave = _wav_read_fourcc(8);
     if wave != "WAVE" { return 0 - 2; }
 
     let mut offset = 12;
@@ -80,18 +80,18 @@ fn wav_parse() {
     let mut found_data = 0;
 
     while offset + 8 < WAV_BUF_SZ {
-        let chunk_id = _wav_read_fourcc(offset);
-        let chunk_size = _wav_read_u32(offset + 4);
+        let mut chunk_id = _wav_read_fourcc(offset);
+        let mut chunk_size = _wav_read_u32(offset + 4);
 
         if chunk_id == "fmt " {
             found_fmt = 1;
-            let audio_format = _wav_read_u16(offset + 8);
+            let mut audio_format = _wav_read_u16(offset + 8);
             if audio_format != 1 { return 0 - 3; }
 
             wav_channels = _wav_read_u16(offset + 10);
             wav_sample_rate = _wav_read_u32(offset + 12);
-            let byte_rate = _wav_read_u32(offset + 16);
-            let block_align = _wav_read_u16(offset + 20);
+            let mut byte_rate = _wav_read_u32(offset + 16);
+            let mut block_align = _wav_read_u16(offset + 20);
             wav_bits_per_sample = _wav_read_u16(offset + 22);
         } else {
             if chunk_id == "data" {
@@ -116,7 +116,7 @@ fn wav_parse() {
 }
 
 fn wav_load(path) {
-    let fd = vfs_open(path, 0);
+    let mut fd = vfs_open(path, 0);
     if fd < 0 { return 0 - 1; }
 
     let mut n = vfs_read(fd, WAV_BUF, WAV_BUF_SZ);
@@ -143,9 +143,9 @@ fn wav_get_duration_ms() {
     if wav_loaded == 0 { return 0; }
     if wav_sample_rate == 0 { return 0; }
 
-    let bytes_per_sample = wav_bits_per_sample / 8;
-    let total_samples = wav_data_size / (bytes_per_sample * wav_channels);
-    let duration_ms = (total_samples * 1000) / wav_sample_rate;
+    let mut bytes_per_sample = wav_bits_per_sample / 8;
+    let mut total_samples = wav_data_size / (bytes_per_sample * wav_channels);
+    let mut duration_ms = (total_samples * 1000) / wav_sample_rate;
 
     return duration_ms;
 }
@@ -165,10 +165,10 @@ fn wav_info() {
 fn wav_play() {
     if wav_loaded == 0 { return 0 - 1; }
 
-    let aus_available = 1;
+    let mut aus_available = 1;
     if aus_available == 0 { return 0 - 2; }
 
-    let play_size = wav_data_size;
+    let mut play_size = wav_data_size;
     if play_size > 65536 { play_size = 65536; }
 
     return 0;
@@ -232,7 +232,7 @@ fn wav_selftest() {
     mem_write_byte(WAV_BUF + 42, 0);
     mem_write_byte(WAV_BUF + 43, 0);
 
-    let res = wav_parse();
+    let mut res = wav_parse();
     if res < 0 { return "wav selftest: parse failed"; }
 
     if wav_sample_rate != 44100 { return "wav selftest: sample rate mismatch"; }

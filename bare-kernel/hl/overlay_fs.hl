@@ -62,7 +62,7 @@ fn overlay_alloc_slot() {
 
 // Create an overlay instance; returns instance_id or -1
 fn overlay_create(lower_path, upper_path, merged_path) {
-    let id = overlay_alloc_slot();
+    let mut id = overlay_alloc_slot();
     if id < 0 {
         print("overlay_fs: table full");
         return 0 - 1;
@@ -94,7 +94,7 @@ fn overlay_destroy(id) {
 
 // Mount overlay into VFS as fs_type=5, device_id=instance_id
 fn overlay_mount(lower_path, upper_path, merged_path) {
-    let id = overlay_create(lower_path, upper_path, merged_path);
+    let mut id = overlay_create(lower_path, upper_path, merged_path);
     if id < 0 { return 0 - 1; }
     vfs_mount(merged_path, 5, id);
     print("overlay_fs: mounted " + merged_path + " (id=" + to_string(id) + ")");
@@ -104,7 +104,7 @@ fn overlay_mount(lower_path, upper_path, merged_path) {
 fn overlay_umount(id) {
     if id < 0 { return 0 - 1; }
     if id >= OVERLAY_MAX { return 0 - 1; }
-    let mpath = ov_merged[id];
+    let mut mpath = ov_merged[id];
     overlay_destroy(id);
     // VFS mount entry remains (no unmount API yet), but overlay now inactive
     print("overlay_fs: umounted " + mpath);
@@ -125,9 +125,9 @@ fn overlay_find_by_merged(path) {
 
 // Strip the merged prefix from path, giving a relative sub-path
 fn overlay_rel_path(id, path) {
-    let mlen = len(ov_merged[id]);
+    let mut mlen = len(ov_merged[id]);
     if len(path) <= mlen { return "/"; }
-    let rel = str_sub(path, mlen, len(path));
+    let mut rel = str_sub(path, mlen, len(path));
     if len(rel) == 0 { return "/"; }
     return rel;
 }
@@ -145,10 +145,10 @@ fn overlay_lower_path(id, rel) {
 
 // Check whether a whiteout entry exists in upper for rel path
 fn overlay_is_whiteout(id, rel) {
-    let parts = _vfs_split_path(rel);
+    let mut parts = _vfs_split_path(rel);
     if len(parts) == 0 { return 0; }
-    let fname = parts[len(parts) - 1];
-    let wh_name = OVERLAY_WH_PREFIX + fname;
+    let mut fname = parts[len(parts) - 1];
+    let mut wh_name = OVERLAY_WH_PREFIX + fname;
     // Build parent path in upper
     let mut parent = ov_upper[id];
     let mut j = 0;
@@ -156,8 +156,8 @@ fn overlay_is_whiteout(id, rel) {
         parent = parent + "/" + parts[j];
         j = j + 1;
     }
-    let wh_path = parent + "/" + wh_name;
-    let st = vfs_stat(wh_path);
+    let mut wh_path = parent + "/" + wh_name;
+    let mut st = vfs_stat(wh_path);
     if st[0] > 0 { return 1; }
     if st[1] > 0 { return 1; }
     return 0;
@@ -166,23 +166,23 @@ fn overlay_is_whiteout(id, rel) {
 // Resolve a merged path to its real path: upper takes precedence
 // Returns [real_path, layer] where layer: 0=upper 1=lower -1=not found
 fn overlay_resolve(merged_path) {
-    let id = overlay_find_by_merged(merged_path);
+    let mut id = overlay_find_by_merged(merged_path);
     if id < 0 { return [merged_path, 0 - 1]; }
 
-    let rel = overlay_rel_path(id, merged_path);
+    let mut rel = overlay_rel_path(id, merged_path);
 
     // Whiteout check: if upper has .wh.<name>, file is deleted
     if overlay_is_whiteout(id, rel) == 1 { return ["", 0 - 1]; }
 
     // Check upper layer first
-    let upath = overlay_upper_path(id, rel);
-    let ust = vfs_stat(upath);
+    let mut upath = overlay_upper_path(id, rel);
+    let mut ust = vfs_stat(upath);
     if ust[0] > 0 { return [upath, 0]; }
     if ust[1] > 0 { return [upath, 0]; }
 
     // Fall back to lower layer
-    let lpath = overlay_lower_path(id, rel);
-    let lst = vfs_stat(lpath);
+    let mut lpath = overlay_lower_path(id, rel);
+    let mut lst = vfs_stat(lpath);
     if lst[0] > 0 { return [lpath, 1]; }
     if lst[1] > 0 { return [lpath, 1]; }
 
@@ -191,10 +191,10 @@ fn overlay_resolve(merged_path) {
 
 // Copy-on-Write: copy a file from lower to upper before writing
 fn overlay_copy_up(id, rel) {
-    let lpath = overlay_lower_path(id, rel);
-    let upath = overlay_upper_path(id, rel);
+    let mut lpath = overlay_lower_path(id, rel);
+    let mut upath = overlay_upper_path(id, rel);
     // Ensure parent directory exists in upper
-    let parts = _vfs_split_path(rel);
+    let mut parts = _vfs_split_path(rel);
     let mut parent = ov_upper[id];
     let mut i = 0;
     while i < len(parts) - 1 {
@@ -202,24 +202,24 @@ fn overlay_copy_up(id, rel) {
         vfs_mkdir(parent);
         i = i + 1;
     }
-    let bytes = vfs_copy(lpath, upath);
+    let mut bytes = vfs_copy(lpath, upath);
     print("overlay_fs: copy-up " + lpath + " -> " + upath + " (" + to_string(bytes) + " bytes)");
     return bytes;
 }
 
 // Merged directory listing: upper + lower, minus whiteouts
 fn overlay_readdir(id, rel) {
-    let upath = overlay_upper_path(id, rel);
-    let lpath = overlay_lower_path(id, rel);
+    let mut upath = overlay_upper_path(id, rel);
+    let mut lpath = overlay_lower_path(id, rel);
 
     let mut names = [];
     let mut seen  = [];   // deduplicate
 
     // Upper entries (may include whiteout files)
-    let u_entries = vfs_readdir(upath);
+    let mut u_entries = vfs_readdir(upath);
     let mut i = 0;
     while i < len(u_entries) {
-        let name = u_entries[i];
+        let mut name = u_entries[i];
         // Skip whiteout files from listing
         if str_starts_with(name, OVERLAY_WH_PREFIX) == 0 {
             push(names, name);
@@ -229,10 +229,10 @@ fn overlay_readdir(id, rel) {
     }
 
     // Lower entries, filtered by whiteouts in upper
-    let l_entries = vfs_readdir(lpath);
+    let mut l_entries = vfs_readdir(lpath);
     let mut j = 0;
     while j < len(l_entries) {
-        let name = l_entries[j];
+        let mut name = l_entries[j];
         // Check not already in seen
         let mut dup = 0;
         let mut k = 0;
@@ -242,9 +242,9 @@ fn overlay_readdir(id, rel) {
         }
         if dup == 0 {
             // Check no whiteout
-            let wh_path = upath + "/" + OVERLAY_WH_PREFIX + name;
-            let wst = vfs_stat(wh_path);
-            let is_wh = 0;
+            let mut wh_path = upath + "/" + OVERLAY_WH_PREFIX + name;
+            let mut wst = vfs_stat(wh_path);
+            let mut is_wh = 0;
             if wst[0] > 0 { is_wh = 1; }
             if wst[1] > 0 { is_wh = 1; }
             if is_wh == 0 {
@@ -259,9 +259,9 @@ fn overlay_readdir(id, rel) {
 
 // Create a whiteout entry in upper to hide a lower file (delete)
 fn overlay_whiteout(id, rel) {
-    let parts = _vfs_split_path(rel);
+    let mut parts = _vfs_split_path(rel);
     if len(parts) == 0 { return 0 - 1; }
-    let fname = parts[len(parts) - 1];
+    let mut fname = parts[len(parts) - 1];
     let mut parent = ov_upper[id];
     let mut i = 0;
     while i < len(parts) - 1 {
@@ -269,9 +269,9 @@ fn overlay_whiteout(id, rel) {
         vfs_mkdir(parent);
         i = i + 1;
     }
-    let wh_path = parent + "/" + OVERLAY_WH_PREFIX + fname;
+    let mut wh_path = parent + "/" + OVERLAY_WH_PREFIX + fname;
     // Create empty whiteout file
-    let fd = vfs_open(wh_path, O_CREAT + O_WRONLY + O_TRUNC);
+    let mut fd = vfs_open(wh_path, O_CREAT + O_WRONLY + O_TRUNC);
     if fd >= 0 { vfs_close(fd); }
     return 0;
 }

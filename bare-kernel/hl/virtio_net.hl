@@ -60,11 +60,11 @@ let TX_HDR_BUF = 9699328;     // 0x940000
 
 // Detect VirtIO-net on PCI bus
 fn virtio_net_detect() {
-    let devices = pci_scan();
+    let mut devices = pci_scan();
     let mut i = 0;
     while i < len(devices) {
-        let vendor = devices[i][3];
-        let devid = devices[i][4];
+        let mut vendor = devices[i][3];
+        let mut devid = devices[i][4];
         if vendor == VIRTIO_VENDOR && devid == VIRTIO_NET_DEV {
             return [devices[i][0], devices[i][1], devices[i][2]];
         }
@@ -76,7 +76,7 @@ fn virtio_net_detect() {
 // Initialize VirtIO network device
 fn virtio_net_init(pci_bus, pci_dev, pci_func) {
     // Read BAR0 for I/O base (mask low 2 bits)
-    let bar0 = pci_bar(pci_bus, pci_dev, pci_func, 0);
+    let mut bar0 = pci_bar(pci_bus, pci_dev, pci_func, 0);
     virtio_bar = (bar0 / 4) * 4;
 
     // Reset device
@@ -89,7 +89,7 @@ fn virtio_net_init(pci_bus, pci_dev, pci_func) {
     port_out_u8(virtio_bar + VIRTIO_DEVICE_STATUS, VIRTIO_STATUS_ACK + VIRTIO_STATUS_DRIVER);
 
     // Negotiate features: accept MAC feature
-    let features = port_in_u32(virtio_bar + VIRTIO_DEVICE_FEATURES);
+    let mut features = port_in_u32(virtio_bar + VIRTIO_DEVICE_FEATURES);
     port_out_u32(virtio_bar + VIRTIO_GUEST_FEATURES, features % 64); // keep low bits
 
     // Setup RX queue (queue 0)
@@ -102,16 +102,16 @@ fn virtio_net_init(pci_bus, pci_dev, pci_func) {
     // Pre-fill RX descriptors
     let mut i = 0;
     while i < RX_BUF_COUNT && i < rx_queue_size {
-        let desc_addr = rx_queue_addr + i * 16;  // each descriptor = 16 bytes
-        let buf = RX_BUF_BASE + i * RX_BUF_SIZE;
+        let mut desc_addr = rx_queue_addr + i * 16;  // each descriptor = 16 bytes
+        let mut buf = RX_BUF_BASE + i * RX_BUF_SIZE;
         mem_write_u64(desc_addr, buf);               // addr
         mem_write_u32(desc_addr + 8, RX_BUF_SIZE);  // len
         mem_write_u16(desc_addr + 12, VRING_DESC_F_WRITE); // flags: device writes
         mem_write_u16(desc_addr + 14, 0);            // next (not chained)
 
         // Add to available ring
-        let avail_base = rx_queue_addr + rx_queue_size * 16;
-        let avail_idx = mem_read_u16(avail_base + 2);
+        let mut avail_base = rx_queue_addr + rx_queue_size * 16;
+        let mut avail_idx = mem_read_u16(avail_base + 2);
         mem_write_u16(avail_base + 4 + (avail_idx % rx_queue_size) * 2, i);
         mem_write_u16(avail_base + 2, avail_idx + 1);
         i = i + 1;
@@ -129,7 +129,7 @@ fn virtio_net_init(pci_bus, pci_dev, pci_func) {
     port_out_u8(virtio_bar + VIRTIO_DEVICE_STATUS, VIRTIO_STATUS_ACK + VIRTIO_STATUS_DRIVER + VIRTIO_STATUS_DRIVER_OK);
 
     // Read MAC address
-    let mac = virtio_net_mac();
+    let mut mac = virtio_net_mac();
     let mut mi = 0;
     while mi < 6 { my_mac[mi] = mac[mi]; mi = mi + 1; }
 
@@ -142,22 +142,22 @@ fn virtio_net_send(data_addr, data_len) {
     // Descriptor 0: virtio_net_header (10 bytes, all zeros = no offloading)
     mem_zero(TX_HDR_BUF, VIRTIO_NET_HDR_SIZE);
 
-    let desc0 = tx_queue_addr + tx_desc_idx * 16;
+    let mut desc0 = tx_queue_addr + tx_desc_idx * 16;
     mem_write_u64(desc0, TX_HDR_BUF);
     mem_write_u32(desc0 + 8, VIRTIO_NET_HDR_SIZE);
     mem_write_u16(desc0 + 12, VRING_DESC_F_NEXT);  // chained
     mem_write_u16(desc0 + 14, tx_desc_idx + 1);     // next descriptor
 
     // Descriptor 1: actual packet data
-    let desc1 = tx_queue_addr + (tx_desc_idx + 1) * 16;
+    let mut desc1 = tx_queue_addr + (tx_desc_idx + 1) * 16;
     mem_write_u64(desc1, data_addr);
     mem_write_u32(desc1 + 8, data_len);
     mem_write_u16(desc1 + 12, 0);  // no more chaining
     mem_write_u16(desc1 + 14, 0);
 
     // Add to TX available ring
-    let avail_base = tx_queue_addr + tx_queue_size * 16;
-    let avail_idx = mem_read_u16(avail_base + 2);
+    let mut avail_base = tx_queue_addr + tx_queue_size * 16;
+    let mut avail_idx = mem_read_u16(avail_base + 2);
     mem_write_u16(avail_base + 4 + (avail_idx % tx_queue_size) * 2, tx_desc_idx);
     mem_write_u16(avail_base + 2, avail_idx + 1);
 
@@ -171,7 +171,7 @@ fn virtio_net_send(data_addr, data_len) {
 
 // Send packet from array of bytes (copies to memory buffer first)
 fn virtio_net_send_pkt(pkt) {
-    let buf = page_alloc();
+    let mut buf = page_alloc();
     let mut i = 0;
     while i < len(pkt) {
         mem_write_u8(buf + i, pkt[i]);
@@ -185,25 +185,25 @@ fn virtio_net_send_pkt(pkt) {
 // Receive a packet (poll used ring)
 // Returns array of bytes, or empty array if nothing available
 fn virtio_net_recv_pkt() {
-    let used_base = rx_queue_addr + rx_queue_size * 16;
+    let mut used_base = rx_queue_addr + rx_queue_size * 16;
     // used ring starts after avail ring: avail = qsize*16 + 4 + qsize*2 + 2
-    let avail_size = 4 + rx_queue_size * 2 + 2;
-    let used_ring = rx_queue_addr + rx_queue_size * 16 + avail_size;
+    let mut avail_size = 4 + rx_queue_size * 2 + 2;
+    let mut used_ring = rx_queue_addr + rx_queue_size * 16 + avail_size;
     // Align to next page
-    let used_aligned = ((used_ring + 4095) / 4096) * 4096;
+    let mut used_aligned = ((used_ring + 4095) / 4096) * 4096;
 
-    let used_idx = mem_read_u16(used_aligned + 2);
+    let mut used_idx = mem_read_u16(used_aligned + 2);
     if rx_last_used == used_idx { return []; }  // nothing new
 
     // Read used element
-    let used_elem = used_aligned + 4 + (rx_last_used % rx_queue_size) * 8;
-    let desc_id = mem_read_u32(used_elem);
-    let total_len = mem_read_u32(used_elem + 4);
+    let mut used_elem = used_aligned + 4 + (rx_last_used % rx_queue_size) * 8;
+    let mut desc_id = mem_read_u32(used_elem);
+    let mut total_len = mem_read_u32(used_elem + 4);
     rx_last_used = rx_last_used + 1;
 
     // Read data from buffer (skip virtio_net_header)
-    let buf = RX_BUF_BASE + desc_id * RX_BUF_SIZE;
-    let pkt_len = total_len - VIRTIO_NET_HDR_SIZE;
+    let mut buf = RX_BUF_BASE + desc_id * RX_BUF_SIZE;
+    let mut pkt_len = total_len - VIRTIO_NET_HDR_SIZE;
     if pkt_len <= 0 { return []; }
 
     let mut pkt = [];
@@ -214,8 +214,8 @@ fn virtio_net_recv_pkt() {
     }
 
     // Re-add descriptor to available ring
-    let avail_base2 = rx_queue_addr + rx_queue_size * 16;
-    let avail_idx = mem_read_u16(avail_base2 + 2);
+    let mut avail_base2 = rx_queue_addr + rx_queue_size * 16;
+    let mut avail_idx = mem_read_u16(avail_base2 + 2);
     mem_write_u16(avail_base2 + 4 + (avail_idx % rx_queue_size) * 2, desc_id);
     mem_write_u16(avail_base2 + 2, avail_idx + 1);
     port_out_u16(virtio_bar + VIRTIO_QUEUE_NOTIFY, 0);  // notify RX queue

@@ -126,18 +126,18 @@ fn mixer_mix(num_samples) {
                         }
                     }
                     if stream_done == 0 {
-                        let real_pos = mixer_position[i] + si;
-                        let sample = mem_read_i16(mixer_buf_addr[i] + real_pos * 2);
+                        let mut real_pos = mixer_position[i] + si;
+                        let mut sample = mem_read_i16(mixer_buf_addr[i] + real_pos * 2);
                         // Apply per-stream volume (0-255) + master volume
-                        let scaled = sample * mixer_volume[i] / 255;
-                        let master_scaled = scaled * mixer_master_vol / 255;
+                        let mut scaled = sample * mixer_volume[i] / 255;
+                        let mut master_scaled = scaled * mixer_master_vol / 255;
                         // Pan: left_vol = (256 - pan), right_vol = pan
-                        let left_vol  = 256 - mixer_pan[i];
-                        let right_vol = mixer_pan[i];
+                        let mut left_vol = 256 - mixer_pan[i];
+                        let mut right_vol = mixer_pan[i];
                         // Mix into output buffer with saturation clamping
-                        let out_off = MIXER_OUTPUT_ADDR + si * 4;
-                        let cur_l = mem_read_i16(out_off);
-                        let cur_r = mem_read_i16(out_off + 2);
+                        let mut out_off = MIXER_OUTPUT_ADDR + si * 4;
+                        let mut cur_l = mem_read_i16(out_off);
+                        let mut cur_r = mem_read_i16(out_off + 2);
                         mem_write_i16(out_off,     mixer_clamp(cur_l + master_scaled * left_vol  / 256, -32768, 32767));
                         mem_write_i16(out_off + 2, mixer_clamp(cur_r + master_scaled * right_vol / 256, -32768, 32767));
                     }
@@ -159,15 +159,15 @@ fn mixer_mix(num_samples) {
 // Generate a square-wave tone and play it through the mixer
 fn mixer_beep(freq_hz, duration_ms) {
     if freq_hz <= 0 { return 0; }
-    let total_samples = MIXER_SAMPLE_RATE * duration_ms / 1000;
+    let mut total_samples = MIXER_SAMPLE_RATE * duration_ms / 1000;
     if total_samples <= 0 { return 0; }
-    let half_period = MIXER_SAMPLE_RATE / (2 * freq_hz);
+    let mut half_period = MIXER_SAMPLE_RATE / (2 * freq_hz);
     let mut i = 0;
     let mut high = 1;
     let mut count = 0;
     while i < total_samples {
         if count >= half_period { high = 1 - high; count = 0; }
-        let sample = 0;
+        let mut sample = 0;
         if high == 1 { sample = 16384; } else { sample = 0 - 16384; }
         // Apply master volume
         let mut s = sample * mixer_master_vol / 255;

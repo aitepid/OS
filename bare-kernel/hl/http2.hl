@@ -201,12 +201,12 @@ fn _h2_write32_be(val) {
 
 // Build 9-byte HTTP/2 frame header
 fn h2_build_frame_header(length, frame_type, flags, stream_id) {
-    let hdr = [0, 0, 0, 0, 0, 0, 0, 0, 0];
-    let lb = _h2_write24_be(length);
+    let mut hdr = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+    let mut lb = _h2_write24_be(length);
     set_at(hdr, 0, lb[0]); set_at(hdr, 1, lb[1]); set_at(hdr, 2, lb[2]);
     set_at(hdr, 3, frame_type);
     set_at(hdr, 4, flags);
-    let sid = _h2_write32_be(stream_id);
+    let mut sid = _h2_write32_be(stream_id);
     set_at(hdr, 5, sid[0]); set_at(hdr, 6, sid[1]);
     set_at(hdr, 7, sid[2]); set_at(hdr, 8, sid[3]);
     return hdr;
@@ -215,10 +215,10 @@ fn h2_build_frame_header(length, frame_type, flags, stream_id) {
 // Parse HTTP/2 frame from raw bytes, store in h2_last_frame_*
 fn h2_parse_frame(data, pos) {
     if len(data) - pos < 9 { return 0 - 1; }
-    let length    = _h2_read24_be(data, pos);
-    let ftype     = data[pos + 3];
-    let flags     = data[pos + 4];
-    let stream_id = _h2_read32_be(data, pos + 5);
+    let mut length = _h2_read24_be(data, pos);
+    let mut ftype = data[pos + 3];
+    let mut flags = data[pos + 4];
+    let mut stream_id = _h2_read32_be(data, pos + 5);
     h2_last_frame_type   = ftype;
     h2_last_frame_flags  = flags;
     h2_last_frame_stream = stream_id;
@@ -237,14 +237,14 @@ fn h2_parse_frame(data, pos) {
 
 // Build SETTINGS frame (empty or with values)
 fn h2_build_settings(ack) {
-    let flags = 0;
+    let mut flags = 0;
     if ack == 1 { flags = H2_FLAG_ACK; }
     if ack == 1 {
         return h2_build_frame_header(0, H2_FRAME_SETTINGS, flags, 0);
     }
     // Send 6 settings (6 × 6 bytes = 36 bytes payload)
-    let payload = [];
-    let settings = [
+    let mut payload = [];
+    let mut settings = [
         [H2_SETTINGS_HEADER_TABLE_SIZE,      h2_settings_header_table_size],
         [H2_SETTINGS_ENABLE_PUSH,            h2_settings_enable_push],
         [H2_SETTINGS_MAX_CONCURRENT_STREAMS, h2_settings_max_streams],
@@ -254,48 +254,48 @@ fn h2_build_settings(ack) {
     ];
     let mut i = 0;
     while i < 6 {
-        let id  = settings[i][0];
+        let mut id = settings[i][0];
         let mut val = settings[i][1];
         set_at(payload, i * 6,     (id / 256) - ((id / 65536) * 256));
         set_at(payload, i * 6 + 1, id - ((id / 256) * 256));
-        let vb = _h2_write32_be(val);
+        let mut vb = _h2_write32_be(val);
         set_at(payload, i * 6 + 2, vb[0]);
         set_at(payload, i * 6 + 3, vb[1]);
         set_at(payload, i * 6 + 4, vb[2]);
         set_at(payload, i * 6 + 5, vb[3]);
         i = i + 1;
     }
-    let hdr = h2_build_frame_header(36, H2_FRAME_SETTINGS, 0, 0);
+    let mut hdr = h2_build_frame_header(36, H2_FRAME_SETTINGS, 0, 0);
     return [hdr, payload];
 }
 
 // Build PING frame (8-byte opaque data)
 fn h2_build_ping(opaque_data, ack) {
-    let flags = 0;
+    let mut flags = 0;
     if ack == 1 { flags = H2_FLAG_ACK; }
-    let hdr = h2_build_frame_header(8, H2_FRAME_PING, flags, 0);
+    let mut hdr = h2_build_frame_header(8, H2_FRAME_PING, flags, 0);
     return [hdr, opaque_data];
 }
 
 // Build WINDOW_UPDATE frame
 fn h2_build_window_update(stream_id, increment) {
-    let hdr = h2_build_frame_header(4, H2_FRAME_WINDOW_UPDATE, 0, stream_id);
-    let payload = _h2_write32_be(increment);
+    let mut hdr = h2_build_frame_header(4, H2_FRAME_WINDOW_UPDATE, 0, stream_id);
+    let mut payload = _h2_write32_be(increment);
     return [hdr, payload];
 }
 
 // Build RST_STREAM frame
 fn h2_build_rst_stream(stream_id, error_code) {
-    let hdr = h2_build_frame_header(4, H2_FRAME_RST_STREAM, 0, stream_id);
-    let payload = _h2_write32_be(error_code);
+    let mut hdr = h2_build_frame_header(4, H2_FRAME_RST_STREAM, 0, stream_id);
+    let mut payload = _h2_write32_be(error_code);
     return [hdr, payload];
 }
 
 // Build GOAWAY frame
 fn h2_build_goaway(last_stream_id, error_code) {
-    let hdr = h2_build_frame_header(8, H2_FRAME_GOAWAY, 0, 0);
-    let p1 = _h2_write32_be(last_stream_id);
-    let p2 = _h2_write32_be(error_code);
+    let mut hdr = h2_build_frame_header(8, H2_FRAME_GOAWAY, 0, 0);
+    let mut p1 = _h2_write32_be(last_stream_id);
+    let mut p2 = _h2_write32_be(error_code);
     return [hdr, p1, p2];
 }
 
@@ -308,13 +308,13 @@ fn h2_hpack_static_lookup(idx) {
 
 // HPACK: add to dynamic table (evict entries if needed)
 fn h2_hpack_add_dynamic(name, val) {
-    let entry_size = len(name) + len(val) + 32;
+    let mut entry_size = len(name) + len(val) + 32;
     while h2_dyn_table_size + entry_size > h2_max_table_size {
         if h2_dyn_table_count == 0 { entry_size = h2_max_table_size + 1; }
         if h2_dyn_table_count > 0 {
             // Evict oldest entry (last in dynamic table)
-            let last = h2_dyn_table_count - 1;
-            let evict_size = len(h2_dyn_table_names[last]) + len(h2_dyn_table_vals[last]) + 32;
+            let mut last = h2_dyn_table_count - 1;
+            let mut evict_size = len(h2_dyn_table_names[last]) + len(h2_dyn_table_vals[last]) + 32;
             h2_dyn_table_size  = h2_dyn_table_size - evict_size;
             h2_dyn_table_count = h2_dyn_table_count - 1;
         }
@@ -332,7 +332,7 @@ fn h2_hpack_add_dynamic(name, val) {
 // HPACK: encode a single header field (literal with incremental indexing)
 fn h2_hpack_encode_header(name, val) {
     // Use literal header field with incremental indexing (prefix 01xxxxxx)
-    let encoded = [];
+    let mut encoded = [];
     // 0x40 = literal with incremental indexing, new name
     set_at(encoded, 0, 64);  // 0x40
     // Length-prefixed name
@@ -342,7 +342,7 @@ fn h2_hpack_encode_header(name, val) {
         set_at(encoded, 2 + i, name[i]);
         i = i + 1;
     }
-    let name_end = 2 + len(name);
+    let mut name_end = 2 + len(name);
     // Length-prefixed value
     set_at(encoded, name_end, len(val));
     i = 0;
@@ -361,28 +361,28 @@ fn h2_hpack_encode_indexed(static_idx) {
 
 // Build HEADERS frame for HTTP/2 request
 fn h2_build_request(method, path, scheme, authority, stream_id) {
-    let hpack_block = [];
+    let mut hpack_block = [];
     let mut idx = 0;
     // :method
     if method == "GET"  { let mut e = h2_hpack_encode_indexed(2); set_at(hpack_block, idx, e[0]); idx = idx + 1; }
     else if method == "POST" { let mut e = h2_hpack_encode_indexed(3); set_at(hpack_block, idx, e[0]); idx = idx + 1; }
     else {
         let mut e = h2_hpack_encode_header(":method", method);
-        let ei = 0; while ei < len(e) { set_at(hpack_block, idx, e[ei]); idx = idx + 1; ei = ei + 1; }
+        let mut ei = 0; while ei < len(e) { set_at(hpack_block, idx, e[ei]); idx = idx + 1; ei = ei + 1; }
     }
     // :path
     if path == "/" { let mut e = h2_hpack_encode_indexed(4); set_at(hpack_block, idx, e[0]); idx = idx + 1; }
     else {
         let mut e = h2_hpack_encode_header(":path", path);
-        let ei = 0; while ei < len(e) { set_at(hpack_block, idx, e[ei]); idx = idx + 1; ei = ei + 1; }
+        let mut ei = 0; while ei < len(e) { set_at(hpack_block, idx, e[ei]); idx = idx + 1; ei = ei + 1; }
     }
     // :scheme http
     if scheme == "http" { let mut e = h2_hpack_encode_indexed(6); set_at(hpack_block, idx, e[0]); idx = idx + 1; }
     else { let mut e = h2_hpack_encode_indexed(7); set_at(hpack_block, idx, e[0]); idx = idx + 1; }
     // :authority
-    let ea = h2_hpack_encode_header(":authority", authority);
-    let ei = 0; while ei < len(ea) { set_at(hpack_block, idx, ea[ei]); idx = idx + 1; ei = ei + 1; }
-    let hdr = h2_build_frame_header(idx, H2_FRAME_HEADERS, H2_FLAG_END_HEADERS, stream_id);
+    let mut ea = h2_hpack_encode_header(":authority", authority);
+    let mut ei = 0; while ei < len(ea) { set_at(hpack_block, idx, ea[ei]); idx = idx + 1; ei = ei + 1; }
+    let mut hdr = h2_build_frame_header(idx, H2_FRAME_HEADERS, H2_FLAG_END_HEADERS, stream_id);
     // Open stream
     if stream_id < H2_MAX_STREAMS {
         set_at(h2_stream_state, stream_id, H2_STREAM_OPEN);
@@ -395,7 +395,7 @@ fn h2_build_request(method, path, scheme, authority, stream_id) {
 
 // Allocate next stream ID (client: odd numbers)
 fn h2_alloc_stream() {
-    let sid = h2_next_stream_id;
+    let mut sid = h2_next_stream_id;
     h2_next_stream_id = h2_next_stream_id + 2;
     return sid;
 }
@@ -405,7 +405,7 @@ fn h2_process_settings(payload) {
     let mut n = len(payload) / 6;
     let mut i = 0;
     while i < n {
-        let id  = payload[i * 6] * 256 + payload[i * 6 + 1];
+        let mut id = payload[i * 6] * 256 + payload[i * 6 + 1];
         let mut val = payload[i * 6 + 2] * 16777216
                 + payload[i * 6 + 3] * 65536
                 + payload[i * 6 + 4] * 256
@@ -423,7 +423,7 @@ fn h2_process_settings(payload) {
 
 fn h2_stream_info(sid) {
     if sid >= H2_MAX_STREAMS { return "h2: invalid stream"; }
-    let state_str = "idle";
+    let mut state_str = "idle";
     let mut s = h2_stream_state[sid];
     if s == H2_STREAM_OPEN        { state_str = "open"; }
     if s == H2_STREAM_HALF_CLOSED { state_str = "half-closed"; }
@@ -444,22 +444,22 @@ fn h2_status() {
 fn http2_test() {
     http2_init();
     // Test SETTINGS frame build
-    let settings_frame = h2_build_settings(0);
-    let settings_ack = h2_build_settings(1);
+    let mut settings_frame = h2_build_settings(0);
+    let mut settings_ack = h2_build_settings(1);
     // Test stream allocation and HEADERS
-    let sid1 = h2_alloc_stream();
-    let req1 = h2_build_request("GET", "/", "https", "example.com", sid1);
-    let sid2 = h2_alloc_stream();
-    let req2 = h2_build_request("POST", "/api/data", "https", "api.example.com", sid2);
+    let mut sid1 = h2_alloc_stream();
+    let mut req1 = h2_build_request("GET", "/", "https", "example.com", sid1);
+    let mut sid2 = h2_alloc_stream();
+    let mut req2 = h2_build_request("POST", "/api/data", "https", "api.example.com", sid2);
     // Test PING
-    let ping = h2_build_ping([0,0,0,0,1,2,3,4], 0);
+    let mut ping = h2_build_ping([0,0,0,0,1,2,3,4], 0);
     // Test WINDOW_UPDATE
-    let wupd = h2_build_window_update(sid1, 32768);
+    let mut wupd = h2_build_window_update(sid1, 32768);
     // Test GOAWAY
-    let goaway = h2_build_goaway(sid2, H2_ERR_NO_ERROR);
+    let mut goaway = h2_build_goaway(sid2, H2_ERR_NO_ERROR);
     // Test HPACK dynamic table
     h2_hpack_add_dynamic("x-custom-header", "custom-value");
-    let frame_hdr = h2_build_frame_header(100, H2_FRAME_DATA, H2_FLAG_END_STREAM, sid1);
+    let mut frame_hdr = h2_build_frame_header(100, H2_FRAME_DATA, H2_FLAG_END_STREAM, sid1);
     print("http2 test: " + h2_status());
     print("http2 test: " + h2_stream_info(sid1));
     return "http2: streams=" + to_string(h2_next_stream_id / 2 - 1)

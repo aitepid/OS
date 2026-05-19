@@ -134,7 +134,7 @@ fn _slsrv_parse(raw) {
     let mut pri = 13;
     let mut pos = 0;
     if str_char_code(raw, 0) == 60 {   // '<'
-        let gt = str_find(raw, ">");
+        let mut gt = str_find(raw, ">");
         if gt > 0 {
             pri = parse_int(str_sub(raw, 1, gt));
             pos = gt + 1;
@@ -144,13 +144,13 @@ fn _slsrv_parse(raw) {
     // Detect RFC 5424: version digit after '>'
     let mut is5424 = 0;
     if pos < n {
-        let vc = str_char_code(raw, pos);
+        let mut vc = str_char_code(raw, pos);
         if vc == 49 { is5424 = 1; pos = pos + 2; }   // '1' + space
     }
 
     // Timestamp: next token up to next space
-    let rest = str_sub(raw, pos, n);
-    let sp1 = str_find(rest, " ");
+    let mut rest = str_sub(raw, pos, n);
+    let mut sp1 = str_find(rest, " ");
     let mut ts = "";
     let mut msg_start = rest;
     if sp1 >= 0 {
@@ -159,7 +159,7 @@ fn _slsrv_parse(raw) {
     }
 
     // Hostname: next token
-    let sp2 = str_find(msg_start, " ");
+    let mut sp2 = str_find(msg_start, " ");
     let mut hostname = "";
     let mut body = msg_start;
     if sp2 >= 0 {
@@ -179,11 +179,11 @@ fn _slsrv_parse(raw) {
 
 fn syslog_srv_on_recv(data) {
     if slsrv_enabled == 0 { return 0; }
-    let parsed = _slsrv_parse(data);
-    let pri  = parsed[0];
-    let ts   = parsed[1];
-    let host = parsed[2];
-    let body = parsed[3];
+    let mut parsed = _slsrv_parse(data);
+    let mut pri = parsed[0];
+    let mut ts = parsed[1];
+    let mut host = parsed[2];
+    let mut body = parsed[3];
     let mut slot = slsrv_head;
     set_at(slsrv_pri, slot, pri);
     set_at(slsrv_src, slot, host);
@@ -203,7 +203,7 @@ fn syslog_srv_on_recv(data) {
 
 fn syslog_srv_tick() {
     if slsrv_enabled == 0 { return 0; }
-    let data = udp_recv(SLSRV_LPORT, SLSRV_BUF, SLSRV_BUF_SZ);
+    let mut data = udp_recv(SLSRV_LPORT, SLSRV_BUF, SLSRV_BUF_SZ);
     if len(data) > 0 { syslog_srv_on_recv(data); }
     return 0;
 }
@@ -224,9 +224,9 @@ fn syslog_srv_list(n) {
         if k >= slsrv_cnt { k = n; }
         else {
             let mut idx = (slsrv_head - 1 - k + SLSRV_MAX * 2) % SLSRV_MAX;
-            let pri = slsrv_pri[idx];
-            let fac = _slsrv_fac_name(_slsrv_facility(pri));
-            let sev = _slsrv_sev_name(_slsrv_severity(pri));
+            let mut pri = slsrv_pri[idx];
+            let mut fac = _slsrv_fac_name(_slsrv_facility(pri));
+            let mut sev = _slsrv_sev_name(_slsrv_severity(pri));
             out = out + "  [" + fac + "." + sev + "] "
                 + slsrv_ts[idx] + " " + slsrv_src[idx]
                 + ": " + slsrv_msg[idx] + "\n";

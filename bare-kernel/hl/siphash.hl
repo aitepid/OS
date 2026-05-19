@@ -36,7 +36,7 @@ fn siphash_init() {
 // siphash_set_key -- load 16-byte key from a string
 // ---------------------------------------------------------------------------
 fn siphash_set_key(key) {
-    let key_len = len(key);
+    let mut key_len = len(key);
     if key_len < 16 {
         print("siphash: key too short (need 16 bytes)");
         return 0 - 1;
@@ -81,8 +81,8 @@ fn _siphash_pow256(exp) {
 fn _siphash_rotl(value, bits) {
     if bits == 0 { return value; }
     if bits >= 32 { return value; }
-    let left  = (value * _siphash_pow2(bits)) % 4294967296;
-    let right = value / _siphash_pow2(32 - bits);
+    let mut left = (value * _siphash_pow2(bits)) % 4294967296;
+    let mut right = value / _siphash_pow2(32 - bits);
     return (left + right) % 4294967296;
 }
 
@@ -141,8 +141,8 @@ fn _siphash_compress(m) {
 // ---------------------------------------------------------------------------
 fn siphash(data, dlen) {
     // Extract key as two 32-bit words from the key array
-    let k0 = (siphash_key[0] + siphash_key[1] * 256 + siphash_key[2] * 65536 + siphash_key[3] * 16777216) % 4294967296;
-    let k1 = (siphash_key[8] + siphash_key[9] * 256 + siphash_key[10] * 65536 + siphash_key[11] * 16777216) % 4294967296;
+    let mut k0 = (siphash_key[0] + siphash_key[1] * 256 + siphash_key[2] * 65536 + siphash_key[3] * 16777216) % 4294967296;
+    let mut k1 = (siphash_key[8] + siphash_key[9] * 256 + siphash_key[10] * 65536 + siphash_key[11] * 16777216) % 4294967296;
 
     // Initialise state
     siphash_v0 = (k0 + 1952801890) % 4294967296;
@@ -152,7 +152,7 @@ fn siphash(data, dlen) {
 
     // Process 8-byte (simplified: 4-byte) blocks
     let mut pos    = 0;
-    let blocks = dlen / 8;
+    let mut blocks = dlen / 8;
     let mut i = 0;
     while i < blocks {
         let mut m = _siphash_read32_str(data, pos, dlen);
@@ -162,11 +162,11 @@ fn siphash(data, dlen) {
     }
 
     // Absorb remaining bytes + length tag
-    let remaining = dlen % 8;
+    let mut remaining = dlen % 8;
     let mut last_block = (dlen % 256) * 16777216;
     let mut j = 0;
     while j < remaining {
-        let bval = str_char_code(data, pos + j);
+        let mut bval = str_char_code(data, pos + j);
         last_block = (last_block + bval * _siphash_pow256(j)) % 4294967296;
         j = j + 1;
     }
@@ -188,12 +188,12 @@ fn siphash(data, dlen) {
 // _siphash_to_hex -- render 32-bit value as 8 hex digits into siphash_hex_buf
 // ---------------------------------------------------------------------------
 fn _siphash_to_hex(value) {
-    let hex_chars = "0123456789abcdef";
+    let mut hex_chars = "0123456789abcdef";
     let mut pos = 0;
     let mut i = 7;
     while i >= 0 {
-        let shift   = i * 4;
-        let nibble  = (value / _siphash_pow2(shift)) % 16;
+        let mut shift = i * 4;
+        let mut nibble = (value / _siphash_pow2(shift)) % 16;
         set_at(siphash_hex_buf, pos, str_char_code(hex_chars, nibble));
         pos = pos + 1;
         i = i - 1;
@@ -235,8 +235,8 @@ fn siphash_get_state() {
 // siphash_test -- basic self-test
 // ---------------------------------------------------------------------------
 fn siphash_test() {
-    let test_key  = "0123456789abcdef";
-    let test_data = "SipHash test message";
+    let mut test_key = "0123456789abcdef";
+    let mut test_data = "SipHash test message";
 
     // Load key
     let mut r = siphash_set_key(test_key);
@@ -246,17 +246,17 @@ fn siphash_test() {
     }
 
     // Determinism check
-    let hash1 = siphash(test_data, len(test_data));
-    let hash2 = siphash(test_data, len(test_data));
+    let mut hash1 = siphash(test_data, len(test_data));
+    let mut hash2 = siphash(test_data, len(test_data));
     if hash1 != hash2 {
         print("siphash_test: determinism failed");
         return 0 - 2;
     }
 
     // Key variation check
-    let diff_key = "fedcba9876543210";
+    let mut diff_key = "fedcba9876543210";
     siphash_set_key(diff_key);
-    let hash3 = siphash(test_data, len(test_data));
+    let mut hash3 = siphash(test_data, len(test_data));
     if hash1 == hash3 {
         print("siphash_test: key variation failed");
         return 0 - 3;

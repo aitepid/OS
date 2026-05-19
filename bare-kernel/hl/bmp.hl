@@ -46,10 +46,10 @@ fn _bmp_read_u16(offset) {
 }
 
 fn _bmp_read_u32(offset) {
-    let b0 = mem_read_byte(BMP_BUF + offset);
-    let b1 = mem_read_byte(BMP_BUF + offset + 1);
-    let b2 = mem_read_byte(BMP_BUF + offset + 2);
-    let b3 = mem_read_byte(BMP_BUF + offset + 3);
+    let mut b0 = mem_read_byte(BMP_BUF + offset);
+    let mut b1 = mem_read_byte(BMP_BUF + offset + 1);
+    let mut b2 = mem_read_byte(BMP_BUF + offset + 2);
+    let mut b3 = mem_read_byte(BMP_BUF + offset + 3);
     return b0 + b1 * 256 + b2 * 65536 + b3 * 16777216;
 }
 
@@ -64,22 +64,22 @@ fn _bmp_read_i32(offset) {
 fn bmp_parse() {
     bmp_clear();
 
-    let sig0 = mem_read_byte(BMP_BUF);
-    let sig1 = mem_read_byte(BMP_BUF + 1);
+    let mut sig0 = mem_read_byte(BMP_BUF);
+    let mut sig1 = mem_read_byte(BMP_BUF + 1);
     if sig0 != 66 { return 0 - 1; }         // 'B'
     if sig1 != 77 { return 0 - 1; }         // 'M'
 
-    let file_size = _bmp_read_u32(2);
+    let mut file_size = _bmp_read_u32(2);
     bmp_data_offset = _bmp_read_u32(10);
 
-    let dib_header_size = _bmp_read_u32(14);
+    let mut dib_header_size = _bmp_read_u32(14);
     if dib_header_size < 40 { return 0 - 2; }
 
     bmp_width = _bmp_read_i32(18);
     bmp_height = _bmp_read_i32(22);
-    let planes = _bmp_read_u16(26);
+    let mut planes = _bmp_read_u16(26);
     bmp_bpp = _bmp_read_u16(28);
-    let compression = _bmp_read_u32(30);
+    let mut compression = _bmp_read_u32(30);
 
     if compression != 0 { return 0 - 3; }   // BI_RGB only
 
@@ -91,7 +91,7 @@ fn bmp_parse() {
 }
 
 fn bmp_load(path) {
-    let fd = vfs_open(path, 0);
+    let mut fd = vfs_open(path, 0);
     if fd < 0 { return 0 - 1; }
 
     let mut n = vfs_read(fd, BMP_BUF, BMP_BUF_SZ);
@@ -134,12 +134,12 @@ fn bmp_get_pixel(x, y) {
 
     if bmp_bpp != 24 { return 0; }
 
-    let row_size = bmp_width * 3;
-    let padding = row_size % 4;
+    let mut row_size = bmp_width * 3;
+    let mut padding = row_size % 4;
     if padding != 0 { row_size = row_size + (4 - padding); }
 
-    let flipped_y = bmp_height - 1 - y;
-    let pixel_offset = bmp_data_offset + flipped_y * row_size + x * 3;
+    let mut flipped_y = bmp_height - 1 - y;
+    let mut pixel_offset = bmp_data_offset + flipped_y * row_size + x * 3;
 
     let mut b = mem_read_byte(BMP_BUF + pixel_offset);
     let mut g = mem_read_byte(BMP_BUF + pixel_offset + 1);
@@ -151,11 +151,11 @@ fn bmp_get_pixel(x, y) {
 fn bmp_display(x_pos, y_pos) {
     if bmp_loaded == 0 { return 0 - 1; }
 
-    let fb_base = vesa_get_fb();
+    let mut fb_base = vesa_get_fb();
     if fb_base == 0 { return 0 - 2; }
 
-    let fb_width = vesa_get_width();
-    let fb_height = vesa_get_height();
+    let mut fb_width = vesa_get_width();
+    let mut fb_height = vesa_get_height();
 
     let mut y = 0;
     while y < bmp_height {
@@ -165,8 +165,8 @@ fn bmp_display(x_pos, y_pos) {
         while x < bmp_width {
             if x_pos + x >= fb_width { x = bmp_width; }
 
-            let color = bmp_get_pixel(x, y);
-            let fb_offset = (y_pos + y) * fb_width + (x_pos + x);
+            let mut color = bmp_get_pixel(x, y);
+            let mut fb_offset = (y_pos + y) * fb_width + (x_pos + x);
             mem_write_dword(fb_base + fb_offset * 4, color);
 
             x = x + 1;
@@ -212,7 +212,7 @@ fn bmp_selftest() {
     mem_write_byte(BMP_BUF + 32, 0);
     mem_write_byte(BMP_BUF + 33, 0);
 
-    let res = bmp_parse();
+    let mut res = bmp_parse();
     if res < 0 { return "bmp selftest: parse failed"; }
 
     if bmp_width != 16 { return "bmp selftest: width mismatch"; }

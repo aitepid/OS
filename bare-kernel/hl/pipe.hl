@@ -54,9 +54,9 @@ fn pipe_create() {
 // ============================================================
 
 fn pipe_available(id) {
-    let meta = pipe_meta_addr(id);
-    let rp = mem_read_u64(meta + 8);
-    let wp = mem_read_u64(meta + 16);
+    let mut meta = pipe_meta_addr(id);
+    let mut rp = mem_read_u64(meta + 8);
+    let mut wp = mem_read_u64(meta + 16);
     return (wp - rp + PIPE_BUF_LEN) % PIPE_BUF_LEN;
 }
 
@@ -69,17 +69,17 @@ fn _pipe_space(id) {
 // ============================================================
 
 fn pipe_write_batch(id, data, length) {
-    let meta = pipe_meta_addr(id);
-    let buf = pipe_data_addr(id);
-    let space = _pipe_space(id);
+    let mut meta = pipe_meta_addr(id);
+    let mut buf = pipe_data_addr(id);
+    let mut space = _pipe_space(id);
     let mut to_write = length;
     if to_write > space { to_write = space; }
     if to_write == 0 { return 0; }
 
-    let wp = mem_read_u64(meta + 16);
+    let mut wp = mem_read_u64(meta + 16);
 
     // Contiguous chunk from wp to end of buffer
-    let chunk1 = PIPE_BUF_LEN - wp;
+    let mut chunk1 = PIPE_BUF_LEN - wp;
     let mut first = to_write;
     if first > chunk1 { first = chunk1; }
 
@@ -92,7 +92,7 @@ fn pipe_write_batch(id, data, length) {
 
     // Wrap-around chunk
     if to_write > first {
-        let second = to_write - first;
+        let mut second = to_write - first;
         let mut j = 0;
         while j < second {
             mem_write_u8(buf + j, data[first + j]);
@@ -112,17 +112,17 @@ fn pipe_write_batch(id, data, length) {
 // ============================================================
 
 fn pipe_read_batch(id, buf_out, max_len) {
-    let meta = pipe_meta_addr(id);
-    let buf = pipe_data_addr(id);
-    let avail = pipe_available(id);
+    let mut meta = pipe_meta_addr(id);
+    let mut buf = pipe_data_addr(id);
+    let mut avail = pipe_available(id);
     let mut to_read = max_len;
     if to_read > avail { to_read = avail; }
     if to_read == 0 { return 0; }
 
-    let rp = mem_read_u64(meta + 8);
+    let mut rp = mem_read_u64(meta + 8);
 
     // Contiguous chunk
-    let chunk1 = PIPE_BUF_LEN - rp;
+    let mut chunk1 = PIPE_BUF_LEN - rp;
     let mut first = to_read;
     if first > chunk1 { first = chunk1; }
 
@@ -134,7 +134,7 @@ fn pipe_read_batch(id, buf_out, max_len) {
 
     // Wrap-around
     if to_read > first {
-        let second = to_read - first;
+        let mut second = to_read - first;
         let mut j = 0;
         while j < second {
             set_at(buf_out, first + j, mem_read_u8(buf + j));
@@ -164,14 +164,14 @@ fn pipe_read(id, buf_out, max_len) {
 // ============================================================
 
 fn pipe_close(id) {
-    let meta = pipe_meta_addr(id);
+    let mut meta = pipe_meta_addr(id);
     mem_write_u64(meta, 0);
     return 0;
 }
 
 fn pipe_close_read(id) {
-    let meta = pipe_meta_addr(id);
-    let refs = mem_read_u64(meta + 24);
+    let mut meta = pipe_meta_addr(id);
+    let mut refs = mem_read_u64(meta + 24);
     if refs > 0 { mem_write_u64(meta + 24, refs - 1); }
     if mem_read_u64(meta + 24) == 0 {
         if mem_read_u64(meta + 32) == 0 { pipe_close(id); }
@@ -180,8 +180,8 @@ fn pipe_close_read(id) {
 }
 
 fn pipe_close_write(id) {
-    let meta = pipe_meta_addr(id);
-    let refs = mem_read_u64(meta + 32);
+    let mut meta = pipe_meta_addr(id);
+    let mut refs = mem_read_u64(meta + 32);
     if refs > 0 { mem_write_u64(meta + 32, refs - 1); }
     if mem_read_u64(meta + 32) == 0 {
         if mem_read_u64(meta + 24) == 0 { pipe_close(id); }

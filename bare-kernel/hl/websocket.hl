@@ -107,30 +107,30 @@ fn _ws_sha1_hex(data) {
     let mut i = 0;
     while i < n {
         let mut b = char_code(char_at(data, i));
-        let r0 = (h0 + b * 17 + i * 31) % 4294967296;
-        let r1 = (h1 + b * 37 + h0) % 4294967296;
-        let r2 = (h2 + b * 53 + h1) % 4294967296;
-        let r3 = (h3 + b * 7  + h2) % 4294967296;
-        let r4 = (h4 + b * 3  + h3) % 4294967296;
+        let mut r0 = (h0 + b * 17 + i * 31) % 4294967296;
+        let mut r1 = (h1 + b * 37 + h0) % 4294967296;
+        let mut r2 = (h2 + b * 53 + h1) % 4294967296;
+        let mut r3 = (h3 + b * 7  + h2) % 4294967296;
+        let mut r4 = (h4 + b * 3  + h3) % 4294967296;
         h0 = r0; h1 = r1; h2 = r2; h3 = r3; h4 = r4;
         i = i + 1;
     }
     // Mix final state
-    let f0 = (h0 + h4) % 4294967296;
-    let f1 = (h1 + h0) % 4294967296;
-    let f2 = (h2 + h1) % 4294967296;
-    let f3 = (h3 + h2) % 4294967296;
-    let f4 = (h4 + h3) % 4294967296;
+    let mut f0 = (h0 + h4) % 4294967296;
+    let mut f1 = (h1 + h0) % 4294967296;
+    let mut f2 = (h2 + h1) % 4294967296;
+    let mut f3 = (h3 + h2) % 4294967296;
+    let mut f4 = (h4 + h3) % 4294967296;
     return _ws_hex32(f0) + _ws_hex32(f1) + _ws_hex32(f2) + _ws_hex32(f3) + _ws_hex32(f4);
 }
 
 fn _ws_hex32(n) {
-    let digits = "0123456789abcdef";
+    let mut digits = "0123456789abcdef";
     let mut s = "";
     let mut v = n;
     let mut i = 0;
     while i < 8 {
-        let nibble = (v / (268435456)) % 16;  // 268435456 = 16^7
+        let mut nibble = (v / (268435456)) % 16;  // 268435456 = 16^7
         let mut d = nibble;
         // Extract correct nibble from high to low
         let mut shift = 28 - i * 4;
@@ -145,7 +145,7 @@ fn _ws_hex32(n) {
 }
 
 fn _ws_base64_char(n) {
-    let chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     return str_sub(chars, n % 64, (n % 64) + 1);
 }
 
@@ -153,13 +153,13 @@ fn _ws_base64_char(n) {
 fn _ws_base64_from_hex(hex_s) {
     // Convert hex string to base64
     let mut out = "";
-    let hlen = len(hex_s);
+    let mut hlen = len(hex_s);
     let mut i = 0;
     while i + 5 < hlen {
         // Read 3 bytes (6 hex chars) → 4 base64 chars
-        let h0 = _ws_hex_byte(hex_s, i);
-        let h1 = _ws_hex_byte(hex_s, i + 2);
-        let h2 = _ws_hex_byte(hex_s, i + 4);
+        let mut h0 = _ws_hex_byte(hex_s, i);
+        let mut h1 = _ws_hex_byte(hex_s, i + 2);
+        let mut h2 = _ws_hex_byte(hex_s, i + 4);
         out = out + _ws_base64_char(h0 / 4);
         out = out + _ws_base64_char((h0 % 4) * 16 + h1 / 16);
         out = out + _ws_base64_char((h1 % 16) * 4 + h2 / 64);
@@ -168,9 +168,9 @@ fn _ws_base64_from_hex(hex_s) {
     }
     // Handle remaining bytes
     if i + 1 < hlen {
-        let h0 = _ws_hex_byte(hex_s, i);
+        let mut h0 = _ws_hex_byte(hex_s, i);
         if i + 3 < hlen {
-            let h1 = _ws_hex_byte(hex_s, i + 2);
+            let mut h1 = _ws_hex_byte(hex_s, i + 2);
             out = out + _ws_base64_char(h0 / 4);
             out = out + _ws_base64_char((h0 % 4) * 16 + h1 / 16);
             out = out + _ws_base64_char((h1 % 16) * 4);
@@ -198,9 +198,9 @@ fn _ws_hex_byte(s, pos) {
 
 // Compute Sec-WebSocket-Accept header value from client key
 fn ws_accept_key(client_key) {
-    let magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-    let concat = client_key + magic;
-    let sha_hex = _ws_sha1_hex(concat);
+    let mut magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+    let mut concat = client_key + magic;
+    let mut sha_hex = _ws_sha1_hex(concat);
     return _ws_base64_from_hex(sha_hex);
 }
 
@@ -211,13 +211,13 @@ fn ws_accept_key(client_key) {
 // Build a WebSocket frame. Returns string of frame bytes.
 // For server→client: MASK=0 (servers must not mask)
 fn ws_frame_build(opcode, payload, mask_key) {
-    let plen = len(payload);
-    let use_mask = 0;
+    let mut plen = len(payload);
+    let mut use_mask = 0;
     if mask_key != 0 { use_mask = 1; }
 
     let mut frame = "";
     // Byte 0: FIN=1, RSV=0, opcode
-    let b0 = 128 + opcode;  // 128 = 0x80 = FIN bit
+    let mut b0 = 128 + opcode;  // 128 = 0x80 = FIN bit
     frame = frame + str_from_code(b0);
     // Byte 1: MASK bit + payload length
     let mut b1 = plen;
@@ -241,7 +241,7 @@ fn ws_frame_build(opcode, payload, mask_key) {
     while i < plen {
         let mut b = char_code(char_at(payload, i));
         if use_mask == 1 {
-            let mk = [
+            let mut mk = [
                 (mask_key / 16777216) % 256,
                 (mask_key / 65536) % 256,
                 (mask_key / 256) % 256,
@@ -262,18 +262,18 @@ fn ws_frame_parse(data) {
     let mut n = len(data);
     if n < 2 { return [0 - 1, "", 0]; }
 
-    let b0 = char_code(char_at(data, 0));
-    let b1 = char_code(char_at(data, 1));
+    let mut b0 = char_code(char_at(data, 0));
+    let mut b1 = char_code(char_at(data, 1));
 
-    let opcode  = b0 % 16;
-    let masked  = (b1 / 128) % 2;
+    let mut opcode = b0 % 16;
+    let mut masked = (b1 / 128) % 2;
     let mut plen = b1 % 128;
     let mut hdr_len = 2;
 
     if plen == 126 {
         if n < 4 { return [0 - 1, "", 0]; }
-        let e0 = char_code(char_at(data, 2));
-        let e1 = char_code(char_at(data, 3));
+        let mut e0 = char_code(char_at(data, 2));
+        let mut e1 = char_code(char_at(data, 3));
         plen = e0 * 256 + e1;
         hdr_len = 4;
     }
@@ -284,10 +284,10 @@ fn ws_frame_parse(data) {
     let mut payload = "";
     let mut i = 0;
     while i < plen {
-        let raw = char_code(char_at(data, hdr_len + i));
+        let mut raw = char_code(char_at(data, hdr_len + i));
         if masked == 1 {
-            let mk_off = hdr_len - 4 + (i % 4);
-            let mk_byte = char_code(char_at(data, mk_off));
+            let mut mk_off = hdr_len - 4 + (i % 4);
+            let mut mk_byte = char_code(char_at(data, mk_off));
             payload = payload + str_from_code(raw ^ mk_byte);
         } else {
             payload = payload + str_from_code(raw);
@@ -302,12 +302,12 @@ fn ws_frame_parse(data) {
 // ============================================================
 
 fn ws_listen(port) {
-    let id = _ws_alloc_slot();
+    let mut id = _ws_alloc_slot();
     if id < 0 {
         print("ws: no free slots");
         return 0 - 1;
     }
-    let tcb = tcp_listen(port);
+    let mut tcb = tcp_listen(port);
     if tcb < 0 {
         print("ws: tcp_listen failed on port " + to_string(port));
         return 0 - 1;
@@ -322,9 +322,9 @@ fn ws_listen(port) {
 
 // Complete HTTP→WS upgrade handshake (called when HTTP Upgrade request arrives)
 fn ws_server_handshake(ws_id, client_key) {
-    let tcb = ws_tcb[ws_id];
-    let accept = ws_accept_key(client_key);
-    let resp = "HTTP/1.1 101 Switching Protocols\r\n"
+    let mut tcb = ws_tcb[ws_id];
+    let mut accept = ws_accept_key(client_key);
+    let mut resp = "HTTP/1.1 101 Switching Protocols\r\n"
         + "Upgrade: websocket\r\n"
         + "Connection: Upgrade\r\n"
         + "Sec-WebSocket-Accept: " + accept + "\r\n"
@@ -336,10 +336,10 @@ fn ws_server_handshake(ws_id, client_key) {
 }
 
 fn ws_connect(host, port, path) {
-    let id = _ws_alloc_slot();
+    let mut id = _ws_alloc_slot();
     if id < 0 { return 0 - 1; }
-    let ip = dns_resolve(host);
-    let tcb = tcp_connect(ip, port);
+    let mut ip = dns_resolve(host);
+    let mut tcb = tcp_connect(ip, port);
     if tcb < 0 { return 0 - 1; }
     set_at(ws_state,     id, WS_ST_HANDSHAKE);
     set_at(ws_tcb,       id, tcb);
@@ -347,8 +347,8 @@ fn ws_connect(host, port, path) {
     ws_count = ws_count + 1;
 
     // Send HTTP Upgrade request
-    let key = "dGhlIHNhbXBsZSBub25jZQ==";   // static nonce for simplicity
-    let req = "GET " + path + " HTTP/1.1\r\n"
+    let mut key = "dGhlIHNhbXBsZSBub25jZQ==";   // static nonce for simplicity
+    let mut req = "GET " + path + " HTTP/1.1\r\n"
         + "Host: " + host + "\r\n"
         + "Upgrade: websocket\r\n"
         + "Connection: Upgrade\r\n"
@@ -368,9 +368,9 @@ fn ws_connect(host, port, path) {
 fn ws_send_text(ws_id, text) {
     if ws_id < 0 { return 0 - 1; }
     if ws_state[ws_id] != WS_ST_OPEN { return 0 - 1; }
-    let mask_key = 0;
+    let mut mask_key = 0;
     if ws_is_server[ws_id] == 0 { mask_key = 305419896; }  // fixed client mask
-    let frame = ws_frame_build(WS_OP_TEXT, text, mask_key);
+    let mut frame = ws_frame_build(WS_OP_TEXT, text, mask_key);
     tcp_send(ws_tcb[ws_id], frame);
     return 0;
 }
@@ -378,9 +378,9 @@ fn ws_send_text(ws_id, text) {
 fn ws_send_binary(ws_id, data_str) {
     if ws_id < 0 { return 0 - 1; }
     if ws_state[ws_id] != WS_ST_OPEN { return 0 - 1; }
-    let mask_key = 0;
+    let mut mask_key = 0;
     if ws_is_server[ws_id] == 0 { mask_key = 305419896; }
-    let frame = ws_frame_build(WS_OP_BINARY, data_str, mask_key);
+    let mut frame = ws_frame_build(WS_OP_BINARY, data_str, mask_key);
     tcp_send(ws_tcb[ws_id], frame);
     return 0;
 }
@@ -388,7 +388,7 @@ fn ws_send_binary(ws_id, data_str) {
 fn ws_send_ping(ws_id) {
     if ws_id < 0 { return 0 - 1; }
     if ws_state[ws_id] != WS_ST_OPEN { return 0 - 1; }
-    let frame = ws_frame_build(WS_OP_PING, "", 0);
+    let mut frame = ws_frame_build(WS_OP_PING, "", 0);
     tcp_send(ws_tcb[ws_id], frame);
     return 0;
 }
@@ -396,7 +396,7 @@ fn ws_send_ping(ws_id) {
 fn ws_close(ws_id) {
     if ws_id < 0 { return 0; }
     if ws_state[ws_id] == WS_ST_FREE { return 0; }
-    let frame = ws_frame_build(WS_OP_CLOSE, "", 0);
+    let mut frame = ws_frame_build(WS_OP_CLOSE, "", 0);
     tcp_send(ws_tcb[ws_id], frame);
     tcp_close(ws_tcb[ws_id]);
     set_at(ws_state, ws_id, WS_ST_FREE);
@@ -407,8 +407,8 @@ fn ws_close(ws_id) {
 // Return last received message for a connection
 fn ws_recv(ws_id) {
     if ws_id < 0 { return [0 - 1, ""]; }
-    let op  = ws_msg_op[ws_id];
-    let msg = ws_msg_buf[ws_id];
+    let mut op = ws_msg_op[ws_id];
+    let mut msg = ws_msg_buf[ws_id];
     set_at(ws_msg_buf, ws_id, "");
     set_at(ws_msg_op,  ws_id, 0);
     return [op, msg];
@@ -422,9 +422,9 @@ fn ws_tick() {
     let mut i = 0;
     while i < WS_MAX_CONN {
         if ws_state[i] == WS_ST_OPEN {
-            let tcb = ws_tcb[i];
+            let mut tcb = ws_tcb[i];
             let mut addr = TCP_TABLE + tcb * TCB_SIZE;
-            let rx_buf = mem_read_u64(addr + 64);
+            let mut rx_buf = mem_read_u64(addr + 64);
             if rx_buf > 0 {
                 // Read raw bytes into string
                 let mut raw = "";
@@ -436,13 +436,13 @@ fn ws_tick() {
                 }
                 if len(raw) >= 2 {
                     let mut r = ws_frame_parse(raw);
-                    let opcode  = r[0];
-                    let payload = r[1];
+                    let mut opcode = r[0];
+                    let mut payload = r[1];
                     if opcode == WS_OP_TEXT   { set_at(ws_msg_op, i, opcode); set_at(ws_msg_buf, i, payload); }
                     if opcode == WS_OP_BINARY { set_at(ws_msg_op, i, opcode); set_at(ws_msg_buf, i, payload); }
                     if opcode == WS_OP_PING   {
                         // Auto-pong
-                        let pong = ws_frame_build(WS_OP_PONG, payload, 0);
+                        let mut pong = ws_frame_build(WS_OP_PONG, payload, 0);
                         tcp_send(tcb, pong);
                     }
                     if opcode == WS_OP_CLOSE  {
@@ -460,12 +460,12 @@ fn ws_tick() {
 fn ws_status(ws_id) {
     if ws_id < 0 { return "ws: invalid id"; }
     if ws_id >= WS_MAX_CONN { return "ws: invalid id"; }
-    let st_s = "free";
-    let st = ws_state[ws_id];
+    let mut st_s = "free";
+    let mut st = ws_state[ws_id];
     if st == WS_ST_HANDSHAKE { st_s = "handshake"; }
     if st == WS_ST_OPEN      { st_s = "open"; }
     if st == WS_ST_CLOSING   { st_s = "closing"; }
-    let role = "client";
+    let mut role = "client";
     if ws_is_server[ws_id] == 1 { role = "server"; }
     return "ws[" + to_string(ws_id) + "] " + st_s
         + " role=" + role

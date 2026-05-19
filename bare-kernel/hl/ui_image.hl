@@ -59,17 +59,17 @@ let mut uiimg_status     = "No image loaded";
 
 // Read little-endian u16 from buffer at offset
 fn _bmp_u16(off) {
-    let b0 = mem_read_u8(UIIMG_LOAD_BUF + off);
-    let b1 = mem_read_u8(UIIMG_LOAD_BUF + off + 1);
+    let mut b0 = mem_read_u8(UIIMG_LOAD_BUF + off);
+    let mut b1 = mem_read_u8(UIIMG_LOAD_BUF + off + 1);
     return b0 + b1 * 256;
 }
 
 // Read little-endian u32 from buffer at offset
 fn _bmp_u32(off) {
-    let b0 = mem_read_u8(UIIMG_LOAD_BUF + off);
-    let b1 = mem_read_u8(UIIMG_LOAD_BUF + off + 1);
-    let b2 = mem_read_u8(UIIMG_LOAD_BUF + off + 2);
-    let b3 = mem_read_u8(UIIMG_LOAD_BUF + off + 3);
+    let mut b0 = mem_read_u8(UIIMG_LOAD_BUF + off);
+    let mut b1 = mem_read_u8(UIIMG_LOAD_BUF + off + 1);
+    let mut b2 = mem_read_u8(UIIMG_LOAD_BUF + off + 2);
+    let mut b3 = mem_read_u8(UIIMG_LOAD_BUF + off + 3);
     return b0 + b1 * 256 + b2 * 65536 + b3 * 16777216;
 }
 
@@ -83,19 +83,19 @@ fn _bmp_i32(off) {
 // Parse BMP header into uiimg_* globals. Returns 1 on success.
 fn _bmp_parse_header() {
     // Check "BM" signature
-    let b0 = mem_read_u8(UIIMG_LOAD_BUF);
-    let b1 = mem_read_u8(UIIMG_LOAD_BUF + 1);
+    let mut b0 = mem_read_u8(UIIMG_LOAD_BUF);
+    let mut b1 = mem_read_u8(UIIMG_LOAD_BUF + 1);
     if b0 != 66 { return 0; }   // 'B'
     if b1 != 77 { return 0; }   // 'M'
 
-    let data_off  = _bmp_u32(10);
-    let hdr_size  = _bmp_u32(14);
+    let mut data_off = _bmp_u32(10);
+    let mut hdr_size = _bmp_u32(14);
     if hdr_size < 40 { return 0; }   // need BITMAPINFOHEADER
 
-    let width  = _bmp_i32(18);
-    let height = _bmp_i32(22);
-    let bpp    = _bmp_u16(28);
-    let compr  = _bmp_u32(30);
+    let mut width = _bmp_i32(18);
+    let mut height = _bmp_i32(22);
+    let mut bpp = _bmp_u16(28);
+    let mut compr = _bmp_u32(30);
 
     if bpp != 24 { if bpp != 32 { return 0; } }  // only 24/32-bit supported
     if compr != 0 { if compr != 3 { return 0; } } // no/bitfields only
@@ -109,8 +109,8 @@ fn _bmp_parse_header() {
 
 // Row stride in bytes (padded to 4-byte boundary)
 fn _bmp_stride() {
-    let bytes_per_row = uiimg_width * (uiimg_bpp / 8);
-    let pad = bytes_per_row % 4;
+    let mut bytes_per_row = uiimg_width * (uiimg_bpp / 8);
+    let mut pad = bytes_per_row % 4;
     if pad == 0 { return bytes_per_row; }
     return bytes_per_row + (4 - pad);
 }
@@ -122,8 +122,8 @@ fn _bmp_pixel(x, y) {
     let mut row = y;
     if h > 0 { row = h - 1 - y; }
 
-    let stride = _bmp_stride();
-    let byte_off = uiimg_data_off + row * stride + x * (uiimg_bpp / 8);
+    let mut stride = _bmp_stride();
+    let mut byte_off = uiimg_data_off + row * stride + x * (uiimg_bpp / 8);
     let mut b = mem_read_u8(UIIMG_LOAD_BUF + byte_off);
     let mut g = mem_read_u8(UIIMG_LOAD_BUF + byte_off + 1);
     let mut r = mem_read_u8(UIIMG_LOAD_BUF + byte_off + 2);
@@ -140,7 +140,7 @@ fn uiimg_load(path) {
     uiimg_status = "Loading: " + path;
     _uiimg_status_draw();
 
-    let fd = vfs_open(path, O_RDONLY);
+    let mut fd = vfs_open(path, O_RDONLY);
     if fd < 0 {
         uiimg_status = "Error: cannot open " + path;
         _uiimg_status_draw();
@@ -155,7 +155,7 @@ fn uiimg_load(path) {
         return 0;
     }
 
-    let ok = _bmp_parse_header();
+    let mut ok = _bmp_parse_header();
     if ok == 0 {
         uiimg_status = "Error: not a supported BMP (need 24/32-bit uncompressed)";
         _uiimg_status_draw();
@@ -177,10 +177,10 @@ fn uiimg_load(path) {
 // ============================================================
 
 fn _uiimg_toolbar_draw() {
-    let wx  = UIIMG_WIN_X;
-    let wy  = UIIMG_WIN_Y + 20;
-    let bg  = ui_theme_panel_color();
-    let bdr = ui_theme_border_color();
+    let mut wx = UIIMG_WIN_X;
+    let mut wy = UIIMG_WIN_Y + 20;
+    let mut bg = ui_theme_panel_color();
+    let mut bdr = ui_theme_border_color();
     vesa_fill_rect(wx, wy, UIIMG_WIN_W, UIIMG_TOOLBAR_H, bg);
     vesa_rect(wx, wy, UIIMG_WIN_W, UIIMG_TOOLBAR_H, bdr);
 
@@ -205,8 +205,8 @@ fn _uiimg_toolbar_draw() {
 
 fn _uiimg_status_draw() {
     if uiimg_open_flag == 0 { return 0; }
-    let wx = UIIMG_WIN_X;
-    let wy = UIIMG_WIN_Y + 20 + UIIMG_TOOLBAR_H;
+    let mut wx = UIIMG_WIN_X;
+    let mut wy = UIIMG_WIN_Y + 20 + UIIMG_TOOLBAR_H;
     vesa_fill_rect(wx, wy, UIIMG_WIN_W, UIIMG_STATUS_H, ui_theme_panel_color());
     ui_draw_text(wx + 4, wy + 1, uiimg_status, ui_theme_text_color(), 0);
     return 0;
@@ -214,10 +214,10 @@ fn _uiimg_status_draw() {
 
 fn _uiimg_image_draw() {
     if uiimg_open_flag == 0 { return 0; }
-    let vx = UIIMG_WIN_X;
-    let vy = UIIMG_WIN_Y + 20 + UIIMG_TOOLBAR_H + UIIMG_STATUS_H;
-    let vw = UIIMG_WIN_W;
-    let vh = UIIMG_VIEW_H;
+    let mut vx = UIIMG_WIN_X;
+    let mut vy = UIIMG_WIN_Y + 20 + UIIMG_TOOLBAR_H + UIIMG_STATUS_H;
+    let mut vw = UIIMG_WIN_W;
+    let mut vh = UIIMG_VIEW_H;
 
     // Clear viewport
     vesa_fill_rect(vx, vy, vw, vh, ui_theme_surface_color());
@@ -229,17 +229,17 @@ fn _uiimg_image_draw() {
     }
 
     // Center image in viewport
-    let disp_w = uiimg_width * uiimg_zoom;
-    let disp_h = uiimg_height;
+    let mut disp_w = uiimg_width * uiimg_zoom;
+    let mut disp_h = uiimg_height;
     if uiimg_height < 0 { disp_h = 0 - uiimg_height; }
-    let disp_h2 = disp_h * uiimg_zoom;
+    let mut disp_h2 = disp_h * uiimg_zoom;
     let mut ox = (vw - disp_w) / 2;
     let mut oy = (vh - disp_h2) / 2;
     if ox < 0 { ox = 0; }
     if oy < 0 { oy = 0; }
 
     // Render pixels
-    let real_h = disp_h;
+    let mut real_h = disp_h;
     let mut py = 0;
     while py < real_h {
         if vy + oy + py * uiimg_zoom >= vy + vh { py = real_h; }
@@ -247,7 +247,7 @@ fn _uiimg_image_draw() {
             let mut px = 0;
             while px < uiimg_width {
                 if vx + ox + px * uiimg_zoom < vx + vw {
-                    let color = _bmp_pixel(px, py);
+                    let mut color = _bmp_pixel(px, py);
                     if uiimg_zoom == 1 {
                         vesa_putpixel(vx + ox + px, vy + oy + py, color);
                     } else {
@@ -264,9 +264,9 @@ fn _uiimg_image_draw() {
 
 fn uiimg_draw() {
     if uiimg_open_flag == 0 { return 0; }
-    let wx = UIIMG_WIN_X;
-    let wy = UIIMG_WIN_Y;
-    let bdr = ui_theme_border_color();
+    let mut wx = UIIMG_WIN_X;
+    let mut wy = UIIMG_WIN_Y;
+    let mut bdr = ui_theme_border_color();
     vesa_fill_rect(wx, wy, UIIMG_WIN_W, 20, ui_theme_panel_color());
     ui_draw_text(wx + 8, wy + 2, "Image Viewer", ui_theme_text_color(), 0);
     vesa_rect(wx, wy, UIIMG_WIN_W, UIIMG_WIN_H, bdr);
@@ -290,8 +290,8 @@ fn uiimg_key(k) {
 
 fn uiimg_click(mx, my) {
     if uiimg_open_flag == 0 { return 0; }
-    let wx  = UIIMG_WIN_X;
-    let wy  = UIIMG_WIN_Y + 20;
+    let mut wx = UIIMG_WIN_X;
+    let mut wy = UIIMG_WIN_Y + 20;
     // Toolbar hit tests
     if ui_button_hit(wx + 4,  wy + 4, 60, 24, mx, my) == 1 {
         // Open: prompt via UI dialog

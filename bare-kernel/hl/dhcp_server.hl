@@ -97,7 +97,7 @@ fn _dhcp_srv_put_u16(value) {
 fn _dhcp_srv_find_lease(mac_high, mac_low) {
     let mut i = 0;
     while i < DHCP_MAX_LEASES {
-        let lease = dhcp_srv_leases[i];
+        let mut lease = dhcp_srv_leases[i];
         if lease[0] == mac_high {
             if lease[1] == mac_low {
                 return i;
@@ -109,16 +109,16 @@ fn _dhcp_srv_find_lease(mac_high, mac_low) {
 }
 
 fn _dhcp_srv_allocate_ip(mac_high, mac_low) {
-    let existing = _dhcp_srv_find_lease(mac_high, mac_low);
+    let mut existing = _dhcp_srv_find_lease(mac_high, mac_low);
     if existing >= 0 {
         return dhcp_srv_leases[existing][2];
     }
 
     let mut i = 0;
     while i < DHCP_MAX_LEASES {
-        let lease = dhcp_srv_leases[i];
+        let mut lease = dhcp_srv_leases[i];
         if lease[2] == 0 {
-            let ip = dhcp_srv_pool_start + i;
+            let mut ip = dhcp_srv_pool_start + i;
             if ip <= dhcp_srv_pool_end {
                 set_at(dhcp_srv_leases, i, [mac_high, mac_low, ip]);
                 return ip;
@@ -135,30 +135,30 @@ fn dhcp_server_process(request_data) {
         return 0 - 1;
     }
 
-    let op = str_char_code(request_data, 0);
+    let mut op = str_char_code(request_data, 0);
     if op != DHCP_OP_BOOTREQUEST {
         return 0 - 1;
     }
 
-    let xid = str_char_code(request_data, 4) * 16777216 +
+    let mut xid = str_char_code(request_data, 4) * 16777216 +
               str_char_code(request_data, 5) * 65536 +
               str_char_code(request_data, 6) * 256 +
               str_char_code(request_data, 7);
 
-    let mac_high = str_char_code(request_data, 28) * 16777216 +
+    let mut mac_high = str_char_code(request_data, 28) * 16777216 +
                    str_char_code(request_data, 29) * 65536 +
                    str_char_code(request_data, 30) * 256;
-    let mac_low = str_char_code(request_data, 31) * 16777216 +
+    let mut mac_low = str_char_code(request_data, 31) * 16777216 +
                   str_char_code(request_data, 32) * 65536 +
                   str_char_code(request_data, 33) * 256;
 
-    let msg_type = 0;
+    let mut msg_type = 0;
     let mut pos = 240;
     let mut go = 1;
     while go == 1 {
         if pos >= len(request_data) { go = 0; }
         if go == 1 {
-            let option = str_char_code(request_data, pos);
+            let mut option = str_char_code(request_data, pos);
             if option == DHCP_OPTION_END { go = 0; }
             if go == 1 {
                 if option == DHCP_OPTION_MSG_TYPE {
@@ -184,7 +184,7 @@ fn dhcp_server_process(request_data) {
     _dhcp_srv_put_u16(0);
     _dhcp_srv_put_u16(0);
 
-    let assigned_ip = _dhcp_srv_allocate_ip(mac_high, mac_low);
+    let mut assigned_ip = _dhcp_srv_allocate_ip(mac_high, mac_low);
     if assigned_ip == 0 {
         return 0 - 1;
     }
@@ -273,10 +273,10 @@ fn dhcp_server_list_leases() {
     let mut i = 0;
     let mut count = 0;
     while i < DHCP_MAX_LEASES {
-        let lease = dhcp_srv_leases[i];
+        let mut lease = dhcp_srv_leases[i];
         if lease[2] != 0 {
-            let ip = lease[2];
-            let ip_str = to_string((ip / 16777216) % 256) + "." +
+            let mut ip = lease[2];
+            let mut ip_str = to_string((ip / 16777216) % 256) + "." +
                          to_string((ip / 65536) % 256) + "." +
                          to_string((ip / 256) % 256) + "." +
                          to_string(ip % 256);
@@ -296,7 +296,7 @@ fn dhcp_server_test() {
 
     dhcp_server_set_pool(3232235777, 3232235808);
 
-    let ip = _dhcp_srv_allocate_ip(1, 2);
+    let mut ip = _dhcp_srv_allocate_ip(1, 2);
     if ip >= dhcp_srv_pool_start {
         if ip <= dhcp_srv_pool_end {
             print("  [ok] DHCP allocation: " + to_string(ip));
@@ -309,7 +309,7 @@ fn dhcp_server_test() {
         return 0 - 1;
     }
 
-    let ip2 = _dhcp_srv_allocate_ip(1, 2);
+    let mut ip2 = _dhcp_srv_allocate_ip(1, 2);
     if ip2 == ip {
         print("  [ok] DHCP same MAC gets same IP");
     } else {

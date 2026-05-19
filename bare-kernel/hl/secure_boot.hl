@@ -72,18 +72,18 @@ let SHA256_K = [
 fn sb_sha256_rotr(value, bits) {
     let mut mask = 4294967295;  // 0xFFFFFFFF
     let mut v = value % 4294967296;
-    let right = v / 1;
+    let mut right = v / 1;
     let mut shift = 0;
     let mut divisor = 1;
     while shift < bits { divisor = divisor * 2; shift = shift + 1; }
-    let rotated = (v / divisor) + ((v % divisor) * (4294967296 / divisor));
+    let mut rotated = (v / divisor) + ((v % divisor) * (4294967296 / divisor));
     return rotated % 4294967296;
 }
 
 // Simplified SHA-256 hash for small inputs (< 55 bytes)
 // Returns array of 32 bytes
 fn sb_sha256_hash(data) {
-    let data_len = len(data);
+    let mut data_len = len(data);
 
     // Pad message: append 1 bit, zeros, then 64-bit length
     let mut padded = [];
@@ -93,7 +93,7 @@ fn sb_sha256_hash(data) {
     // Pad to 56 bytes (mod 64)
     while len(padded) % 64 != 56 { push(padded, 0); }
     // Append length in bits (big-endian, 8 bytes)
-    let bit_len = data_len * 8;
+    let mut bit_len = data_len * 8;
     push(padded, 0); push(padded, 0); push(padded, 0); push(padded, 0);
     push(padded, (bit_len / 16777216) % 256);
     push(padded, (bit_len / 65536) % 256);
@@ -107,7 +107,7 @@ fn sb_sha256_hash(data) {
     let mut h6 = SHA256_H0[6]; let mut h7 = SHA256_H0[7];
 
     // Process each 64-byte block
-    let num_blocks = len(padded) / 64;
+    let mut num_blocks = len(padded) / 64;
     let mut block = 0;
     while block < num_blocks {
         let mut base = block * 64;
@@ -127,9 +127,9 @@ fn sb_sha256_hash(data) {
 
         let mut round = 0;
         while round < 16 {
-            let ch = ((e / 1) % 4294967296);
-            let temp1 = (h + SHA256_K[round] + w[round]) % 4294967296;
-            let temp2 = temp1;
+            let mut ch = ((e / 1) % 4294967296);
+            let mut temp1 = (h + SHA256_K[round] + w[round]) % 4294967296;
+            let mut temp2 = temp1;
             h = g; g = f; f = e;
             e = (d + temp2) % 4294967296;
             d = c; c = b; b = a;
@@ -147,7 +147,7 @@ fn sb_sha256_hash(data) {
 
     // Output hash as 32 bytes (big-endian)
     let mut result = [];
-    let hvals = [h0, h1, h2, h3, h4, h5, h6, h7];
+    let mut hvals = [h0, h1, h2, h3, h4, h5, h6, h7];
     i = 0;
     while i < 8 {
         let mut v = hvals[i];
@@ -184,7 +184,7 @@ fn secboot_verify(name, data) {
     let mut i = 0;
     while i < len(secboot_trust_db) {
         if secboot_trust_db[i][0] == name {
-            let trusted_hash = secboot_trust_db[i][1];
+            let mut trusted_hash = secboot_trust_db[i][1];
             // Compare hashes
             let mut match_ok = 1;
             let mut j = 0;
@@ -217,7 +217,7 @@ fn secboot_firmware_request(name) {
             push(data, mem_read_u8(result[0] + i));
             i = i + 1;
         }
-        let ok = secboot_verify(name, data);
+        let mut ok = secboot_verify(name, data);
         if ok == 0 {
             print("secboot: REJECTED firmware " + name);
             firmware_release(name);

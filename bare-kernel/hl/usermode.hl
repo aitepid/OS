@@ -58,7 +58,7 @@ fn syscall_msr_setup(handler_addr) {
     // STAR = (user_base << 48) | (kernel_base << 32) | 0
     // user_base=0x0010, kernel_base=0x0008
     // STAR = 0x0010_0008_0000_0000
-    let star_hi = 1048584;  // (0x0010 << 16) | 0x0008 = 0x00100008
+    let mut star_hi = 1048584;  // (0x0010 << 16) | 0x0008 = 0x00100008
     // Native: wrmsr(0xC0000081, star_lo=0, star_hi)
     // In interpreter, record the values for image_builder
     mem_write_u32(TSS_ADDR - 32, star_hi);       // stash for codegen
@@ -87,7 +87,7 @@ fn enter_usermode(user_rip, user_rsp) {
     //   RSP-24: RFLAGS = 0x202 (IF=1, reserved bit 1)
     //   RSP-16: RSP    = user_rsp
     //   RSP-8:  SS     = 0x18 | 3 = 0x1B (user data, DPL3)
-    let frame_base = KERNEL_STACK_TOP - 40;
+    let mut frame_base = KERNEL_STACK_TOP - 40;
     mem_write_u64(frame_base,      user_rip);   // RIP
     mem_write_u64(frame_base + 8,  35);         // CS = 0x23
     mem_write_u64(frame_base + 16, 514);        // RFLAGS = 0x202
@@ -102,7 +102,7 @@ fn enter_usermode(user_rip, user_rsp) {
 // RCX = user RIP, R11 = user RFLAGS (saved by CPU)
 fn syscall_entry() {
     // Save user context to per-CPU save area
-    let save_area = TSS_ADDR + 112; // after TSS, use reserved space
+    let mut save_area = TSS_ADDR + 112; // after TSS, use reserved space
     // swapgs
     // mov [save_area], rsp       -- save user RSP
     mem_write_u64(save_area, KERNEL_STACK_TOP);  // fallback saved RSP value

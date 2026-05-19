@@ -47,7 +47,7 @@ fn _httpd_headers(content_type, body_len) {
 }
 
 fn _httpd_send_response(tcb_idx, code, content_type, body) {
-    let resp = _httpd_status_line(code) + _httpd_headers(content_type, len(body)) + body;
+    let mut resp = _httpd_status_line(code) + _httpd_headers(content_type, len(body)) + body;
     tcp_send(tcb_idx, resp);
     return 0;
 }
@@ -68,9 +68,9 @@ fn _httpd_route_root() {
 }
 
 fn _httpd_route_status() {
-    let secs = uptime_secs();
-    let cpus = smp_cpu_count();
-    let free_p = page_count_free();
+    let mut secs = uptime_secs();
+    let mut cpus = smp_cpu_count();
+    let mut free_p = page_count_free();
     return "HicOS 6.0 kernel status\n"
         + "uptime:  " + to_string(secs) + "s\n"
         + "cpus:    " + to_string(cpus) + "\n"
@@ -80,7 +80,7 @@ fn _httpd_route_status() {
 }
 
 fn _httpd_serve_file(path) {
-    let fd = vfs_open(path, O_RDONLY);
+    let mut fd = vfs_open(path, O_RDONLY);
     if fd < 0 { return ""; }
     let mut n = vfs_read(fd, HTTP_BUF_ADDR, HTTP_BUF_SIZE - 1);
     vfs_close(fd);
@@ -111,15 +111,15 @@ fn _httpd_content_type(path) {
 // Returns [method, path] or ["",""] on error
 fn _httpd_parse_request(req) {
     // Find first space (end of method)
-    let sp1 = str_find(req, " ");
+    let mut sp1 = str_find(req, " ");
     if sp1 < 0 { return ["", ""]; }
-    let method = str_sub(req, 0, sp1);
+    let mut method = str_sub(req, 0, sp1);
 
     // Find second space (end of path)
-    let rest = str_sub(req, sp1 + 1, len(req));
-    let sp2  = str_find(rest, " ");
+    let mut rest = str_sub(req, sp1 + 1, len(req));
+    let mut sp2 = str_find(rest, " ");
     if sp2 < 0 { return ["", ""]; }
-    let path = str_sub(rest, 0, sp2);
+    let mut path = str_sub(rest, 0, sp2);
 
     return [method, path];
 }
@@ -133,9 +133,9 @@ fn httpd_serve(tcb_idx, req) {
         return 0;
     }
 
-    let parsed = _httpd_parse_request(req);
-    let method = parsed[0];
-    let path   = parsed[1];
+    let mut parsed = _httpd_parse_request(req);
+    let mut method = parsed[0];
+    let mut path = parsed[1];
 
     if len(method) == 0 {
         _httpd_send_response(tcb_idx, 400, "text/plain", "Bad Request");
@@ -157,20 +157,20 @@ fn httpd_serve(tcb_idx, req) {
 
     // Built-in routes
     if path == "/" {
-        let body = _httpd_route_root();
+        let mut body = _httpd_route_root();
         _httpd_send_response(tcb_idx, 200, "text/html", body);
         return 0;
     }
 
     if path == "/status" {
-        let body = _httpd_route_status();
+        let mut body = _httpd_route_status();
         _httpd_send_response(tcb_idx, 200, "text/plain", body);
         return 0;
     }
 
     // /proc/* routes → procfs_read
     if str_starts_with(path, "/proc/") {
-        let body = procfs_read(path);
+        let mut body = procfs_read(path);
         if len(body) > 0 {
             _httpd_send_response(tcb_idx, 200, "text/plain", body);
         } else {
@@ -181,9 +181,9 @@ fn httpd_serve(tcb_idx, req) {
     }
 
     // VFS file serving
-    let body = _httpd_serve_file(path);
+    let mut body = _httpd_serve_file(path);
     if len(body) > 0 {
-        let ct = _httpd_content_type(path);
+        let mut ct = _httpd_content_type(path);
         _httpd_send_response(tcb_idx, 200, ct, body);
     } else {
         _httpd_send_response(tcb_idx, 404, "text/plain", "Not Found: " + path);
@@ -223,13 +223,13 @@ fn httpd_tick() {
     // Scan TCB table for ESTABLISHED connections on our port
     let mut i = 0;
     while i < 32 {
-        let addr  = TCP_TABLE + i * TCB_SIZE;
+        let mut addr = TCP_TABLE + i * TCB_SIZE;
         let mut state = mem_read_u64(addr);
-        let lport = mem_read_u32(addr + 12);
+        let mut lport = mem_read_u32(addr + 12);
         if state == 4 {   // TCP_ESTABLISHED = 4
             if lport == HTTP_PORT {
                 // Read request from receive buffer (simplified: read the stored payload)
-                let rx_buf = mem_read_u64(addr + 64);  // rx_buf pointer in TCB
+                let mut rx_buf = mem_read_u64(addr + 64);  // rx_buf pointer in TCB
                 if rx_buf > 0 {
                     // Build request string from buffer
                     let mut req = "";
@@ -261,7 +261,7 @@ fn httpd_tick() {
 }
 
 fn httpd_status() {
-    let st = "stopped";
+    let mut st = "stopped";
     if httpd_running == 1 { st = "running"; }
     return "httpd: " + st
         + " port=" + to_string(HTTP_PORT)

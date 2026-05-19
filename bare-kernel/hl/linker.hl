@@ -68,17 +68,17 @@ fn linker_pass1(module_codes) {
     let mut mi = 0;
     while mi < len(module_codes) {
         push(link_module_offsets, offset);
-        let mod_info = module_codes[mi];
-        let mod_syms = mod_info[2];
+        let mut mod_info = module_codes[mi];
+        let mut mod_syms = mod_info[2];
         // Register all exported symbols with absolute offset
         let mut si = 0;
         while si < len(mod_syms) {
-            let sym = mod_syms[si];
+            let mut sym = mod_syms[si];
             linker_add_symbol(sym[0], mi, offset + sym[2], sym[3]);
             si = si + 1;
         }
         // Accumulate code size
-        let code_size = len(mod_info[1]);
+        let mut code_size = len(mod_info[1]);
         offset = offset + code_size;
         mi = mi + 1;
     }
@@ -92,16 +92,16 @@ fn linker_pass2(combined_code) {
     let mut unresolved = 0;
     let mut ri = 0;
     while ri < len(link_relocs) {
-        let reloc = link_relocs[ri];
-        let site = reloc[0];
-        let target_name = reloc[1];
-        let reloc_type = reloc[2];
-        let sym = linker_find_symbol(target_name);
+        let mut reloc = link_relocs[ri];
+        let mut site = reloc[0];
+        let mut target_name = reloc[1];
+        let mut reloc_type = reloc[2];
+        let mut sym = linker_find_symbol(target_name);
         if sym != nil {
-            let target_offset = sym[2]; // absolute offset in .text
+            let mut target_offset = sym[2]; // absolute offset in .text
             if reloc_type == "rel32" {
                 // PC-relative: target - (site + 4)
-                let rel = target_offset - (site + 4);
+                let mut rel = target_offset - (site + 4);
                 // Patch 4 bytes at site (little-endian)
                 combined_code[site] = rel % 256;
                 combined_code[site + 1] = (rel / 256) % 256;
@@ -132,12 +132,12 @@ fn linker_pass2(combined_code) {
 
 // Add a string to the rodata pool, return its offset
 fn linker_add_string(s) {
-    let offset = len(link_rodata_buf);
+    let mut offset = len(link_rodata_buf);
     let mut i = 0;
     while i < len(s) {
         let mut c = s[i];
         let mut code = 63; // '?' default
-        let ascii = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+        let mut ascii = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
         let mut ai = 0;
         while ai < len(ascii) {
             if ascii[ai] == c { code = ai + 32; ai = len(ascii); }
@@ -163,7 +163,7 @@ let mut link_builtin_stubs = []; // array of [name, stub_offset]
 // Register language builtins as stub trampolines
 // Each stub is a minimal: xor eax,eax; ret (returns 0)
 fn linker_register_builtins(combined_code) {
-    let builtins = ["print", "println", "len", "push", "pop", "set_at",
+    let mut builtins = ["print", "println", "len", "push", "pop", "set_at",
                     "to_string", "lfsr_next", "tcp_send", "tcp_recv",
                     "tcp_connect", "dns_resolve", "input", "type_of",
                     "str_split", "str_trim", "str_find", "str_sub",
@@ -191,10 +191,10 @@ fn linker_register_builtins(combined_code) {
     let mut stub_count = 0;
     let mut bi = 0;
     while bi < len(builtins) {
-        let name = builtins[bi];
-        let existing = linker_find_symbol(name);
+        let mut name = builtins[bi];
+        let mut existing = linker_find_symbol(name);
         if existing == nil {
-            let stub_off = len(combined_code);
+            let mut stub_off = len(combined_code);
             // Stub: push rbp; mov rbp,rsp; xor eax,eax; pop rbp; ret
             push(combined_code, 85);   // push rbp
             push(combined_code, 72);   // REX.W
@@ -218,10 +218,10 @@ fn linker_register_fwd_stubs(combined_code) {
     let mut stub_count = 0;
     let mut fi = 0;
     while fi < len(link_fwd_decls) {
-        let name = link_fwd_decls[fi][0];
-        let existing = linker_find_symbol(name);
+        let mut name = link_fwd_decls[fi][0];
+        let mut existing = linker_find_symbol(name);
         if existing == nil {
-            let stub_off = len(combined_code);
+            let mut stub_off = len(combined_code);
             push(combined_code, 85);
             push(combined_code, 72);
             push(combined_code, 137);
@@ -241,9 +241,9 @@ fn linker_register_fwd_stubs(combined_code) {
 // Enhanced Pass 2: concatenate + generate stubs + resolve (two-pass)
 fn linker_pass2_enhanced(combined_code) {
     // Step 1: register builtin stubs
-    let builtin_count = linker_register_builtins(combined_code);
+    let mut builtin_count = linker_register_builtins(combined_code);
     // Step 2: register forward-declaration stubs
-    let fwd_count = linker_register_fwd_stubs(combined_code);
+    let mut fwd_count = linker_register_fwd_stubs(combined_code);
     // Step 3: resolve relocations (all symbols now available)
     let mut result = linker_pass2(combined_code);
     return [result[0], result[1], builtin_count, fwd_count];

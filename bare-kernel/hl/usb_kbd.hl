@@ -57,7 +57,7 @@ fn _usb_kbd_usage_to_ascii(usage, shifted) {
     // Numbers 1-9 (0x1E-0x26), 0 (0x27)
     if usage >= 30 && usage <= 38 {
         if shifted == 1 {
-            let shift_nums = [33, 64, 35, 36, 37, 94, 38, 42, 40]; // !@#$%^&*(
+            let mut shift_nums = [33, 64, 35, 36, 37, 94, 38, 42, 40]; // !@#$%^&*(
             return shift_nums[usage - 30];
         }
         if usage == 38 { return 48; }  // '0'
@@ -97,9 +97,9 @@ fn usb_kbd_detect() {
     // Scan USB devices for HID keyboard interface
     let mut i = 0;
     while i < usb_device_count() {
-        let cls = usb_device_class(i);
-        let sub = usb_device_subclass(i);
-        let proto = usb_device_protocol(i);
+        let mut cls = usb_device_class(i);
+        let mut sub = usb_device_subclass(i);
+        let mut proto = usb_device_protocol(i);
         // HID class=3, Boot subclass=1, Keyboard protocol=1
         if cls == 3 && sub == 1 && proto == 1 {
             usb_kbd_detected = 1;
@@ -136,21 +136,21 @@ fn usb_kbd_poll() {
     if usb_kbd_detected == 0 { return 0; }
 
     // Read 8-byte boot protocol report
-    let ok = usb_interrupt_read(usb_kbd_interface, USB_KBD_REPORT_BUF, 8);
+    let mut ok = usb_interrupt_read(usb_kbd_interface, USB_KBD_REPORT_BUF, 8);
     if ok == 0 { return 0; }
 
     // Parse report
-    let modifiers = mem_read_u8(USB_KBD_REPORT_BUF);
+    let mut modifiers = mem_read_u8(USB_KBD_REPORT_BUF);
     usb_kbd_modifiers = modifiers;
 
     // Check for new key presses (compare with last report)
-    let shifted = 0;
+    let mut shifted = 0;
     if (modifiers % 4) > 0 { shifted = 1; }  // Left/Right Shift
     if (modifiers / 32) % 2 == 1 { shifted = 1; }  // Right Shift
 
     let mut key_idx = 2;
     while key_idx < 8 {
-        let usage = mem_read_u8(USB_KBD_REPORT_BUF + key_idx);
+        let mut usage = mem_read_u8(USB_KBD_REPORT_BUF + key_idx);
         if usage > 1 {
             // Check if this key was in previous report (ignore if already held)
             let mut was_pressed = 0;
@@ -164,7 +164,7 @@ fn usb_kbd_poll() {
 
             if was_pressed == 0 {
                 // New key press - convert to ASCII
-                let ascii = _usb_kbd_usage_to_ascii(usage, shifted);
+                let mut ascii = _usb_kbd_usage_to_ascii(usage, shifted);
                 if ascii > 0 {
                     // Save current keys for next comparison
                     let mut k = 0;

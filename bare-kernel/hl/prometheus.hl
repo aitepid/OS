@@ -68,7 +68,7 @@ fn prometheus_init() {
 }
 
 fn _pm_alloc(type_, name_hash) {
-    let id = pm_n_metrics;
+    let mut id = pm_n_metrics;
     set_at(pm_type,      id, type_);
     set_at(pm_name_hash, id, name_hash);
     set_at(pm_value,     id, 0);
@@ -123,14 +123,14 @@ fn pm_observe(id, val) {
         let mut b = 0;
         while b < PM_HIST_BUCKETS {
             if val <= pm_hb_bound[b] {
-                let bidx = id * PM_HB_STRIDE + b;
+                let mut bidx = id * PM_HB_STRIDE + b;
                 set_at(pm_hb_count, bidx, pm_hb_count[bidx] + 1);
             }
             b += 1;
         }
     } else {
         // Summary: store sample (ring buffer)
-        let n   = pm_smp_n[id];
+        let mut n = pm_smp_n[id];
         let mut slot = n - (n / PM_MAXSAMPLES) * PM_MAXSAMPLES;
         set_at(pm_smp, id * PM_SMP_STRIDE + slot, val);
         set_at(pm_smp_n, id, n + 1);
@@ -145,9 +145,9 @@ fn _pm_sort_samples(id) {
     let mut base = id * PM_SMP_STRIDE;
     let mut i = 1;
     while i < n {
-        let key = pm_smp[base + i];
-        let j   = i - 1;
-        let go  = 1;
+        let mut key = pm_smp[base + i];
+        let mut j = i - 1;
+        let mut go = 1;
         while go == 1 {
             if j >= 0 {
                 if pm_smp[base + j] > key {
@@ -188,35 +188,35 @@ fn prometheus_test() {
     prometheus_init();
 
     // Counter: http_requests_total
-    let c1 = pm_counter(1001);
+    let mut c1 = pm_counter(1001);
     pm_label(c1, 200, 300);   // method="GET"
     pm_inc(c1); pm_inc(c1); pm_inc(c1);
-    let cv = pm_get(c1);      // should be 3
+    let mut cv = pm_get(c1);      // should be 3
 
     // Gauge: memory_bytes
-    let g1 = pm_gauge(1002);
+    let mut g1 = pm_gauge(1002);
     pm_set(g1, 65536);
     pm_set(g1, 32768);
-    let gv = pm_get(g1);      // should be 32768
+    let mut gv = pm_get(g1);      // should be 32768
 
     // Histogram: request_duration_ms
-    let h1 = pm_histogram(1003);
+    let mut h1 = pm_histogram(1003);
     pm_observe(h1, 3);     // bucket ≤5 and ≤10 ... ≤+Inf
     pm_observe(h1, 8);     // bucket ≤10 ... ≤+Inf
     pm_observe(h1, 200);   // bucket ≤500 ≤1000 ≤+Inf
-    let hsum = pm_hist_sum(h1);     // 3+8+200=211
-    let hcnt = pm_hist_count(h1);   // 3
-    let hb0  = pm_hist_bucket(h1, 0);  // bound≤1: 0
-    let hb2  = pm_hist_bucket(h1, 2);  // bound≤10: 2
+    let mut hsum = pm_hist_sum(h1);     // 3+8+200=211
+    let mut hcnt = pm_hist_count(h1);   // 3
+    let mut hb0 = pm_hist_bucket(h1, 0);  // bound≤1: 0
+    let mut hb2 = pm_hist_bucket(h1, 2);  // bound≤10: 2
 
     // Summary: response_size_bytes
-    let s1 = pm_summary(1004);
+    let mut s1 = pm_summary(1004);
     pm_observe(s1, 100); pm_observe(s1, 200); pm_observe(s1, 300);
     pm_observe(s1, 400); pm_observe(s1, 500); pm_observe(s1, 600);
     pm_observe(s1, 700); pm_observe(s1, 800); pm_observe(s1, 900);
     pm_observe(s1, 1000);
-    let p50 = pm_quantile(s1, 50);  // 5th element of sorted 10 = 500
-    let p90 = pm_quantile(s1, 90);  // 9th element = 900
+    let mut p50 = pm_quantile(s1, 50);  // 5th element of sorted 10 = 500
+    let mut p90 = pm_quantile(s1, 90);  // 9th element = 900
 
     print("prometheus_test: cv=" + to_string(cv)
           + " gv=" + to_string(gv)

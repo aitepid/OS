@@ -51,14 +51,14 @@ fn _bcache_hash(dev, blk) {
 }
 
 fn _ht_insert(dev, blk, slot) {
-    let bucket = _bcache_hash(dev, blk);
+    let mut bucket = _bcache_hash(dev, blk);
     set_at(bcache_ht_next, slot, bcache_ht[bucket]);
     set_at(bcache_ht, bucket, slot);
     return 0;
 }
 
 fn _ht_remove(dev, blk) {
-    let bucket = _bcache_hash(dev, blk);
+    let mut bucket = _bcache_hash(dev, blk);
     let mut prev = 0 - 1;
     let mut cur = bcache_ht[bucket];
     while cur >= 0 {
@@ -80,7 +80,7 @@ fn _ht_remove(dev, blk) {
 }
 
 fn _ht_lookup(dev, blk) {
-    let bucket = _bcache_hash(dev, blk);
+    let mut bucket = _bcache_hash(dev, blk);
     let mut cur = bcache_ht[bucket];
     while cur >= 0 {
         if bcache_valid[cur] == 1 {
@@ -178,7 +178,7 @@ fn bcache_lookup(dev, block) {
 }
 
 fn bcache_evict_lru() {
-    let victim = bcache_lru_tail;
+    let mut victim = bcache_lru_tail;
     if victim < 0 { return 0; }
     if bcache_dirty[victim] == 1 {
         bcache_writeback(victim);
@@ -190,8 +190,8 @@ fn bcache_evict_lru() {
 }
 
 fn bcache_writeback(slot) {
-    let sector = bcache_block[slot] * (BCACHE_BLOCK_SIZE / 512);
-    let sectors = BCACHE_BLOCK_SIZE / 512;
+    let mut sector = bcache_block[slot] * (BCACHE_BLOCK_SIZE / 512);
+    let mut sectors = BCACHE_BLOCK_SIZE / 512;
     virtio_blk_write(sector, sectors, bcache_data_addr(slot));
     set_at(bcache_dirty, slot, 0);
     return 0;
@@ -214,8 +214,8 @@ fn bcache_read(dev, block) {
     }
     if free_slot < 0 { free_slot = bcache_evict_lru(); }
 
-    let sector = block * (BCACHE_BLOCK_SIZE / 512);
-    let sectors = BCACHE_BLOCK_SIZE / 512;
+    let mut sector = block * (BCACHE_BLOCK_SIZE / 512);
+    let mut sectors = BCACHE_BLOCK_SIZE / 512;
     virtio_blk_read(sector, sectors, bcache_data_addr(free_slot));
 
     set_at(bcache_dev, free_slot, dev);

@@ -79,7 +79,7 @@ fn _re_is_space(c) {
 // ============================================================
 
 fn _re_class_match(pat, pi, c) {
-    let plen = len(pat);
+    let mut plen = len(pat);
     let mut p = pi + 1;   // skip '['
     let mut negate = 0;
     if p < plen {
@@ -87,11 +87,11 @@ fn _re_class_match(pat, pi, c) {
     }
     let mut matched = 0;
     while p < plen {
-        let ch = str_sub(pat, p, p + 1);
+        let mut ch = str_sub(pat, p, p + 1);
         if ch == "]" { p = p + 1; p = plen + 1; }  // break (signal end)
         else if ch == "\\" {
             if p + 1 < plen {
-                let esc = str_sub(pat, p + 1, p + 2);
+                let mut esc = str_sub(pat, p + 1, p + 2);
                 if _re_char_match(esc, c) == 1 { matched = 1; }
                 p = p + 2;
             } else { p = p + 1; }
@@ -99,7 +99,7 @@ fn _re_class_match(pat, pi, c) {
             // range? e.g. a-z
             if p + 2 < plen {
                 if str_sub(pat, p + 1, p + 2) == "-" {
-                    let end_ch = str_sub(pat, p + 2, p + 3);
+                    let mut end_ch = str_sub(pat, p + 2, p + 3);
                     if c >= ch { if c <= end_ch { matched = 1; } }
                     p = p + 3;
                 } else {
@@ -120,11 +120,11 @@ fn _re_class_match(pat, pi, c) {
 
 // Find the end position of a '[...]' class starting at pi.
 fn _re_class_end(pat, pi) {
-    let plen = len(pat);
+    let mut plen = len(pat);
     let mut p = pi + 1;  // skip '['
     if p < plen { if str_sub(pat, p, p + 1) == "^" { p = p + 1; } }
     while p < plen {
-        let ch = str_sub(pat, p, p + 1);
+        let mut ch = str_sub(pat, p, p + 1);
         if ch == "]" { return p + 1; }
         if ch == "\\" { p = p + 2; }
         else { p = p + 1; }
@@ -138,13 +138,13 @@ fn _re_class_end(pat, pi) {
 
 // Match pattern[pi..] against text[ti..]. Returns 1 on success.
 fn _re_here(pat, pi, text, ti) {
-    let plen = len(pat);
-    let tlen = len(text);
+    let mut plen = len(pat);
+    let mut tlen = len(text);
 
     // Pattern exhausted = match
     if pi >= plen { return 1; }
 
-    let pc = str_sub(pat, pi, pi + 1);
+    let mut pc = str_sub(pat, pi, pi + 1);
 
     // $ anchor
     if pc == "$" { if pi + 1 == plen { if ti == tlen { return 1; } return 0; } }
@@ -159,8 +159,8 @@ fn _re_here(pat, pi, text, ti) {
 
     // Character class [...]
     if pc == "[" {
-        let class_end = _re_class_end(pat, pi);
-        let next_pi = class_end;
+        let mut class_end = _re_class_end(pat, pi);
+        let mut next_pi = class_end;
         // Check quantifier after class
         if next_pi < plen {
             let mut q = str_sub(pat, next_pi, next_pi + 1);
@@ -188,7 +188,7 @@ fn _re_here(pat, pi, text, ti) {
 
     // Grouping: skip '(' ... ')'  (no capture, just grouping for alternation)
     if pc == "(" {
-        let group_end = _re_group_end(pat, pi);
+        let mut group_end = _re_group_end(pat, pi);
         return _re_here(pat, pi + 1, text, ti);  // simplified: enter group body
     }
     if pc == ")" {
@@ -196,14 +196,14 @@ fn _re_here(pat, pi, text, ti) {
     }
 
     // Alternation: split at top-level '|'
-    let alt = _re_find_alt(pat, pi);
+    let mut alt = _re_find_alt(pat, pi);
     if alt >= 0 {
         if _re_here(pat, pi, text, ti) == 1 { return 1; }
         return _re_here(pat, alt + 1, text, ti);
     }
 
     // Check quantifier after atom
-    let qpi = pi + atom_len;
+    let mut qpi = pi + atom_len;
     if qpi < plen {
         let mut q = str_sub(pat, qpi, qpi + 1);
         if q == "*" {
@@ -226,7 +226,7 @@ fn _re_here(pat, pi, text, ti) {
 
     // Single atom match
     if ti >= tlen { return 0; }
-    let tc = str_sub(text, ti, ti + 1);
+    let mut tc = str_sub(text, ti, ti + 1);
     if _re_atom_match_one(atom, is_escape, tc) == 0 { return 0; }
     return _re_here(pat, qpi, text, ti + 1);
 }
@@ -240,10 +240,10 @@ fn _re_atom_match_one(atom, is_escape, c) {
 // Greedy star for atom
 fn _re_atom_star(atom, is_escape, pat, pi, text, ti, depth) {
     if depth > 500 { return 0; }
-    let tlen = len(text);
+    let mut tlen = len(text);
     let mut j = ti;
     while j < tlen {
-        let tc = str_sub(text, j, j + 1);
+        let mut tc = str_sub(text, j, j + 1);
         if _re_atom_match_one(atom, is_escape, tc) == 0 { j = tlen + 1; }
         else { j = j + 1; }
     }
@@ -260,7 +260,7 @@ fn _re_atom_star(atom, is_escape, pat, pi, text, ti, depth) {
 // Greedy star for character class
 fn _re_class_star(pat, class_pi, class_end, next_pi, text, ti, depth) {
     if depth > 500 { return 0; }
-    let tlen = len(text);
+    let mut tlen = len(text);
     let mut j = ti;
     while j < tlen {
         if _re_class_match(pat, class_pi, str_sub(text, j, j + 1)) == 0 { j = tlen + 1; }
@@ -278,7 +278,7 @@ fn _re_class_star(pat, class_pi, class_end, next_pi, text, ti, depth) {
 // Find top-level '|' in pattern starting at pi. Returns pos or -1.
 fn _re_find_alt(pat, pi) {
     // Simplified: look for | not inside [] or ()
-    let plen = len(pat);
+    let mut plen = len(pat);
     let mut p = pi;
     let mut depth = 0;
     while p < plen {
@@ -286,7 +286,7 @@ fn _re_find_alt(pat, pi) {
         if c == "(" { depth = depth + 1; }
         if c == ")" { depth = depth - 1; }
         if c == "[" {
-            let ce = _re_class_end(pat, p);
+            let mut ce = _re_class_end(pat, p);
             p = ce;
         } else if c == "|" {
             if depth == 0 { return p; }
@@ -299,7 +299,7 @@ fn _re_find_alt(pat, pi) {
 }
 
 fn _re_group_end(pat, pi) {
-    let plen = len(pat);
+    let mut plen = len(pat);
     let mut p = pi + 1;
     let mut d = 1;
     while p < plen {
@@ -316,8 +316,8 @@ fn _re_group_end(pat, pi) {
 // ============================================================
 
 fn regex_match(pattern, text) {
-    let pi = 0;
-    let pat = pattern;
+    let mut pi = 0;
+    let mut pat = pattern;
     // Handle ^ anchor
     if len(pat) > 0 {
         if str_sub(pat, 0, 1) == "^" {
@@ -325,7 +325,7 @@ fn regex_match(pattern, text) {
         }
     }
     // Try matching at every start position
-    let tlen = len(text);
+    let mut tlen = len(text);
     let mut i = 0;
     while i <= tlen {
         if _re_here(pat, 0, text, i) == 1 { return 1; }
@@ -336,7 +336,7 @@ fn regex_match(pattern, text) {
 
 // Returns [found, start, end] — end is exclusive
 fn regex_search(pattern, text) {
-    let tlen = len(text);
+    let mut tlen = len(text);
     let mut pat = pattern;
     let mut anchor = 0;
     if len(pat) > 0 {

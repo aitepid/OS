@@ -122,7 +122,7 @@ fn seccomp_add_rule(profile_id, syscall_nr, cmp, arg0_val, action) {
     if sc_active[profile_id] == 0 { return 0 - 1; }
     if sc_rule_cnt[profile_id] >= SECCOMP_MAX_RULES { return 0 - 1; }
 
-    let rules = sc_rules[profile_id];
+    let mut rules = sc_rules[profile_id];
     push(rules, [syscall_nr, cmp, arg0_val, action]);
     set_at(sc_rules, profile_id, rules);
     set_at(sc_rule_cnt, profile_id, sc_rule_cnt[profile_id] + 1);
@@ -168,21 +168,21 @@ fn seccomp_detach(task_idx) {
 fn seccomp_check(task_idx, syscall_nr, arg0) {
     if task_idx < 0 { return SECCOMP_ACT_ALLOW; }
     if task_idx >= 64 { return SECCOMP_ACT_ALLOW; }
-    let pid_s = task_sc_id[task_idx];
+    let mut pid_s = task_sc_id[task_idx];
     if pid_s < 0 { return SECCOMP_ACT_ALLOW; }   // no filter attached
 
-    let rules = sc_rules[pid_s];
-    let cnt   = sc_rule_cnt[pid_s];
+    let mut rules = sc_rules[pid_s];
+    let mut cnt = sc_rule_cnt[pid_s];
     let mut i = 0;
     while i < cnt {
-        let rule    = rules[i];
-        let rule_nr  = rule[0];
-        let rule_cmp = rule[1];
-        let rule_val = rule[2];
-        let rule_act = rule[3];
+        let mut rule = rules[i];
+        let mut rule_nr = rule[0];
+        let mut rule_cmp = rule[1];
+        let mut rule_val = rule[2];
+        let mut rule_act = rule[3];
 
         if rule_nr == syscall_nr {
-            let matched = 0;
+            let mut matched = 0;
             if rule_cmp == SECCOMP_CMP_ANY { matched = 1; }
             if rule_cmp == SECCOMP_CMP_EQ  { if arg0 == rule_val { matched = 1; } }
             if rule_cmp == SECCOMP_CMP_NEQ { if arg0 != rule_val { matched = 1; } }
@@ -202,7 +202,7 @@ fn seccomp_check(task_idx, syscall_nr, arg0) {
     }
 
     // No rule matched → apply default
-    let def = sc_default[pid_s];
+    let mut def = sc_default[pid_s];
     if def != SECCOMP_ACT_ALLOW {
         set_at(sc_hit_count, pid_s, sc_hit_count[pid_s] + 1);
     }
@@ -213,7 +213,7 @@ fn seccomp_check(task_idx, syscall_nr, arg0) {
 
 // Minimal sandbox: allow only essential syscalls, deny everything else
 fn seccomp_profile_minimal(name) {
-    let pid_s = seccomp_create_profile(name, SECCOMP_ACT_ERRNO);
+    let mut pid_s = seccomp_create_profile(name, SECCOMP_ACT_ERRNO);
     if pid_s < 0 { return 0 - 1; }
     seccomp_allow(pid_s, 0);   // SYS_EXIT
     seccomp_allow(pid_s, 4);   // SYS_GETPID
@@ -227,7 +227,7 @@ fn seccomp_profile_minimal(name) {
 
 // Network-sandbox: allow file I/O but block all network syscalls
 fn seccomp_profile_no_net(name) {
-    let pid_s = seccomp_create_profile(name, SECCOMP_ACT_ALLOW);
+    let mut pid_s = seccomp_create_profile(name, SECCOMP_ACT_ALLOW);
     if pid_s < 0 { return 0 - 1; }
     seccomp_deny(pid_s, 48);   // SYS_SEND
     seccomp_deny(pid_s, 49);   // SYS_RECV
@@ -240,7 +240,7 @@ fn seccomp_profile_no_net(name) {
 
 // Audit-only: log all syscalls but never block
 fn seccomp_profile_audit(name) {
-    let pid_s = seccomp_create_profile(name, SECCOMP_ACT_ALLOW);
+    let mut pid_s = seccomp_create_profile(name, SECCOMP_ACT_ALLOW);
     if pid_s < 0 { return 0 - 1; }
     // Catch-all trace rule via default; just set trace flag for key calls
     seccomp_add_rule(pid_s, 0 - 1, SECCOMP_CMP_ANY, 0, SECCOMP_ACT_TRACE); // nr=-1 never matches

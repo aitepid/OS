@@ -82,7 +82,7 @@ fn asn1_encode_integer(val) {
 
     let mut bytes = [];
     let mut temp = val;
-    let is_negative = 0;
+    let mut is_negative = 0;
 
     if val < 0 {
         temp = 0 - val;
@@ -97,7 +97,7 @@ fn asn1_encode_integer(val) {
         }
     }
 
-    let bytes_len = len(bytes);
+    let mut bytes_len = len(bytes);
     _asn1_encode_length(bytes_len);
 
     let mut i = bytes_len - 1;
@@ -145,7 +145,7 @@ fn asn1_encode_sequence_start() {
 }
 
 fn asn1_encode_sequence_end(start_pos) {
-    let content_len = asn1_len - start_pos;
+    let mut content_len = asn1_len - start_pos;
 
     let mut temp_len = content_len;
     let mut len_octets = 0;
@@ -162,13 +162,13 @@ fn asn1_encode_sequence_end(start_pos) {
     let mut shift = asn1_len - start_pos;
     let mut i = 0;
     while i < shift {
-        let src = ASN1_BUF + asn1_len - 1 - i;
-        let dst = ASN1_BUF + asn1_len - 1 - i + len_octets;
+        let mut src = ASN1_BUF + asn1_len - 1 - i;
+        let mut dst = ASN1_BUF + asn1_len - 1 - i + len_octets;
         mem_write_byte(dst, mem_read_byte(src));
         i = i + 1;
     }
 
-    let len_pos = start_pos;
+    let mut len_pos = start_pos;
     asn1_len = start_pos;
     _asn1_encode_length(content_len);
     asn1_len = start_pos + len_octets + content_len;
@@ -184,13 +184,13 @@ fn asn1_parse_tag(data, offset) {
 fn asn1_parse_length(data, offset) {
     if offset >= len(data) { return [0 - 1, 0]; }
 
-    let first = str_char_code(data, offset);
+    let mut first = str_char_code(data, offset);
 
     if first < 128 {
         return [first, 1];
     }
 
-    let num_octets = first % 128;
+    let mut num_octets = first % 128;
     if num_octets == 0 { return [0 - 1, 0]; }
     if offset + num_octets >= len(data) { return [0 - 1, 0]; }
 
@@ -229,23 +229,23 @@ fn asn1_decode(data) {
     let mut result = "ASN.1 DER:\n";
 
     while offset < len(data) {
-        let tag = asn1_parse_tag(data, offset);
+        let mut tag = asn1_parse_tag(data, offset);
         if tag < 0 { return result; }
 
-        let len_info = asn1_parse_length(data, offset + 1);
-        let len_val = len_info[0];
-        let len_bytes = len_info[1];
+        let mut len_info = asn1_parse_length(data, offset + 1);
+        let mut len_val = len_info[0];
+        let mut len_bytes = len_info[1];
 
         if len_val < 0 { return result; }
 
-        let value_offset = offset + 1 + len_bytes;
+        let mut value_offset = offset + 1 + len_bytes;
 
         if tag == ASN1_INTEGER {
-            let int_val = asn1_parse_integer(data, value_offset, len_val);
+            let mut int_val = asn1_parse_integer(data, value_offset, len_val);
             result = result + "  INTEGER: " + to_string(int_val) + "\n";
         } else {
             if tag == ASN1_OCTET_STRING {
-                let str_val = asn1_parse_octet_string(data, value_offset, len_val);
+                let mut str_val = asn1_parse_octet_string(data, value_offset, len_val);
                 result = result + "  OCTET STRING: " + str_val + "\n";
             } else {
                 if tag == ASN1_NULL {
@@ -288,8 +288,8 @@ fn asn1_selftest() {
     asn1_encode_octet_string("hi");
     asn1_encode_null();
 
-    let hex = asn1_get_hex();
-    let expected = "02012a04026869";
+    let mut hex = asn1_get_hex();
+    let mut expected = "02012a04026869";
 
     if hex == expected + "0500" {
         return "asn1 selftest: pass";

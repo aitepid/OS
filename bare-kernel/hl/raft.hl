@@ -152,8 +152,8 @@ fn raft_log_get_term(index) {
 
 // Check if log is at least as up-to-date as (last_log_term, last_log_index)
 fn _raft_log_up_to_date(last_log_term, last_log_index) {
-    let my_last_term  = raft_log_get_term(raft_log_count);
-    let my_last_index = raft_log_count;
+    let mut my_last_term = raft_log_get_term(raft_log_count);
+    let mut my_last_index = raft_log_count;
     if last_log_term != my_last_term { return last_log_term > my_last_term; }
     return last_log_index >= my_last_index;
 }
@@ -200,8 +200,8 @@ fn raft_handle_request_vote(candidate_id, term, last_log_index, last_log_term) {
     }
     // Grant vote if: haven't voted yet (or already voted for this candidate)
     //                AND candidate's log is at least as up-to-date as ours
-    let grant = 0;
-    let not_voted = 0;
+    let mut grant = 0;
+    let mut not_voted = 0;
     if raft_voted_for == -1     { not_voted = 1; }
     if raft_voted_for == candidate_id { not_voted = 1; }
     if not_voted == 1 {
@@ -225,7 +225,7 @@ fn raft_handle_vote_response(from_id, term, vote_granted) {
     }
     if vote_granted == 1 {
         raft_votes_received = raft_votes_received + 1;
-        let quorum = raft_cluster_size / 2 + 1;
+        let mut quorum = raft_cluster_size / 2 + 1;
         if raft_votes_received >= quorum {
             _raft_become_leader();
         }
@@ -256,12 +256,12 @@ fn _raft_become_leader() {
 
 // Build AppendEntries RPC for a specific peer
 fn raft_build_append_entries(peer_idx) {
-    let next  = raft_next_index[peer_idx];
-    let prev_index = next - 1;
-    let prev_term  = raft_log_get_term(prev_index);
+    let mut next = raft_next_index[peer_idx];
+    let mut prev_index = next - 1;
+    let mut prev_term = raft_log_get_term(prev_index);
     // Gather entries to send (up to 16 at a time)
-    let entries_start = next;
-    let entries_count = raft_log_count - entries_start + 1;
+    let mut entries_start = next;
+    let mut entries_count = raft_log_count - entries_start + 1;
     if entries_count < 0 { entries_count = 0; }
     if entries_count > 16 { entries_count = 16; }
     raft_appends_sent = raft_appends_sent + 1;
@@ -330,7 +330,7 @@ fn raft_handle_append_response(peer_idx, term, success, match_index) {
         _raft_advance_commit();
     } else {
         // Decrement nextIndex and retry
-        let ni = raft_next_index[peer_idx];
+        let mut ni = raft_next_index[peer_idx];
         if ni > 1 { set_at(raft_next_index, peer_idx, ni - 1); }
     }
     return 0;
@@ -349,7 +349,7 @@ fn _raft_advance_commit() {
                 }
                 i = i + 1;
             }
-            let quorum = raft_cluster_size / 2 + 1;
+            let mut quorum = raft_cluster_size / 2 + 1;
             if count >= quorum {
                 raft_commit_index = n;
                 _raft_apply_committed();
@@ -375,7 +375,7 @@ fn _raft_apply_committed() {
 // Propose a command (only callable on leader)
 fn raft_propose(command) {
     if raft_state != RAFT_LEADER { return 0 - 1; }
-    let index = raft_log_append(raft_current_term, RAFT_ENTRY_COMMAND, command);
+    let mut index = raft_log_append(raft_current_term, RAFT_ENTRY_COMMAND, command);
     return index;
 }
 
@@ -415,7 +415,7 @@ fn raft_install_snapshot(last_included_index, last_included_term, data) {
 }
 
 fn raft_status() {
-    let state_str = "follower";
+    let mut state_str = "follower";
     if raft_state == RAFT_CANDIDATE { state_str = "candidate"; }
     if raft_state == RAFT_LEADER    { state_str = "leader"; }
     return "raft[" + to_string(raft_node_id) + "]: " + state_str
@@ -440,16 +440,16 @@ fn raft_test() {
     // Node 0 should now be leader (3 votes including self = majority of 5)
     print("raft test: " + raft_status());
     // Propose commands
-    let i1 = raft_propose("set x=1");
-    let i2 = raft_propose("set y=2");
-    let i3 = raft_propose("set z=3");
+    let mut i1 = raft_propose("set x=1");
+    let mut i2 = raft_propose("set y=2");
+    let mut i3 = raft_propose("set z=3");
     // Simulate replication acknowledgments
     raft_handle_append_response(0, raft_current_term, 1, 3);
     raft_handle_append_response(1, raft_current_term, 1, 3);
     _raft_advance_commit();
     // Tick to simulate heartbeat
     raft_tick(60);
-    let st = raft_status();
+    let mut st = raft_status();
     print("raft test final: " + st);
     return "raft: " + st + " [Ongaro & Ousterhout 2014 ok]";
 }

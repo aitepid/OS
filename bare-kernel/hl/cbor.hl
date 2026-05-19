@@ -81,7 +81,7 @@ fn _cbor_append(b) {
 }
 
 fn _cbor_encode_head(major, val) {
-    let prefix = major * 32;   // major_type << 5
+    let mut prefix = major * 32;   // major_type << 5
     if val < 24 {
         _cbor_append(prefix + val);
     } else {
@@ -191,9 +191,9 @@ fn _cbor_hex_nibble(c) {
 }
 
 fn _cbor_hex_to_bytes(hexstr, dst_addr, max_bytes) {
-    let hlen = len(hexstr);
+    let mut hlen = len(hexstr);
     let mut n = hlen / 2;
-    let limit = n;
+    let mut limit = n;
     if max_bytes < n { let limit = max_bytes; }
     let mut i = 0;
     while i < limit {
@@ -209,9 +209,9 @@ fn _cbor_hex_to_bytes(hexstr, dst_addr, max_bytes) {
 // Returns array [desc_string, bytes_consumed]
 fn _cbor_decode_one(addr, avail) {
     if avail <= 0 { return ["<empty>", 0]; }
-    let initial = mem_read_u8(addr);
-    let major = initial / 32;
-    let addl  = initial % 32;
+    let mut initial = mem_read_u8(addr);
+    let mut major = initial / 32;
+    let mut addl = initial % 32;
 
     // Decode argument
     let mut val = addl;
@@ -239,8 +239,8 @@ fn _cbor_decode_one(addr, avail) {
     if major == 0 { return ["uint(" + to_string(val) + ")", consumed]; }
     if major == 1 { return ["negint(-" + to_string(val + 1) + ")", consumed]; }
     if major == 2 {
-        let blen = val;
-        let end = consumed + blen;
+        let mut blen = val;
+        let mut end = consumed + blen;
         if end > avail { return ["<trunc bstr>", avail]; }
         let mut hex = "bstr(" + to_string(blen) + "):";
         let mut k = 0;
@@ -251,8 +251,8 @@ fn _cbor_decode_one(addr, avail) {
         return [hex, consumed + blen];
     }
     if major == 3 {
-        let slen = val;
-        let end = consumed + slen;
+        let mut slen = val;
+        let mut end = consumed + slen;
         if end > avail { return ["<trunc tstr>", avail]; }
         let mut s = "tstr:\"";
         let mut k = 0;
@@ -273,18 +273,18 @@ fn _cbor_decode_one(addr, avail) {
 }
 
 fn cbor_decode_hex(hexstr) {
-    let hlen = len(hexstr);
+    let mut hlen = len(hexstr);
     if hlen % 2 != 0 { return "cbor_decode_hex: odd hex length"; }
-    let nbytes = hlen / 2;
-    let scratch = CBOR_BUF + 2048;   // use upper half of buffer as scratch
+    let mut nbytes = hlen / 2;
+    let mut scratch = CBOR_BUF + 2048;   // use upper half of buffer as scratch
     _cbor_hex_to_bytes(hexstr, scratch, nbytes);
 
     let mut out = "";
     let mut pos = 0;
     while pos < nbytes {
-        let res = _cbor_decode_one(scratch + pos, nbytes - pos);
-        let desc = res[0];
-        let used = res[1];
+        let mut res = _cbor_decode_one(scratch + pos, nbytes - pos);
+        let mut desc = res[0];
+        let mut used = res[1];
         out = out + desc + " ";
         if used <= 0 { pos = nbytes; }
         else { pos = pos + used; }
@@ -302,9 +302,9 @@ fn cbor_selftest() {
     cbor_encode_str("hi");
     cbor_encode_bool(1);
     cbor_encode_null();
-    let hex = cbor_get_result();
+    let mut hex = cbor_get_result();
     // uint(42)=0x182a, str("hi")=0x626869, true=0xf5, null=0xf6
-    let expected = "182a" + "626869" + "f5" + "f6";
+    let mut expected = "182a" + "626869" + "f5" + "f6";
     if hex == expected {
         return "cbor_selftest: ok — " + hex;
     }

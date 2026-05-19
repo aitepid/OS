@@ -85,8 +85,8 @@ fn _h3_derive_key(cid, server) {
 
 fn _h3_alloc_stream(cid) {
     // Client-initiated bidirectional streams: IDs 0, 4, 8, ...
-    let sidx = h3_next_stream[cid];
-    let slot  = cid * H3_MAXSTREAMS + sidx;
+    let mut sidx = h3_next_stream[cid];
+    let mut slot = cid * H3_MAXSTREAMS + sidx;
     set_at(h3s_state, slot, H3_ST_OPEN);
     set_at(h3s_id,    slot, sidx * 4);  // stream_id = idx * 4 for bidi client
     set_at(h3_next_stream, cid, sidx + 1);
@@ -100,7 +100,7 @@ fn h3_connect(cid, server_hash) {
     set_at(h3_state,  cid, H3_CONNECTING);
 
     // Derive 1-RTT key
-    let key = _h3_derive_key(cid, server_hash);
+    let mut key = _h3_derive_key(cid, server_hash);
     set_at(h3_key, cid, key);
 
     // Simulate CRYPTO + SETTINGS frame exchange
@@ -113,17 +113,17 @@ fn h3_connect(cid, server_hash) {
 fn h3_get(cid, path_hash) {
     // Send HTTP/3 HEADERS frame (GET request) on new stream
     if h3_state[cid] != H3_ESTAB { return 0 - 1; }
-    let sidx  = _h3_alloc_stream(cid);
-    let slot  = cid * H3_MAXSTREAMS + sidx;
-    let pn    = h3_pkt_num[cid];
+    let mut sidx = _h3_alloc_stream(cid);
+    let mut slot = cid * H3_MAXSTREAMS + sidx;
+    let mut pn = h3_pkt_num[cid];
 
     // Encrypt path_hash with key: ct = (path_hash + key + pn) mod 65521
-    let key = h3_key[cid];
-    let ct  = path_hash + key + pn;
-    let p   = 65521;
+    let mut key = h3_key[cid];
+    let mut ct = path_hash + key + pn;
+    let mut p = 65521;
     ct = ct - (ct / p) * p;
 
-    let pb = cid * H3_PKT_STRIDE;
+    let mut pb = cid * H3_PKT_STRIDE;
     set_at(h3_pkt, pb,     pn);
     set_at(h3_pkt, pb + 1, h3s_id[slot]);
     set_at(h3_pkt, pb + 2, H3_FRAME_HEADERS);
@@ -142,16 +142,16 @@ fn h3_get(cid, path_hash) {
 fn h3_post(cid, path_hash, body_hash) {
     // Send HEADERS + DATA frames for POST
     if h3_state[cid] != H3_ESTAB { return 0 - 1; }
-    let sidx  = _h3_alloc_stream(cid);
-    let slot  = cid * H3_MAXSTREAMS + sidx;
-    let pn    = h3_pkt_num[cid];
-    let key   = h3_key[cid];
+    let mut sidx = _h3_alloc_stream(cid);
+    let mut slot = cid * H3_MAXSTREAMS + sidx;
+    let mut pn = h3_pkt_num[cid];
+    let mut key = h3_key[cid];
 
-    let ct = path_hash + body_hash + key + pn;
-    let p  = 65521;
+    let mut ct = path_hash + body_hash + key + pn;
+    let mut p = 65521;
     ct = ct - (ct / p) * p;
 
-    let pb = cid * H3_PKT_STRIDE;
+    let mut pb = cid * H3_PKT_STRIDE;
     set_at(h3_pkt, pb,     pn);
     set_at(h3_pkt, pb + 1, h3s_id[slot]);
     set_at(h3_pkt, pb + 2, H3_FRAME_DATA);
@@ -180,7 +180,7 @@ fn h3_recv_data(cid, sidx) {
 fn h3_close(cid) {
     // Send GOAWAY frame
     if h3_state[cid] == H3_IDLE { return 0; }
-    let pb = cid * H3_PKT_STRIDE;
+    let mut pb = cid * H3_PKT_STRIDE;
     set_at(h3_pkt, pb,     h3_pkt_num[cid]);
     set_at(h3_pkt, pb + 1, 0);
     set_at(h3_pkt, pb + 2, H3_FRAME_GOAWAY);
@@ -198,21 +198,21 @@ fn h3_test() {
     h3_init();
 
     // Connect to server hash=4242
-    let st = h3_connect(0, 4242);
+    let mut st = h3_connect(0, 4242);
 
     // GET /index (path_hash=1111)
-    let s1 = h3_get(0, 1111);
-    let r1 = h3_recv_status(0, s1);
-    let d1 = h3_recv_data(0, s1);
+    let mut s1 = h3_get(0, 1111);
+    let mut r1 = h3_recv_status(0, s1);
+    let mut d1 = h3_recv_data(0, s1);
 
     // POST /submit (path=2222, body=3333)
-    let s2 = h3_post(0, 2222, 3333);
-    let r2 = h3_recv_status(0, s2);
-    let d2 = h3_recv_data(0, s2);
+    let mut s2 = h3_post(0, 2222, 3333);
+    let mut r2 = h3_recv_status(0, s2);
+    let mut d2 = h3_recv_data(0, s2);
 
     // Close
     h3_close(0);
-    let final_st = h3_conn_state(0);
+    let mut final_st = h3_conn_state(0);
 
     print("h3_test: conn_state=" + to_string(st)
           + " s1=" + to_string(s1)

@@ -89,15 +89,15 @@ fn gpu_avail_base() {
 
 // used ring base: after avail ring, page-aligned
 fn gpu_used_base() {
-    let avail_end = gpu_avail_base() + 4 + gpu_vq_size * 2 + 2;
+    let mut avail_end = gpu_avail_base() + 4 + gpu_vq_size * 2 + 2;
     return ((avail_end + 4095) / 4096) * 4096;
 }
 
 // Submit a command buffer (cmd_addr/cmd_len) and expect a response (resp_addr)
 // Uses two chained descriptors: one read-only (cmd) + one write-only (resp)
 fn gpu_submit(cmd_addr, cmd_len, resp_addr, resp_len) {
-    let d0 = gpu_vq_desc_addr(gpu_desc_idx);
-    let d1 = gpu_vq_desc_addr(gpu_desc_idx + 1);
+    let mut d0 = gpu_vq_desc_addr(gpu_desc_idx);
+    let mut d1 = gpu_vq_desc_addr(gpu_desc_idx + 1);
 
     // Descriptor 0: command (device reads)
     mem_write_u64(d0,      cmd_addr);
@@ -112,7 +112,7 @@ fn gpu_submit(cmd_addr, cmd_len, resp_addr, resp_len) {
     mem_write_u16(d1 + 14, 0);
 
     // Add head descriptor to available ring
-    let avail = gpu_avail_base();
+    let mut avail = gpu_avail_base();
     let mut idx = mem_read_u16(avail + 2);
     mem_write_u16(avail + 4 + (idx % gpu_vq_size) * 2, gpu_desc_idx);
     mem_write_u16(avail + 2, idx + 1);
@@ -129,7 +129,7 @@ fn gpu_submit(cmd_addr, cmd_len, resp_addr, resp_len) {
     let mut done = 0;
     while spin < 100000 {
         if done == 0 {
-            let used_idx = mem_read_u16(gpu_used_base() + 2);
+            let mut used_idx = mem_read_u16(gpu_used_base() + 2);
             if used_idx != gpu_vq_used_last {
                 gpu_vq_used_last = used_idx;
                 done = 1;
@@ -153,11 +153,11 @@ fn gpu_write_hdr(addr, cmd_type) {
 // === GPU public API ===
 
 fn gpu_detect() {
-    let devices = pci_scan();
+    let mut devices = pci_scan();
     let mut i = 0;
     while i < len(devices) {
-        let vendor = devices[i][3];
-        let devid  = devices[i][4];
+        let mut vendor = devices[i][3];
+        let mut devid = devices[i][4];
         if vendor == GPU_VENDOR && devid == GPU_DEVICE {
             return [devices[i][0], devices[i][1], devices[i][2]];
         }
@@ -167,7 +167,7 @@ fn gpu_detect() {
 }
 
 fn gpu_create_resource(width, height) {
-    let id = gpu_resource_id;
+    let mut id = gpu_resource_id;
     gpu_resource_id = gpu_resource_id + 1;
     // RESOURCE_CREATE_2D: header(24) + resource_id(4) + format(4) + width(4) + height(4) = 40 bytes
     gpu_write_hdr(GPU_CMD_BUF, GPU_CMD_RESOURCE_CREATE_2D);
@@ -207,7 +207,7 @@ fn gpu_set_scanout(resource_id) {
 
 fn gpu_transfer(resource_id, x, y, w, h) {
     // TRANSFER_TO_HOST_2D: header(24) + rect(16) + offset(8) + resource_id(4) + pad(4) = 56 bytes
-    let offset = (y * gpu_display_w + x) * 4;  // byte offset in framebuffer
+    let mut offset = (y * gpu_display_w + x) * 4;  // byte offset in framebuffer
     gpu_write_hdr(GPU_CMD_BUF, GPU_CMD_TRANSFER_TO_HOST_2D);
     mem_write_u32(GPU_CMD_BUF + 24, x);
     mem_write_u32(GPU_CMD_BUF + 28, y);
@@ -254,7 +254,7 @@ fn gpu_fb_base() {
 
 fn gpu_init(pci_bus, pci_dev, pci_func) {
     // Read BAR0 (I/O port base, mask low 2 bits)
-    let bar0 = pci_bar(pci_bus, pci_dev, pci_func, 0);
+    let mut bar0 = pci_bar(pci_bus, pci_dev, pci_func, 0);
     gpu_bar = (bar0 / 4) * 4;
 
     // VirtIO device reset
@@ -264,7 +264,7 @@ fn gpu_init(pci_bus, pci_dev, pci_func) {
     port_out_u8(gpu_bar + GPU_DEV_STATUS, 3);   // ACK | DRIVER
 
     // Negotiate features (accept all)
-    let feat = port_in_u32(gpu_bar + GPU_DEV_FEAT);
+    let mut feat = port_in_u32(gpu_bar + GPU_DEV_FEAT);
     port_out_u32(gpu_bar + GPU_GUEST_FEAT, feat);
 
     // Setup control queue (queue 0)
@@ -296,7 +296,7 @@ fn gpu_init(pci_bus, pci_dev, pci_func) {
     gpu_fb_resource = gpu_create_resource(gpu_display_w, gpu_display_h);
 
     // Clear framebuffer backing memory to black
-    let fb_size = gpu_display_w * gpu_display_h * 4;
+    let mut fb_size = gpu_display_w * gpu_display_h * 4;
     mem_zero(GPU_FB_ADDR, fb_size);
 
     // Attach guest framebuffer memory to resource

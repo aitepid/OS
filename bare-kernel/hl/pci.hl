@@ -33,7 +33,7 @@ fn pci_config_read32(bus, device, func, offset) {
 
 // Read 16-bit value from PCI config
 fn pci_config_read16(bus, device, func, offset) {
-    let dword = pci_config_read32(bus, device, func, offset);
+    let mut dword = pci_config_read32(bus, device, func, offset);
     if offset % 4 == 0 { return dword % 65536; }
     return (dword / 65536) % 65536;
 }
@@ -52,7 +52,7 @@ fn pci_config_write32(bus, device, func, offset, val) {
 
 // Write 16 bits to PCI config space
 fn pci_config_write16(bus, device, func, offset, val) {
-    let old = pci_config_read32(bus, device, func, offset);
+    let mut old = pci_config_read32(bus, device, func, offset);
     let mut new_val = 0;
     if offset % 4 == 0 {
         new_val = (old / 65536) * 65536 + (val % 65536);
@@ -75,19 +75,19 @@ fn pci_device_id(bus, dev, func) {
 
 // Get class code
 fn pci_class(bus, dev, func) {
-    let reg = pci_config_read32(bus, dev, func, 8);
+    let mut reg = pci_config_read32(bus, dev, func, 8);
     return (reg / 16777216) % 256;
 }
 
 // Get subclass
 fn pci_subclass(bus, dev, func) {
-    let reg = pci_config_read32(bus, dev, func, 8);
+    let mut reg = pci_config_read32(bus, dev, func, 8);
     return (reg / 65536) % 256;
 }
 
 // Get header type
 fn pci_header_type(bus, dev, func) {
-    let reg = pci_config_read32(bus, dev, func, 12);
+    let mut reg = pci_config_read32(bus, dev, func, 12);
     return (reg / 65536) % 256;
 }
 
@@ -103,7 +103,7 @@ fn pci_read_bar(bus, dev, func, bar_idx) {
 
 // Get interrupt line
 fn pci_interrupt_line(bus, dev, func) {
-    let reg = pci_config_read32(bus, dev, func, 60);
+    let mut reg = pci_config_read32(bus, dev, func, 60);
     return reg % 256;
 }
 
@@ -145,23 +145,23 @@ fn pci_scan() {
     let mut devices = [];
     let mut dev = 0;
     while dev < 32 {
-        let vendor = pci_vendor_id(0, dev, 0);
+        let mut vendor = pci_vendor_id(0, dev, 0);
         if vendor != 65535 {
-            let did = pci_device_id(0, dev, 0);
-            let cls = pci_class(0, dev, 0);
-            let sub = pci_subclass(0, dev, 0);
+            let mut did = pci_device_id(0, dev, 0);
+            let mut cls = pci_class(0, dev, 0);
+            let mut sub = pci_subclass(0, dev, 0);
             push(devices, [0, dev, 0, vendor, did, cls, sub]);
 
             // Check multi-function
-            let htype = pci_header_type(0, dev, 0);
+            let mut htype = pci_header_type(0, dev, 0);
             if (htype / 128) % 2 == 1 {
                 let mut func = 1;
                 while func < 8 {
-                    let fv = pci_vendor_id(0, dev, func);
+                    let mut fv = pci_vendor_id(0, dev, func);
                     if fv != 65535 {
-                        let fd = pci_device_id(0, dev, func);
-                        let fc = pci_class(0, dev, func);
-                        let fs = pci_subclass(0, dev, func);
+                        let mut fd = pci_device_id(0, dev, func);
+                        let mut fc = pci_class(0, dev, func);
+                        let mut fs = pci_subclass(0, dev, func);
                         push(devices, [0, dev, func, fv, fd, fc, fs]);
                     }
                     func = func + 1;
@@ -185,17 +185,17 @@ print("Found " + to_string(n) + " devices on bus 0.");
 
 while i < n {
     let mut d = devs[i];
-    let bus = d[0];
-    let dev = d[1];
-    let func = d[2];
-    let vid = d[3];
-    let did = d[4];
-    let cls = d[5];
-    let sub = d[6];
+    let mut bus = d[0];
+    let mut dev = d[1];
+    let mut func = d[2];
+    let mut vid = d[3];
+    let mut did = d[4];
+    let mut cls = d[5];
+    let mut sub = d[6];
 
-    let name = pci_class_name(cls, sub);
-    let line = "PCI " + to_string(bus) + ":" + to_string(dev) + "." + to_string(func);
-    let detail = " - " + name + " (Vid: " + to_string(vid) + ", Did: " + to_string(did) + ")";
+    let mut name = pci_class_name(cls, sub);
+    let mut line = "PCI " + to_string(bus) + ":" + to_string(dev) + "." + to_string(func);
+    let mut detail = " - " + name + " (Vid: " + to_string(vid) + ", Did: " + to_string(did) + ")";
     print(line + detail);
     i = i + 1;
 }

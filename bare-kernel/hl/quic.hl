@@ -129,14 +129,14 @@ fn quic_conn_alloc() {
 
 // Generate a pseudo-random connection ID using LFSR
 fn quic_gen_conn_id() {
-    let seed = get_ticks() ^ 305419896; // 0x12345678
+    let mut seed = get_ticks() ^ 305419896; // 0x12345678
     return lfsr_next(seed);
 }
 
 // --- 1-RTT Connection Establishment ---
 
 fn quic_connect(remote_ip, remote_port) {
-    let conn = quic_conn_alloc();
+    let mut conn = quic_conn_alloc();
     if conn < 0 { return 0 - 1; }
 
     let mut addr = quic_conn_addr(conn);
@@ -166,7 +166,7 @@ fn quic_connect(remote_ip, remote_port) {
     // Initialize streams for this connection
     let mut si = 0;
     while si < QUIC_MAX_STREAMS {
-        let saddr = quic_stream_addr(conn, si);
+        let mut saddr = quic_stream_addr(conn, si);
         mem_write_u64(saddr, 0);     // stream_id = 0 (unused)
         mem_write_u64(saddr + 8, 0); // state = idle
         si = si + 1;
@@ -181,7 +181,7 @@ fn quic_connect(remote_ip, remote_port) {
 // Build Initial packet (client hello)
 fn quic_send_initial(conn) {
     let mut addr = quic_conn_addr(conn);
-    let pkt_num = mem_read_u64(addr + 40);
+    let mut pkt_num = mem_read_u64(addr + 40);
 
     // Compose QUIC Initial packet:
     //   Long Header: 1(flags) + 4(version) + 1(DCID len) + DCID + 1(SCID len) + SCID
@@ -196,7 +196,7 @@ fn quic_send_initial(conn) {
 
     // DCID: length(1) + id(8 bytes, LE)
     push(pkt, 8);
-    let remote_cid = mem_read_u64(addr + 16);
+    let mut remote_cid = mem_read_u64(addr + 16);
     let mut bi = 0;
     while bi < 8 {
         push(pkt, (remote_cid >> (bi * 8)) & 255);
@@ -205,7 +205,7 @@ fn quic_send_initial(conn) {
 
     // SCID: length(1) + id(8 bytes, LE)
     push(pkt, 8);
-    let local_cid = mem_read_u64(addr + 8);
+    let mut local_cid = mem_read_u64(addr + 8);
     bi = 0;
     while bi < 8 {
         push(pkt, (local_cid >> (bi * 8)) & 255);
@@ -216,10 +216,10 @@ fn quic_send_initial(conn) {
     push(pkt, 0);
 
     // Payload: CRYPTO frame with TLS ClientHello
-    let crypto_payload = quic_build_crypto_frame(conn);
+    let mut crypto_payload = quic_build_crypto_frame(conn);
 
     // Length (varint): payload_len + pkt_num_len(2)
-    let total_len = len(crypto_payload) + 2;
+    let mut total_len = len(crypto_payload) + 2;
     // 2-byte varint encoding (0x4000 | length)
     push(pkt, 64 + ((total_len >> 8) & 63));  // 0x40 | high bits
     push(pkt, total_len & 255);
@@ -236,9 +236,9 @@ fn quic_send_initial(conn) {
     }
 
     // Send via UDP
-    let remote_ip = mem_read_u32(addr + 24);
-    let remote_port = mem_read_u32(addr + 28);
-    let local_port = mem_read_u32(addr + 32);
+    let mut remote_ip = mem_read_u32(addr + 24);
+    let mut remote_port = mem_read_u32(addr + 28);
+    let mut local_port = mem_read_u32(addr + 32);
     udp_send(remote_ip, local_port, remote_port, pkt);
 
     // Increment packet number
@@ -272,12 +272,12 @@ fn quic_recv_packet(conn, data) {
     let mut addr = quic_conn_addr(conn);
     let mut state = mem_read_u64(addr);
 
-    let header_byte = data[0];
-    let is_long = (header_byte >> 7) & 1;
+    let mut header_byte = data[0];
+    let mut is_long = (header_byte >> 7) & 1;
 
     if is_long == 1 {
         // Long header packet
-        let pkt_type = (header_byte >> 4) & 3;
+        let mut pkt_type = (header_byte >> 4) & 3;
 
         if pkt_type == PKT_INITIAL && state == QUIC_INITIAL {
             // Server Initial: extract SCID, process CRYPTO frame
@@ -305,7 +305,7 @@ fn quic_process_server_initial(conn, data) {
     let mut addr = quic_conn_addr(conn);
     // Extract server's SCID from Initial packet
     if len(data) < 23 { return 0; }
-    let scid_len = data[14];
+    let mut scid_len = data[14];
     if scid_len > 0 && scid_len <= 20 {
         let mut cid = 0;
         let mut i = 0;
@@ -321,11 +321,11 @@ fn quic_process_server_initial(conn, data) {
 fn quic_process_handshake(conn, data) {
     // Handshake complete — derive application keys (simplified)
     let mut addr = quic_conn_addr(conn);
-    let local_cid = mem_read_u64(addr + 8);
-    let remote_cid = mem_read_u64(addr + 16);
+    let mut local_cid = mem_read_u64(addr + 8);
+    let mut remote_cid = mem_read_u64(addr + 16);
     // Derive key material by mixing CIDs (simplified HKDF equivalent)
-    let key_tx = local_cid ^ remote_cid ^ 2862933555777941757;
-    let key_rx = remote_cid ^ local_cid ^ 1442695040888963407;
+    let mut key_tx = local_cid ^ remote_cid ^ 2862933555777941757;
+    let mut key_rx = remote_cid ^ local_cid ^ 1442695040888963407;
     mem_write_u64(addr + 56, key_tx);
     mem_write_u64(addr + 64, key_rx);
     return 0;
@@ -336,14 +336,14 @@ fn quic_process_short(conn, data) {
     // Parse short header: 1(flags) + CID(8) + pkt_num(1-4) + payload
     if len(data) < 10 { return 0; }
     // Update largest received packet number
-    let pkt_num = data[9];
-    let largest = mem_read_u64(addr + 48);
+    let mut pkt_num = data[9];
+    let mut largest = mem_read_u64(addr + 48);
     if pkt_num > largest { mem_write_u64(addr + 48, pkt_num); }
 
     // Process frames in payload (starting at offset 10)
     let mut off = 10;
     while off < len(data) {
-        let frame_type = data[off];
+        let mut frame_type = data[off];
         off = off + 1;
 
         if frame_type == FRAME_PADDING {
@@ -356,7 +356,7 @@ fn quic_process_short(conn, data) {
         else if frame_type == FRAME_ACK {
             // Parse ACK: largest_ack(varint) + ack_delay(varint) + ...
             if off + 2 <= len(data) {
-                let largest_ack = data[off];
+                let mut largest_ack = data[off];
                 off = off + 1;
                 quic_on_ack(conn, largest_ack);
             }
@@ -364,15 +364,15 @@ fn quic_process_short(conn, data) {
         }
         else if frame_type >= FRAME_STREAM && frame_type <= 15 {
             // STREAM frame: 0x08-0x0F
-            let has_off = (frame_type >> 2) & 1;
-            let has_len = (frame_type >> 1) & 1;
-            let has_fin = frame_type & 1;
+            let mut has_off = (frame_type >> 2) & 1;
+            let mut has_len = (frame_type >> 1) & 1;
+            let mut has_fin = frame_type & 1;
 
             if off + 1 <= len(data) {
-                let stream_id = data[off]; off = off + 1;
-                let str_off = 0;
+                let mut stream_id = data[off]; off = off + 1;
+                let mut str_off = 0;
                 if has_off == 1 && off < len(data) { str_off = data[off]; off = off + 1; }
-                let str_len = len(data) - off;
+                let mut str_len = len(data) - off;
                 if has_len == 1 && off < len(data) { str_len = data[off]; off = off + 1; }
 
                 quic_stream_recv(conn, stream_id, data, off, str_len, has_fin);
@@ -381,7 +381,7 @@ fn quic_process_short(conn, data) {
         }
         else if frame_type == FRAME_MAX_DATA {
             if off < len(data) {
-                let new_limit = data[off]; off = off + 1;
+                let mut new_limit = data[off]; off = off + 1;
                 mem_write_u64(addr + 136, new_limit * 1024);
             }
         }
@@ -402,7 +402,7 @@ fn quic_process_short(conn, data) {
 fn quic_stream_open(conn, stream_id) {
     let mut si = 0;
     while si < QUIC_MAX_STREAMS {
-        let saddr = quic_stream_addr(conn, si);
+        let mut saddr = quic_stream_addr(conn, si);
         if mem_read_u64(saddr + 8) == 0 {
             mem_write_u64(saddr, stream_id);
             mem_write_u64(saddr + 8, 1);     // state = open
@@ -410,7 +410,7 @@ fn quic_stream_open(conn, stream_id) {
             mem_write_u64(saddr + 24, 0);    // recv_offset
             mem_write_u64(saddr + 32, 65536); // max_data = 64KB default
             // Allocate receive buffer (4KB)
-            let buf = page_alloc();
+            let mut buf = page_alloc();
             mem_write_u64(saddr + 40, buf);
             mem_write_u64(saddr + 48, 4096);
             mem_write_u64(saddr + 56, 0);    // fin_sent
@@ -429,23 +429,23 @@ fn quic_stream_send(conn, stream_id, data) {
     if state != QUIC_ESTABLISHED { return 0 - 1; }
 
     // Check connection-level flow control
-    let data_sent = mem_read_u64(addr + 144);
-    let max_remote = mem_read_u64(addr + 136);
+    let mut data_sent = mem_read_u64(addr + 144);
+    let mut max_remote = mem_read_u64(addr + 136);
     if data_sent + len(data) > max_remote { return 0 - 2; } // blocked
 
     // Find stream
     let mut si = quic_find_stream(conn, stream_id);
     if si < 0 { return 0 - 3; }
-    let saddr = quic_stream_addr(conn, si);
+    let mut saddr = quic_stream_addr(conn, si);
 
     // Check per-stream flow control
-    let send_offset = mem_read_u64(saddr + 16);
-    let max_data = mem_read_u64(saddr + 32);
+    let mut send_offset = mem_read_u64(saddr + 16);
+    let mut max_data = mem_read_u64(saddr + 32);
     if send_offset + len(data) > max_data { return 0 - 4; }
 
     // Build STREAM frame
     let mut frame = [];
-    let frame_type = FRAME_STREAM | 2; // has_len flag
+    let mut frame_type = FRAME_STREAM | 2; // has_len flag
     if send_offset > 0 { frame_type = frame_type | 4; } // has_offset flag
     push(frame, frame_type);
     push(frame, stream_id & 255);
@@ -478,13 +478,13 @@ fn quic_stream_recv(conn, stream_id, data, off, length, fin) {
         si = quic_stream_open(conn, stream_id);
         if si < 0 { return 0; }
     }
-    let saddr = quic_stream_addr(conn, si);
-    let recv_offset = mem_read_u64(saddr + 24);
-    let buf_addr = mem_read_u64(saddr + 40);
-    let buf_len = mem_read_u64(saddr + 48);
+    let mut saddr = quic_stream_addr(conn, si);
+    let mut recv_offset = mem_read_u64(saddr + 24);
+    let mut buf_addr = mem_read_u64(saddr + 40);
+    let mut buf_len = mem_read_u64(saddr + 48);
 
     // Copy data to receive buffer (circular, simplified)
-    let write_off = recv_offset % buf_len;
+    let mut write_off = recv_offset % buf_len;
     let mut i = 0;
     while i < length && (write_off + i) < buf_len {
         if off + i < len(data) {
@@ -496,7 +496,7 @@ fn quic_stream_recv(conn, stream_id, data, off, length, fin) {
 
     // Update connection data_recv
     let mut addr = quic_conn_addr(conn);
-    let data_recv = mem_read_u64(addr + 152);
+    let mut data_recv = mem_read_u64(addr + 152);
     mem_write_u64(addr + 152, data_recv + length);
 
     if fin == 1 {
@@ -508,7 +508,7 @@ fn quic_stream_recv(conn, stream_id, data, off, length, fin) {
 fn quic_find_stream(conn, stream_id) {
     let mut si = 0;
     while si < QUIC_MAX_STREAMS {
-        let saddr = quic_stream_addr(conn, si);
+        let mut saddr = quic_stream_addr(conn, si);
         if mem_read_u64(saddr + 8) != 0 && mem_read_u64(saddr) == stream_id {
             return si;
         }
@@ -521,8 +521,8 @@ fn quic_find_stream(conn, stream_id) {
 
 fn quic_send_short(conn, payload) {
     let mut addr = quic_conn_addr(conn);
-    let pkt_num = mem_read_u64(addr + 40);
-    let remote_cid = mem_read_u64(addr + 16);
+    let mut pkt_num = mem_read_u64(addr + 40);
+    let mut remote_cid = mem_read_u64(addr + 16);
 
     let mut pkt = [];
     // Short header: 0100_0001 (spin=0, reserved=0, key_phase=0, pkt_num_len=1)
@@ -546,9 +546,9 @@ fn quic_send_short(conn, payload) {
     }
 
     // Send via UDP
-    let remote_ip = mem_read_u32(addr + 24);
-    let remote_port = mem_read_u32(addr + 28);
-    let local_port = mem_read_u32(addr + 32);
+    let mut remote_ip = mem_read_u32(addr + 24);
+    let mut remote_port = mem_read_u32(addr + 28);
+    let mut local_port = mem_read_u32(addr + 32);
     udp_send(remote_ip, local_port, remote_port, pkt);
 
     mem_write_u64(addr + 40, pkt_num + 1);
@@ -560,7 +560,7 @@ fn quic_send_short(conn, payload) {
 
 fn quic_send_ack(conn) {
     let mut addr = quic_conn_addr(conn);
-    let largest = mem_read_u64(addr + 48);
+    let mut largest = mem_read_u64(addr + 48);
     let mut frame = [];
     push(frame, FRAME_ACK);
     push(frame, largest & 255);  // largest acknowledged
@@ -574,39 +574,39 @@ fn quic_send_ack(conn) {
 fn quic_on_ack(conn, largest_ack) {
     let mut addr = quic_conn_addr(conn);
     // Update RTT estimate (simplified: assume 1-tick per RTT for now)
-    let now = get_ticks();
-    let last = mem_read_u64(addr + 184);
-    let sample = now - last;
+    let mut now = get_ticks();
+    let mut last = mem_read_u64(addr + 184);
+    let mut sample = now - last;
     if sample > 0 {
-        let srtt = mem_read_u64(addr + 104);
-        let rttvar = mem_read_u64(addr + 112);
+        let mut srtt = mem_read_u64(addr + 104);
+        let mut rttvar = mem_read_u64(addr + 112);
         // Jacobson/Karels: SRTT = 7/8 * SRTT + 1/8 * sample
-        let new_srtt = srtt - (srtt >> 3) + sample;
+        let mut new_srtt = srtt - (srtt >> 3) + sample;
         // RTTVAR = 3/4 * RTTVAR + 1/4 * |SRTT - sample|
-        let diff = srtt / 8 - sample;
+        let mut diff = srtt / 8 - sample;
         if diff < 0 { diff = 0 - diff; }
-        let new_rttvar = rttvar - (rttvar >> 2) + diff;
+        let mut new_rttvar = rttvar - (rttvar >> 2) + diff;
         mem_write_u64(addr + 104, new_srtt);
         mem_write_u64(addr + 112, new_rttvar);
         // RTO = SRTT/8 + 4*RTTVAR
-        let rto = new_srtt / 8 + new_rttvar;
+        let mut rto = new_srtt / 8 + new_rttvar;
         if rto < 200 { rto = 200; } // min 200ms
         mem_write_u64(addr + 120, rto);
         // Update rtt_min
-        let rtt_min = mem_read_u64(addr + 96);
+        let mut rtt_min = mem_read_u64(addr + 96);
         if sample < rtt_min { mem_write_u64(addr + 96, sample); }
     }
 
     // Congestion control: NewReno-style
-    let cwnd = mem_read_u64(addr + 72);
-    let ssthresh = mem_read_u64(addr + 80);
-    let bif = mem_read_u64(addr + 88);
+    let mut cwnd = mem_read_u64(addr + 72);
+    let mut ssthresh = mem_read_u64(addr + 80);
+    let mut bif = mem_read_u64(addr + 88);
     if cwnd < ssthresh {
         // Slow start: cwnd += ACK'd bytes (approx 1 MSS)
         mem_write_u64(addr + 72, cwnd + 1472);
     } else {
         // Congestion avoidance: cwnd += MSS^2 / cwnd
-        let inc = 1472 * 1472 / cwnd;
+        let mut inc = 1472 * 1472 / cwnd;
         if inc < 1 { inc = 1; }
         mem_write_u64(addr + 72, cwnd + inc);
     }
@@ -635,9 +635,9 @@ fn quic_close(conn) {
     // Close all streams
     let mut si = 0;
     while si < QUIC_MAX_STREAMS {
-        let saddr = quic_stream_addr(conn, si);
+        let mut saddr = quic_stream_addr(conn, si);
         if mem_read_u64(saddr + 8) != 0 {
-            let buf = mem_read_u64(saddr + 40);
+            let mut buf = mem_read_u64(saddr + 40);
             if buf != 0 { page_free(buf); }
             mem_write_u64(saddr + 8, 0);
         }
@@ -666,16 +666,16 @@ fn quic_status() {
 fn quic_conn_info(conn) {
     let mut addr = quic_conn_addr(conn);
     let mut state = mem_read_u64(addr);
-    let state_name = "UNKNOWN";
+    let mut state_name = "UNKNOWN";
     if state == QUIC_IDLE { state_name = "IDLE"; }
     if state == QUIC_INITIAL { state_name = "INITIAL"; }
     if state == QUIC_HANDSHAKE { state_name = "HANDSHAKE"; }
     if state == QUIC_ESTABLISHED { state_name = "ESTABLISHED"; }
     if state == QUIC_CLOSING { state_name = "CLOSING"; }
     if state == QUIC_CLOSED { state_name = "CLOSED"; }
-    let cwnd = mem_read_u64(addr + 72);
-    let bif = mem_read_u64(addr + 88);
-    let rto = mem_read_u64(addr + 120);
+    let mut cwnd = mem_read_u64(addr + 72);
+    let mut bif = mem_read_u64(addr + 88);
+    let mut rto = mem_read_u64(addr + 120);
     return state_name + " cwnd=" + to_string(cwnd) + " bif=" + to_string(bif) + " rto=" + to_string(rto) + "ms";
 }
 

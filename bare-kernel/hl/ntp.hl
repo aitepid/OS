@@ -96,9 +96,9 @@ fn _ntp_dim(m, y) {
 
 fn ntp_format_time(unix) {
     if unix <= 0 { return "1970-01-01 00:00:00"; }
-    let sec  = unix % 60;
-    let min  = (unix / 60) % 60;
-    let hr   = (unix / 3600) % 24;
+    let mut sec = unix % 60;
+    let mut min = (unix / 60) % 60;
+    let mut hr = (unix / 3600) % 24;
     let mut rem = unix / 86400;
     let mut y = 1970;
     let mut cont = 1;
@@ -114,7 +114,7 @@ fn ntp_format_time(unix) {
     let mut m = 1;
     let mut cont2 = 1;
     while cont2 == 1 {
-        let dm = _ntp_dim(m, y);
+        let mut dm = _ntp_dim(m, y);
         if rem < dm { cont2 = 0; }
         else { rem = rem - dm; m = m + 1; }
     }
@@ -132,20 +132,20 @@ fn ntp_sync(host) {
     ntp_resp_ready = 0;
     ntp_resp_data  = [];
 
-    let ip = dns_resolve(host);
+    let mut ip = dns_resolve(host);
     if ip == 0 {
         print("ntp: dns_resolve failed for " + host);
         return 0;
     }
 
-    let sock = udp_bind(NTP_LOCAL_PORT);
+    let mut sock = udp_bind(NTP_LOCAL_PORT);
     if sock < 0 { print("ntp: udp_bind failed"); return 0; }
 
-    let req = _ntp_build_request();
+    let mut req = _ntp_build_request();
     udp_send(ip, NTP_PORT, NTP_LOCAL_PORT, req);
 
     // Poll for response callback
-    let deadline = get_ticks() + NTP_TIMEOUT;
+    let mut deadline = get_ticks() + NTP_TIMEOUT;
     while ntp_resp_ready == 0 {
         if get_ticks() >= deadline { udp_close(sock); print("ntp: timeout"); return 0; }
     }
@@ -158,19 +158,19 @@ fn ntp_sync(host) {
         return 0;
     }
 
-    let ntp_secs = _ntp_u32_be(ntp_resp_data, 40);
+    let mut ntp_secs = _ntp_u32_be(ntp_resp_data, 40);
     if ntp_secs < NTP_EPOCH_DELTA {
         print("ntp: implausible timestamp " + to_string(ntp_secs));
         return 0;
     }
 
-    let unix_secs = ntp_secs - NTP_EPOCH_DELTA;
+    let mut unix_secs = ntp_secs - NTP_EPOCH_DELTA;
     ntp_last_unix  = unix_secs;
     ntp_last_tick  = get_ticks();
     ntp_synced     = 1;
     ntp_sync_count = ntp_sync_count + 1;
 
-    let ts = ntp_format_time(unix_secs);
+    let mut ts = ntp_format_time(unix_secs);
     klog(1, "ntp", "synced to " + host + ": " + ts);
     print("ntp: synchronized — " + ts + " (unix=" + to_string(unix_secs) + ")");
     return unix_secs;
@@ -178,7 +178,7 @@ fn ntp_sync(host) {
 
 fn ntp_get_time() {
     if ntp_synced == 0 { return 0; }
-    let elapsed = get_ticks() - ntp_last_tick;
+    let mut elapsed = get_ticks() - ntp_last_tick;
     return ntp_last_unix + elapsed / 100;
 }
 

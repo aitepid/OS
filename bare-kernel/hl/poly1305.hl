@@ -36,7 +36,7 @@ fn poly1305_init() {
 
 // Set key (32 bytes: r + s)
 fn poly1305_set_key(key) {
-    let key_len = len(key);
+    let mut key_len = len(key);
     if key_len < 32 {
         print("Poly1305: key too short");
         return 0 - 1;
@@ -169,20 +169,20 @@ fn _poly1305_multiply(acc, r) {
     // Byte-by-byte schoolbook multiplication
     let mut j = 0;
     while j < 16 {
-        let r_byte = r[j];
+        let mut r_byte = r[j];
         if r_byte > 0 {
             let mut carry = 0;
             i = 0;
             while i < 17 {
-                let acc_byte = acc[i];
-                let prod_idx = i + j;
+                let mut acc_byte = acc[i];
+                let mut prod_idx = i + j;
 
                 let mut prod_byte = 0;
                 if prod_idx < 32 {
                     prod_byte = poly1305_product[prod_idx];
                 }
 
-                let prod_val = acc_byte * r_byte + prod_byte + carry;
+                let mut prod_val = acc_byte * r_byte + prod_byte + carry;
 
                 if prod_idx < 32 {
                     set_at(poly1305_product, prod_idx, prod_val % 256);
@@ -209,7 +209,7 @@ fn _poly1305_multiply(acc, r) {
 
 // Reduce modulo 2^130 - 5 (simplified)
 fn _poly1305_reduce(acc) {
-    let overflow = acc[16];
+    let mut overflow = acc[16];
     if overflow >= 4 {
         // Add 5 to subtract 2^130 - 5 (reduction via adding 5)
         let mut i = 0;
@@ -238,8 +238,8 @@ fn poly1305_finalize() {
     let mut i = 0;
     let mut carry = 0;
     while i < 16 {
-        let acc_byte = poly1305_accumulator[i];
-        let s_byte = poly1305_s[i];
+        let mut acc_byte = poly1305_accumulator[i];
+        let mut s_byte = poly1305_s[i];
         let mut sum = acc_byte + s_byte + carry;
 
         set_at(poly1305_tag, i, sum % 256);
@@ -272,12 +272,12 @@ fn poly1305_get_hex() {
 
 // Convert byte array to hex string
 fn _poly1305_to_hex(data, dlen) {
-    let hex_chars = "0123456789abcdef";
+    let mut hex_chars = "0123456789abcdef";
     let mut pos = 0;
     let mut i = 0;
 
     while i < dlen {
-        let bval = data[i];
+        let mut bval = data[i];
         set_at(poly1305_hex_buf, pos, hex_chars[bval / 16]);
         pos = pos + 1;
         set_at(poly1305_hex_buf, pos, hex_chars[bval % 16]);
@@ -309,8 +309,8 @@ fn poly1305_reset() {
 
 // Test Poly1305 determinism
 fn poly1305_test() {
-    let key = "12345678901234567890123456789012";
-    let message = "Test message for Poly1305 MAC";
+    let mut key = "12345678901234567890123456789012";
+    let mut message = "Test message for Poly1305 MAC";
 
     let mut result = poly1305_set_key(key);
     if result < 0 {
@@ -318,8 +318,8 @@ fn poly1305_test() {
         return 0 - 1;
     }
 
-    let mlen = len(message);
-    let upd = poly1305_update(message, mlen);
+    let mut mlen = len(message);
+    let mut upd = poly1305_update(message, mlen);
     if upd < 0 {
         print("Poly1305 test: update failed");
         return 0 - 2;
@@ -334,7 +334,7 @@ fn poly1305_test() {
     poly1305_finalize();
 
     // Compare final tag with itself (determinism check)
-    let matched = poly1305_verify(poly1305_tag);
+    let mut matched = poly1305_verify(poly1305_tag);
     if matched == 0 {
         print("Poly1305 test: determinism failed");
         return 0 - 3;

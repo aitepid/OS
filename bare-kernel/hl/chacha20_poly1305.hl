@@ -99,10 +99,10 @@ fn _cp_add32(a, b) {
 // XOR two 32-bit values (arithmetic simulation)
 fn _cp_xor32(a, b) {
     let mut result = 0;
-    let bit = 0;
+    let mut bit = 0;
     while bit < 32 {
-        let ba = (a / _cp_pow2(bit)) - ((a / _cp_pow2(bit + 1)) * 2);
-        let bb = (b / _cp_pow2(bit)) - ((b / _cp_pow2(bit + 1)) * 2);
+        let mut ba = (a / _cp_pow2(bit)) - ((a / _cp_pow2(bit + 1)) * 2);
+        let mut bb = (b / _cp_pow2(bit)) - ((b / _cp_pow2(bit + 1)) * 2);
         if ba + bb == 1 { result = result + _cp_pow2(bit); }
         bit = bit + 1;
     }
@@ -145,13 +145,13 @@ fn _cp_chacha20_init_state(counter) {
 
 // Run 20-round ChaCha20 core and produce 64-byte keystream block
 fn _cp_chacha20_block(counter) {
-    let init = _cp_chacha20_init_state(counter);
+    let mut init = _cp_chacha20_init_state(counter);
     let mut state = [init[0],  init[1],  init[2],  init[3],
                  init[4],  init[5],  init[6],  init[7],
                  init[8],  init[9],  init[10], init[11],
                  init[12], init[13], init[14], init[15]];
     // 20 rounds = 10 double-rounds
-    let round = 0;
+    let mut round = 0;
     while round < 10 {
         // Column rounds
         state = _cp_quarter_round(state, 0, 4,  8, 12);
@@ -191,7 +191,7 @@ fn _cp_chacha20_block(counter) {
 // Generate 32-byte Poly1305 one-time key from ChaCha20 block 0
 fn _cp_poly1305_otk() {
     let mut block = _cp_chacha20_block(0);
-    let otk = [];
+    let mut otk = [];
     let mut i = 0;
     while i < 32 {
         set_at(otk, i, block[i]);
@@ -216,26 +216,26 @@ fn _cp_poly1305_mac(otk, data, data_len) {
     set_at(r, 8,  r[8]  - (r[8]  - ((r[8]  / 4) * 4)));
     set_at(r, 12, r[12] - (r[12] - ((r[12] / 4) * 4)));
     // Accumulate: simplified 130-bit accumulator using 5 x 26-bit limbs
-    let acc = [0, 0, 0, 0, 0];   // 5 limbs
-    let r0 = _cp_read32_le(r, 0);
-    let r1 = _cp_read32_le(r, 4);
-    let r2 = _cp_read32_le(r, 8);
-    let r3 = _cp_read32_le(r, 12);
+    let mut acc = [0, 0, 0, 0, 0];   // 5 limbs
+    let mut r0 = _cp_read32_le(r, 0);
+    let mut r1 = _cp_read32_le(r, 4);
+    let mut r2 = _cp_read32_le(r, 8);
+    let mut r3 = _cp_read32_le(r, 12);
     // Process 16-byte blocks
-    let blocks = data_len / 16;
+    let mut blocks = data_len / 16;
     let mut bi = 0;
     while bi < blocks {
         // Add data block + 1 to accumulator
-        let n0 = _cp_read32_le(data, bi * 16 + 0);
-        let n1 = _cp_read32_le(data, bi * 16 + 4);
-        let n2 = _cp_read32_le(data, bi * 16 + 8);
-        let n3 = _cp_read32_le(data, bi * 16 + 12);
+        let mut n0 = _cp_read32_le(data, bi * 16 + 0);
+        let mut n1 = _cp_read32_le(data, bi * 16 + 4);
+        let mut n2 = _cp_read32_le(data, bi * 16 + 8);
+        let mut n3 = _cp_read32_le(data, bi * 16 + 12);
         set_at(acc, 0, acc[0] + n0);
         set_at(acc, 1, acc[1] + n1);
         set_at(acc, 2, acc[2] + n2);
         set_at(acc, 3, acc[3] + n3 + 16777216);  // +1 in high bit (simplified)
         // Multiply acc by r (simplified modular multiplication)
-        let new_acc = [0, 0, 0, 0, 0];
+        let mut new_acc = [0, 0, 0, 0, 0];
         set_at(new_acc, 0, _cp_add32(acc[0] * r0, acc[3] * r1 * 5 + acc[2] * r2 * 5 + acc[1] * r3 * 5));
         set_at(new_acc, 1, _cp_add32(acc[1] * r0, acc[0] * r1 + acc[3] * r2 * 5 + acc[2] * r3 * 5));
         set_at(new_acc, 2, _cp_add32(acc[2] * r0, acc[1] * r1 + acc[0] * r2 + acc[3] * r3 * 5));
@@ -247,16 +247,16 @@ fn _cp_poly1305_mac(otk, data, data_len) {
         bi = bi + 1;
     }
     // Add s = otk[16..31] to accumulator for final tag
-    let s0 = _cp_read32_le(otk, 16);
-    let s1 = _cp_read32_le(otk, 20);
-    let s2 = _cp_read32_le(otk, 24);
-    let s3 = _cp_read32_le(otk, 28);
-    let tag_w0 = _cp_add32(acc[0], s0);
-    let tag_w1 = _cp_add32(acc[1], s1);
-    let tag_w2 = _cp_add32(acc[2], s2);
-    let tag_w3 = _cp_add32(acc[3], s3);
+    let mut s0 = _cp_read32_le(otk, 16);
+    let mut s1 = _cp_read32_le(otk, 20);
+    let mut s2 = _cp_read32_le(otk, 24);
+    let mut s3 = _cp_read32_le(otk, 28);
+    let mut tag_w0 = _cp_add32(acc[0], s0);
+    let mut tag_w1 = _cp_add32(acc[1], s1);
+    let mut tag_w2 = _cp_add32(acc[2], s2);
+    let mut tag_w3 = _cp_add32(acc[3], s3);
     // Serialize tag (16 bytes, little-endian)
-    let tag = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+    let mut tag = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
     set_at(tag, 0,  tag_w0 - ((tag_w0 / 256) * 256));
     set_at(tag, 1,  (tag_w0 / 256) - ((tag_w0 / 65536) * 256));
     set_at(tag, 2,  (tag_w0 / 65536) - ((tag_w0 / 16777216) * 256));
@@ -278,10 +278,10 @@ fn _cp_poly1305_mac(otk, data, data_len) {
 
 // Build Poly1305 input: AAD pad + ciphertext pad + lengths
 fn _cp_build_mac_input(aad, aad_len, ciphertext, ct_len) {
-    let mac_data = [];
+    let mut mac_data = [];
     let mut idx = 0;
     // Copy AAD
-    let ai = 0;
+    let mut ai = 0;
     while ai < aad_len { set_at(mac_data, idx, aad[ai]); idx = idx + 1; ai = ai + 1; }
     // Pad AAD to 16-byte boundary
     while idx - ((idx / 16) * 16) != 0 { set_at(mac_data, idx, 0); idx = idx + 1; }
@@ -313,19 +313,19 @@ fn _cp_build_mac_input(aad, aad_len, ciphertext, ct_len) {
 
 // Encrypt plaintext with ChaCha20 (counter starting at 1)
 fn _cp_stream_encrypt(plaintext) {
-    let plen = len(plaintext);
-    let ciphertext = [];
-    let block_num = 1;
+    let mut plen = len(plaintext);
+    let mut ciphertext = [];
+    let mut block_num = 1;
     let mut i = 0;
     while i < plen {
-        let keystream = _cp_chacha20_block(block_num);
+        let mut keystream = _cp_chacha20_block(block_num);
         let mut j = 0;
         while j < 64 {
             if i + j < plen {
-                let ks = keystream[j];
-                let pt = plaintext[i + j];
+                let mut ks = keystream[j];
+                let mut pt = plaintext[i + j];
                 // XOR simulation: (a + b - 2*(a AND b)) -- simplified
-                let xv = ks + pt;
+                let mut xv = ks + pt;
                 if xv >= 256 { xv = xv - 256; }
                 set_at(ciphertext, i + j, xv);
             }
@@ -339,19 +339,19 @@ fn _cp_stream_encrypt(plaintext) {
 
 // Encrypt plaintext → (ciphertext, tag) per RFC 8439
 fn chacha20_poly1305_encrypt(plaintext) {
-    let plen = len(plaintext);
+    let mut plen = len(plaintext);
     // Generate one-time key from ChaCha20 block 0
-    let otk = _cp_poly1305_otk();
+    let mut otk = _cp_poly1305_otk();
     // Encrypt with ChaCha20 (counter 1+)
-    let ciphertext = _cp_stream_encrypt(plaintext);
+    let mut ciphertext = _cp_stream_encrypt(plaintext);
     cp_ct_len = plen;
     let mut i = 0;
     while i < plen { set_at(cp_ciphertext, i, ciphertext[i]); i = i + 1; }
     // Build MAC input and compute Poly1305 tag
-    let mac_result = _cp_build_mac_input(cp_aad, cp_aad_len, ciphertext, plen);
-    let mac_data = mac_result[0];
-    let mac_len  = mac_result[1];
-    let tag = _cp_poly1305_mac(otk, mac_data, mac_len);
+    let mut mac_result = _cp_build_mac_input(cp_aad, cp_aad_len, ciphertext, plen);
+    let mut mac_data = mac_result[0];
+    let mut mac_len = mac_result[1];
+    let mut tag = _cp_poly1305_mac(otk, mac_data, mac_len);
     i = 0;
     while i < 16 { set_at(cp_tag, i, tag[i]); i = i + 1; }
     return 0;
@@ -359,25 +359,25 @@ fn chacha20_poly1305_encrypt(plaintext) {
 
 // Decrypt and verify tag (returns 0 on success, 1 on auth failure)
 fn chacha20_poly1305_decrypt(ciphertext) {
-    let ct_len = len(ciphertext);
+    let mut ct_len = len(ciphertext);
     // Generate one-time key and recompute expected tag
-    let otk = _cp_poly1305_otk();
-    let mac_result = _cp_build_mac_input(cp_aad, cp_aad_len, ciphertext, ct_len);
-    let mac_data = mac_result[0];
-    let mac_len  = mac_result[1];
-    let expected_tag = _cp_poly1305_mac(otk, mac_data, mac_len);
+    let mut otk = _cp_poly1305_otk();
+    let mut mac_result = _cp_build_mac_input(cp_aad, cp_aad_len, ciphertext, ct_len);
+    let mut mac_data = mac_result[0];
+    let mut mac_len = mac_result[1];
+    let mut expected_tag = _cp_poly1305_mac(otk, mac_data, mac_len);
     // Verify tag (constant-time comparison)
-    let diff = 0;
+    let mut diff = 0;
     let mut i = 0;
     while i < 16 { diff = diff + (expected_tag[i] - cp_tag[i]) * (expected_tag[i] - cp_tag[i]); i = i + 1; }
     if diff != 0 { return 1; }   // Authentication failed
     // Decrypt using stream cipher (same as encrypt)
-    let plaintext = _cp_stream_encrypt(ciphertext);
+    let mut plaintext = _cp_stream_encrypt(ciphertext);
     return 0;
 }
 
 fn chacha20_poly1305_get_tag() {
-    let hex_chars = "0123456789abcdef";
+    let mut hex_chars = "0123456789abcdef";
     let mut result = "";
     let mut i = 0;
     while i < 16 {
@@ -391,9 +391,9 @@ fn chacha20_poly1305_get_tag() {
 }
 
 fn chacha20_poly1305_get_ct_hex() {
-    let hex_chars = "0123456789abcdef";
+    let mut hex_chars = "0123456789abcdef";
     let mut result = "";
-    let limit = cp_ct_len;
+    let mut limit = cp_ct_len;
     if limit > 16 { limit = 16; }
     let mut i = 0;
     while i < limit {
@@ -409,19 +409,19 @@ fn chacha20_poly1305_get_ct_hex() {
 
 fn chacha20_poly1305_test() {
     // RFC 8439 §2.8.2 test vector
-    let key   = [0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87,
+    let mut key = [0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87,
                  0x88, 0x89, 0x8a, 0x8b, 0x8c, 0x8d, 0x8e, 0x8f,
                  0x90, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97,
                  0x98, 0x99, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f];
-    let nonce = [0x07, 0, 0, 0, 0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47];
-    let plain = [76, 97, 100, 105, 101, 115, 32, 97, 110, 100,
+    let mut nonce = [0x07, 0, 0, 0, 0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47];
+    let mut plain = [76, 97, 100, 105, 101, 115, 32, 97, 110, 100,
                  32, 71, 101, 110, 116, 108];   // "Ladies and Gentl"
     chacha20_poly1305_set_key(key);
     chacha20_poly1305_set_nonce(nonce);
     chacha20_poly1305_set_aad([]);
     chacha20_poly1305_encrypt(plain);
-    let tag_hex = chacha20_poly1305_get_tag();
-    let ct_hex  = chacha20_poly1305_get_ct_hex();
+    let mut tag_hex = chacha20_poly1305_get_tag();
+    let mut ct_hex = chacha20_poly1305_get_ct_hex();
     return "chacha20-poly1305: ct=" + substr(ct_hex, 0, 8) + "... tag=" + substr(tag_hex, 0, 8) + "... [RFC 8439 AEAD ok]";
 }
 

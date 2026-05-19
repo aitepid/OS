@@ -118,7 +118,7 @@ fn bpf_init() {
 // Load a program: insns = flat array [op, dst, src, imm, op, dst, src, imm, ...]
 fn bpf_load(insns) {
     if _bpf_ready == 0 { bpf_init(); }
-    let n_insns = len(insns) / 4;
+    let mut n_insns = len(insns) / 4;
     if n_insns > BPF_MAX_INSNS { return 0 - 1; }
     // Verify: must end with EXIT
     if n_insns == 0 { return 0 - 1; }
@@ -179,8 +179,8 @@ fn bpf_run(prog_id, ctx) {
     if prog_id >= BPF_MAX_PROGS { return 0; }
     if _bpf_active[prog_id] == 0 { return 0; }
 
-    let insns = _bpf_insns[prog_id];
-    let n_insns = _bpf_insn_count[prog_id];
+    let mut insns = _bpf_insns[prog_id];
+    let mut n_insns = _bpf_insn_count[prog_id];
     set_at(_bpf_run_count, prog_id, _bpf_run_count[prog_id] + 1);
 
     // Registers
@@ -196,10 +196,10 @@ fn bpf_run(prog_id, ctx) {
     while pc < n_insns {
         if steps >= BPF_MAX_STEPS { return 0; } // safety limit
         let mut base = pc * 4;
-        let op = insns[base];
-        let dst = insns[base + 1];
-        let src = insns[base + 2];
-        let imm = insns[base + 3];
+        let mut op = insns[base];
+        let mut dst = insns[base + 1];
+        let mut src = insns[base + 2];
+        let mut imm = insns[base + 3];
 
         if op == BPF_NOP { pc = pc + 1; }
         else if op == BPF_MOVI { set_at(regs, dst, imm); pc = pc + 1; }
@@ -243,7 +243,7 @@ fn bpf_run_hook(attach_point, ctx) {
     if _bpf_ready == 0 { return 0; }
     if attach_point < 0 { return 0; }
     if attach_point >= BPF_MAX_ATTACH_POINTS { return 0; }
-    let prog = _bpf_attach[attach_point];
+    let mut prog = _bpf_attach[attach_point];
     if prog < 0 { return 0; }
     return bpf_run(prog, ctx);
 }

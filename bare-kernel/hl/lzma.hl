@@ -36,7 +36,7 @@ fn lzma_compress(data, data_len) {
     let mut pos = 0;
 
     // LZMA header: 1-byte properties + 4-byte dict size + 8-byte uncompressed size
-    let props = (LZMA_LC * 5 + LZMA_LP) * 9 + LZMA_PB;
+    let mut props = (LZMA_LC * 5 + LZMA_LP) * 9 + LZMA_PB;
     set_at(lzma_out_buf, pos, props);
     pos = pos + 1;
 
@@ -49,7 +49,7 @@ fn lzma_compress(data, data_len) {
     pos = pos + 8;
 
     // Encode the payload
-    let compressed_len = _lzma_encode(data, data_len, lzma_out_buf, pos);
+    let mut compressed_len = _lzma_encode(data, data_len, lzma_out_buf, pos);
     if compressed_len < 0 {
         return 0 - 1;
     }
@@ -66,14 +66,14 @@ fn lzma_decompress(data, data_len) {
     }
 
     // Parse 13-byte header
-    let props  = data[0];
-    let pb     = props % 9;
-    let props2 = props / 9;
-    let lp     = props2 % 5;
-    let lc     = props2 / 5;
+    let mut props = data[0];
+    let mut pb = props % 9;
+    let mut props2 = props / 9;
+    let mut lp = props2 % 5;
+    let mut lc = props2 / 5;
 
-    let dict_size  = _lzma_read_u32_le(data, 1);
-    let uncomp_size = _lzma_read_u64_le(data, 5);
+    let mut dict_size = _lzma_read_u32_le(data, 1);
+    let mut uncomp_size = _lzma_read_u64_le(data, 5);
 
     // Validate properties
     if lc > 8 || lp > 4 || pb > 4 {
@@ -81,7 +81,7 @@ fn lzma_decompress(data, data_len) {
         return 0 - 2;
     }
 
-    let decompressed_len = _lzma_decode(data, 13, data_len - 13, lzma_out_buf, uncomp_size);
+    let mut decompressed_len = _lzma_decode(data, 13, data_len - 13, lzma_out_buf, uncomp_size);
     if decompressed_len < 0 {
         return 0 - 3;
     }
@@ -97,7 +97,7 @@ fn _lzma_encode(data, data_len, output, start_pos) {
     let mut dict_pos = 0;
 
     while data_pos < data_len {
-        let best_match = _lzma_find_match(data, data_pos, data_len);
+        let mut best_match = _lzma_find_match(data, data_pos, data_len);
         let mut match_len  = best_match[0];
         let mut match_dist = best_match[1];
 
@@ -145,7 +145,7 @@ fn _lzma_find_match(data, data_pos, data_len) {
     let mut best_dist = 0;
 
     let mut dict_search = lzma_dict_pos;
-    let search_limit    = 256;
+    let mut search_limit = 256;
     let mut searches    = 0;
 
     while searches < search_limit && dict_search > 0 {
@@ -161,8 +161,8 @@ fn _lzma_find_match(data, data_pos, data_len) {
         let mut i         = 0;
         let mut byte_done = 0;
         while i < max_len && byte_done == 0 {
-            let dict_byte = lzma_dictionary[dict_search % LZMA_DICT_SIZE];
-            let data_byte = data[data_pos + i];
+            let mut dict_byte = lzma_dictionary[dict_search % LZMA_DICT_SIZE];
+            let mut data_byte = data[data_pos + i];
             if dict_byte == data_byte {
                 match_len = match_len + 1;
                 i = i + 1;
@@ -192,7 +192,7 @@ fn _lzma_decode(data, start_pos, compressed_len, output, expected_len) {
     let mut dict_pos = 0;
 
     while out_pos < expected_len && pos < start_pos + compressed_len {
-        let marker = data[pos];
+        let mut marker = data[pos];
         pos = pos + 1;
 
         if marker == 0 {
@@ -207,15 +207,15 @@ fn _lzma_decode(data, start_pos, compressed_len, output, expected_len) {
 
         if marker != 0 {
             // Back-reference match
-            let distance = data[pos] * 256 + data[pos + 1];
+            let mut distance = data[pos] * 256 + data[pos + 1];
             pos = pos + 2;
-            let length = data[pos];
+            let mut length = data[pos];
             pos = pos + 1;
 
             let mut i = 0;
             while i < length {
-                let src_pos = (dict_pos - distance + i) % LZMA_DICT_SIZE;
-                let byte    = lzma_dictionary[src_pos];
+                let mut src_pos = (dict_pos - distance + i) % LZMA_DICT_SIZE;
+                let mut byte = lzma_dictionary[src_pos];
                 set_at(output, out_pos, byte);
                 set_at(lzma_dictionary, dict_pos % LZMA_DICT_SIZE, byte);
                 out_pos  = out_pos + 1;
@@ -246,10 +246,10 @@ fn _lzma_write_u64_le(buf, offset, value) {
 
 // Read 32-bit little-endian value from buffer at offset
 fn _lzma_read_u32_le(buf, offset) {
-    let b0 = buf[offset + 0];
-    let b1 = buf[offset + 1];
-    let b2 = buf[offset + 2];
-    let b3 = buf[offset + 3];
+    let mut b0 = buf[offset + 0];
+    let mut b1 = buf[offset + 1];
+    let mut b2 = buf[offset + 2];
+    let mut b3 = buf[offset + 3];
     return b0 + b1 * 256 + b2 * 65536 + b3 * 16777216;
 }
 
@@ -278,8 +278,8 @@ fn lzma_get_ratio() {
 
 // Self-test: compress a string and verify round-trip length
 fn lzma_test() {
-    let test_str = "LZMA test: Hello Hello Hello World World World!";
-    let str_len  = len(test_str);
+    let mut test_str = "LZMA test: Hello Hello Hello World World World!";
+    let mut str_len = len(test_str);
 
     // Copy string bytes into a byte array for the compressor
     let mut i = 0;
@@ -290,13 +290,13 @@ fn lzma_test() {
 
     lzma_init();
 
-    let comp_len = lzma_compress(lzma_test_buf, str_len);
+    let mut comp_len = lzma_compress(lzma_test_buf, str_len);
     if comp_len < 0 {
         print("LZMA test: compression failed");
         return 0 - 1;
     }
 
-    let decomp_len = lzma_decompress(lzma_out_buf, comp_len);
+    let mut decomp_len = lzma_decompress(lzma_out_buf, comp_len);
     if decomp_len < 0 {
         print("LZMA test: decompression failed");
         return 0 - 2;

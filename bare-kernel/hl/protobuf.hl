@@ -34,7 +34,7 @@ fn protobuf_start() {
 
 // Encode a varint field: tag = (field_num << 3) | VARINT, then value
 fn protobuf_add_varint(field_num, value) {
-    let tag = field_num * 8 + PROTOBUF_VARINT;
+    let mut tag = field_num * 8 + PROTOBUF_VARINT;
     protobuf_output_len = _protobuf_encode_varint(protobuf_output, protobuf_output_len, tag);
     protobuf_output_len = _protobuf_encode_varint(protobuf_output, protobuf_output_len, value);
     return protobuf_output_len;
@@ -42,10 +42,10 @@ fn protobuf_add_varint(field_num, value) {
 
 // Encode a string field: tag, length varint, then raw bytes
 fn protobuf_add_string(field_num, str) {
-    let tag = field_num * 8 + PROTOBUF_LENGTH;
+    let mut tag = field_num * 8 + PROTOBUF_LENGTH;
     protobuf_output_len = _protobuf_encode_varint(protobuf_output, protobuf_output_len, tag);
 
-    let slen = len(str);
+    let mut slen = len(str);
     protobuf_output_len = _protobuf_encode_varint(protobuf_output, protobuf_output_len, slen);
 
     let mut i = 0;
@@ -60,7 +60,7 @@ fn protobuf_add_string(field_num, str) {
 
 // Encode a bytes field: tag, length varint, then raw bytes
 fn protobuf_add_bytes(field_num, data, dlen) {
-    let tag = field_num * 8 + PROTOBUF_LENGTH;
+    let mut tag = field_num * 8 + PROTOBUF_LENGTH;
     protobuf_output_len = _protobuf_encode_varint(protobuf_output, protobuf_output_len, tag);
     protobuf_output_len = _protobuf_encode_varint(protobuf_output, protobuf_output_len, dlen);
 
@@ -76,7 +76,7 @@ fn protobuf_add_bytes(field_num, data, dlen) {
 
 // Encode a 32-bit fixed field (little-endian)
 fn protobuf_add_fixed32(field_num, value) {
-    let tag = field_num * 8 + PROTOBUF_32BIT;
+    let mut tag = field_num * 8 + PROTOBUF_32BIT;
     protobuf_output_len = _protobuf_encode_varint(protobuf_output, protobuf_output_len, tag);
 
     set_at(protobuf_output, protobuf_output_len + 0, value % 256);
@@ -90,7 +90,7 @@ fn protobuf_add_fixed32(field_num, value) {
 
 // Encode a 64-bit fixed field (little-endian; upper 32 bits forced to zero)
 fn protobuf_add_fixed64(field_num, value) {
-    let tag = field_num * 8 + PROTOBUF_64BIT;
+    let mut tag = field_num * 8 + PROTOBUF_64BIT;
     protobuf_output_len = _protobuf_encode_varint(protobuf_output, protobuf_output_len, tag);
 
     set_at(protobuf_output, protobuf_output_len + 0, value % 256);
@@ -167,13 +167,13 @@ fn protobuf_decode_field(data, data_len) {
     }
 
     // Decode tag varint; extract scalars before the next varint call
-    let tag_res = _protobuf_decode_varint(data, protobuf_decode_pos);
-    let tag     = tag_res[0];
-    let tag_len = tag_res[1];
+    let mut tag_res = _protobuf_decode_varint(data, protobuf_decode_pos);
+    let mut tag = tag_res[0];
+    let mut tag_len = tag_res[1];
     protobuf_decode_pos = protobuf_decode_pos + tag_len;
 
-    let field_num = tag / 8;
-    let wire_type = tag % 8;
+    let mut field_num = tag / 8;
+    let mut wire_type = tag % 8;
 
     set_at(protobuf_field_result, 0, field_num);
     set_at(protobuf_field_result, 1, wire_type);
@@ -182,15 +182,15 @@ fn protobuf_decode_field(data, data_len) {
     let mut fextra = 0;
 
     if wire_type == PROTOBUF_VARINT {
-        let vr     = _protobuf_decode_varint(data, protobuf_decode_pos);
+        let mut vr = _protobuf_decode_varint(data, protobuf_decode_pos);
         fval       = vr[0];
-        let vbytes = vr[1];
+        let mut vbytes = vr[1];
         protobuf_decode_pos = protobuf_decode_pos + vbytes;
         fextra = 0;
     } else if wire_type == PROTOBUF_LENGTH {
-        let lr      = _protobuf_decode_varint(data, protobuf_decode_pos);
-        let dlen2   = lr[0];
-        let lbytes  = lr[1];
+        let mut lr = _protobuf_decode_varint(data, protobuf_decode_pos);
+        let mut dlen2 = lr[0];
+        let mut lbytes = lr[1];
         protobuf_decode_pos = protobuf_decode_pos + lbytes;
         fval   = protobuf_decode_pos;   // data starts at current position
         fextra = dlen2;                 // data byte count
@@ -212,10 +212,10 @@ fn protobuf_decode_field(data, data_len) {
 
 // Read a 32-bit little-endian integer from buf at offset
 fn _protobuf_read_u32_le(buf, offset) {
-    let b0 = buf[offset + 0];
-    let b1 = buf[offset + 1];
-    let b2 = buf[offset + 2];
-    let b3 = buf[offset + 3];
+    let mut b0 = buf[offset + 0];
+    let mut b1 = buf[offset + 1];
+    let mut b2 = buf[offset + 2];
+    let mut b3 = buf[offset + 3];
     return b0 + b1 * 256 + b2 * 65536 + b3 * 16777216;
 }
 
@@ -231,8 +231,8 @@ fn protobuf_get_length() {
 
 // Copy a LENGTH-type field payload from data into protobuf_str_buf, null-terminate
 fn protobuf_extract_string(data, field_info) {
-    let offset = field_info[2];
-    let slen   = field_info[3];
+    let mut offset = field_info[2];
+    let mut slen = field_info[3];
     let mut i = 0;
     while i < slen {
         set_at(protobuf_str_buf, i, data[offset + i]);
@@ -245,9 +245,9 @@ fn protobuf_extract_string(data, field_info) {
 // Format field_info as a human-readable string in protobuf_fmt_buf
 fn protobuf_format_field(field_info) {
     let mut pos   = 0;
-    let field_num = field_info[0];
-    let wire_type = field_info[1];
-    let fval      = field_info[2];
+    let mut field_num = field_info[0];
+    let mut wire_type = field_info[1];
+    let mut fval = field_info[2];
 
     pos = _protobuf_append_str(protobuf_fmt_buf, pos, "Field ");
     pos = _protobuf_append_num(protobuf_fmt_buf, pos, field_num);
@@ -274,7 +274,7 @@ fn protobuf_format_field(field_info) {
 
 // Helper: append str bytes into buf starting at pos; return updated pos
 fn _protobuf_append_str(buf, pos, str) {
-    let slen = len(str);
+    let mut slen = len(str);
     let mut i = 0;
     let mut p = pos;
     while i < slen {
@@ -317,27 +317,27 @@ fn protobuf_test() {
     protobuf_add_varint(1, 150);
     protobuf_add_string(2, "testing");
 
-    let msg  = protobuf_get_message();
-    let mlen = protobuf_get_length();
+    let mut msg = protobuf_get_message();
+    let mut mlen = protobuf_get_length();
 
     protobuf_decode_start(msg);
 
     // Decode field 1 and immediately save scalar results before the next call
-    let f1 = protobuf_decode_field(msg, mlen);
+    let mut f1 = protobuf_decode_field(msg, mlen);
     if f1 == 0 {
         print("Protobuf test: field 1 decode failed");
         return 0 - 1;
     }
-    let f1_num = f1[0];
-    let f1_val = f1[2];
+    let mut f1_num = f1[0];
+    let mut f1_val = f1[2];
 
     // Decode field 2 and save scalar results
-    let f2 = protobuf_decode_field(msg, mlen);
+    let mut f2 = protobuf_decode_field(msg, mlen);
     if f2 == 0 {
         print("Protobuf test: field 2 decode failed");
         return 0 - 2;
     }
-    let f2_num = f2[0];
+    let mut f2_num = f2[0];
 
     if f1_num != 1 || f1_val != 150 {
         print("Protobuf test: field 1 mismatch");

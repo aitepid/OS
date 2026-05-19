@@ -99,7 +99,7 @@ fn grpc_register_method(svc_idx, method_name) {
     if grpc_method_count >= GRPC_MAX_METHODS { return 0 - 1; }
     if svc_idx >= grpc_service_count { return 0 - 1; }
     let mut idx = grpc_method_count;
-    let path = "/" + grpc_service_names[svc_idx] + "/" + method_name;
+    let mut path = "/" + grpc_service_names[svc_idx] + "/" + method_name;
     set_at(grpc_method_paths, idx, path);
     set_at(grpc_method_svc,   idx, svc_idx);
     grpc_method_count = grpc_method_count + 1;
@@ -120,8 +120,8 @@ fn grpc_encode_frame_header(msg_len) {
 // Decode 5-byte LPM header: returns [compressed, length]
 fn grpc_decode_frame_header(header) {
     if len(header) < 5 { return [0, 0]; }
-    let compressed = header[0];
-    let length = header[1] * 16777216
+    let mut compressed = header[0];
+    let mut length = header[1] * 16777216
                + header[2] * 65536
                + header[3] * 256
                + header[4];
@@ -130,7 +130,7 @@ fn grpc_decode_frame_header(header) {
 
 // Build HTTP/2 HEADERS frame (simplified, fixed pseudo-headers)
 fn grpc_build_request_headers(method_path) {
-    let headers = ":method: POST\r\n"
+    let mut headers = ":method: POST\r\n"
                 + ":scheme: http\r\n"
                 + ":path: " + method_path + "\r\n"
                 + ":authority: localhost\r\n"
@@ -143,7 +143,7 @@ fn grpc_build_request_headers(method_path) {
 
 // Build gRPC response trailers (status headers)
 fn grpc_build_trailers(status_code) {
-    let status_str = "0";
+    let mut status_str = "0";
     if status_code > 0 { status_str = to_string(status_code); }
     return "grpc-status: " + status_str + "\r\n"
          + "grpc-message: " + grpc_status_to_string(status_code) + "\r\n";
@@ -205,11 +205,11 @@ fn grpc_call(method_path) {
         return GRPC_NOT_FOUND;
     }
     // Build framed request
-    let frame_hdr = grpc_encode_frame_header(grpc_request_len);
+    let mut frame_hdr = grpc_encode_frame_header(grpc_request_len);
     // Simulate successful response: echo back request with OK status
-    let resp_payload = "response to " + method_path;
-    let resp_len = len(resp_payload);
-    let resp_hdr = grpc_encode_frame_header(resp_len);
+    let mut resp_payload = "response to " + method_path;
+    let mut resp_len = len(resp_payload);
+    let mut resp_hdr = grpc_encode_frame_header(resp_len);
     grpc_response_buf = resp_hdr;
     grpc_response_len = 5 + resp_len;
     grpc_last_status  = GRPC_OK;
@@ -220,16 +220,16 @@ fn grpc_call(method_path) {
 
 // Stream simulation: send one message in a client-streaming RPC
 fn grpc_stream_send(data) {
-    let frame_hdr = grpc_encode_frame_header(len(data));
+    let mut frame_hdr = grpc_encode_frame_header(len(data));
     return 0;
 }
 
 // gRPC server: handle incoming framed request and route to method
 fn grpc_server_handle(raw_request) {
     if len(raw_request) < 5 { return GRPC_INVALID_ARGUMENT; }
-    let frame_info = grpc_decode_frame_header(raw_request);
-    let compressed  = frame_info[0];
-    let msg_len     = frame_info[1];
+    let mut frame_info = grpc_decode_frame_header(raw_request);
+    let mut compressed = frame_info[0];
+    let mut msg_len = frame_info[1];
     if compressed == 1 {
         grpc_last_status  = GRPC_UNIMPLEMENTED;
         grpc_last_message = "Compression not supported";
@@ -272,21 +272,21 @@ fn grpc_status() {
 fn grpc_test() {
     grpc_init();
     // Register a Greeter service with SayHello method
-    let svc = grpc_register_service("helloworld.Greeter");
-    let m1  = grpc_register_method(svc, "SayHello");
-    let m2  = grpc_register_method(svc, "SayGoodbye");
+    let mut svc = grpc_register_service("helloworld.Greeter");
+    let mut m1 = grpc_register_method(svc, "SayHello");
+    let mut m2 = grpc_register_method(svc, "SayGoodbye");
     // Register a Health check service
-    let svc2 = grpc_register_service("grpc.health.v1.Health");
-    let m3   = grpc_register_method(svc2, "Check");
+    let mut svc2 = grpc_register_service("grpc.health.v1.Health");
+    let mut m3 = grpc_register_method(svc2, "Check");
     // Set metadata
     grpc_set_metadata("authorization", "Bearer test-token");
     grpc_set_metadata("x-request-id", "abc123");
     // Make a call
     grpc_set_request([8, 1, 18, 5, 72, 101, 108, 108, 111]);  // proto: name="Hello"
-    let status = grpc_call("/helloworld.Greeter/SayHello");
+    let mut status = grpc_call("/helloworld.Greeter/SayHello");
     // Test frame encoding
-    let hdr = grpc_encode_frame_header(42);
-    let decoded = grpc_decode_frame_header(hdr);
+    let mut hdr = grpc_encode_frame_header(42);
+    let mut decoded = grpc_decode_frame_header(hdr);
     print("grpc test: frame header decode=" + to_string(decoded[1]) + " bytes");
     return "grpc: " + to_string(grpc_method_count) + " methods registered, call status="
         + grpc_status_to_string(status) + " [gRPC LPM framing ok]";

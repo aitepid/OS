@@ -42,7 +42,7 @@ fn btp_init() {
 }
 
 fn _btp_alloc(is_leaf) {
-    let id = btp_nnodes;
+    let mut id = btp_nnodes;
     set_at(btp_nkeys,  id, 0);
     set_at(btp_isleaf, id, is_leaf);
     set_at(btp_next,   id, BTP_NULL);
@@ -81,8 +81,8 @@ fn btp_search(nd, k) {
 
 fn _btp_split_leaf(par, ci) {
     // Split full leaf child btp_ch[par,ci]; push copy of median key up to par
-    let fc = btp_ch[par * BTP_MAXCH + ci];
-    let nn = _btp_alloc(1);   // new leaf
+    let mut fc = btp_ch[par * BTP_MAXCH + ci];
+    let mut nn = _btp_alloc(1);   // new leaf
 
     // nn gets upper half: keys/vals [T..2T-2] from fc
     let mut j = 0;
@@ -100,10 +100,10 @@ fn _btp_split_leaf(par, ci) {
     set_at(btp_next, fc, nn);
 
     // Push copy of nn's first key to parent
-    let push_k = btp_keys[nn * BTP_MAXKEYS + 0];
+    let mut push_k = btp_keys[nn * BTP_MAXKEYS + 0];
 
     // Shift par's keys/children right from ci
-    let pn = btp_nkeys[par];
+    let mut pn = btp_nkeys[par];
     j = pn;
     while j > ci {
         set_at(btp_keys, par * BTP_MAXKEYS + j,     btp_keys[par * BTP_MAXKEYS + j - 1]);
@@ -118,8 +118,8 @@ fn _btp_split_leaf(par, ci) {
 
 fn _btp_split_internal(par, ci) {
     // Split full internal child; median goes up (not copied)
-    let fc = btp_ch[par * BTP_MAXCH + ci];
-    let nn = _btp_alloc(0);
+    let mut fc = btp_ch[par * BTP_MAXCH + ci];
+    let mut nn = _btp_alloc(0);
 
     // nn gets keys [T..2T-2] from fc
     let mut j = 0;
@@ -133,12 +133,12 @@ fn _btp_split_internal(par, ci) {
         set_at(btp_ch, nn * BTP_MAXCH + j, btp_ch[fc * BTP_MAXCH + BTP_T + j]);
         j += 1;
     }
-    let med_k = btp_keys[fc * BTP_MAXKEYS + BTP_T - 1];
+    let mut med_k = btp_keys[fc * BTP_MAXKEYS + BTP_T - 1];
     set_at(btp_nkeys, nn, BTP_T - 1);
     set_at(btp_nkeys, fc, BTP_T - 1);
 
     // Push median to parent
-    let pn = btp_nkeys[par];
+    let mut pn = btp_nkeys[par];
     j = pn;
     while j > ci {
         set_at(btp_keys, par * BTP_MAXKEYS + j,     btp_keys[par * BTP_MAXKEYS + j - 1]);
@@ -196,13 +196,13 @@ fn _btp_ins_nf(nd, k, v) {
 
 fn btp_insert(k, v) {
     if btp_root == BTP_NULL {
-        let leaf = _btp_alloc(1);
+        let mut leaf = _btp_alloc(1);
         btp_root       = leaf;
         btp_first_leaf = leaf;
     }
     let mut r = btp_root;
     if btp_nkeys[r] == BTP_MAXKEYS {
-        let nr = _btp_alloc(0);
+        let mut nr = _btp_alloc(0);
         set_at(btp_nkeys, nr, 0);
         set_at(btp_ch, nr * BTP_MAXCH + 0, r);
         btp_root = nr;
@@ -225,7 +225,7 @@ fn btp_range(lo, hi) {
     if btp_root == BTP_NULL { return 0; }
 
     // Find leftmost leaf with key >= lo
-    let nd = btp_root;
+    let mut nd = btp_root;
     let mut go = 1;
     while go == 1 {
         if btp_isleaf[nd] == 1 {
@@ -233,7 +233,7 @@ fn btp_range(lo, hi) {
         } else {
             let mut n = btp_nkeys[nd];
             let mut i = 0;
-            let go2 = 1;
+            let mut go2 = 1;
             while go2 == 1 {
                 if i < n {
                     if btp_keys[nd * BTP_MAXKEYS + i] < lo {
@@ -250,7 +250,7 @@ fn btp_range(lo, hi) {
     }
 
     // Walk leaf chain
-    let go3 = 1;
+    let mut go3 = 1;
     while go3 == 1 {
         if nd == BTP_NULL {
             go3 = 0;
@@ -258,7 +258,7 @@ fn btp_range(lo, hi) {
             let mut n = btp_nkeys[nd];
             let mut i = 0;
             while i < n {
-                let kk = btp_keys[nd * BTP_MAXKEYS + i];
+                let mut kk = btp_keys[nd * BTP_MAXKEYS + i];
                 if kk > hi { go3 = 0; }
                 if go3 == 1 {
                     if kk >= lo {
@@ -290,12 +290,12 @@ fn btp_test() {
         btp_insert(i, i * 100);
         i += 1;
     }
-    let v5   = btp_search(btp_root, 5);
-    let v10  = btp_search(btp_root, 10);
-    let miss = btp_search(btp_root, 11);
+    let mut v5 = btp_search(btp_root, 5);
+    let mut v10 = btp_search(btp_root, 10);
+    let mut miss = btp_search(btp_root, 11);
 
     // Range query [3, 7] should return 5 items
-    let rc   = btp_range(3, 7);
+    let mut rc = btp_range(3, 7);
 
     print("btp_test: v5=" + to_string(v5) + " v10=" + to_string(v10) + " miss=" + to_string(miss));
     print("btp_test: range[3,7]=" + to_string(rc) + " size=" + to_string(btp_size));

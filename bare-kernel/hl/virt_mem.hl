@@ -73,13 +73,13 @@ fn alloc_page_table() {
 // paddr: physical address (4KB aligned)
 // flags: PTE_PRESENT | PTE_WRITABLE | PTE_USER
 fn map_page(vaddr, paddr, flags) {
-    let pml4i = pml4_index(vaddr);
-    let pdpti = pdpt_index(vaddr);
-    let pdi   = pd_index(vaddr);
-    let pti   = pt_index(vaddr);
+    let mut pml4i = pml4_index(vaddr);
+    let mut pdpti = pdpt_index(vaddr);
+    let mut pdi = pd_index(vaddr);
+    let mut pti = pt_index(vaddr);
 
     // Walk PML4 -> PDPT
-    let pml4e = pte_read(PML4_ADDR + pml4i * 8);
+    let mut pml4e = pte_read(PML4_ADDR + pml4i * 8);
     let mut pdpt_addr = 0;
     if pml4e % 2 == 1 {
         // Present -- extract address (bits 12-51)
@@ -91,7 +91,7 @@ fn map_page(vaddr, paddr, flags) {
     }
 
     // Walk PDPT -> PD
-    let pdpte = pte_read(pdpt_addr + pdpti * 8);
+    let mut pdpte = pte_read(pdpt_addr + pdpti * 8);
     let mut pd_addr = 0;
     if pdpte % 2 == 1 {
         pd_addr = (pdpte / 4096) * 4096;
@@ -101,7 +101,7 @@ fn map_page(vaddr, paddr, flags) {
     }
 
     // Walk PD -> PT (skip if 2MB page)
-    let pde = pte_read(pd_addr + pdi * 8);
+    let mut pde = pte_read(pd_addr + pdi * 8);
     let mut pt_addr = 0;
     if pde % 2 == 1 {
         if (pde / 128) % 2 == 1 {
@@ -124,22 +124,22 @@ fn map_page(vaddr, paddr, flags) {
 
 // Unmap a 4KB virtual page
 fn unmap_page(vaddr) {
-    let pml4i = pml4_index(vaddr);
-    let pdpti = pdpt_index(vaddr);
-    let pdi   = pd_index(vaddr);
-    let pti   = pt_index(vaddr);
+    let mut pml4i = pml4_index(vaddr);
+    let mut pdpti = pdpt_index(vaddr);
+    let mut pdi = pd_index(vaddr);
+    let mut pti = pt_index(vaddr);
 
-    let pml4e = pte_read(PML4_ADDR + pml4i * 8);
+    let mut pml4e = pte_read(PML4_ADDR + pml4i * 8);
     if pml4e % 2 == 0 { return 0; }
-    let pdpt_addr = (pml4e / 4096) * 4096;
+    let mut pdpt_addr = (pml4e / 4096) * 4096;
 
-    let pdpte = pte_read(pdpt_addr + pdpti * 8);
+    let mut pdpte = pte_read(pdpt_addr + pdpti * 8);
     if pdpte % 2 == 0 { return 0; }
-    let pd_addr = (pdpte / 4096) * 4096;
+    let mut pd_addr = (pdpte / 4096) * 4096;
 
-    let pde = pte_read(pd_addr + pdi * 8);
+    let mut pde = pte_read(pd_addr + pdi * 8);
     if pde % 2 == 0 { return 0; }
-    let pt_addr = (pde / 4096) * 4096;
+    let mut pt_addr = (pde / 4096) * 4096;
 
     // Clear PT entry
     pte_write(pt_addr + pti * 8, 0);
@@ -149,21 +149,21 @@ fn unmap_page(vaddr) {
 
 // Translate virtual -> physical address
 fn translate(vaddr) {
-    let pml4i = pml4_index(vaddr);
-    let pdpti = pdpt_index(vaddr);
-    let pdi   = pd_index(vaddr);
-    let pti   = pt_index(vaddr);
-    let off   = page_offset(vaddr);
+    let mut pml4i = pml4_index(vaddr);
+    let mut pdpti = pdpt_index(vaddr);
+    let mut pdi = pd_index(vaddr);
+    let mut pti = pt_index(vaddr);
+    let mut off = page_offset(vaddr);
 
-    let pml4e = pte_read(PML4_ADDR + pml4i * 8);
+    let mut pml4e = pte_read(PML4_ADDR + pml4i * 8);
     if pml4e % 2 == 0 { return 0; }
-    let pdpt_addr = (pml4e / 4096) * 4096;
+    let mut pdpt_addr = (pml4e / 4096) * 4096;
 
-    let pdpte = pte_read(pdpt_addr + pdpti * 8);
+    let mut pdpte = pte_read(pdpt_addr + pdpti * 8);
     if pdpte % 2 == 0 { return 0; }
-    let pd_addr = (pdpte / 4096) * 4096;
+    let mut pd_addr = (pdpte / 4096) * 4096;
 
-    let pde = pte_read(pd_addr + pdi * 8);
+    let mut pde = pte_read(pd_addr + pdi * 8);
     if pde % 2 == 0 { return 0; }
 
     // Check for 2MB huge page
@@ -172,10 +172,10 @@ fn translate(vaddr) {
         return base + (vaddr % 2097152);
     }
 
-    let pt_addr = (pde / 4096) * 4096;
-    let pte = pte_read(pt_addr + pti * 8);
+    let mut pt_addr = (pde / 4096) * 4096;
+    let mut pte = pte_read(pt_addr + pti * 8);
     if pte % 2 == 0 { return 0; }
-    let frame = (pte / 4096) * 4096;
+    let mut frame = (pte / 4096) * 4096;
     return frame + off;
 }
 
@@ -185,12 +185,12 @@ fn virt_mem_unmap(vaddr) { return unmap_page(vaddr); }
 
 // Map a 2MB huge page (identity mapped)
 fn map_huge_page(vaddr, paddr, flags) {
-    let pml4i = pml4_index(vaddr);
-    let pdpti = pdpt_index(vaddr);
-    let pdi   = pd_index(vaddr);
+    let mut pml4i = pml4_index(vaddr);
+    let mut pdpti = pdpt_index(vaddr);
+    let mut pdi = pd_index(vaddr);
 
     // Walk PML4 -> PDPT
-    let pml4e = pte_read(PML4_ADDR + pml4i * 8);
+    let mut pml4e = pte_read(PML4_ADDR + pml4i * 8);
     let mut pdpt_addr = 0;
     if pml4e % 2 == 1 {
         pdpt_addr = (pml4e / 4096) * 4096;
@@ -200,7 +200,7 @@ fn map_huge_page(vaddr, paddr, flags) {
     }
 
     // Walk PDPT -> PD
-    let pdpte = pte_read(pdpt_addr + pdpti * 8);
+    let mut pdpte = pte_read(pdpt_addr + pdpti * 8);
     let mut pd_addr = 0;
     if pdpte % 2 == 1 {
         pd_addr = (pdpte / 4096) * 4096;
@@ -222,10 +222,10 @@ fn map_all_ram() {
     while i < count {
         if e820_entry_type(i) == E820_TYPE_USABLE {
             let mut base = e820_entry_base(i);
-            let length = e820_entry_length(i);
+            let mut length = e820_entry_length(i);
             // Align base down to 2MB and end up to 2MB
-            let start = (base / 2097152) * 2097152;
-            let end = ((base + length + 2097151) / 2097152) * 2097152;
+            let mut start = (base / 2097152) * 2097152;
+            let mut end = ((base + length + 2097151) / 2097152) * 2097152;
             let mut addr = start;
             while addr < end {
                 map_huge_page(addr, addr, PTE_PRESENT + PTE_WRITABLE);

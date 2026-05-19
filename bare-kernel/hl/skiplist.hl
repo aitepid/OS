@@ -79,10 +79,10 @@ fn _skip_random_level() {
     skip_rand_state = skip_rand_state * 1664525 + 1013904223;
     if skip_rand_state < 0 { skip_rand_state = -skip_rand_state; }
     let mut r = skip_rand_state - ((skip_rand_state / 10000) * 10000);
-    let lvl = 1;
+    let mut lvl = 1;
     while lvl < SKIP_MAX_LEVEL {
         // coin flip: r mod 2 == 0 → go up one level
-        let bit = r - ((r / 2) * 2);
+        let mut bit = r - ((r / 2) * 2);
         if bit != 0 { return lvl; }
         r = r / 2;
         lvl = lvl + 1;
@@ -93,9 +93,9 @@ fn _skip_random_level() {
 // Search: return node slot containing key, or -1 if not found
 fn skip_search(key) {
     let mut cur = 0;  // start at head
-    let lvl = skip_cur_level - 1;
+    let mut lvl = skip_cur_level - 1;
     while lvl >= 0 {
-        let nxt = skip_forward[cur * SKIP_MAX_LEVEL + lvl];
+        let mut nxt = skip_forward[cur * SKIP_MAX_LEVEL + lvl];
         while nxt >= 0 {
             if skip_key[nxt] == key { return nxt; }
             if skip_key[nxt] > key { nxt = -2; }  // break inner
@@ -116,13 +116,13 @@ fn skip_get(key) {
 // Insert or update key→value; returns 0 on success
 fn skip_insert(key, value) {
     // Record update path (predecessor at each level)
-    let update = [];
+    let mut update = [];
     let mut i = 0;
     while i < SKIP_MAX_LEVEL { set_at(update, i, 0); i = i + 1; }
     let mut cur = 0;
-    let lvl = skip_cur_level - 1;
+    let mut lvl = skip_cur_level - 1;
     while lvl >= 0 {
-        let nxt = skip_forward[cur * SKIP_MAX_LEVEL + lvl];
+        let mut nxt = skip_forward[cur * SKIP_MAX_LEVEL + lvl];
         while nxt >= 0 {
             if skip_key[nxt] >= key { nxt = -2; }
             else { cur = nxt; nxt = skip_forward[cur * SKIP_MAX_LEVEL + lvl]; }
@@ -131,7 +131,7 @@ fn skip_insert(key, value) {
         lvl = lvl - 1;
     }
     // Check if key already exists (update value)
-    let nxt2 = skip_forward[update[0] * SKIP_MAX_LEVEL + 0];
+    let mut nxt2 = skip_forward[update[0] * SKIP_MAX_LEVEL + 0];
     if nxt2 >= 0 {
         if skip_key[nxt2] == key {
             set_at(skip_val, nxt2, value);
@@ -140,7 +140,7 @@ fn skip_insert(key, value) {
     }
     // Allocate new node
     if skip_count >= SKIP_MAX_NODES { return 1; }
-    let new_lvl = _skip_random_level();
+    let mut new_lvl = _skip_random_level();
     // Extend current max level if needed
     if new_lvl > skip_cur_level {
         i = skip_cur_level;
@@ -155,7 +155,7 @@ fn skip_insert(key, value) {
     // Splice into forward pointer chains at each level
     i = 0;
     while i < new_lvl {
-        let pred = update[i];
+        let mut pred = update[i];
         set_at(skip_forward, slot * SKIP_MAX_LEVEL + i,
                skip_forward[pred * SKIP_MAX_LEVEL + i]);
         set_at(skip_forward, pred * SKIP_MAX_LEVEL + i, slot);
@@ -167,13 +167,13 @@ fn skip_insert(key, value) {
 
 // Delete key; returns 0 on success, 1 if not found
 fn skip_delete(key) {
-    let update = [];
+    let mut update = [];
     let mut i = 0;
     while i < SKIP_MAX_LEVEL { set_at(update, i, 0); i = i + 1; }
     let mut cur = 0;
-    let lvl = skip_cur_level - 1;
+    let mut lvl = skip_cur_level - 1;
     while lvl >= 0 {
-        let nxt = skip_forward[cur * SKIP_MAX_LEVEL + lvl];
+        let mut nxt = skip_forward[cur * SKIP_MAX_LEVEL + lvl];
         while nxt >= 0 {
             if skip_key[nxt] >= key { nxt = -2; }
             else { cur = nxt; nxt = skip_forward[cur * SKIP_MAX_LEVEL + lvl]; }
@@ -181,7 +181,7 @@ fn skip_delete(key) {
         set_at(update, lvl, cur);
         lvl = lvl - 1;
     }
-    let target = skip_forward[update[0] * SKIP_MAX_LEVEL + 0];
+    let mut target = skip_forward[update[0] * SKIP_MAX_LEVEL + 0];
     if target < 0 { return 1; }
     if skip_key[target] != key { return 1; }
     // Remove from each level
@@ -213,9 +213,9 @@ fn skip_range(lo, hi) {
     let mut count = 0;
     // Find first node >= lo
     let mut cur = 0;
-    let lvl = skip_cur_level - 1;
+    let mut lvl = skip_cur_level - 1;
     while lvl >= 0 {
-        let nxt = skip_forward[cur * SKIP_MAX_LEVEL + lvl];
+        let mut nxt = skip_forward[cur * SKIP_MAX_LEVEL + lvl];
         while nxt >= 0 {
             if skip_key[nxt] >= lo { nxt = -2; }
             else { cur = nxt; nxt = skip_forward[cur * SKIP_MAX_LEVEL + lvl]; }
@@ -223,7 +223,7 @@ fn skip_range(lo, hi) {
         lvl = lvl - 1;
     }
     // Walk forward at level 0
-    let node = skip_forward[cur * SKIP_MAX_LEVEL + 0];
+    let mut node = skip_forward[cur * SKIP_MAX_LEVEL + 0];
     while node >= 0 {
         if skip_key[node] > hi { node = -2; }
         else { count = count + 1; node = skip_forward[node * SKIP_MAX_LEVEL + 0]; }
@@ -233,7 +233,7 @@ fn skip_range(lo, hi) {
 
 // Find minimum key (first entry after head)
 fn skip_min() {
-    let first = skip_forward[0 * SKIP_MAX_LEVEL + 0];
+    let mut first = skip_forward[0 * SKIP_MAX_LEVEL + 0];
     if first < 0 { return 0 - 999999; }
     return skip_key[first];
 }
@@ -241,9 +241,9 @@ fn skip_min() {
 // Find maximum key (walk level 0 to end)
 fn skip_max() {
     let mut cur = 0;
-    let lvl = skip_cur_level - 1;
+    let mut lvl = skip_cur_level - 1;
     while lvl >= 0 {
-        let nxt = skip_forward[cur * SKIP_MAX_LEVEL + lvl];
+        let mut nxt = skip_forward[cur * SKIP_MAX_LEVEL + lvl];
         while nxt >= 0 { cur = nxt; nxt = skip_forward[cur * SKIP_MAX_LEVEL + lvl]; }
         lvl = lvl - 1;
     }
@@ -272,17 +272,17 @@ fn skiplist_test() {
     skip_insert(70, 700);
     skip_insert(25, 250);
     // Search
-    let v20 = skip_get(20);   // 200
-    let v60 = skip_get(60);   // 600
-    let vmiss = skip_get(55); // -1
+    let mut v20 = skip_get(20);   // 200
+    let mut v60 = skip_get(60);   // 600
+    let mut vmiss = skip_get(55); // -1
     // Range [25, 60]
-    let rcount = skip_range(25, 60);  // should include 25,30,40,50,60 = 5
+    let mut rcount = skip_range(25, 60);  // should include 25,30,40,50,60 = 5
     // Delete
     skip_delete(20);
-    let after_del = skip_get(20);  // -1
+    let mut after_del = skip_get(20);  // -1
     // Update
     skip_insert(50, 5000);
-    let updated = skip_get(50);  // 5000
+    let mut updated = skip_get(50);  // 5000
     print("skiplist test: " + skiplist_status());
     print("skiplist test: get(20)=" + to_string(v20)
         + " get(60)=" + to_string(v60)

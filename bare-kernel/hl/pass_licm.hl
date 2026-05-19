@@ -60,7 +60,7 @@ fn licm_init() {
 }
 
 fn licm_add_instr(op, dst, src0, src1, bb) {
-    let id = licm_n;
+    let mut id = licm_n;
     set_at(licm_op,   id, op);
     set_at(licm_dst,  id, dst);
     set_at(licm_src0, id, src0);
@@ -72,7 +72,7 @@ fn licm_add_instr(op, dst, src0, src1, bb) {
 }
 
 fn licm_add_loop(header) {
-    let lid = licm_ln;
+    let mut lid = licm_ln;
     set_at(licm_lhdr, lid, header);
     set_at(licm_lbsz, lid, 0);
     licm_ln += 1;
@@ -100,20 +100,20 @@ fn _licm_in_loop(bb, loop_id) {
 }
 
 fn _licm_is_invariant(instr_id, loop_id) {
-    let op   = licm_op[instr_id];
-    let src0 = licm_src0[instr_id];
-    let src1 = licm_src1[instr_id];
+    let mut op = licm_op[instr_id];
+    let mut src0 = licm_src0[instr_id];
+    let mut src1 = licm_src1[instr_id];
 
     // Constants (op==4) are always invariant
     if op == 4 { return 1; }
 
     // Check src0: def_bb must be outside loop (or undefined = -1)
-    let dbb0 = licm_def_bb[src0];
+    let mut dbb0 = licm_def_bb[src0];
     if dbb0 != 0 - 1 {
         if _licm_in_loop(dbb0, loop_id) == 1 {
             // Check if the defining instruction itself is hoisted
             let mut j = 0;
-            let found_hoisted = 0;
+            let mut found_hoisted = 0;
             while j < licm_n {
                 if licm_dst[j] == src0 {
                     if licm_hoisted[j] == 1 { found_hoisted = 1; }
@@ -126,11 +126,11 @@ fn _licm_is_invariant(instr_id, loop_id) {
 
     // Check src1 for binary ops
     if op != 3 {  // not a load (load uses only src0)
-        let dbb1 = licm_def_bb[src1];
+        let mut dbb1 = licm_def_bb[src1];
         if dbb1 != 0 - 1 {
             if _licm_in_loop(dbb1, loop_id) == 1 {
                 let mut j = 0;
-                let found2 = 0;
+                let mut found2 = 0;
                 while j < licm_n {
                     if licm_dst[j] == src1 {
                         if licm_hoisted[j] == 1 { found2 = 1; }
@@ -147,9 +147,9 @@ fn _licm_is_invariant(instr_id, loop_id) {
 fn licm_run() {
     licm_hoist_cnt = 0;
     // For each loop, scan body instructions for invariants (iterate to fixpoint)
-    let lid = 0;
+    let mut lid = 0;
     while lid < licm_ln {
-        let changed = 1;
+        let mut changed = 1;
         while changed == 1 {
             changed = 0;
             let mut i = 0;
@@ -187,7 +187,7 @@ fn licm_test() {
     licm_add_instr(0, 4, 4, 3, 1);
     // Mark r4 as defined in loop (loop-carried)
     set_at(licm_def_bb, 4, 1);
-    let hoisted = licm_run();
+    let mut hoisted = licm_run();
     print("licm_test: hoisted=" + to_string(hoisted));
     if hoisted == 2 {
         if licm_hoisted[0] == 1 {

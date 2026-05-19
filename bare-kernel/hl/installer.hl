@@ -61,11 +61,11 @@ fn installer_disk_write(lba, count, buf_addr) {
 
 fn installer_detect_disk() {
     // Priority 1: ATA PIO (works on real IDE/SATA hardware)
-    let ata_cap = ata_pio_capacity();
+    let mut ata_cap = ata_pio_capacity();
     if ata_cap > 0 {
         installer_disk_backend = 1;
         installer_disk_sectors = ata_cap;
-        let mb = ata_cap * 512 / 1048576;
+        let mut mb = ata_cap * 512 / 1048576;
         print("  Backend: ATA PIO (real hardware)");
         print("  Disk: " + to_string(ata_cap) + " sectors (" + to_string(mb) + " MB)");
         return ata_cap;
@@ -74,11 +74,11 @@ fn installer_detect_disk() {
     // Priority 2: AHCI (real SATA via DMA)
     if ahci_port_count > 0 {
         // Use first AHCI port with a device
-        let ahci_cap = ahci_identify(0);
+        let mut ahci_cap = ahci_identify(0);
         if ahci_cap > 0 {
             installer_disk_backend = 2;
             installer_disk_sectors = ahci_cap;
-            let mb = ahci_cap * 512 / 1048576;
+            let mut mb = ahci_cap * 512 / 1048576;
             print("  Backend: AHCI DMA (SATA)");
             print("  Disk: " + to_string(ahci_cap) + " sectors (" + to_string(mb) + " MB)");
             return ahci_cap;
@@ -86,11 +86,11 @@ fn installer_detect_disk() {
     }
 
     // Priority 3: VirtIO-blk (QEMU virtual disk)
-    let vio_cap = virtio_blk_capacity();
+    let mut vio_cap = virtio_blk_capacity();
     if vio_cap > 0 {
         installer_disk_backend = 3;
         installer_disk_sectors = vio_cap;
-        let mb = vio_cap * 512 / 1048576;
+        let mut mb = vio_cap * 512 / 1048576;
         print("  Backend: VirtIO-blk (virtual)");
         print("  Disk: " + to_string(vio_cap) + " sectors (" + to_string(mb) + " MB)");
         return vio_cap;
@@ -102,14 +102,14 @@ fn installer_detect_disk() {
 }
 
 fn installer_create_mbr(total_sectors) {
-    let mbr_buf = page_alloc();
+    let mut mbr_buf = page_alloc();
     mem_zero(mbr_buf, 512);
 
     // Read existing MBR (preserve boot code if present)
     installer_disk_read(0, 1, mbr_buf);
 
     // Partition 1 entry at offset 446
-    let p1 = mbr_buf + 446;
+    let mut p1 = mbr_buf + 446;
     mem_write_u8(p1, 128);        // 0x80 = bootable
     mem_write_u8(p1 + 1, 0);     // CHS start head
     mem_write_u8(p1 + 2, 2);     // CHS start sector (1-based)
@@ -146,7 +146,7 @@ fn installer_write_bootloader(img_data, img_size) {
         print("  Error: image too small for bootloader.");
         return 0;
     }
-    let mbr_buf = page_alloc();
+    let mut mbr_buf = page_alloc();
     installer_disk_read(0, 1, mbr_buf);
     // Overwrite boot code (first 446 bytes), preserve partition table
     let mut i = 0;
@@ -160,13 +160,13 @@ fn installer_write_bootloader(img_data, img_size) {
     page_free(mbr_buf);
 
     // Write stage2 + kernel (sectors 1+)
-    let remaining_sectors = (img_size - 512 + 511) / 512;
-    let data_buf = page_alloc();
+    let mut remaining_sectors = (img_size - 512 + 511) / 512;
+    let mut data_buf = page_alloc();
     let mut sec = 0;
     while sec < remaining_sectors {
         let mut bi = 0;
         while bi < 512 {
-            let src_off = 512 + sec * 512 + bi;
+            let mut src_off = 512 + sec * 512 + bi;
             if src_off < img_size {
                 mem_write_u8(data_buf + bi, img_data[src_off]);
             } else {
@@ -183,10 +183,10 @@ fn installer_write_bootloader(img_data, img_size) {
 }
 
 fn installer_verify() {
-    let verify_buf = page_alloc();
+    let mut verify_buf = page_alloc();
     installer_disk_read(0, 1, verify_buf);
-    let sig_lo = mem_read_u8(verify_buf + 510);
-    let sig_hi = mem_read_u8(verify_buf + 511);
+    let mut sig_lo = mem_read_u8(verify_buf + 510);
+    let mut sig_hi = mem_read_u8(verify_buf + 511);
     page_free(verify_buf);
     if sig_lo == 85 && sig_hi == 170 {
         print("  Verification: MBR boot signature OK (0x55AA)");
@@ -197,7 +197,7 @@ fn installer_verify() {
 }
 
 fn installer_check_capacity() {
-    let need = self_image_sectors();
+    let mut need = self_image_sectors();
     if need == 0 {
         print("  ERROR: current boot image metadata unavailable.");
         return 0;
@@ -213,7 +213,7 @@ fn installer_check_capacity() {
 
 fn installer_write_current_image() {
     let mut total = self_image_sectors();
-    let written = self_install_to_disk();
+    let mut written = self_install_to_disk();
     if written != total {
         print("  ERROR: image write incomplete (" + to_string(written) + "/" + to_string(total) + " sectors)");
         return 0;
@@ -230,12 +230,12 @@ fn installer_main() {
 
     // Step 1: Detect disk (multi-backend)
     print("[1/7] Detecting target disk...");
-    let cap = installer_detect_disk();
+    let mut cap = installer_detect_disk();
     if cap == 0 { return 1; }
 
     // Step 2: Detect boot mode
     print("[2/7] Detecting boot mode...");
-    let is_uefi = uefi_is_boot();
+    let mut is_uefi = uefi_is_boot();
     if is_uefi == 1 {
         print("  Boot mode: UEFI");
     } else {
@@ -270,7 +270,7 @@ fn installer_main() {
     print("");
     print("========================================");
     print("  Installation Complete!");
-    let backend_name = "unknown";
+    let mut backend_name = "unknown";
     if installer_disk_backend == 1 { backend_name = "ATA PIO"; }
     if installer_disk_backend == 2 { backend_name = "AHCI"; }
     if installer_disk_backend == 3 { backend_name = "VirtIO"; }

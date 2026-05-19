@@ -48,12 +48,12 @@ fn hyperloglog_init() {
 fn _hll_hash_int(key) {
     let mut h = 2166136261;
     h = h - ((h / 1000000) * 1000000);
-    let fnv = 16777619;
+    let mut fnv = 16777619;
     // Mix key bytes (treat as 4 bytes)
-    let b0 = key - ((key / 256) * 256);
-    let b1 = (key / 256) - ((key / 65536) * 256);
-    let b2 = (key / 65536) - ((key / 16777216) * 256);
-    let b3 = key / 16777216;
+    let mut b0 = key - ((key / 256) * 256);
+    let mut b1 = (key / 256) - ((key / 65536) * 256);
+    let mut b2 = (key / 65536) - ((key / 16777216) * 256);
+    let mut b3 = key / 16777216;
     if b3 < 0 { b3 = -b3; }
     h = (h * fnv) + b0; h = h - ((h / 4294967296) * 4294967296); if h < 0 { h = -h; }
     h = (h * fnv) + b1; h = h - ((h / 4294967296) * 4294967296); if h < 0 { h = -h; }
@@ -66,7 +66,7 @@ fn _hll_hash_int(key) {
 fn _hll_hash_str(s) {
     let mut h = 2166136261;
     h = h - ((h / 1000000) * 1000000);
-    let fnv = 16777619;
+    let mut fnv = 16777619;
     let mut i = 0;
     let mut n = len(s);
     while i < n {
@@ -84,13 +84,13 @@ fn _hll_leading_zeros(w) {
     if w == 0 { return HLL_MAX_VAL; }
     let mut count = 0;
     // We work with at most 26 bits (32 - b = 32 - 6 = 26)
-    let limit = 33554432;   // 2^25 (26-bit MSB)
-    let bit = 25;
+    let mut limit = 33554432;   // 2^25 (26-bit MSB)
+    let mut bit = 25;
     while bit >= 0 {
-        let power = 1;
+        let mut power = 1;
         let mut p = 0;
         while p < bit { power = power * 2; p = p + 1; }
-        let bval = w / power - ((w / power) / 2) * 2;
+        let mut bval = w / power - ((w / power) / 2) * 2;
         if bval == 1 { return count; }
         count = count + 1;
         bit = bit - 1;
@@ -105,7 +105,7 @@ fn hll_add_int(key) {
     let mut j = h - ((h / HLL_M) * HLL_M);
     // Upper (32-b) bits → leading zero count
     let mut w = h / HLL_M;
-    let rho = _hll_leading_zeros(w) + 1;
+    let mut rho = _hll_leading_zeros(w) + 1;
     if rho > hll_M[j] { set_at(hll_M, j, rho); }
     hll_count = hll_count + 1;
     return 0;
@@ -116,7 +116,7 @@ fn hll_add_str(s) {
     let mut h = _hll_hash_str(s);
     let mut j = h - ((h / HLL_M) * HLL_M);
     let mut w = h / HLL_M;
-    let rho = _hll_leading_zeros(w) + 1;
+    let mut rho = _hll_leading_zeros(w) + 1;
     if rho > hll_M[j] { set_at(hll_M, j, rho); }
     hll_count = hll_count + 1;
     return 0;
@@ -128,13 +128,13 @@ fn _hll_harmonic_sum() {
     let mut sum = 0;
     let mut i = 0;
     while i < HLL_M {
-        let mj = hll_M[i];
+        let mut mj = hll_M[i];
         // 2^mj for mj up to 20
-        let power = 1;
+        let mut power = 1;
         let mut p = 0;
         while p < mj { if power < 1000000 { power = power * 2; } p = p + 1; }
         // Contribution: 1000 / 2^mj (per-mille)
-        let contrib = 1000;
+        let mut contrib = 1000;
         if power > 0 { contrib = 1000000 / power; }
         sum = sum + contrib;
         i = i + 1;
@@ -144,21 +144,21 @@ fn _hll_harmonic_sum() {
 
 // Estimate distinct count
 fn hll_estimate() {
-    let Z = _hll_harmonic_sum();  // Σ 2^(-M[j]) × 1000
+    let mut Z = _hll_harmonic_sum();  // Σ 2^(-M[j]) × 1000
     if Z == 0 { return 0; }
     // E = α_m × m² / Z  (Z is in per-mille, m² × 1000 / Z)
-    let m2 = HLL_M * HLL_M;
-    let raw = (HLL_ALPHA_M * m2) / Z;  // Z in per-mille
+    let mut m2 = HLL_M * HLL_M;
+    let mut raw = (HLL_ALPHA_M * m2) / Z;  // Z in per-mille
 
     // Small-range correction: if raw < 5/2 × m, use linear counting
     // Count zero registers
-    let zeros = 0;
+    let mut zeros = 0;
     let mut i = 0;
     while i < HLL_M { if hll_M[i] == 0 { zeros = zeros + 1; } i = i + 1; }
     if raw < HLL_M * 5 / 2 {
         if zeros > 0 {
             // Linear counting: m × ln(m/zeros) ≈ m × (m/zeros - 1) for small ratios
-            let lc = HLL_M * (HLL_M - zeros) / zeros;
+            let mut lc = HLL_M * (HLL_M - zeros) / zeros;
             return lc;
         }
     }
@@ -183,8 +183,8 @@ fn hll_snapshot() {
 }
 
 fn hll_status() {
-    let zeros = 0;
-    let max_reg = 0;
+    let mut zeros = 0;
+    let mut max_reg = 0;
     let mut i = 0;
     while i < HLL_M {
         if hll_M[i] == 0 { zeros = zeros + 1; }
@@ -203,12 +203,12 @@ fn hyperloglog_test() {
     // Add 100 distinct integers 1..100
     let mut i = 1;
     while i <= 100 { hll_add_int(i); i = i + 1; }
-    let est_100 = hll_estimate();  // should be near 100
+    let mut est_100 = hll_estimate();  // should be near 100
 
     // Add duplicates — estimate should not change much
     i = 1;
     while i <= 50 { hll_add_int(i); i = i + 1; }
-    let est_dup = hll_estimate();  // still ~100
+    let mut est_dup = hll_estimate();  // still ~100
 
     // Add string keys
     hll_add_str("alpha"); hll_add_str("beta"); hll_add_str("gamma");
@@ -220,7 +220,7 @@ fn hyperloglog_test() {
     i = 101;
     while i <= 150 { hll_add_int(i); i = i + 1; }
     hll_merge(hll_merge_M);
-    let est_union = hll_estimate();  // ~150
+    let mut est_union = hll_estimate();  // ~150
 
     print("hll test: est(1..100)=" + to_string(est_100)
         + " est(+dups)=" + to_string(est_dup)

@@ -55,7 +55,7 @@ fn bzip2_compress(data, dlen) {
     pos = pos + 6;
 
     // Compress block with BWT + RLE
-    let compressed_len = _bzip2_compress_block(data, dlen, pos);
+    let mut compressed_len = _bzip2_compress_block(data, dlen, pos);
     pos = pos + compressed_len;
 
     // End-of-stream marker 6 bytes: 0x177245385090
@@ -68,7 +68,7 @@ fn bzip2_compress(data, dlen) {
     pos = pos + 6;
 
     // Stream CRC (4 bytes, big-endian)
-    let crc = _bzip2_crc32(data, dlen);
+    let mut crc = _bzip2_crc32(data, dlen);
     set_at(bzip2_out, pos, (crc / 16777216) % 256);
     set_at(bzip2_out, pos + 1, (crc / 65536) % 256);
     set_at(bzip2_out, pos + 2, (crc / 256) % 256);
@@ -85,7 +85,7 @@ fn _bzip2_compress_block(data, dlen, start_pos) {
     let mut pos = start_pos;
 
     // Burrows-Wheeler Transform; sorted column lands in bzip2_work[65536..]
-    let bwt_index = _bzip2_bwt(data, dlen);
+    let mut bwt_index = _bzip2_bwt(data, dlen);
 
     // Store BWT original-position index (4 bytes, big-endian)
     set_at(bzip2_out, pos, (bwt_index / 16777216) % 256);
@@ -165,8 +165,8 @@ fn _bzip2_bwt(data, dlen) {
     while i < blen - 1 {
         let mut j = 0;
         while j < blen - i - 1 {
-            let rot1 = bzip2_work[j];
-            let rot2 = bzip2_work[j + 1];
+            let mut rot1 = bzip2_work[j];
+            let mut rot2 = bzip2_work[j + 1];
             if _bzip2_compare_rotation(data, blen, rot1, rot2) > 0 {
                 set_at(bzip2_work, j, rot2);
                 set_at(bzip2_work, j + 1, rot1);
@@ -179,9 +179,9 @@ fn _bzip2_bwt(data, dlen) {
     // Extract last column of each rotation into bzip2_work[65536..]
     i = 0;
     while i < blen {
-        let rot = bzip2_work[i];
-        let last_pos = (rot + blen - 1) % blen;
-        let last_char = data[last_pos];
+        let mut rot = bzip2_work[i];
+        let mut last_pos = (rot + blen - 1) % blen;
+        let mut last_char = data[last_pos];
         set_at(bzip2_work, 65536 + i, last_char);
         if rot == 0 {
             original_index = i;
@@ -203,10 +203,10 @@ fn _bzip2_compare_rotation(data, dlen, rot1, rot2) {
             done = 1;
         }
         if done == 0 {
-            let pos1 = (rot1 + i) % dlen;
-            let pos2 = (rot2 + i) % dlen;
-            let c1 = data[pos1];
-            let c2 = data[pos2];
+            let mut pos1 = (rot1 + i) % dlen;
+            let mut pos2 = (rot2 + i) % dlen;
+            let mut c1 = data[pos1];
+            let mut c2 = data[pos2];
             if c1 < c2 {
                 result = 0 - 1;
                 done = 1;
@@ -262,7 +262,7 @@ fn bzip2_decompress(data, dlen) {
     let mut out_pos = 0;
 
     // Read BWT original index (consumed but not used for simplified decompressor)
-    let bwt_index = data[pos] * 16777216 + data[pos + 1] * 65536 + data[pos + 2] * 256 + data[pos + 3];
+    let mut bwt_index = data[pos] * 16777216 + data[pos + 1] * 65536 + data[pos + 2] * 256 + data[pos + 3];
     pos = pos + 4;
 
     // Reverse RLE into bzip2_out
@@ -280,9 +280,9 @@ fn bzip2_decompress(data, dlen) {
 
         if is_run == 1 {
             pos = pos + 3;
-            let run_extra = data[pos];
+            let mut run_extra = data[pos];
             pos = pos + 1;
-            let total_run = 4 + run_extra;
+            let mut total_run = 4 + run_extra;
             let mut k = 0;
             while k < total_run {
                 set_at(bzip2_out, out_pos, byte);
@@ -311,15 +311,15 @@ fn bzip2_get_output_len() {
 
 // Self-test: copy test string into staging buffer, compress, check result
 fn bzip2_test() {
-    let test_str = "bzip2 test data with repeating patterns: aaaa bbbb cccc";
-    let slen = len(test_str);
+    let mut test_str = "bzip2 test data with repeating patterns: aaaa bbbb cccc";
+    let mut slen = len(test_str);
     let mut i = 0;
     while i < slen {
         set_at(bzip2_tbuf, i, test_str[i]);
         i = i + 1;
     }
 
-    let comp_len = bzip2_compress(bzip2_tbuf, slen);
+    let mut comp_len = bzip2_compress(bzip2_tbuf, slen);
     if comp_len < 0 {
         print("bzip2 test: compression failed");
         return 0 - 1;

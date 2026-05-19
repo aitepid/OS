@@ -25,7 +25,7 @@ fn power_shutdown() {
         let mut val = acpi_slp_typa * 1024 + 8192;  // SLP_TYP << 10 | SLP_EN
         port_out_u16(acpi_pm1a_cnt, val);
         if acpi_pm1b_cnt != 0 {
-            let val2 = acpi_slp_typb * 1024 + 8192;
+            let mut val2 = acpi_slp_typb * 1024 + 8192;
             port_out_u16(acpi_pm1b_cnt, val2);
         }
         // If ACPI shutdown worked, we never reach here
@@ -58,7 +58,7 @@ fn power_reboot() {
     // Wait for input buffer empty: poll port 0x64 bit 1
     let mut timeout = 100000;
     while timeout > 0 {
-        let status = port_in_u8(100);  // 0x64
+        let mut status = port_in_u8(100);  // 0x64
         if (status / 2) % 2 == 0 { timeout = 0; }
         timeout = timeout - 1;
     }
@@ -97,11 +97,11 @@ fn power_init_fadt(fadt_addr) {
     acpi_pm1b_cnt = mem_read_u32(fadt_addr + 68);
 
     // FADT revision >= 2: reset register at +116
-    let fadt_rev = mem_read_u8(fadt_addr + 8);
+    let mut fadt_rev = mem_read_u8(fadt_addr + 8);
     if fadt_rev >= 2 {
         // Generic Address Structure at +116 (12 bytes):
         //   +0: address_space (1), +1: bit_width (1), +4: address (8)
-        let addr_space = mem_read_u8(fadt_addr + 116);
+        let mut addr_space = mem_read_u8(fadt_addr + 116);
         if addr_space == 1 {  // I/O space
             acpi_reset_reg = mem_read_u32(fadt_addr + 120);
             acpi_reset_val = mem_read_u8(fadt_addr + 128);
@@ -123,22 +123,22 @@ fn power_init_fadt(fadt_addr) {
 
 // Full ACPI power init: find FADT, parse it, get S5 sleep type
 fn power_init() {
-    let rsdp = acpi_find_rsdp();
+    let mut rsdp = acpi_find_rsdp();
     if rsdp == 0 {
         print("ACPI not found, power management limited.");
         return 0;
     }
-    let rsdp_info = acpi_parse_rsdp(rsdp);
-    let rsdt = rsdp_info[1];
+    let mut rsdp_info = acpi_parse_rsdp(rsdp);
+    let mut rsdt = rsdp_info[1];
     if rsdt == 0 { return 0; }
 
     // Find FADT (signature "FACP" = [70, 65, 67, 80])
-    let fadt = acpi_find_table(rsdt, [70, 65, 67, 80]);
+    let mut fadt = acpi_find_table(rsdt, [70, 65, 67, 80]);
     if fadt != 0 {
         power_init_fadt(fadt);
 
         // Read DSDT address from FADT (+40)
-        let dsdt = mem_read_u32(fadt + 40);
+        let mut dsdt = mem_read_u32(fadt + 40);
         if dsdt != 0 {
             // Search DSDT for \_S5_ object to get SLP_TYP values
             // The \_S5_ package typically looks like: 08 5F 53 35 5F 12 ...

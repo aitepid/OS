@@ -104,11 +104,11 @@ fn dhcp_parse_offer(data) {
     dhcp_server_ip = [data[20], data[21], data[22], data[23]];
     let mut off = 240;
     while off < len(data) {
-        let opt = data[off];
+        let mut opt = data[off];
         if opt == 255 { return 1; }
         if opt == 0 { off = off + 1; }
         else {
-            let opt_len = data[off + 1];
+            let mut opt_len = data[off + 1];
             if opt == 1 { dhcp_subnet = [data[off+2], data[off+3], data[off+4], data[off+5]]; }
             if opt == 3 { dhcp_gateway = [data[off+2], data[off+3], data[off+4], data[off+5]]; }
             if opt == 6 { dhcp_dns = [data[off+2], data[off+3], data[off+4], data[off+5]]; }
@@ -119,20 +119,20 @@ fn dhcp_parse_offer(data) {
 }
 
 fn dhcp_discover() {
-    let pkt = dhcp_build_discover();
-    let broadcast_mac = [255, 255, 255, 255, 255, 255];
-    let broadcast_ip = [255, 255, 255, 255];
-    let udp = build_udp_packet(broadcast_mac, broadcast_ip, DHCP_CLIENT_PORT, DHCP_SERVER_PORT, pkt);
+    let mut pkt = dhcp_build_discover();
+    let mut broadcast_mac = [255, 255, 255, 255, 255, 255];
+    let mut broadcast_ip = [255, 255, 255, 255];
+    let mut udp = build_udp_packet(broadcast_mac, broadcast_ip, DHCP_CLIENT_PORT, DHCP_SERVER_PORT, pkt);
     virtio_net_send_pkt(udp);
     print("DHCP DISCOVER sent (xid=" + to_string(dhcp_xid) + ")");
     return 0;
 }
 
 fn dhcp_request() {
-    let pkt = dhcp_build_request(dhcp_offered_ip, dhcp_server_ip);
-    let broadcast_mac = [255, 255, 255, 255, 255, 255];
-    let broadcast_ip = [255, 255, 255, 255];
-    let udp = build_udp_packet(broadcast_mac, broadcast_ip, DHCP_CLIENT_PORT, DHCP_SERVER_PORT, pkt);
+    let mut pkt = dhcp_build_request(dhcp_offered_ip, dhcp_server_ip);
+    let mut broadcast_mac = [255, 255, 255, 255, 255, 255];
+    let mut broadcast_ip = [255, 255, 255, 255];
+    let mut udp = build_udp_packet(broadcast_mac, broadcast_ip, DHCP_CLIENT_PORT, DHCP_SERVER_PORT, pkt);
     virtio_net_send_pkt(udp);
     print("DHCP REQUEST sent for " + to_string(dhcp_offered_ip[0]) + "." + to_string(dhcp_offered_ip[1]) + "." + to_string(dhcp_offered_ip[2]) + "." + to_string(dhcp_offered_ip[3]));
     return 0;
@@ -140,17 +140,17 @@ fn dhcp_request() {
 
 fn dhcp_input(data) {
     if len(data) < 240 { return 0; }
-    let pkt_xid = data[4]*16777216 + data[5]*65536 + data[6]*256 + data[7];
+    let mut pkt_xid = data[4]*16777216 + data[5]*65536 + data[6]*256 + data[7];
     if pkt_xid != dhcp_xid { return 0; }
     let mut msg_type = 0;
     let mut off = 240;
     while off < len(data) {
-        let opt = data[off];
+        let mut opt = data[off];
         if opt == 255 { off = len(data); }
         else {
             if opt == 0 { off = off + 1; }
             else {
-                let opt_len = data[off + 1];
+                let mut opt_len = data[off + 1];
                 if opt == 53 { msg_type = data[off + 2]; }
                 off = off + 2 + opt_len;
             }

@@ -66,8 +66,8 @@ fn _sm4_pow2(exp) {
 // _sm4_rotl -- rotate-left (32-bit simulation)
 // ---------------------------------------------------------------------------
 fn _sm4_rotl(value, bits) {
-    let left  = (value * _sm4_pow2(bits)) % 4294967296;
-    let right = value / _sm4_pow2(32 - bits);
+    let mut left = (value * _sm4_pow2(bits)) % 4294967296;
+    let mut right = value / _sm4_pow2(32 - bits);
     return (left + right) % 4294967296;
 }
 
@@ -75,10 +75,10 @@ fn _sm4_rotl(value, bits) {
 // _sm4_read32 -- read 4-byte little-endian word from an array
 // ---------------------------------------------------------------------------
 fn _sm4_read32(arr, offset) {
-    let b0 = arr[offset];
-    let b1 = arr[offset + 1];
-    let b2 = arr[offset + 2];
-    let b3 = arr[offset + 3];
+    let mut b0 = arr[offset];
+    let mut b1 = arr[offset + 1];
+    let mut b2 = arr[offset + 2];
+    let mut b3 = arr[offset + 3];
     return b0 + b1 * 256 + b2 * 65536 + b3 * 16777216;
 }
 
@@ -86,10 +86,10 @@ fn _sm4_read32(arr, offset) {
 // _sm4_read32_str -- read 4-byte little-endian word from a string
 // ---------------------------------------------------------------------------
 fn _sm4_read32_str(str, pos) {
-    let b0 = str_char_code(str, pos);
-    let b1 = str_char_code(str, pos + 1);
-    let b2 = str_char_code(str, pos + 2);
-    let b3 = str_char_code(str, pos + 3);
+    let mut b0 = str_char_code(str, pos);
+    let mut b1 = str_char_code(str, pos + 1);
+    let mut b2 = str_char_code(str, pos + 2);
+    let mut b3 = str_char_code(str, pos + 3);
     return b0 + b1 * 256 + b2 * 65536 + b3 * 16777216;
 }
 
@@ -108,10 +108,10 @@ fn _sm4_write32(arr, offset, value) {
 // _sm4_tau -- S-box substitution on each byte of a 32-bit word
 // ---------------------------------------------------------------------------
 fn _sm4_tau(word) {
-    let b0 = sm4_sbox[word % 256];
-    let b1 = sm4_sbox[(word / 256) % 256];
-    let b2 = sm4_sbox[(word / 65536) % 256];
-    let b3 = sm4_sbox[(word / 16777216) % 256];
+    let mut b0 = sm4_sbox[word % 256];
+    let mut b1 = sm4_sbox[(word / 256) % 256];
+    let mut b2 = sm4_sbox[(word / 65536) % 256];
+    let mut b3 = sm4_sbox[(word / 16777216) % 256];
     return b0 + b1 * 256 + b2 * 65536 + b3 * 16777216;
 }
 
@@ -119,7 +119,7 @@ fn _sm4_tau(word) {
 // _sm4_l -- linear transformation (simplified rotate-and-mix)
 // ---------------------------------------------------------------------------
 fn _sm4_l(word) {
-    let rotated = _sm4_rotl(word, 13);
+    let mut rotated = _sm4_rotl(word, 13);
     return (word + rotated) % 4294967296;
 }
 
@@ -138,10 +138,10 @@ fn _sm4_key_expansion(key) {
     // Generate SM4_ROUNDS round keys
     i = 0;
     while i < SM4_ROUNDS {
-        let k0 = _sm4_read32(sm4_k_buf,  0);
-        let k1 = _sm4_read32(sm4_k_buf,  4);
-        let k2 = _sm4_read32(sm4_k_buf,  8);
-        let k3 = _sm4_read32(sm4_k_buf, 12);
+        let mut k0 = _sm4_read32(sm4_k_buf,  0);
+        let mut k1 = _sm4_read32(sm4_k_buf,  4);
+        let mut k2 = _sm4_read32(sm4_k_buf,  8);
+        let mut k3 = _sm4_read32(sm4_k_buf, 12);
 
         let mut rk = (k0 + k1 + k2 + k3 + i * 12345) % 4294967296;
         rk = _sm4_tau(rk);
@@ -163,7 +163,7 @@ fn _sm4_key_expansion(key) {
 // sm4_set_key -- load a 16-byte string key and expand round keys
 // ---------------------------------------------------------------------------
 fn sm4_set_key(key) {
-    let key_len = len(key);
+    let mut key_len = len(key);
     if key_len < SM4_KEY_SIZE {
         print("sm4: key too short (need 16 bytes)");
         return 0 - 1;
@@ -193,16 +193,16 @@ fn sm4_encrypt_block(plaintext) {
     // 32 rounds
     i = 0;
     while i < SM4_ROUNDS {
-        let x0 = _sm4_read32(sm4_x_buf,  0);
-        let x1 = _sm4_read32(sm4_x_buf,  4);
-        let x2 = _sm4_read32(sm4_x_buf,  8);
-        let x3 = _sm4_read32(sm4_x_buf, 12);
-        let rk = _sm4_read32(sm4_round_keys, i * 4);
+        let mut x0 = _sm4_read32(sm4_x_buf,  0);
+        let mut x1 = _sm4_read32(sm4_x_buf,  4);
+        let mut x2 = _sm4_read32(sm4_x_buf,  8);
+        let mut x3 = _sm4_read32(sm4_x_buf, 12);
+        let mut rk = _sm4_read32(sm4_round_keys, i * 4);
 
         let mut temp = (x1 + x2 + x3 + rk) % 4294967296;
         temp = _sm4_tau(temp);
         temp = _sm4_l(temp);
-        let x4 = (x0 + temp) % 4294967296;
+        let mut x4 = (x0 + temp) % 4294967296;
 
         _sm4_write32(sm4_x_buf,  0, x1);
         _sm4_write32(sm4_x_buf,  4, x2);
@@ -241,16 +241,16 @@ fn sm4_decrypt_block(ciphertext) {
     // 32 rounds with reversed key order
     let mut ri = SM4_ROUNDS - 1;
     while ri >= 0 {
-        let x0 = _sm4_read32(sm4_x_buf,  0);
-        let x1 = _sm4_read32(sm4_x_buf,  4);
-        let x2 = _sm4_read32(sm4_x_buf,  8);
-        let x3 = _sm4_read32(sm4_x_buf, 12);
-        let rk = _sm4_read32(sm4_round_keys, ri * 4);
+        let mut x0 = _sm4_read32(sm4_x_buf,  0);
+        let mut x1 = _sm4_read32(sm4_x_buf,  4);
+        let mut x2 = _sm4_read32(sm4_x_buf,  8);
+        let mut x3 = _sm4_read32(sm4_x_buf, 12);
+        let mut rk = _sm4_read32(sm4_round_keys, ri * 4);
 
         let mut temp = (x1 + x2 + x3 + rk) % 4294967296;
         temp = _sm4_tau(temp);
         temp = _sm4_l(temp);
-        let x4 = (x0 + temp) % 4294967296;
+        let mut x4 = (x0 + temp) % 4294967296;
 
         _sm4_write32(sm4_x_buf,  0, x1);
         _sm4_write32(sm4_x_buf,  4, x2);
@@ -273,11 +273,11 @@ fn sm4_decrypt_block(ciphertext) {
 // sm4_get_hex -- encode a 16-byte array block as 32-char hex into sm4_hex_buf
 // ---------------------------------------------------------------------------
 fn sm4_get_hex(data) {
-    let hex_chars = "0123456789abcdef";
+    let mut hex_chars = "0123456789abcdef";
     let mut pos = 0;
     let mut i = 0;
     while i < SM4_BLOCK_SIZE {
-        let bval = data[i];
+        let mut bval = data[i];
         set_at(sm4_hex_buf, pos, str_char_code(hex_chars, bval / 16));
         pos = pos + 1;
         set_at(sm4_hex_buf, pos, str_char_code(hex_chars, bval % 16));
@@ -292,8 +292,8 @@ fn sm4_get_hex(data) {
 // sm4_test -- basic self-test: encrypt then verify result is non-zero
 // ---------------------------------------------------------------------------
 fn sm4_test() {
-    let key       = "0123456789abcdef";
-    let plaintext = "Hello SM4 cipher";
+    let mut key = "0123456789abcdef";
+    let mut plaintext = "Hello SM4 cipher";
 
     let mut r = sm4_set_key(key);
     if r < 0 {
@@ -301,13 +301,13 @@ fn sm4_test() {
         return 0 - 1;
     }
 
-    let ciphertext = sm4_encrypt_block(plaintext);
+    let mut ciphertext = sm4_encrypt_block(plaintext);
     if ciphertext == 0 {
         print("sm4_test: encryption failed");
         return 0 - 2;
     }
 
-    let decrypted = sm4_decrypt_block(ciphertext);
+    let mut decrypted = sm4_decrypt_block(ciphertext);
     if decrypted == 0 {
         print("sm4_test: decryption failed");
         return 0 - 3;

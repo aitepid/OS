@@ -70,20 +70,20 @@ fn ext4_init(ahci_port) {
     ext4_ready = 0;
 
     // Superblock is at byte offset 1024 on disk = LBA 2 (512-byte sectors)
-    let ok = ahci_read(ahci_port, 2, 2, EXT4_SB_BUF);
+    let mut ok = ahci_read(ahci_port, 2, 2, EXT4_SB_BUF);
     if ok == 0 {
         print("ext4: superblock read failed");
         return 0;
     }
 
-    let magic = mem_read_u16(EXT4_SB_BUF + 56);
+    let mut magic = mem_read_u16(EXT4_SB_BUF + 56);
     if magic != EXT4_MAGIC {
         print("ext4: bad superblock magic 0x" + format_hex(magic, 4));
         return 0;
     }
 
     // block_size = 1024 << log_block_size
-    let log_bs = mem_read_u32(EXT4_SB_BUF + 24);
+    let mut log_bs = mem_read_u32(EXT4_SB_BUF + 24);
     let mut bsz = 1024;
     let mut sh = log_bs;
     while sh > 0 {
@@ -96,7 +96,7 @@ fn ext4_init(ahci_port) {
     ext4_inode_size = mem_read_u16(EXT4_SB_BUF + 88);
     if ext4_inode_size < 128 { ext4_inode_size = 128; }
 
-    let incompat = mem_read_u32(EXT4_SB_BUF + 96);
+    let mut incompat = mem_read_u32(EXT4_SB_BUF + 96);
     ext4_has_extents = (incompat / 64) % 2;   // bit 6
     ext4_is_64bit    = (incompat / 512) % 2;  // bit 9
 
@@ -115,35 +115,35 @@ fn ext4_read_inode(inode_num) {
     if ext4_ready == 0 { return 0; }
     if inode_num < 1 { return 0; }
 
-    let group = (inode_num - 1) / ext4_inodes_per_group;
-    let idx   = (inode_num - 1) % ext4_inodes_per_group;
+    let mut group = (inode_num - 1) / ext4_inodes_per_group;
+    let mut idx = (inode_num - 1) % ext4_inodes_per_group;
 
     // BGDT is at block 1 for block_size >= 2048, block 2 for 1024
     let mut bgdt_block = 1;
     if ext4_block_size == 1024 { bgdt_block = 2; }
-    let bgdt_lba = bgdt_block * (ext4_block_size / 512);
+    let mut bgdt_lba = bgdt_block * (ext4_block_size / 512);
 
     // Each BGDT entry: 32 bytes (non-64-bit) or 64 bytes (64-bit)
     let mut bgdt_entry_sz = 32;
     if ext4_is_64bit == 1 { bgdt_entry_sz = 64; }
 
     // Read enough of BGDT (8 sectors covers 4096 bytes = 128 groups)
-    let ok_bgdt = ahci_read(ext4_ahci_port, bgdt_lba, 8, EXT4_BGDT_BUF);
+    let mut ok_bgdt = ahci_read(ext4_ahci_port, bgdt_lba, 8, EXT4_BGDT_BUF);
     if ok_bgdt == 0 { return 0; }
 
     // inode_table_block from group descriptor at offset +8
-    let bgdt_off = group * bgdt_entry_sz;
-    let inode_table_block = mem_read_u32(EXT4_BGDT_BUF + bgdt_off + 8);
+    let mut bgdt_off = group * bgdt_entry_sz;
+    let mut inode_table_block = mem_read_u32(EXT4_BGDT_BUF + bgdt_off + 8);
 
     // Byte position of this inode within the inode table
-    let inode_byte = idx * ext4_inode_size;
+    let mut inode_byte = idx * ext4_inode_size;
 
     // Which LBA and intra-sector offset contains this inode
-    let secs_per_block = ext4_block_size / 512;
-    let inode_lba = inode_table_block * secs_per_block + inode_byte / 512;
-    let inode_sec_off = inode_byte % 512;
+    let mut secs_per_block = ext4_block_size / 512;
+    let mut inode_lba = inode_table_block * secs_per_block + inode_byte / 512;
+    let mut inode_sec_off = inode_byte % 512;
 
-    let ok_in = ahci_read(ext4_ahci_port, inode_lba, 1, EXT4_INODE_BUF);
+    let mut ok_in = ahci_read(ext4_ahci_port, inode_lba, 1, EXT4_INODE_BUF);
     if ok_in == 0 { return 0; }
 
     return EXT4_INODE_BUF + inode_sec_off;
@@ -156,11 +156,11 @@ fn ext4_parse_extents(inode_addr) {
     if inode_addr == 0 { return extents; }
 
     // i_block (extent tree) starts at inode byte 40
-    let eh_magic = mem_read_u16(inode_addr + 40);
+    let mut eh_magic = mem_read_u16(inode_addr + 40);
     if eh_magic != EXT4_EXTENT_MAGIC { return extents; }
 
-    let eh_entries = mem_read_u16(inode_addr + 42);
-    let eh_depth   = mem_read_u16(inode_addr + 46);
+    let mut eh_entries = mem_read_u16(inode_addr + 42);
+    let mut eh_depth = mem_read_u16(inode_addr + 46);
 
     if eh_depth != 0 {
         // Index-node extents (depth > 0) — not yet supported
@@ -172,12 +172,12 @@ fn ext4_parse_extents(inode_addr) {
     let mut i = 0;
     while i < eh_entries {
         let mut off = inode_addr + 52 + i * 12;  // 40+12 header + i*12
-        let file_block = mem_read_u32(off);
-        let blk_count  = mem_read_u16(off + 4);
-        let start_hi   = mem_read_u16(off + 6);
-        let start_lo   = mem_read_u32(off + 8);
+        let mut file_block = mem_read_u32(off);
+        let mut blk_count = mem_read_u16(off + 4);
+        let mut start_hi = mem_read_u16(off + 6);
+        let mut start_lo = mem_read_u32(off + 8);
         // Use start_lo only (covers < 2 TB; start_hi is 0 on typical VMs)
-        let disk_block = start_lo;
+        let mut disk_block = start_lo;
         push(extents, [file_block, blk_count, disk_block]);
         i = i + 1;
     }
@@ -188,11 +188,11 @@ fn ext4_parse_extents(inode_addr) {
 // max_size == 0 means use actual file size.
 // Returns bytes read on success, 0 on failure.
 fn ext4_read_file(inode_num, max_size) {
-    let inode_addr = ext4_read_inode(inode_num);
+    let mut inode_addr = ext4_read_inode(inode_num);
     if inode_addr == 0 { return 0; }
 
     // i_size_lo at inode offset 4
-    let file_size = mem_read_u32(inode_addr + 4);
+    let mut file_size = mem_read_u32(inode_addr + 4);
     let mut read_limit = file_size;
     if max_size > 0 {
         if max_size < read_limit { read_limit = max_size; }
@@ -200,19 +200,19 @@ fn ext4_read_file(inode_num, max_size) {
     if read_limit == 0 { return 0; }
 
     if ext4_has_extents == 1 {
-        let extents = ext4_parse_extents(inode_addr);
+        let mut extents = ext4_parse_extents(inode_addr);
         let mut written = 0;
-        let secs_per_block = ext4_block_size / 512;
+        let mut secs_per_block = ext4_block_size / 512;
         let mut ei = 0;
         let mut done = 0;
         while ei < len(extents) {
             if done == 0 {
-                let ext = extents[ei];
-                let blk_count  = ext[1];
-                let disk_blk   = ext[2];
-                let secs       = blk_count * secs_per_block;
-                let dst_addr   = EXT4_BLOCK_BUF + written;
-                let ok = ahci_read(ext4_ahci_port, disk_blk * secs_per_block, secs, dst_addr);
+                let mut ext = extents[ei];
+                let mut blk_count = ext[1];
+                let mut disk_blk = ext[2];
+                let mut secs = blk_count * secs_per_block;
+                let mut dst_addr = EXT4_BLOCK_BUF + written;
+                let mut ok = ahci_read(ext4_ahci_port, disk_blk * secs_per_block, secs, dst_addr);
                 if ok == 0 { done = 1; }
                 else {
                     written = written + blk_count * ext4_block_size;
@@ -232,7 +232,7 @@ fn ext4_read_file(inode_num, max_size) {
 // Returns array of [name, inode_num, file_type] for each valid entry.
 fn ext4_list_dir(inode_num) {
     let mut entries = [];
-    let nbytes = ext4_read_file(inode_num, 65536);
+    let mut nbytes = ext4_read_file(inode_num, 65536);
     if nbytes == 0 { return entries; }
 
     let mut off = 0;
@@ -240,16 +240,16 @@ fn ext4_list_dir(inode_num) {
     while done == 0 {
         if off >= nbytes { done = 1; }
         else {
-            let ino     = mem_read_u32(EXT4_BLOCK_BUF + off);
-            let rec_len = mem_read_u16(EXT4_BLOCK_BUF + off + 4);
-            let name_len = mem_read_u8(EXT4_BLOCK_BUF + off + 6);
-            let ftype   = mem_read_u8(EXT4_BLOCK_BUF + off + 7);
+            let mut ino = mem_read_u32(EXT4_BLOCK_BUF + off);
+            let mut rec_len = mem_read_u16(EXT4_BLOCK_BUF + off + 4);
+            let mut name_len = mem_read_u8(EXT4_BLOCK_BUF + off + 6);
+            let mut ftype = mem_read_u8(EXT4_BLOCK_BUF + off + 7);
 
             if rec_len == 0 { done = 1; }
             else {
                 if ino != 0 {
                     if name_len > 0 {
-                        let name = ext4_read_str(EXT4_BLOCK_BUF + off + 8, name_len);
+                        let mut name = ext4_read_str(EXT4_BLOCK_BUF + off + 8, name_len);
                         push(entries, [name, ino, ftype]);
                     }
                 }
@@ -267,7 +267,7 @@ fn ext4_resolve(path) {
     if path == "/" { return EXT4_ROOT_INODE; }
 
     let mut cur_ino = EXT4_ROOT_INODE;
-    let plen = len(path);
+    let mut plen = len(path);
     let mut seg_start = 0;
     // Skip leading '/'
     if plen > 0 {
@@ -283,9 +283,9 @@ fn ext4_resolve(path) {
 
         if at_sep == 1 {
             if i > seg_start {
-                let seg = str_sub(path, seg_start, i);
+                let mut seg = str_sub(path, seg_start, i);
                 // Walk current directory looking for seg
-                let entries = ext4_list_dir(cur_ino);
+                let mut entries = ext4_list_dir(cur_ino);
                 let mut found = 0;
                 let mut j = 0;
                 while j < len(entries) {
@@ -309,7 +309,7 @@ fn ext4_resolve(path) {
 // Convenience: read file at path into EXT4_BLOCK_BUF.
 // Returns byte count on success, 0 on failure.
 fn ext4_read_path(path, max_size) {
-    let ino = ext4_resolve(path);
+    let mut ino = ext4_resolve(path);
     if ino == 0 { return 0; }
     return ext4_read_file(ino, max_size);
 }

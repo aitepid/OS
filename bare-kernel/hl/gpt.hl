@@ -75,7 +75,7 @@ fn gpt_crc32(data, length) {
         let mut byte = data[i];
         let mut bit = 0;
         while bit < 8 {
-            let xor_flag = (crc + byte / (1)) % 2;
+            let mut xor_flag = (crc + byte / (1)) % 2;
             crc = crc / 2;
             if xor_flag == 1 {
                 // XOR with 0xEDB88320 (reversed polynomial)
@@ -92,11 +92,11 @@ fn gpt_crc32(data, length) {
 
 // Write protective MBR (LBA 0)
 fn gpt_write_protective_mbr(total_sectors) {
-    let buf = page_alloc();
+    let mut buf = page_alloc();
     mem_zero(buf, 512);
 
     // Partition 1 entry at offset 446: type 0xEE (GPT protective)
-    let p1 = buf + 446;
+    let mut p1 = buf + 446;
     mem_write_u8(p1, 0);          // not bootable
     mem_write_u8(p1 + 1, 0);     // CHS start
     mem_write_u8(p1 + 2, 2);
@@ -107,7 +107,7 @@ fn gpt_write_protective_mbr(total_sectors) {
     mem_write_u8(p1 + 7, 255);
     mem_write_u32(p1 + 8, 1);    // LBA start = 1 (GPT header)
     // Size: min(total_sectors - 1, 0xFFFFFFFF)
-    let pmbr_size = total_sectors - 1;
+    let mut pmbr_size = total_sectors - 1;
     if pmbr_size > 4294967295 { pmbr_size = 4294967295; }
     mem_write_u32(p1 + 12, pmbr_size);
 
@@ -123,7 +123,7 @@ fn gpt_write_protective_mbr(total_sectors) {
 // Generate a pseudo-random GUID (v4)
 fn gpt_generate_guid() {
     let mut guid = [];
-    let seed = get_ticks();
+    let mut seed = get_ticks();
     let mut val = seed;
     let mut i = 0;
     while i < 16 {
@@ -140,7 +140,7 @@ fn gpt_generate_guid() {
 
 // Write GPT header at a given LBA
 fn gpt_write_header(lba, alt_lba, first_usable, last_usable, entry_lba, num_entries, entries_crc) {
-    let buf = page_alloc();
+    let mut buf = page_alloc();
     mem_zero(buf, 512);
 
     // Signature
@@ -178,7 +178,7 @@ fn gpt_write_header(lba, alt_lba, first_usable, last_usable, entry_lba, num_entr
     let mut hdr_bytes = [];
     i = 0;
     while i < GPT_HEADER_SIZE { push(hdr_bytes, mem_read_u8(buf + i)); i = i + 1; }
-    let hdr_crc = gpt_crc32(hdr_bytes, GPT_HEADER_SIZE);
+    let mut hdr_crc = gpt_crc32(hdr_bytes, GPT_HEADER_SIZE);
     mem_write_u32(buf + 16, hdr_crc);
 
     virtio_blk_write(lba, 1, buf);
@@ -189,10 +189,10 @@ fn gpt_write_header(lba, alt_lba, first_usable, last_usable, entry_lba, num_entr
 // Write a partition entry into the entry area
 fn gpt_write_entry(entry_index, type_guid, unique_guid, start_lba, end_lba, name_utf16) {
     // Each entry is 128 bytes; 4 entries per sector
-    let sector = GPT_ENTRY_LBA + entry_index / 4;
-    let offset = (entry_index % 4) * GPT_ENTRY_SIZE;
+    let mut sector = GPT_ENTRY_LBA + entry_index / 4;
+    let mut offset = (entry_index % 4) * GPT_ENTRY_SIZE;
 
-    let buf = page_alloc();
+    let mut buf = page_alloc();
     virtio_blk_read(sector, 1, buf);
 
     let mut base = buf + offset;
@@ -238,7 +238,7 @@ fn gpt_str_to_utf16(s) {
 
 // Read and validate GPT from disk
 fn gpt_read() {
-    let buf = page_alloc();
+    let mut buf = page_alloc();
     virtio_blk_read(1, 1, buf);
 
     // Check signature
@@ -257,10 +257,10 @@ fn gpt_read() {
     i = 0;
     while i < 16 { gpt_disk_guid[i] = mem_read_u8(buf + 56 + i); i = i + 1; }
 
-    let num_entries = mem_read_u32(buf + 80);
-    let entry_lba = mem_read_u64(buf + 72);
-    let first_usable = mem_read_u64(buf + 40);
-    let last_usable = mem_read_u64(buf + 48);
+    let mut num_entries = mem_read_u32(buf + 80);
+    let mut entry_lba = mem_read_u64(buf + 72);
+    let mut first_usable = mem_read_u64(buf + 40);
+    let mut last_usable = mem_read_u64(buf + 48);
     page_free(buf);
 
     // Read partition entries
@@ -268,9 +268,9 @@ fn gpt_read() {
     gpt_partition_count = 0;
     let mut ei = 0;
     while ei < num_entries {
-        let sector = entry_lba + ei / 4;
-        let offset = (ei % 4) * GPT_ENTRY_SIZE;
-        let ebuf = page_alloc();
+        let mut sector = entry_lba + ei / 4;
+        let mut offset = (ei % 4) * GPT_ENTRY_SIZE;
+        let mut ebuf = page_alloc();
         virtio_blk_read(sector, 1, ebuf);
 
         // Check if entry is empty (all-zero type GUID)
@@ -282,8 +282,8 @@ fn gpt_read() {
         }
 
         if empty == 0 {
-            let start = mem_read_u64(ebuf + offset + 32);
-            let end = mem_read_u64(ebuf + offset + 40);
+            let mut start = mem_read_u64(ebuf + offset + 32);
+            let mut end = mem_read_u64(ebuf + offset + 40);
             let mut tguid = [];
             j = 0;
             while j < 16 { push(tguid, mem_read_u8(ebuf + offset + j)); j = j + 1; }
@@ -329,46 +329,46 @@ fn gpt_create(total_sectors) {
     // Protective MBR
     gpt_write_protective_mbr(total_sectors);
 
-    let first_usable = 34;
-    let last_usable = total_sectors - 34;
+    let mut first_usable = 34;
+    let mut last_usable = total_sectors - 34;
 
     // ESP: 100 MB = 204800 sectors (each 512 bytes)
-    let esp_start = first_usable;
-    let esp_size = 204800;
-    let esp_end = esp_start + esp_size - 1;
+    let mut esp_start = first_usable;
+    let mut esp_size = 204800;
+    let mut esp_end = esp_start + esp_size - 1;
 
     // HicOS partition: rest of disk
-    let hicos_start = esp_end + 1;
-    let hicos_end = last_usable;
+    let mut hicos_start = esp_end + 1;
+    let mut hicos_end = last_usable;
 
     // Zero the entry sectors (LBA 2-33)
-    let zero_buf = page_alloc();
+    let mut zero_buf = page_alloc();
     mem_zero(zero_buf, 512);
     let mut s = 2;
     while s <= 33 { virtio_blk_write(s, 1, zero_buf); s = s + 1; }
     page_free(zero_buf);
 
     // Write ESP entry
-    let esp_guid = gpt_generate_guid();
-    let esp_name = gpt_str_to_utf16("EFI System");
+    let mut esp_guid = gpt_generate_guid();
+    let mut esp_name = gpt_str_to_utf16("EFI System");
     gpt_write_entry(0, ESP_GUID, esp_guid, esp_start, esp_end, esp_name);
 
     // Write HicOS entry
-    let hicos_guid_unique = gpt_generate_guid();
-    let hicos_name = gpt_str_to_utf16("HicOS");
+    let mut hicos_guid_unique = gpt_generate_guid();
+    let mut hicos_name = gpt_str_to_utf16("HicOS");
     gpt_write_entry(1, HICOS_GUID, hicos_guid_unique, hicos_start, hicos_end, hicos_name);
 
     // Compute entries CRC32 (read back 32 sectors of entries)
     // Simplified: use 0 for now; real implementation needs full CRC
-    let entries_crc = 0;
+    let mut entries_crc = 0;
 
     // Write primary GPT header (LBA 1)
     gpt_write_header(1, total_sectors - 1, first_usable, last_usable, GPT_ENTRY_LBA, GPT_MAX_ENTRIES, entries_crc);
 
     // Write backup GPT header (last LBA)
-    let backup_entry_lba = total_sectors - 33;
+    let mut backup_entry_lba = total_sectors - 33;
     // Copy entries to backup location
-    let copy_buf = page_alloc();
+    let mut copy_buf = page_alloc();
     s = 0;
     while s < 32 {
         virtio_blk_read(GPT_ENTRY_LBA + s, 1, copy_buf);

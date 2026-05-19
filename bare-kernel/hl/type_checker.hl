@@ -50,7 +50,7 @@ fn tc_init() {
 fn tc_set_ret_type(t) { tc_ret_type = t; return 0; }
 
 fn tc_declare(name, typ) {
-    let id = tc_var_n;
+    let mut id = tc_var_n;
     set_at(tc_var_name, id, name);
     set_at(tc_var_type, id, typ);
     tc_var_n += 1;
@@ -88,7 +88,7 @@ fn _tc_error(node, expected, got) {
 }
 
 fn tc_add_assign(var_name, expr_type) {
-    let id = tc_st_n;
+    let mut id = tc_st_n;
     set_at(tc_st_kind, id, 0);
     set_at(tc_st_a,    id, var_name);
     set_at(tc_st_b,    id, expr_type);
@@ -97,7 +97,7 @@ fn tc_add_assign(var_name, expr_type) {
 }
 
 fn tc_add_binop(op, lhs_var, rhs_var, dst_var) {
-    let id = tc_st_n;
+    let mut id = tc_st_n;
     set_at(tc_st_kind, id, 1);
     set_at(tc_st_op,   id, op);
     set_at(tc_st_a,    id, lhs_var);
@@ -108,7 +108,7 @@ fn tc_add_binop(op, lhs_var, rhs_var, dst_var) {
 }
 
 fn tc_add_ret(var_name) {
-    let id = tc_st_n;
+    let mut id = tc_st_n;
     set_at(tc_st_kind, id, 2);
     set_at(tc_st_a,    id, var_name);
     tc_st_n += 1;
@@ -116,7 +116,7 @@ fn tc_add_ret(var_name) {
 }
 
 fn tc_add_if(cond_var, body_stmt) {
-    let id = tc_st_n;
+    let mut id = tc_st_n;
     set_at(tc_st_kind, id, 3);
     set_at(tc_st_a,    id, cond_var);
     set_at(tc_st_b,    id, body_stmt);
@@ -125,15 +125,15 @@ fn tc_add_if(cond_var, body_stmt) {
 }
 
 fn _tc_check_stmt(i) {
-    let k  = tc_st_kind[i];
-    let op = tc_st_op[i];
-    let a  = tc_st_a[i];
-    let b  = tc_st_b[i];
-    let c  = tc_st_c[i];
+    let mut k = tc_st_kind[i];
+    let mut op = tc_st_op[i];
+    let mut a = tc_st_a[i];
+    let mut b = tc_st_b[i];
+    let mut c = tc_st_c[i];
 
     if k == 0 {
         // assign: check if var already declared with different type
-        let existing = _tc_lookup(a);
+        let mut existing = _tc_lookup(a);
         if existing == TC_UNKNOWN {
             _tc_set_type(a, b);
         } else {
@@ -149,9 +149,9 @@ fn _tc_check_stmt(i) {
     if k == 1 {
         // binop: arithmetic ops (0-2) require Int; comparison (3-4) require Int, produce Bool
         //         logical ops (5-6) require Bool
-        let tl = _tc_lookup(a);
-        let tr = _tc_lookup(b);
-        let res_type = TC_ERROR;
+        let mut tl = _tc_lookup(a);
+        let mut tr = _tc_lookup(b);
+        let mut res_type = TC_ERROR;
 
         if op <= 2 {
             // arithmetic: both must be Int -> Int
@@ -188,7 +188,7 @@ fn _tc_check_stmt(i) {
 
     if k == 2 {
         // ret: must match declared return type
-        let rt = _tc_lookup(a);
+        let mut rt = _tc_lookup(a);
         if rt != tc_ret_type {
             if rt != TC_UNKNOWN {
                 _tc_error(i, tc_ret_type, rt);
@@ -199,7 +199,7 @@ fn _tc_check_stmt(i) {
 
     if k == 3 {
         // if: condition must be Bool
-        let ct = _tc_lookup(a);
+        let mut ct = _tc_lookup(a);
         if ct != TC_BOOL {
             _tc_error(i, TC_BOOL, ct);
         }
@@ -228,7 +228,7 @@ fn tc_test() {
     tc_add_binop(0, 10, 10, 12);   // z = x+x  -> Int
     tc_add_binop(5, 11, 12, 13);   // w = y&&z  -> error(z is Int, not Bool)
     tc_add_ret(12);                 // ret z(Int) -> error(expected Bool)
-    let errs = tc_run();
+    let mut errs = tc_run();
     print("tc_test: errors=" + to_string(errs));
     if errs == 2 {
         print("tc_test: PASS");

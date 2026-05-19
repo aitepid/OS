@@ -107,7 +107,7 @@ fn _mqtt_encode_len(off, val) {
     let mut v = val;
     let mut cnt = 0;
     while 1 == 1 {
-        let enc = v % 128;
+        let mut enc = v % 128;
         v = v / 128;
         if v > 0 {
             mem_write_u8(MQTT_BUF + off + cnt, enc + 128);
@@ -137,9 +137,9 @@ fn _mqtt_flush(id, n) {
 // ============================================================
 
 fn _mqtt_send_connect(id) {
-    let cid = mqtt_client_id[id];
+    let mut cid = mqtt_client_id[id];
     // Variable header: protocol name "MQTT"(6B) + level(1) + flags(1) + keepalive(2)
-    let vh_off = 4;   // reserve bytes 0-3 for fixed header + length
+    let mut vh_off = 4;   // reserve bytes 0-3 for fixed header + length
     let mut pos = vh_off;
     pos = pos + _mqtt_write_str(pos, "MQTT");   // protocol name
     mem_write_u8(MQTT_BUF + pos, 4);  pos = pos + 1;   // level=4 (MQTT 3.1.1)
@@ -149,15 +149,15 @@ fn _mqtt_send_connect(id) {
     // Payload: client_id
     pos = pos + _mqtt_write_str(pos, cid);
 
-    let remain = pos - vh_off;
+    let mut remain = pos - vh_off;
     // Write fixed header at bytes 0-1
     mem_write_u8(MQTT_BUF + 0, 16);   // CONNECT = 1<<4 = 0x10
-    let lbytes = _mqtt_encode_len(1, remain);
+    let mut lbytes = _mqtt_encode_len(1, remain);
     // Shift variable header to after length bytes
-    let hdr_sz = 1 + lbytes;
-    let body_start = vh_off;
-    let body_end   = pos;
-    let body_len   = body_end - body_start;
+    let mut hdr_sz = 1 + lbytes;
+    let mut body_start = vh_off;
+    let mut body_end = pos;
+    let mut body_len = body_end - body_start;
     // Move body to follow the real header
     if hdr_sz < vh_off {
         let mut k = 0;
@@ -181,14 +181,14 @@ fn mqtt_publish(id, topic, payload) {
         print("mqtt[" + to_string(id) + "]: not ready"); return 0 - 1;
     }
     // Build directly into pkt string (QoS 0 = no packet id)
-    let tlen  = len(topic);
-    let plen  = len(payload);
-    let remain = 2 + tlen + plen;
+    let mut tlen = len(topic);
+    let mut plen = len(payload);
+    let mut remain = 2 + tlen + plen;
     let mut pkt = str_from_code(48);   // 0x30 = PUBLISH QoS0
     // Encode remaining length
     let mut v = remain;
     while 1 == 1 {
-        let enc = v % 128;
+        let mut enc = v % 128;
         v = v / 128;
         if v > 0 { pkt = pkt + str_from_code(enc + 128); }
         else { pkt = pkt + str_from_code(enc); }
@@ -208,14 +208,14 @@ fn mqtt_publish(id, topic, payload) {
 fn mqtt_subscribe(id, topic) {
     if id < 0 { return 0 - 1; }
     if mqtt_active[id] == 0 { return 0 - 1; }
-    let pid = mqtt_pkt_id[id];
+    let mut pid = mqtt_pkt_id[id];
     set_at(mqtt_pkt_id, id, pid + 1);
-    let tlen   = len(topic);
-    let remain = 2 + 2 + tlen + 1;   // pkt_id + len(2) + topic + QoS
+    let mut tlen = len(topic);
+    let mut remain = 2 + 2 + tlen + 1;   // pkt_id + len(2) + topic + QoS
     let mut pkt = str_from_code(130);   // 0x82 = SUBSCRIBE
     let mut v = remain;
     while 1 == 1 {
-        let enc = v % 128;
+        let mut enc = v % 128;
         v = v / 128;
         if v > 0 { pkt = pkt + str_from_code(enc + 128); }
         else { pkt = pkt + str_from_code(enc); }
@@ -233,14 +233,14 @@ fn mqtt_subscribe(id, topic) {
 fn mqtt_unsubscribe(id, topic) {
     if id < 0 { return 0 - 1; }
     if mqtt_active[id] == 0 { return 0 - 1; }
-    let pid = mqtt_pkt_id[id];
+    let mut pid = mqtt_pkt_id[id];
     set_at(mqtt_pkt_id, id, pid + 1);
-    let tlen   = len(topic);
-    let remain = 2 + 2 + tlen;
+    let mut tlen = len(topic);
+    let mut remain = 2 + 2 + tlen;
     let mut pkt = str_from_code(162);   // 0xA2 = UNSUBSCRIBE
     let mut v = remain;
     while 1 == 1 {
-        let enc = v % 128;
+        let mut enc = v % 128;
         v = v / 128;
         if v > 0 { pkt = pkt + str_from_code(enc + 128); }
         else { pkt = pkt + str_from_code(enc); }
@@ -283,10 +283,10 @@ fn mqtt_disconnect(id) {
 // ============================================================
 
 fn mqtt_connect(host, port, client_id) {
-    let id = _mqtt_alloc();
+    let mut id = _mqtt_alloc();
     if id < 0 { print("mqtt: no free slots"); return 0 - 1; }
-    let ip = dns_resolve(host);
-    let tcb = tcp_connect(ip, port);
+    let mut ip = dns_resolve(host);
+    let mut tcb = tcp_connect(ip, port);
     if tcb < 0 { print("mqtt: tcp_connect failed to " + host); return 0 - 1; }
     set_at(mqtt_active,    id, 1);
     set_at(mqtt_tcb,       id, tcb);
@@ -299,14 +299,14 @@ fn mqtt_connect(host, port, client_id) {
     _mqtt_send_connect(id);
 
     // Wait for CONNACK (up to 200 ticks)
-    let deadline = get_ticks() + 200;
+    let mut deadline = get_ticks() + 200;
     while get_ticks() < deadline {
         let mut addr = TCP_TABLE + tcb * TCB_SIZE;
-        let rx_buf = mem_read_u64(addr + 64);
+        let mut rx_buf = mem_read_u64(addr + 64);
         if rx_buf != 0 {
-            let b0 = mem_read_u8(rx_buf);
+            let mut b0 = mem_read_u8(rx_buf);
             if b0 == 32 {   // CONNACK = 0x20
-                let rc = mem_read_u8(rx_buf + 3);
+                let mut rc = mem_read_u8(rx_buf + 3);
                 mem_zero(rx_buf, 4);
                 if rc == 0 {
                     set_at(mqtt_state, id, MQTT_ST_READY);
@@ -341,9 +341,9 @@ fn mqtt_tick() {
                 }
                 // Drain incoming (PUBLISH from subscriptions → klog)
                 let mut addr = TCP_TABLE + mqtt_tcb[i] * TCB_SIZE;
-                let rx_buf = mem_read_u64(addr + 64);
+                let mut rx_buf = mem_read_u64(addr + 64);
                 if rx_buf != 0 {
-                    let b0 = mem_read_u8(rx_buf);
+                    let mut b0 = mem_read_u8(rx_buf);
                     if b0 >= 48 {
                         if b0 < 64 {   // PUBLISH: 0x30..0x3F
                             klog(1, "mqtt", "incoming PUBLISH on connection " + to_string(i));
@@ -366,9 +366,9 @@ fn mqtt_status(id) {
     if id < 0 { return "mqtt: invalid"; }
     if id >= MQTT_MAX { return "mqtt: invalid"; }
     if mqtt_active[id] == 0 { return "mqtt[" + to_string(id) + "] free"; }
-    let st_names = ["free", "connecting", "ready", "error"];
-    let st = mqtt_state[id];
-    let st_s = "?";
+    let mut st_names = ["free", "connecting", "ready", "error"];
+    let mut st = mqtt_state[id];
+    let mut st_s = "?";
     if st >= 0 { if st <= 3 { st_s = st_names[st]; } }
     return "mqtt[" + to_string(id) + "] " + st_s
         + " host=" + mqtt_host[id]

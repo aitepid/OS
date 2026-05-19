@@ -44,11 +44,11 @@ fn merkle_tree_init() {
 fn _merkle_hash_int(val) {
     let mut h = 2166136261;
     h = h - ((h / 1000000) * 1000000);
-    let fnv = 16777619;
-    let b0 = val - ((val / 256) * 256);
-    let b1 = (val / 256) - ((val / 65536) * 256);
-    let b2 = (val / 65536) - ((val / 16777216) * 256);
-    let b3 = (val / 16777216) - ((val / 4294967296) * 256);
+    let mut fnv = 16777619;
+    let mut b0 = val - ((val / 256) * 256);
+    let mut b1 = (val / 256) - ((val / 65536) * 256);
+    let mut b2 = (val / 65536) - ((val / 16777216) * 256);
+    let mut b3 = (val / 16777216) - ((val / 4294967296) * 256);
     if b3 < 0 { b3 = -b3; }
     h = h * fnv + b0 + 1; h = h - ((h / 999983) * 999983); if h < 0 { h = -h; }
     h = h * fnv + b1 + 2; h = h - ((h / 999983) * 999983); if h < 0 { h = -h; }
@@ -61,22 +61,22 @@ fn _merkle_hash_int(val) {
 fn _merkle_combine(left, right) {
     let mut h = 2166136261;
     h = h - ((h / 999983) * 999983);
-    let fnv = 16777619;
+    let mut fnv = 16777619;
     // Mix left (4 bytes)
-    let l0 = left - ((left / 256) * 256);
-    let l1 = (left / 256) - ((left / 65536) * 256);
-    let l2 = (left / 65536) - ((left / 16777216) * 256);
-    let l3 = (left / 16777216) - ((left / 4294967296) * 256);
+    let mut l0 = left - ((left / 256) * 256);
+    let mut l1 = (left / 256) - ((left / 65536) * 256);
+    let mut l2 = (left / 65536) - ((left / 16777216) * 256);
+    let mut l3 = (left / 16777216) - ((left / 4294967296) * 256);
     if l3 < 0 { l3 = -l3; }
     h = h * fnv + l0; h = h - ((h / 999983) * 999983); if h < 0 { h = -h; }
     h = h * fnv + l1; h = h - ((h / 999983) * 999983); if h < 0 { h = -h; }
     h = h * fnv + l2; h = h - ((h / 999983) * 999983); if h < 0 { h = -h; }
     h = h * fnv + l3; h = h - ((h / 999983) * 999983); if h < 0 { h = -h; }
     // Mix right (4 bytes)
-    let r0 = right - ((right / 256) * 256);
-    let r1 = (right / 256) - ((right / 65536) * 256);
-    let r2 = (right / 65536) - ((right / 16777216) * 256);
-    let r3 = (right / 16777216) - ((right / 4294967296) * 256);
+    let mut r0 = right - ((right / 256) * 256);
+    let mut r1 = (right / 256) - ((right / 65536) * 256);
+    let mut r2 = (right / 65536) - ((right / 16777216) * 256);
+    let mut r3 = (right / 16777216) - ((right / 4294967296) * 256);
     if r3 < 0 { r3 = -r3; }
     h = h * fnv + r0; h = h - ((h / 999983) * 999983); if h < 0 { h = -h; }
     h = h * fnv + r1; h = h - ((h / 999983) * 999983); if h < 0 { h = -h; }
@@ -97,13 +97,13 @@ fn _merkle_next_pow2(n) {
 fn merkle_build(leaf_data, count) {
     if count > MERKLE_MAX_LEAVES { count = MERKLE_MAX_LEAVES; }
     merkle_leaf_count = count;
-    let cap = _merkle_next_pow2(count);
+    let mut cap = _merkle_next_pow2(count);
     merkle_capacity = cap;
     // Leaf nodes occupy indices [cap .. 2*cap-1] in 1-indexed array
     // Internal nodes: [1 .. cap-1]
     let mut i = 0;
     while i < cap {
-        let leaf_idx = cap + i;     // 1-indexed position in tree array
+        let mut leaf_idx = cap + i;     // 1-indexed position in tree array
         let mut h = 0;
         if i < count { h = _merkle_hash_int(leaf_data[i]); }
         set_at(merkle_hashes, leaf_idx, h);
@@ -112,8 +112,8 @@ fn merkle_build(leaf_data, count) {
     // Compute internal nodes bottom-up
     i = cap - 1;
     while i >= 1 {
-        let left  = merkle_hashes[i * 2];
-        let right = merkle_hashes[i * 2 + 1];
+        let mut left = merkle_hashes[i * 2];
+        let mut right = merkle_hashes[i * 2 + 1];
         set_at(merkle_hashes, i, _merkle_combine(left, right));
         i = i - 1;
     }
@@ -129,13 +129,13 @@ fn merkle_get_root() {
 // Recomputes only affected ancestors: O(log n)
 fn merkle_update_leaf(leaf_idx, new_data) {
     if leaf_idx >= merkle_leaf_count { return 1; }
-    let node = merkle_capacity + leaf_idx;
+    let mut node = merkle_capacity + leaf_idx;
     set_at(merkle_hashes, node, _merkle_hash_int(new_data));
     // Walk up to root
     node = node / 2;
     while node >= 1 {
-        let left  = merkle_hashes[node * 2];
-        let right = merkle_hashes[node * 2 + 1];
+        let mut left = merkle_hashes[node * 2];
+        let mut right = merkle_hashes[node * 2 + 1];
         set_at(merkle_hashes, node, _merkle_combine(left, right));
         node = node / 2;
     }
@@ -145,13 +145,13 @@ fn merkle_update_leaf(leaf_idx, new_data) {
 // Generate Merkle proof for leaf_idx: returns sibling hashes (depth entries)
 // Proof array: proof[0] = sibling at leaf level, proof[depth-1] = sibling near root
 fn merkle_get_proof(leaf_idx) {
-    let proof = [];
+    let mut proof = [];
     let mut depth = 0;
-    let node = merkle_capacity + leaf_idx;
+    let mut node = merkle_capacity + leaf_idx;
     while node > 1 {
         // Sibling: if node is even (left child), sibling is node+1; else node-1
-        let sibling = node + 1;
-        let is_right = node - ((node / 2) * 2);  // node mod 2
+        let mut sibling = node + 1;
+        let mut is_right = node - ((node / 2) * 2);  // node mod 2
         if is_right == 1 { sibling = node - 1; }
         set_at(proof, depth, merkle_hashes[sibling]);
         depth = depth + 1;
@@ -167,8 +167,8 @@ fn merkle_verify_proof(leaf_data, proof_siblings, proof_depth, leaf_idx, expecte
     let mut idx = leaf_idx;
     let mut d = 0;
     while d < proof_depth {
-        let sibling = proof_siblings[d];
-        let is_right = idx - ((idx / 2) * 2);  // idx mod 2
+        let mut sibling = proof_siblings[d];
+        let mut is_right = idx - ((idx / 2) * 2);  // idx mod 2
         if is_right == 0 {
             // Current node is left child: combine(current, sibling)
             h = _merkle_combine(h, sibling);
@@ -204,25 +204,25 @@ fn merkle_status() {
 fn merkle_tree_test() {
     merkle_tree_init();
     // Build tree with 8 leaves
-    let data = [10, 20, 30, 40, 50, 60, 70, 80];
-    let root1 = merkle_build(data, 8);
+    let mut data = [10, 20, 30, 40, 50, 60, 70, 80];
+    let mut root1 = merkle_build(data, 8);
     // Get proof for leaf 2 (value=30)
-    let proof_result = merkle_get_proof(2);
-    let proof_siblings = proof_result[0];
-    let proof_depth = proof_result[1];
+    let mut proof_result = merkle_get_proof(2);
+    let mut proof_siblings = proof_result[0];
+    let mut proof_depth = proof_result[1];
     // Verify inclusion of leaf 2
-    let valid = merkle_verify_proof(30, proof_siblings, proof_depth, 2, root1);
+    let mut valid = merkle_verify_proof(30, proof_siblings, proof_depth, 2, root1);
     // Invalid proof: wrong data
-    let invalid = merkle_verify_proof(999, proof_siblings, proof_depth, 2, root1);
+    let mut invalid = merkle_verify_proof(999, proof_siblings, proof_depth, 2, root1);
     // Update leaf 0 (10 → 15): root should change
     merkle_update_leaf(0, 15);
-    let root2 = merkle_get_root();
-    let roots_differ = 1;
+    let mut root2 = merkle_get_root();
+    let mut roots_differ = 1;
     if root1 == root2 { roots_differ = 0; }
     // Build 4-leaf tree: partial tree
-    let data2 = [1, 2, 3, 4];
+    let mut data2 = [1, 2, 3, 4];
     merkle_build(data2, 4);
-    let root3 = merkle_get_root();
+    let mut root3 = merkle_get_root();
     print("merkle test: " + merkle_status());
     print("merkle test: root1=" + to_string(root1)
         + " valid=" + to_string(valid)

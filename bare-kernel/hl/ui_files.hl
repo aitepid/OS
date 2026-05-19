@@ -58,14 +58,14 @@ fn uifiles_load_dir(path) {
         uifiles_entry_count = uifiles_entry_count + 1;
     }
 
-    let names = vfs_readdir(path);
+    let mut names = vfs_readdir(path);
     let mut i = 0;
     while i < len(names) {
-        let name = names[i];
-        let full_path = path + "/" + name;
-        let stat_result = vfs_stat(full_path);
-        let is_dir = 0;
-        let size = 0;
+        let mut name = names[i];
+        let mut full_path = path + "/" + name;
+        let mut stat_result = vfs_stat(full_path);
+        let mut is_dir = 0;
+        let mut size = 0;
 
         if stat_result > 0 { is_dir = 1; }
 
@@ -93,7 +93,7 @@ fn uifiles_navigate(path) {
 fn uifiles_selected_path() {
     if uifiles_entry_count == 0 { return ""; }
     if uifiles_selected_idx >= uifiles_entry_count { return ""; }
-    let name = uifiles_entries[uifiles_selected_idx][0];
+    let mut name = uifiles_entries[uifiles_selected_idx][0];
     if name == ".." { return uifiles_current_path; }
     if uifiles_current_path == "/" { return "/" + name; }
     return uifiles_current_path + "/" + name;
@@ -101,13 +101,13 @@ fn uifiles_selected_path() {
 
 fn uifiles_draw_icon(x, y, is_dir) {
     if is_dir == 1 {
-        let fg = ui_theme_accent_color();
+        let mut fg = ui_theme_accent_color();
         vesa_rect(x, y, 12, 10, fg);
         vesa_hline(x + 3, y + 3, 5, fg);
         return 0;
     }
 
-    let fg = ui_theme_text_color();
+    let mut fg = ui_theme_text_color();
     vesa_vline(x + 2, y + 2, 9, fg);
     vesa_hline(x + 2, y + 2, 7, fg);
     return 0;
@@ -124,28 +124,28 @@ fn uifiles_render(window_id) {
     vesa_fill_rect(x, y, w, 24, ui_theme_titlebar_color());
     ui_draw_text(x + 8, y + 4, "File Manager", ui_theme_text_color(), 0);
 
-    let path_y = y + 30;
+    let mut path_y = y + 30;
     vesa_fill_rect(x, path_y, w, 24, ui_theme_panel_color());
     ui_label(x + 8, path_y + 4, uifiles_current_path);
 
-    let list_y = path_y + 28;
+    let mut list_y = path_y + 28;
     vesa_fill_rect(x, list_y, w, 20, ui_theme_panel_color());
     ui_label(x + 8, list_y + 2, "Name");
     ui_label(x + 300, list_y + 2, "Type");
     vesa_hline(x, list_y + 20, w, ui_theme_border_color());
 
-    let entries_y = list_y + 22;
-    let visible_rows = (h - (entries_y - y) - 20) / UIFILES_ENTRY_HEIGHT;
+    let mut entries_y = list_y + 22;
+    let mut visible_rows = (h - (entries_y - y) - 20) / UIFILES_ENTRY_HEIGHT;
     let mut row = 0;
 
     while row < visible_rows {
         let mut idx = uifiles_scroll_pos + row;
         if idx >= uifiles_entry_count { row = visible_rows; }
         if row < visible_rows {
-            let entry = uifiles_entries[idx];
-            let name = entry[0];
-            let is_dir = entry[1];
-            let item_y = entries_y + row * UIFILES_ENTRY_HEIGHT;
+            let mut entry = uifiles_entries[idx];
+            let mut name = entry[0];
+            let mut is_dir = entry[1];
+            let mut item_y = entries_y + row * UIFILES_ENTRY_HEIGHT;
 
             if idx == uifiles_selected_idx {
                 vesa_fill_rect(x, item_y, w, UIFILES_ENTRY_HEIGHT, ui_theme_accent_color());
@@ -166,9 +166,9 @@ fn uifiles_render(window_id) {
 
     // Draw scroll bar if needed
     if uifiles_entry_count > visible_rows {
-        let bar_h = h - (entries_y - y) - 20;
-        let thumb_h = visible_rows * bar_h / uifiles_entry_count;
-        let thumb_y = entries_y + uifiles_scroll_pos * bar_h / uifiles_entry_count;
+        let mut bar_h = h - (entries_y - y) - 20;
+        let mut thumb_h = visible_rows * bar_h / uifiles_entry_count;
+        let mut thumb_y = entries_y + uifiles_scroll_pos * bar_h / uifiles_entry_count;
         vesa_fill_rect(x + w - 8, entries_y, 6, bar_h, ui_theme_panel_color());
         vesa_fill_rect(x + w - 8, thumb_y, 6, thumb_h, ui_theme_border_color());
     }
@@ -192,14 +192,14 @@ fn uifiles_ctx_label(item) {
 }
 
 fn uifiles_ctx_render() {
-    let menu_h = UIFILES_CTX_ITEMS * UIFILES_CTX_ITEM_H + 4;
+    let mut menu_h = UIFILES_CTX_ITEMS * UIFILES_CTX_ITEM_H + 4;
     vesa_fill_rect(uifiles_ctx_x, uifiles_ctx_y, UIFILES_CTX_W, menu_h, ui_theme_surface_color());
     vesa_rect(uifiles_ctx_x, uifiles_ctx_y, UIFILES_CTX_W, menu_h, ui_theme_border_color());
 
     let mut i = 1;
     while i <= UIFILES_CTX_ITEMS {
-        let iy = uifiles_ctx_y + 2 + (i - 1) * UIFILES_CTX_ITEM_H;
-        let label = uifiles_ctx_label(i);
+        let mut iy = uifiles_ctx_y + 2 + (i - 1) * UIFILES_CTX_ITEM_H;
+        let mut label = uifiles_ctx_label(i);
         // Separator before Cancel
         if i == UIFILES_CTX_CANCEL {
             vesa_hline(uifiles_ctx_x + 4, iy - 2, UIFILES_CTX_W - 8, ui_theme_border_color());
@@ -223,7 +223,7 @@ fn uifiles_ctx_hide() {
 fn uifiles_ctx_handle_click(mx, my) {
     if uifiles_ctx_open == 0 { return 0; }
 
-    let menu_h = UIFILES_CTX_ITEMS * UIFILES_CTX_ITEM_H + 4;
+    let mut menu_h = UIFILES_CTX_ITEMS * UIFILES_CTX_ITEM_H + 4;
 
     // Click outside = cancel
     if mx < uifiles_ctx_x { uifiles_ctx_hide(); return UIFILES_CTX_CANCEL; }
@@ -232,7 +232,7 @@ fn uifiles_ctx_handle_click(mx, my) {
     if my > uifiles_ctx_y + menu_h { uifiles_ctx_hide(); return UIFILES_CTX_CANCEL; }
 
     let mut row = (my - uifiles_ctx_y - 2) / UIFILES_CTX_ITEM_H;
-    let action = row + 1;
+    let mut action = row + 1;
     uifiles_ctx_hide();
     return action;
 }
@@ -240,7 +240,7 @@ fn uifiles_ctx_handle_click(mx, my) {
 // --- File Operations ---
 
 fn uifiles_op_delete() {
-    let path = uifiles_selected_path();
+    let mut path = uifiles_selected_path();
     if len(path) == 0 { return 0 - 1; }
     let mut result = vfs_unlink(path);
     uifiles_load_dir(uifiles_current_path);  // refresh
@@ -248,17 +248,17 @@ fn uifiles_op_delete() {
 }
 
 fn uifiles_op_new_folder(name) {
-    let path = uifiles_current_path + "/" + name;
+    let mut path = uifiles_current_path + "/" + name;
     let mut result = vfs_mkdir(path);
     uifiles_load_dir(uifiles_current_path);  // refresh
     return result;
 }
 
 fn uifiles_op_copy(dst_dir) {
-    let src_path = uifiles_selected_path();
+    let mut src_path = uifiles_selected_path();
     if len(src_path) == 0 { return 0 - 1; }
-    let name = uifiles_entries[uifiles_selected_idx][0];
-    let dst_path = dst_dir + "/" + name;
+    let mut name = uifiles_entries[uifiles_selected_idx][0];
+    let mut dst_path = dst_dir + "/" + name;
     return vfs_copy(src_path, dst_path);
 }
 
@@ -267,7 +267,7 @@ fn uifiles_op_copy(dst_dir) {
 fn uifiles_handle_click(click_x, click_y, double_click) {
     // Delegate to context menu first if open
     if uifiles_ctx_open == 1 {
-        let action = uifiles_ctx_handle_click(click_x, click_y);
+        let mut action = uifiles_ctx_handle_click(click_x, click_y);
         if action == UIFILES_CTX_DELETE  { uifiles_op_delete(); return 1; }
         if action == UIFILES_CTX_NEWFOLD {
             uifiles_op_new_folder("new_folder");
@@ -281,7 +281,7 @@ fn uifiles_handle_click(click_x, click_y, double_click) {
     let mut x = mem_read_u64(addr + 8);
     let mut y = mem_read_u64(addr + 16);
 
-    let entries_y = y + 104;
+    let mut entries_y = y + 104;
     if click_y < entries_y { return 0; }
 
     let mut row = (click_y - entries_y) / UIFILES_ENTRY_HEIGHT;
@@ -292,14 +292,14 @@ fn uifiles_handle_click(click_x, click_y, double_click) {
     uifiles_selected_idx = idx;
 
     if double_click == 1 {
-        let entry = uifiles_entries[idx];
-        let name = entry[0];
-        let is_dir = entry[1];
+        let mut entry = uifiles_entries[idx];
+        let mut name = entry[0];
+        let mut is_dir = entry[1];
 
         if is_dir == 1 {
             let mut new_path = uifiles_current_path + "/" + name;
             if name == ".." {
-                let parts = _vfs_split_path(uifiles_current_path);
+                let mut parts = _vfs_split_path(uifiles_current_path);
                 if len(parts) > 1 {
                     new_path = "";
                     let mut i = 0;

@@ -98,7 +98,7 @@ fn doh_set_server(url_hash) {
 fn _doh_build_wire(qname_hash, qtype) {
     // Build minimal DNS wire format query
     // Header: QID(2) + flags(2) + QDCOUNT=1(2) + 0s(6)
-    let qid = doh_n_queries * 7 + 1;
+    let mut qid = doh_n_queries * 7 + 1;
     set_at(doh_wire, 0,  qid / 256);
     set_at(doh_wire, 1,  qid - (qid / 256) * 256);
     set_at(doh_wire, 2,  1);   // QR=0 OPCODE=0 RD=1
@@ -148,7 +148,7 @@ fn _doh_cache_insert(qname_hash, qtype, val, ttl) {
     let mut slot = doh_cache_n;
     if doh_cache_n >= DOH_CACHE {
         // Find LRU slot
-        let min_lru = doh_cache_lru[0];
+        let mut min_lru = doh_cache_lru[0];
         slot = 0;
         let mut i = 1;
         while i < DOH_CACHE {
@@ -180,12 +180,12 @@ fn _doh_simulate_response(qname_hash, qtype) {
 
 fn doh_query(qname_hash, qtype) {
     // Check cache first
-    let cached = _doh_cache_lookup(qname_hash, qtype);
+    let mut cached = _doh_cache_lookup(qname_hash, qtype);
     if cached != 0 - 1 {
         return cached;
     }
     // Build wire query
-    let qid = _doh_build_wire(qname_hash, qtype);
+    let mut qid = _doh_build_wire(qname_hash, qtype);
     // Find free query slot
     let mut slot = doh_n_queries - (doh_n_queries / DOH_MAXQ) * DOH_MAXQ;
     set_at(doh_qstate, slot, DOH_Q_PENDING);
@@ -195,7 +195,7 @@ fn doh_query(qname_hash, qtype) {
     doh_n_queries += 1;
 
     // Simulate HTTPS POST to DoH server and receive response
-    let rdata = _doh_simulate_response(qname_hash, qtype);
+    let mut rdata = _doh_simulate_response(qname_hash, qtype);
     set_at(doh_qstate, slot, DOH_Q_RESOLVED);
     set_at(doh_rcode,  slot, DOH_RCODE_OK);
     set_at(doh_rdata,  slot, rdata);
@@ -220,7 +220,7 @@ fn doh_flush() {
 fn doh_tick() {
     // Decrement TTLs; expire zero-TTL entries
     let mut i = 0;
-    let expired = 0;
+    let mut expired = 0;
     while i < doh_cache_n {
         if doh_cache_used[i] == 1 {
             if doh_cache_ttl[i] > 0 {
@@ -249,22 +249,22 @@ fn doh_test() {
     doh_init();
 
     // Query A record for domain hash=1234
-    let r1 = doh_query(1234, DOH_A);
+    let mut r1 = doh_query(1234, DOH_A);
 
     // Same query again → cache hit
-    let r2 = doh_query(1234, DOH_A);
+    let mut r2 = doh_query(1234, DOH_A);
 
     // Different query: AAAA for domain hash=5678
-    let r3 = doh_query(5678, DOH_AAAA);
+    let mut r3 = doh_query(5678, DOH_AAAA);
 
-    let csz = doh_cache_size();
+    let mut csz = doh_cache_size();
 
     // Cache flush
     doh_flush();
-    let csz2 = doh_cache_size();
+    let mut csz2 = doh_cache_size();
 
     // After flush, new query re-resolves
-    let r4 = doh_query(1234, DOH_A);
+    let mut r4 = doh_query(1234, DOH_A);
 
     print("doh_test: r1=" + to_string(r1)
           + " r2=" + to_string(r2)

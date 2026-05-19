@@ -92,11 +92,11 @@ fn _tar_block_zero(addr) {
 
 // Verify ustar magic "ustar" at offset 257
 fn _tar_is_ustar(addr) {
-    let b0 = mem_read_u8(addr + 257);
-    let b1 = mem_read_u8(addr + 258);
-    let b2 = mem_read_u8(addr + 259);
-    let b3 = mem_read_u8(addr + 260);
-    let b4 = mem_read_u8(addr + 261);
+    let mut b0 = mem_read_u8(addr + 257);
+    let mut b1 = mem_read_u8(addr + 258);
+    let mut b2 = mem_read_u8(addr + 259);
+    let mut b3 = mem_read_u8(addr + 260);
+    let mut b4 = mem_read_u8(addr + 261);
     if b0 != 117 { return 0; }  // 'u'
     if b1 != 115 { return 0; }  // 's'
     if b2 != 116 { return 0; }  // 't'
@@ -113,15 +113,15 @@ fn _tar_read_block(fd) {
 // Number of 512-byte data blocks for a file of given size
 fn _tar_data_blocks(size) {
     if size == 0 { return 0; }
-    let full = size / TAR_BLOCK;
+    let mut full = size / TAR_BLOCK;
     if size % TAR_BLOCK != 0 { return full + 1; }
     return full;
 }
 
 // Build full filename: prefix (if any) + "/" + name
 fn _tar_fullname(addr) {
-    let prefix = _tar_read_str(addr + 345, 155);
-    let name   = _tar_read_str(addr, 100);
+    let mut prefix = _tar_read_str(addr + 345, 155);
+    let mut name = _tar_read_str(addr, 100);
     if len(prefix) == 0 { return name; }
     return prefix + "/" + name;
 }
@@ -131,7 +131,7 @@ fn _tar_fullname(addr) {
 // ============================================================
 
 fn tar_list(path) {
-    let fd = vfs_open(path, O_RDONLY);
+    let mut fd = vfs_open(path, O_RDONLY);
     if fd < 0 { return "Error: cannot open " + path; }
 
     let mut out = "";
@@ -143,10 +143,10 @@ fn tar_list(path) {
         else {
             if _tar_block_zero(TAR_BUF) == 1 { done = 1; }
             else {
-                let typeflag = mem_read_u8(TAR_BUF + 156);
-                let size     = _tar_oct(TAR_BUF + 124, 12);
-                let fname    = _tar_fullname(TAR_BUF);
-                let is_valid = _tar_is_ustar(TAR_BUF);
+                let mut typeflag = mem_read_u8(TAR_BUF + 156);
+                let mut size = _tar_oct(TAR_BUF + 124, 12);
+                let mut fname = _tar_fullname(TAR_BUF);
+                let mut is_valid = _tar_is_ustar(TAR_BUF);
 
                 if is_valid == 1 {
                     if len(fname) > 0 {
@@ -158,7 +158,7 @@ fn tar_list(path) {
                 }
 
                 // Skip data blocks
-                let dblocks = _tar_data_blocks(size);
+                let mut dblocks = _tar_data_blocks(size);
                 let mut j = 0;
                 while j < dblocks {
                     vfs_read(fd, TAR_BUF, TAR_BLOCK);
@@ -176,7 +176,7 @@ fn tar_list(path) {
 // ============================================================
 
 fn tar_cat(tar_path, filename) {
-    let fd = vfs_open(tar_path, O_RDONLY);
+    let mut fd = vfs_open(tar_path, O_RDONLY);
     if fd < 0 { return "Error: cannot open " + tar_path; }
 
     let mut found = 0;
@@ -188,15 +188,15 @@ fn tar_cat(tar_path, filename) {
         else {
             if _tar_block_zero(TAR_BUF) == 1 { done = 1; }
             else {
-                let size  = _tar_oct(TAR_BUF + 124, 12);
-                let fname = _tar_fullname(TAR_BUF);
+                let mut size = _tar_oct(TAR_BUF + 124, 12);
+                let mut fname = _tar_fullname(TAR_BUF);
 
                 if fname == filename {
                     found = 1;
                     // Read up to TAR_DATA_MAX bytes of file content
-                    let read_sz = size;
+                    let mut read_sz = size;
                     if read_sz > TAR_DATA_MAX { read_sz = TAR_DATA_MAX; }
-                    let got = vfs_read(fd, TAR_DATA_BUF, read_sz);
+                    let mut got = vfs_read(fd, TAR_DATA_BUF, read_sz);
                     result = _tar_read_str(TAR_DATA_BUF, got);
                     if size > TAR_DATA_MAX {
                         result = result + "\n[truncated at " + to_string(TAR_DATA_MAX) + " bytes]";
@@ -204,7 +204,7 @@ fn tar_cat(tar_path, filename) {
                     done = 1;
                 } else {
                     // Skip data blocks
-                    let dblocks = _tar_data_blocks(size);
+                    let mut dblocks = _tar_data_blocks(size);
                     let mut j = 0;
                     while j < dblocks {
                         vfs_read(fd, TAR_BUF, TAR_BLOCK);
@@ -224,7 +224,7 @@ fn tar_cat(tar_path, filename) {
 // ============================================================
 
 fn tar_extract(tar_path, dest_dir) {
-    let fd = vfs_open(tar_path, O_RDONLY);
+    let mut fd = vfs_open(tar_path, O_RDONLY);
     if fd < 0 { print("tar: cannot open " + tar_path); return 0 - 1; }
 
     let mut extracted = 0;
@@ -235,27 +235,27 @@ fn tar_extract(tar_path, dest_dir) {
         else {
             if _tar_block_zero(TAR_BUF) == 1 { done = 1; }
             else {
-                let size     = _tar_oct(TAR_BUF + 124, 12);
-                let typeflag = mem_read_u8(TAR_BUF + 156);
-                let fname    = _tar_fullname(TAR_BUF);
+                let mut size = _tar_oct(TAR_BUF + 124, 12);
+                let mut typeflag = mem_read_u8(TAR_BUF + 156);
+                let mut fname = _tar_fullname(TAR_BUF);
 
                 if len(fname) > 0 {
-                    let dest = dest_dir + "/" + fname;
+                    let mut dest = dest_dir + "/" + fname;
                     if typeflag == 53 {   // directory
                         vfs_mkdir(dest);
                         print("tar: mkdir " + dest);
                     } else {
                         // Regular file: read blocks, write to VFS
-                        let out_fd = vfs_open(dest, O_WRONLY);
+                        let mut out_fd = vfs_open(dest, O_WRONLY);
                         let mut remaining = size;
                         let mut ok = 1;
                         if out_fd < 0 { ok = 0; }
-                        let dblocks = _tar_data_blocks(size);
+                        let mut dblocks = _tar_data_blocks(size);
                         let mut j = 0;
                         while j < dblocks {
-                            let rd = vfs_read(fd, TAR_DATA_BUF, TAR_BLOCK);
+                            let mut rd = vfs_read(fd, TAR_DATA_BUF, TAR_BLOCK);
                             if ok == 1 {
-                                let wr = remaining;
+                                let mut wr = remaining;
                                 if wr > TAR_BLOCK { wr = TAR_BLOCK; }
                                 vfs_write(out_fd, TAR_DATA_BUF, wr);
                                 remaining = remaining - wr;
@@ -272,7 +272,7 @@ fn tar_extract(tar_path, dest_dir) {
                     }
                 } else {
                     // Skip data blocks for unnamed entry
-                    let dblocks = _tar_data_blocks(size);
+                    let mut dblocks = _tar_data_blocks(size);
                     let mut j = 0;
                     while j < dblocks { vfs_read(fd, TAR_BUF, TAR_BLOCK); j = j + 1; }
                 }
@@ -289,7 +289,7 @@ fn tar_extract(tar_path, dest_dir) {
 // ============================================================
 
 fn tar_info(path) {
-    let fd = vfs_open(path, O_RDONLY);
+    let mut fd = vfs_open(path, O_RDONLY);
     if fd < 0 { return "Error: cannot open " + path; }
 
     let mut count = 0;
@@ -301,10 +301,10 @@ fn tar_info(path) {
         else {
             if _tar_block_zero(TAR_BUF) == 1 { done = 1; }
             else {
-                let size  = _tar_oct(TAR_BUF + 124, 12);
-                let fname = _tar_fullname(TAR_BUF);
+                let mut size = _tar_oct(TAR_BUF + 124, 12);
+                let mut fname = _tar_fullname(TAR_BUF);
                 if len(fname) > 0 { count = count + 1; total = total + size; }
-                let dblocks = _tar_data_blocks(size);
+                let mut dblocks = _tar_data_blocks(size);
                 let mut j = 0;
                 while j < dblocks { vfs_read(fd, TAR_BUF, TAR_BLOCK); j = j + 1; }
             }

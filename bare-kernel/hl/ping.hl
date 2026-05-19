@@ -100,7 +100,7 @@ fn _ping_build_pkt(seq) {
         i = i + 1;
     }
     // Compute and insert checksum
-    let cksum = _ping_checksum(pkt);
+    let mut cksum = _ping_checksum(pkt);
     set_at(pkt, 2, cksum / 256);
     set_at(pkt, 3, cksum % 256);
     return pkt;
@@ -112,9 +112,9 @@ fn _ping_build_pkt(seq) {
 
 fn ping_on_recv(data) {
     if len(data) < 8 { return 0; }
-    let ptype = data[0];
-    let seq_hi = data[6];
-    let seq_lo = data[7];
+    let mut ptype = data[0];
+    let mut seq_hi = data[6];
+    let mut seq_lo = data[7];
     if ptype == 0 {   // echo reply
         ping_resp_rdy = 1;
         ping_resp_seq = seq_hi * 256 + seq_lo;
@@ -131,14 +131,14 @@ fn ping_once(ip_arr) {
     ping_seq = ping_seq + 1;
     ping_resp_rdy = 0;
 
-    let pkt = _ping_build_pkt(ping_seq);
-    let sock = udp_bind(PING_LPORT);
+    let mut pkt = _ping_build_pkt(ping_seq);
+    let mut sock = udp_bind(PING_LPORT);
     if sock < 0 { return 0 - 1; }
 
-    let t_send = get_ticks();
+    let mut t_send = get_ticks();
     udp_send(ip_arr, PING_PORT, PING_LPORT, pkt);
 
-    let deadline = t_send + PING_TIMEOUT;
+    let mut deadline = t_send + PING_TIMEOUT;
     let mut rtt = 0 - 1;
     let mut go = 1;
     while go == 1 {
@@ -160,15 +160,15 @@ fn ping_once(ip_arr) {
 // ============================================================
 
 fn ping_stat_str(host, sent, recv, rtt_min, rtt_max, rtt_total) {
-    let lost = sent - recv;
-    let pct_loss = 0;
+    let mut lost = sent - recv;
+    let mut pct_loss = 0;
     if sent > 0 { pct_loss = lost * 100 / sent; }
-    let avg_rtt = 0;
+    let mut avg_rtt = 0;
     if recv > 0 { avg_rtt = rtt_total / recv; }
     // Convert ticks → ms (100 Hz → 1 tick = 10 ms)
-    let ms_min = rtt_min * 10;
-    let ms_max = rtt_max * 10;
-    let ms_avg = avg_rtt * 10;
+    let mut ms_min = rtt_min * 10;
+    let mut ms_max = rtt_max * 10;
+    let mut ms_avg = avg_rtt * 10;
     return "--- " + host + " ping statistics ---\n"
         + to_string(sent) + " transmitted, " + to_string(recv) + " received, "
         + to_string(pct_loss) + "% packet loss\n"
@@ -186,9 +186,9 @@ fn _ping_ip_str(ip) {
 // ============================================================
 
 fn ping_host(host, count) {
-    let ip = dns_resolve(host);
+    let mut ip = dns_resolve(host);
     if len(ip) < 4 { return "ping: cannot resolve " + host; }
-    let ip_str = _ping_ip_str(ip);
+    let mut ip_str = _ping_ip_str(ip);
     let mut out = "PING " + host + " (" + ip_str + ") " + to_string(PING_PKT_SZ) + " bytes of data.\n";
 
     let mut sent = 0;
@@ -203,10 +203,10 @@ fn ping_host(host, count) {
     let mut i = 0;
     while i < lim {
         sent = sent + 1;
-        let rtt = ping_once(ip);
+        let mut rtt = ping_once(ip);
         if rtt >= 0 {
             recv = recv + 1;
-            let ms = rtt * 10;
+            let mut ms = rtt * 10;
             out = out + to_string(PING_PKT_SZ) + " bytes from " + ip_str
                 + ": icmp_seq=" + to_string(ping_seq)
                 + " ttl=64 time=" + to_string(ms) + " ms\n";

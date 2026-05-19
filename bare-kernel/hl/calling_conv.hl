@@ -118,7 +118,7 @@ fn cc_add_float_arg() {
     set_at(cc_arg_kind, idx, 1);
     // Float args use XMM0..XMM7 (treated as reg indices 16..23 here)
     // Count prior float args
-    let fcnt = 0;
+    let mut fcnt = 0;
     let mut i = 0;
     while i < idx {
         if cc_arg_kind[i] == 1 { fcnt += 1; }
@@ -140,8 +140,8 @@ fn cc_compute_frame(local_bytes, n_callee_saved) {
     cc_frame_locals = local_bytes;
     cc_frame_saved  = n_callee_saved * 8;
     // Total must be 16-byte aligned; include return address (8) already pushed
-    let raw = cc_frame_locals + cc_frame_saved + 8;
-    let rem = raw - (raw / 16) * 16;
+    let mut raw = cc_frame_locals + cc_frame_saved + 8;
+    let mut rem = raw - (raw / 16) * 16;
     if rem == 0 {
         cc_frame_total = raw;
     } else {
@@ -174,14 +174,14 @@ fn calling_conv_test() {
     let mut i = 0;
     while i < 8 { cc_add_int_arg(); i += 1; }
     // Check: arg[0]=RDI=7, arg[5]=R9=9, arg[6]=stack offset 0, arg[7]=stack offset 8
-    let a0  = cc_arg_reg[0];
-    let a5  = cc_arg_reg[5];
-    let a6r = cc_arg_reg[6];
-    let a6s = cc_arg_stack[6];
-    let a7s = cc_arg_stack[7];
+    let mut a0 = cc_arg_reg[0];
+    let mut a5 = cc_arg_reg[5];
+    let mut a6r = cc_arg_reg[6];
+    let mut a6s = cc_arg_stack[6];
+    let mut a7s = cc_arg_stack[7];
     print("calling_conv_test: arg0=r" + to_string(a0) + " arg5=r" + to_string(a5) + " arg6=stack+" + to_string(a6s) + " arg7=stack+" + to_string(a7s));
     // Frame: 32 bytes locals, 2 callee-saved = 8+8=16; total=32+16+8=56 -> align16 -> 64
-    let fsz = cc_compute_frame(32, 2);
+    let mut fsz = cc_compute_frame(32, 2);
     print("calling_conv_test: frame=" + to_string(fsz));
     if a0 == CC_RDI {
         if a5 == CC_R9 {

@@ -66,7 +66,7 @@ fn _bcrypt_generate_salt() {
 }
 
 fn _bcrypt_encode_base64(byte) {
-    let table = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut table = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     if byte < 64 {
         return str_char_at(table, byte);
     }
@@ -78,8 +78,8 @@ fn _bcrypt_salt_to_string() {
     let mut i = 0;
     while i < BCRYPT_SALT_LEN {
         let mut byte = bcrypt_salt[i];
-        let c1 = _bcrypt_encode_base64(byte / 4);
-        let c2 = _bcrypt_encode_base64((byte % 4) * 16);
+        let mut c1 = _bcrypt_encode_base64(byte / 4);
+        let mut c2 = _bcrypt_encode_base64((byte % 4) * 16);
         result = result + c1 + c2;
         i = i + 1;
     }
@@ -104,7 +104,7 @@ fn _bcrypt_expand_key(password) {
 
     let mut k = 0;
     while k < BCRYPT_SALT_LEN {
-        let salt_byte = bcrypt_salt[k];
+        let mut salt_byte = bcrypt_salt[k];
         let mut idx = k % 18;
         set_at(state, idx, (state[idx] + salt_byte * (k + 1)) % 4294967296);
         k = k + 1;
@@ -119,7 +119,7 @@ fn _bcrypt_rounds(state, rounds) {
         let mut i = 0;
         while i < 18 {
             let mut val = state[i];
-            let next_val = (val * 1103515245 + 12345) % 4294967296;
+            let mut next_val = (val * 1103515245 + 12345) % 4294967296;
             set_at(state, i, next_val);
             i = i + 1;
         }
@@ -132,29 +132,29 @@ fn bcrypt_hash(password) {
     bcrypt_clear();
     _bcrypt_generate_salt();
 
-    let iterations = 1 * (2 * bcrypt_cost);
+    let mut iterations = 1 * (2 * bcrypt_cost);
     let mut state = _bcrypt_expand_key(password);
-    let final_state = _bcrypt_rounds(state, iterations);
+    let mut final_state = _bcrypt_rounds(state, iterations);
 
-    let salt_str = _bcrypt_salt_to_string();
+    let mut salt_str = _bcrypt_salt_to_string();
 
-    let cost_str = "";
+    let mut cost_str = "";
     if bcrypt_cost < 10 {
         cost_str = "0" + to_string(bcrypt_cost);
     } else {
         cost_str = to_string(bcrypt_cost);
     }
 
-    let hash_str = "$2b$" + cost_str + "$" + salt_str;
+    let mut hash_str = "$2b$" + cost_str + "$" + salt_str;
 
     let mut i = 0;
     while i < 6 {
         if i < len(final_state) {
             let mut val = final_state[i];
-            let b1 = (val / 16777216) % 256;
-            let b2 = (val / 65536) % 256;
-            let b3 = (val / 256) % 256;
-            let b4 = val % 256;
+            let mut b1 = (val / 16777216) % 256;
+            let mut b2 = (val / 65536) % 256;
+            let mut b3 = (val / 256) % 256;
+            let mut b4 = val % 256;
 
             hash_str = hash_str + _bcrypt_encode_base64(b1 / 4);
             hash_str = hash_str + _bcrypt_encode_base64((b1 % 4) * 16 + b2 / 16);
@@ -176,24 +176,24 @@ fn bcrypt_verify(password, hash) {
         return 0;
     }
 
-    let cost_str = str_sub(hash, 4, 6);
-    let stored_cost = parse_int(cost_str);
+    let mut cost_str = str_sub(hash, 4, 6);
+    let mut stored_cost = parse_int(cost_str);
 
-    let salt_start = 7;
-    let salt_end = salt_start + 22;
+    let mut salt_start = 7;
+    let mut salt_end = salt_start + 22;
     if len(hash) < salt_end {
         return 0;
     }
 
-    let old_cost = bcrypt_cost;
+    let mut old_cost = bcrypt_cost;
     bcrypt_cost = stored_cost;
 
-    let new_hash = bcrypt_hash(password);
+    let mut new_hash = bcrypt_hash(password);
 
     bcrypt_cost = old_cost;
 
-    let new_prefix = str_sub(new_hash, 0, salt_end);
-    let old_prefix = str_sub(hash, 0, salt_end);
+    let mut new_prefix = str_sub(new_hash, 0, salt_end);
+    let mut old_prefix = str_sub(hash, 0, salt_end);
 
     if new_prefix == old_prefix {
         return 1;
@@ -207,7 +207,7 @@ fn bcrypt_test() {
 
     bcrypt_set_cost(4);
 
-    let password = "test_password";
+    let mut password = "test_password";
     let mut hash = bcrypt_hash(password);
 
     if len(hash) > 30 {
@@ -224,7 +224,7 @@ fn bcrypt_test() {
         return 0 - 1;
     }
 
-    let verify_result = bcrypt_verify(password, hash);
+    let mut verify_result = bcrypt_verify(password, hash);
     if verify_result == 1 {
         print("  [ok] bcrypt password verification passed");
     } else {
@@ -232,7 +232,7 @@ fn bcrypt_test() {
         return 0 - 1;
     }
 
-    let wrong_result = bcrypt_verify("wrong_password", hash);
+    let mut wrong_result = bcrypt_verify("wrong_password", hash);
     if wrong_result == 0 {
         print("  [ok] bcrypt wrong password rejected");
     } else {

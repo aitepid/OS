@@ -54,19 +54,19 @@ fn _pem_base64_encode_char(n) {
 fn pem_parse(data) {
     pem_clear();
 
-    let begin_marker = "-----BEGIN ";
-    let end_marker = "-----END ";
+    let mut begin_marker = "-----BEGIN ";
+    let mut end_marker = "-----END ";
 
-    let begin_pos = str_index_of(data, begin_marker);
+    let mut begin_pos = str_index_of(data, begin_marker);
     if begin_pos < 0 { return 0 - 1; }
 
-    let label_start = begin_pos + len(begin_marker);
-    let label_end = str_index_of(str_sub(data, label_start, len(data)), "-----");
+    let mut label_start = begin_pos + len(begin_marker);
+    let mut label_end = str_index_of(str_sub(data, label_start, len(data)), "-----");
     if label_end < 0 { return 0 - 2; }
 
     pem_label = str_sub(data, label_start, label_start + label_end);
 
-    let content_start = label_start + label_end + 5;
+    let mut content_start = label_start + label_end + 5;
     while content_start < len(data) {
         let mut c = str_char_code(data, content_start);
         if c == 13 { content_start = content_start + 1; }
@@ -76,10 +76,10 @@ fn pem_parse(data) {
 
     if content_start >= len(data) { return 0 - 3; }
 
-    let end_pos = str_index_of(str_sub(data, content_start, len(data)), end_marker);
+    let mut end_pos = str_index_of(str_sub(data, content_start, len(data)), end_marker);
     if end_pos < 0 { return 0 - 4; }
 
-    let content_end = content_start + end_pos;
+    let mut content_end = content_start + end_pos;
     let mut base64_data = "";
     let mut i = content_start;
     while i < content_end {
@@ -94,27 +94,27 @@ fn pem_parse(data) {
     while bi < len(base64_data) {
         if bi + 4 > len(base64_data) { bi = len(base64_data); }
 
-        let c1 = _pem_base64_decode_char(str_char_code(base64_data, bi));
-        let c2 = _pem_base64_decode_char(str_char_code(base64_data, bi + 1));
-        let c3 = _pem_base64_decode_char(str_char_code(base64_data, bi + 2));
-        let c4 = _pem_base64_decode_char(str_char_code(base64_data, bi + 3));
+        let mut c1 = _pem_base64_decode_char(str_char_code(base64_data, bi));
+        let mut c2 = _pem_base64_decode_char(str_char_code(base64_data, bi + 1));
+        let mut c3 = _pem_base64_decode_char(str_char_code(base64_data, bi + 2));
+        let mut c4 = _pem_base64_decode_char(str_char_code(base64_data, bi + 3));
 
         if c1 >= 0 { if c2 >= 0 {
-            let b1 = c1 * 4 + (c2 / 16);
+            let mut b1 = c1 * 4 + (c2 / 16);
             if pem_len < PEM_BUF_SZ {
                 mem_write_byte(PEM_BUF + pem_len, b1);
                 pem_len = pem_len + 1;
             }
 
             if c3 >= 0 {
-                let b2 = (c2 % 16) * 16 + (c3 / 4);
+                let mut b2 = (c2 % 16) * 16 + (c3 / 4);
                 if pem_len < PEM_BUF_SZ {
                     mem_write_byte(PEM_BUF + pem_len, b2);
                     pem_len = pem_len + 1;
                 }
 
                 if c4 >= 0 {
-                    let b3 = (c3 % 4) * 64 + c4;
+                    let mut b3 = (c3 % 4) * 64 + c4;
                     if pem_len < PEM_BUF_SZ {
                         mem_write_byte(PEM_BUF + pem_len, b3);
                         pem_len = pem_len + 1;
@@ -133,8 +133,8 @@ fn pem_encode(data, label) {
     pem_clear();
     pem_label = label;
 
-    let header = "-----BEGIN " + label + "-----\n";
-    let footer = "\n-----END " + label + "-----\n";
+    let mut header = "-----BEGIN " + label + "-----\n";
+    let mut footer = "\n-----END " + label + "-----\n";
 
     let mut i = 0;
     while i < len(header) {
@@ -148,16 +148,16 @@ fn pem_encode(data, label) {
     let mut di = 0;
     let mut line_len = 0;
     while di < len(data) {
-        let b1 = str_char_code(data, di);
-        let b2 = 0;
-        let b3 = 0;
+        let mut b1 = str_char_code(data, di);
+        let mut b2 = 0;
+        let mut b3 = 0;
         if di + 1 < len(data) { b2 = str_char_code(data, di + 1); }
         if di + 2 < len(data) { b3 = str_char_code(data, di + 2); }
 
-        let c1 = b1 / 4;
-        let c2 = (b1 % 4) * 16 + (b2 / 16);
-        let c3 = (b2 % 16) * 4 + (b3 / 64);
-        let c4 = b3 % 64;
+        let mut c1 = b1 / 4;
+        let mut c2 = (b1 % 4) * 16 + (b2 / 16);
+        let mut c3 = (b2 % 16) * 4 + (b3 / 64);
+        let mut c4 = b3 % 64;
 
         if pem_len < PEM_BUF_SZ {
             mem_write_byte(PEM_BUF + pem_len, _pem_base64_encode_char(c1));
@@ -237,10 +237,10 @@ fn pem_get_label() {
 }
 
 fn pem_load(path) {
-    let fd = vfs_open(path, 0);
+    let mut fd = vfs_open(path, 0);
     if fd < 0 { return 0 - 1; }
 
-    let tmp_buf = 16842752;
+    let mut tmp_buf = 16842752;
     let mut n = vfs_read(fd, tmp_buf, 32768);
     vfs_close(fd);
 
@@ -257,13 +257,13 @@ fn pem_load(path) {
 }
 
 fn pem_selftest() {
-    let test_pem = "-----BEGIN TEST-----\nSGVsbG8=\n-----END TEST-----\n";
+    let mut test_pem = "-----BEGIN TEST-----\nSGVsbG8=\n-----END TEST-----\n";
     let mut n = pem_parse(test_pem);
 
     if n < 0 { return "pem selftest: parse failed"; }
     if pem_label != "TEST" { return "pem selftest: label mismatch"; }
 
-    let decoded = "";
+    let mut decoded = "";
     let mut i = 0;
     while i < pem_len {
         decoded = decoded + str_from_code(mem_read_byte(PEM_BUF + i));

@@ -58,7 +58,7 @@ fn gi_cycles_used()        { return gi_cycles; }
 fn gi_queue_len()          { return gi_n_ops; }
 
 fn gi_add_op(op_type, in_off, out_off, in_dim, out_dim) {
-    let id = gi_n_ops;
+    let mut id = gi_n_ops;
     set_at(gi_op_type,    id, op_type);
     set_at(gi_op_in_off,  id, in_off);
     set_at(gi_op_out_off, id, out_off);
@@ -84,7 +84,7 @@ fn _gi_linear(in_off, out_off, in_dim, out_dim) {
     // y[j] = Σ w[j*in_dim+k] * x[in_off+k] / 256 + bias[j]
     let mut j = 0;
     while j < out_dim {
-        let acc = gi_bias[j];
+        let mut acc = gi_bias[j];
         let mut k = 0;
         while k < in_dim {
             acc += gi_weights[j * in_dim + k] * gi_tensor[in_off + k] / 256;
@@ -99,13 +99,13 @@ fn _gi_linear(in_off, out_off, in_dim, out_dim) {
 
 fn _gi_softmax(in_off, out_off, n) {
     // exp_fp(x) = x - max + 256  (linear shift-and-clamp approximation)
-    let max_v = gi_tensor[in_off];
+    let mut max_v = gi_tensor[in_off];
     let mut i = 1;
     while i < n {
         if gi_tensor[in_off + i] > max_v { max_v = gi_tensor[in_off + i]; }
         i += 1;
     }
-    let sum_exp = 0;
+    let mut sum_exp = 0;
     i = 0;
     while i < n {
         let mut x = gi_tensor[in_off + i] - max_v + 256;
@@ -128,13 +128,13 @@ fn _gi_softmax(in_off, out_off, n) {
 
 fn gi_dispatch() {
     gi_cycles = 0;
-    let op = 0;
+    let mut op = 0;
     while op < gi_n_ops {
-        let t  = gi_op_type[op];
-        let io = gi_op_in_off[op];
-        let oo = gi_op_out_off[op];
-        let id = gi_op_in_dim[op];
-        let od = gi_op_out_dim[op];
+        let mut t = gi_op_type[op];
+        let mut io = gi_op_in_off[op];
+        let mut oo = gi_op_out_off[op];
+        let mut id = gi_op_in_dim[op];
+        let mut od = gi_op_out_dim[op];
         if t == GI_RELU    { _gi_relu(io, oo, id); }
         if t == GI_LINEAR  { _gi_linear(io, oo, id, od); }
         if t == GI_SOFTMAX { _gi_softmax(io, oo, id); }
@@ -162,12 +162,12 @@ fn gi_test() {
     gi_add_op(GI_SOFTMAX, 4, 8, 2, 2);
 
     // Dispatch: relu cycles=4, softmax cycles=4, total=8
-    let cyc = gi_dispatch();
-    let r4  = gi_get_output(4);   // relu(100)   = 100
-    let r5  = gi_get_output(5);   // relu(-50)   = 0
-    let r6  = gi_get_output(6);   // relu(150)   = 150
-    let s0  = gi_get_output(8);   // softmax[0] = 159
-    let s1  = gi_get_output(9);   // softmax[1] = 96
+    let mut cyc = gi_dispatch();
+    let mut r4 = gi_get_output(4);   // relu(100)   = 100
+    let mut r5 = gi_get_output(5);   // relu(-50)   = 0
+    let mut r6 = gi_get_output(6);   // relu(150)   = 150
+    let mut s0 = gi_get_output(8);   // softmax[0] = 159
+    let mut s1 = gi_get_output(9);   // softmax[1] = 96
 
     print("gi_test: r4=" + to_string(r4)
           + " r5=" + to_string(r5)

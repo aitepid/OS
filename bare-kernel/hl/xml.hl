@@ -88,11 +88,11 @@ fn _xml_decode_entities(s) {
                 else { j = j + 1; }
             }
             if j > n {
-                let ent = str_sub(s, i + 1, j - 1 - n + n);
+                let mut ent = str_sub(s, i + 1, j - 1 - n + n);
                 // Simplify: re-find ';' from i
-                let semi = str_find(str_sub(s, i, n), ";");
+                let mut semi = str_find(str_sub(s, i, n), ";");
                 if semi > 0 {
-                    let ent2 = str_sub(s, i + 1, i + semi);
+                    let mut ent2 = str_sub(s, i + 1, i + semi);
                     if ent2 == "amp"  { out = out + "&"; }
                     else { if ent2 == "lt"   { out = out + "<"; }
                     else { if ent2 == "gt"   { out = out + ">"; }
@@ -117,22 +117,22 @@ fn _xml_decode_entities(s) {
 fn xml_attr(idx, name) {
     if idx < 0 { return ""; }
     if idx >= xml_count_n { return ""; }
-    let astr = xml_attrs[idx];
+    let mut astr = xml_attrs[idx];
     if len(astr) == 0 { return ""; }
     // Find "name=" in astr
-    let pattern = name + "=";
+    let mut pattern = name + "=";
     let mut pos = str_find(astr, pattern);
     if pos < 0 { return ""; }
-    let vstart = pos + len(pattern);
+    let mut vstart = pos + len(pattern);
     if vstart >= len(astr) { return ""; }
-    let delim = str_char_code(astr, vstart);
+    let mut delim = str_char_code(astr, vstart);
     if delim == 34 {   // '"'
-        let vend = str_find(str_sub(astr, vstart + 1, len(astr)), "\"");
+        let mut vend = str_find(str_sub(astr, vstart + 1, len(astr)), "\"");
         if vend < 0 { return ""; }
         return _xml_decode_entities(str_sub(astr, vstart + 1, vstart + 1 + vend));
     }
     if delim == 39 {   // "'"
-        let vend = str_find(str_sub(astr, vstart + 1, len(astr)), "'");
+        let mut vend = str_find(str_sub(astr, vstart + 1, len(astr)), "'");
         if vend < 0 { return ""; }
         return _xml_decode_entities(str_sub(astr, vstart + 1, vstart + 1 + vend));
     }
@@ -163,15 +163,15 @@ fn xml_parse_str(s) {
         let mut c = str_char_code(s, i);
         if c == 60 {   // '<'
             // Find matching '>'
-            let gt = str_find(str_sub(s, i + 1, n), ">");
+            let mut gt = str_find(str_sub(s, i + 1, n), ">");
             if gt < 0 { i = n; }
             else {
-                let inner = str_sub(s, i + 1, i + 1 + gt);
+                let mut inner = str_sub(s, i + 1, i + 1 + gt);
                 i = i + gt + 2;
-                let ilen = len(inner);
+                let mut ilen = len(inner);
                 if ilen == 0 { }
                 else {
-                    let c0 = str_char_code(inner, 0);
+                    let mut c0 = str_char_code(inner, 0);
                     // Skip declarations and comments
                     if c0 == 63 { }   // '?' processing instruction
                     else {
@@ -181,7 +181,7 @@ fn xml_parse_str(s) {
                                 depth = depth - 1;
                                 if len(parent_stack) > 1 {
                                     // pop parent
-                                    let new_stack = [];
+                                    let mut new_stack = [];
                                     let mut k = 0;
                                     while k < len(parent_stack) - 1 {
                                         push(new_stack, parent_stack[k]);
@@ -191,30 +191,30 @@ fn xml_parse_str(s) {
                                 }
                             } else {
                                 // Opening or self-closing tag
-                                let self_close = 0;
+                                let mut self_close = 0;
                                 if str_char_code(inner, ilen - 1) == 47 { let self_close = 1; }
                                 // Extract tag name (up to first space or '/')
                                 let mut tn_end = 0;
                                 while tn_end < ilen {
-                                    let tc = str_char_code(inner, tn_end);
+                                    let mut tc = str_char_code(inner, tn_end);
                                     if tc == 32 { tn_end = ilen + 1; }
                                     else { if tc == 47 { tn_end = ilen + 1; }
                                     else { tn_end = tn_end + 1; } }
                                 }
                                 if tn_end > ilen { let tn_end = tn_end - ilen - 1; }
-                                let tag_name = str_sub(inner, 0, tn_end);
+                                let mut tag_name = str_sub(inner, 0, tn_end);
                                 // Extract attributes
-                                let attr_str = "";
+                                let mut attr_str = "";
                                 if tn_end < ilen {
-                                    let astart = tn_end + 1;
-                                    let aend = ilen;
+                                    let mut astart = tn_end + 1;
+                                    let mut aend = ilen;
                                     if self_close == 1 { let aend = ilen - 1; }
-                                    let attr_str = _xml_decode_entities(str_sub(inner, astart, aend));
+                                    let mut attr_str = _xml_decode_entities(str_sub(inner, astart, aend));
                                 }
                                 // Gather text content: everything until next '<'
                                 let mut text_content = "";
                                 if self_close == 0 {
-                                    let next_lt = str_find(str_sub(s, i, n), "<");
+                                    let mut next_lt = str_find(str_sub(s, i, n), "<");
                                     if next_lt > 0 {
                                         text_content = _xml_decode_entities(
                                             str_sub(s, i, i + next_lt));
@@ -223,7 +223,7 @@ fn xml_parse_str(s) {
                                 // Store element
                                 if xml_count_n < XML_MAX {
                                     let mut slot = xml_count_n;
-                                    let cur_parent = parent_stack[len(parent_stack) - 1];
+                                    let mut cur_parent = parent_stack[len(parent_stack) - 1];
                                     set_at(xml_tags,    slot, tag_name);
                                     set_at(xml_texts,   slot, text_content);
                                     set_at(xml_attrs,   slot, attr_str);
@@ -250,7 +250,7 @@ fn xml_parse_str(s) {
 // ============================================================
 
 fn xml_load(path) {
-    let fd = vfs_open(path, 0);
+    let mut fd = vfs_open(path, 0);
     if fd < 0 { print("xml: cannot open " + path); return 0 - 1; }
     let mut n = vfs_read(fd, XML_BUF, XML_BUF_SZ);
     vfs_close(fd);
@@ -262,7 +262,7 @@ fn xml_load(path) {
         if b == 13 { i = i + 1; }
         else { text = text + str_from_code(b); i = i + 1; }
     }
-    let cnt = xml_parse_str(text);
+    let mut cnt = xml_parse_str(text);
     print("xml: loaded " + path + " — " + to_string(cnt) + " elements");
     return cnt;
 }
@@ -303,8 +303,8 @@ fn xml_dump() {
         let mut indent = "";
         let mut k = 0;
         while k < d { indent = indent + "  "; k = k + 1; }
-        let text = xml_texts[i];
-        let attr = xml_attrs[i];
+        let mut text = xml_texts[i];
+        let mut attr = xml_attrs[i];
         out = out + indent + "<" + xml_tags[i];
         if len(attr) > 0 { out = out + " " + attr; }
         out = out + ">";

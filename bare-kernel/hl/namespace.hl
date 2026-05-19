@@ -106,7 +106,7 @@ fn ns_create(parent_ns_id, type_mask) {
     if parent_ns_id >= NS_MAX { return 0 - 1; }
     if ns_active[parent_ns_id] == 0 { return 0 - 1; }
 
-    let id = ns_alloc_slot();
+    let mut id = ns_alloc_slot();
     if id < 0 {
         print("namespace: ns_create failed — table full");
         return 0 - 1;
@@ -162,7 +162,7 @@ fn ns_enter(task_idx, ns_id) {
     if ns_active[ns_id] == 0 { return 0 - 1; }
 
     // Decrement old ns refcount
-    let old_ns = task_ns_id[task_idx];
+    let mut old_ns = task_ns_id[task_idx];
     if old_ns >= 0 {
         if old_ns < NS_MAX {
             set_at(ns_refcount, old_ns, ns_refcount[old_ns] - 1);
@@ -190,10 +190,10 @@ fn ns_pid_alloc(ns_id, global_pid) {
     if ns_id >= NS_MAX { return global_pid; }
     if (ns_type_mask[ns_id] / NS_TYPE_PID) % 2 == 0 { return global_pid; }
 
-    let local_pid = ns_pid_base[ns_id];
+    let mut local_pid = ns_pid_base[ns_id];
     set_at(ns_pid_base, ns_id, local_pid + 1);
     // Record mapping: [global, local]
-    let old_map = ns_pid_map[ns_id];
+    let mut old_map = ns_pid_map[ns_id];
     push(old_map, [global_pid, local_pid]);
     set_at(ns_pid_map, ns_id, old_map);
     return local_pid;
@@ -204,7 +204,7 @@ fn ns_get_pid(ns_id, global_pid) {
     if ns_id <= 0 { return global_pid; }
     if ns_id >= NS_MAX { return global_pid; }
     if (ns_type_mask[ns_id] / NS_TYPE_PID) % 2 == 0 { return global_pid; }
-    let mp = ns_pid_map[ns_id];
+    let mut mp = ns_pid_map[ns_id];
     let mut i = 0;
     while i < len(mp) {
         if mp[i][0] == global_pid { return mp[i][1]; }
@@ -255,7 +255,7 @@ fn ns_ipc_add_key(ns_id, key) {
     if ns_id < 0 { return 0 - 1; }
     if ns_id >= NS_MAX { return 0 - 1; }
     if (ns_type_mask[ns_id] / NS_TYPE_IPC) % 2 == 0 { return 0 - 1; }
-    let keys = ns_ipc_keys[ns_id];
+    let mut keys = ns_ipc_keys[ns_id];
     push(keys, key);
     set_at(ns_ipc_keys, ns_id, keys);
     return 0;
@@ -266,7 +266,7 @@ fn ns_ipc_key_valid(ns_id, key) {
     if ns_id <= 0 { return 1; }  // root ns: all keys visible
     if ns_id >= NS_MAX { return 0; }
     if (ns_type_mask[ns_id] / NS_TYPE_IPC) % 2 == 0 { return 1; }
-    let keys = ns_ipc_keys[ns_id];
+    let mut keys = ns_ipc_keys[ns_id];
     let mut i = 0;
     while i < len(keys) {
         if keys[i] == key { return 1; }
@@ -284,7 +284,7 @@ fn ns_mnt_add(ns_id, path) {
     if ns_id <= 0 { return 0 - 1; }  // don't modify root ns mounts this way
     if ns_id >= NS_MAX { return 0 - 1; }
     if (ns_type_mask[ns_id] / NS_TYPE_MNT) % 2 == 0 { return 0 - 1; }
-    let mpts = ns_mnt_extra[ns_id];
+    let mut mpts = ns_mnt_extra[ns_id];
     push(mpts, path);
     set_at(ns_mnt_extra, ns_id, mpts);
     return 0;
@@ -296,14 +296,14 @@ fn ns_mount_visible(ns_id, path) {
     if ns_id >= NS_MAX { return 0; }
     if (ns_type_mask[ns_id] / NS_TYPE_MNT) % 2 == 0 { return 1; }
     // Check ns-specific mounts
-    let mpts = ns_mnt_extra[ns_id];
+    let mut mpts = ns_mnt_extra[ns_id];
     let mut i = 0;
     while i < len(mpts) {
         if mpts[i] == path { return 1; }
         i = i + 1;
     }
     // Fall back: check if parent ns sees it (recursive)
-    let parent = ns_parent[ns_id];
+    let mut parent = ns_parent[ns_id];
     if parent >= 0 { return ns_mount_visible(parent, path); }
     return 1;  // global mounts always visible
 }

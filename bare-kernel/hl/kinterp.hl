@@ -102,7 +102,7 @@ fn ki_lex(source) {
     ki_tok_count = 0;
 
     while ki_pos < ki_source_len {
-        let ch = str_char_at(ki_source, ki_pos);
+        let mut ch = str_char_at(ki_source, ki_pos);
 
         // Skip whitespace
         if ch == 32 || ch == 9 || ch == 10 || ch == 13 {
@@ -116,7 +116,7 @@ fn ki_lex(source) {
         }
         // Number: scan digits, stop at first non-digit
         else if ch >= 48 && ch <= 57 {
-            let start = ki_pos;
+            let mut start = ki_pos;
             let mut scan_num = 1;
             while scan_num == 1 {
                 if ki_pos >= ki_source_len {
@@ -130,7 +130,7 @@ fn ki_lex(source) {
                     }
                 }
             }
-            let num_str = str_sub(ki_source, start, ki_pos);
+            let mut num_str = str_sub(ki_source, start, ki_pos);
             push(ki_tok_types, TOK_NUM);
             push(ki_tok_vals, num_str);
             ki_tok_count = ki_tok_count + 1;
@@ -138,11 +138,11 @@ fn ki_lex(source) {
         // String literal
         else if ch == 34 {
             ki_pos = ki_pos + 1;
-            let start = ki_pos;
+            let mut start = ki_pos;
             while ki_pos < ki_source_len && str_char_at(ki_source, ki_pos) != 34 {
                 ki_pos = ki_pos + 1;
             }
-            let sval = str_sub(ki_source, start, ki_pos);
+            let mut sval = str_sub(ki_source, start, ki_pos);
             ki_pos = ki_pos + 1;  // skip closing quote
             push(ki_tok_types, TOK_STR);
             push(ki_tok_vals, sval);
@@ -150,13 +150,13 @@ fn ki_lex(source) {
         }
         // Identifier or keyword
         else if (ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122) || ch == 95 {
-            let start = ki_pos;
+            let mut start = ki_pos;
             let mut scan_id = 1;
             while scan_id == 1 {
                 if ki_pos >= ki_source_len {
                     scan_id = 0;
                 } else {
-                    let ic = str_char_at(ki_source, ki_pos);
+                    let mut ic = str_char_at(ki_source, ki_pos);
                     if (ic >= 65 && ic <= 90) || (ic >= 97 && ic <= 122) || (ic >= 48 && ic <= 57) || ic == 95 {
                         ki_pos = ki_pos + 1;
                     } else {
@@ -164,7 +164,7 @@ fn ki_lex(source) {
                     }
                 }
             }
-            let ident = str_sub(ki_source, start, ki_pos);
+            let mut ident = str_sub(ki_source, start, ki_pos);
             if ki_is_keyword(ident) == 1 {
                 push(ki_tok_types, TOK_KW);
             } else {
@@ -467,8 +467,8 @@ fn ki_parse_expr();      // forward
 fn ki_parse_primary();   // forward
 
 fn ki_parse_primary() {
-    let tt = ki_peek_type();
-    let tv = ki_peek_val();
+    let mut tt = ki_peek_type();
+    let mut tv = ki_peek_val();
 
     // Number literal
     if tt == TOK_NUM {
@@ -494,7 +494,7 @@ fn ki_parse_primary() {
     // Array literal []
     if tt == TOK_LBRACK {
         ki_advance();
-        let arr = [];
+        let mut arr = [];
         while ki_peek_type() != TOK_RBRACK && ki_peek_type() != TOK_EOF {
             push(arr, ki_parse_expr());
             if ki_peek_val() == "," { ki_advance(); }
@@ -504,22 +504,22 @@ fn ki_parse_primary() {
     }
     // Identifier (variable or function call)
     if tt == TOK_IDENT {
-        let name = tv;
+        let mut name = tv;
         ki_advance();
         // Function call
         if ki_peek_type() == TOK_LPAREN {
             ki_advance();
-            let args = [];
+            let mut args = [];
             while ki_peek_type() != TOK_RPAREN && ki_peek_type() != TOK_EOF {
                 push(args, ki_parse_expr());
                 if ki_peek_val() == "," { ki_advance(); }
             }
             ki_expect_val(")");
             // Try builtin first
-            let br = ki_call_builtin(name, args);
+            let mut br = ki_call_builtin(name, args);
             if br != 0 - 99999 { return br; }
             // User-defined function
-            let fi = ki_fn_find(name);
+            let mut fi = ki_fn_find(name);
             if fi >= 0 {
                 return ki_call_fn(fi, args);
             }
@@ -532,7 +532,7 @@ fn ki_parse_primary() {
             ki_advance();
             let mut idx = ki_parse_expr();
             ki_expect_val("]");
-            let arr_val = ki_var_get(name);
+            let mut arr_val = ki_var_get(name);
             return arr_val[idx];
         }
         // Variable
@@ -550,9 +550,9 @@ fn ki_parse_primary() {
 fn ki_parse_mul() {
     let mut left = ki_parse_primary();
     while ki_peek_val() == "*" || ki_peek_val() == "/" || ki_peek_val() == "%" {
-        let op = ki_peek_val();
+        let mut op = ki_peek_val();
         ki_advance();
-        let right = ki_parse_primary();
+        let mut right = ki_parse_primary();
         if op == "*" { left = left * right; }
         if op == "/" { if right != 0 { left = left / right; } }
         if op == "%" { left = left % right; }
@@ -563,9 +563,9 @@ fn ki_parse_mul() {
 fn ki_parse_add() {
     let mut left = ki_parse_mul();
     while ki_peek_val() == "+" || ki_peek_val() == "-" {
-        let op = ki_peek_val();
+        let mut op = ki_peek_val();
         ki_advance();
-        let right = ki_parse_mul();
+        let mut right = ki_parse_mul();
         if op == "+" { left = left + right; }
         if op == "-" { left = left - right; }
     }
@@ -575,9 +575,9 @@ fn ki_parse_add() {
 fn ki_parse_cmp() {
     let mut left = ki_parse_add();
     while ki_peek_val() == "<" || ki_peek_val() == ">" || ki_peek_val() == "<=" || ki_peek_val() == ">=" {
-        let op = ki_peek_val();
+        let mut op = ki_peek_val();
         ki_advance();
-        let right = ki_parse_add();
+        let mut right = ki_parse_add();
         if op == "<" { if left < right { left = 1; } else { left = 0; } }
         if op == ">" { if left > right { left = 1; } else { left = 0; } }
         if op == "<=" { if left <= right { left = 1; } else { left = 0; } }
@@ -589,9 +589,9 @@ fn ki_parse_cmp() {
 fn ki_parse_eq() {
     let mut left = ki_parse_cmp();
     while ki_peek_val() == "==" || ki_peek_val() == "!=" {
-        let op = ki_peek_val();
+        let mut op = ki_peek_val();
         ki_advance();
-        let right = ki_parse_cmp();
+        let mut right = ki_parse_cmp();
         if op == "==" { if left == right { left = 1; } else { left = 0; } }
         if op == "!=" { if left != right { left = 1; } else { left = 0; } }
     }
@@ -609,8 +609,8 @@ fn ki_parse_expr() {
 fn ki_exec_block();  // forward
 
 fn ki_exec_stmt() {
-    let tt = ki_peek_type();
-    let tv = ki_peek_val();
+    let mut tt = ki_peek_type();
+    let mut tv = ki_peek_val();
 
     // End of block
     if tt == TOK_RBRACE || tt == TOK_EOF { return [1, 0]; }
@@ -638,7 +638,7 @@ fn ki_exec_stmt() {
     if tt == TOK_KW && tv == "let" {
         ki_advance(); // let
         if ki_peek_val() == "mut" { ki_advance(); } // mut
-        let name = ki_peek_val();
+        let mut name = ki_peek_val();
         ki_advance(); // name
         ki_expect_val("=");
         let mut value = ki_parse_expr();
@@ -650,7 +650,7 @@ fn ki_exec_stmt() {
     // return expr;
     if tt == TOK_KW && tv == "return" {
         ki_advance();
-        let rval = ki_parse_expr();
+        let mut rval = ki_parse_expr();
         if ki_peek_val() == ";" { ki_advance(); }
         return [0, rval];
     }
@@ -658,7 +658,7 @@ fn ki_exec_stmt() {
     // if cond { body } [else if cond { body }]* [else { body }]
     if tt == TOK_KW && tv == "if" {
         ki_advance(); // if
-        let cond = ki_parse_expr();
+        let mut cond = ki_parse_expr();
         ki_expect_val("{");
         if cond != 0 {
             let mut r = ki_exec_block();
@@ -727,11 +727,11 @@ fn ki_exec_stmt() {
     // while cond { body }
     if tt == TOK_KW && tv == "while" {
         ki_advance(); // while
-        let loop_start = ki_tok_idx;
+        let mut loop_start = ki_tok_idx;
         let mut loop_running = 1;
         while loop_running == 1 {
             ki_tok_idx = loop_start;
-            let cond = ki_parse_expr();
+            let mut cond = ki_parse_expr();
             if cond == 0 {
                 // Skip body
                 ki_expect_val("{");
@@ -758,7 +758,7 @@ fn ki_exec_stmt() {
 
     // Assignment: name = expr; or arr[i] = expr; or function call
     if tt == TOK_IDENT {
-        let name = tv;
+        let mut name = tv;
         ki_advance();
         // Array index assignment: name[idx] = expr
         if ki_peek_type() == TOK_LBRACK {
@@ -769,7 +769,7 @@ fn ki_exec_stmt() {
                 ki_advance();
                 let mut value = ki_parse_expr();
                 if ki_peek_val() == ";" { ki_advance(); }
-                let arr_val = ki_var_get(name);
+                let mut arr_val = ki_var_get(name);
                 set_at(arr_val, idx, value);
                 ki_var_set(name, arr_val);
                 return [1, 0];
@@ -812,13 +812,13 @@ fn ki_call_fn(fi, args) {
         return 0;
     }
     ki_depth = ki_depth + 1;
-    let saved_idx = ki_tok_idx;
-    let saved_var_count = ki_var_count;
+    let mut saved_idx = ki_tok_idx;
+    let mut saved_var_count = ki_var_count;
 
     // Bind parameters
-    let params = ki_fn_params[fi];
-    let expected = len(params);
-    let got = len(args);
+    let mut params = ki_fn_params[fi];
+    let mut expected = len(params);
+    let mut got = len(args);
     if got < expected {
         klog(2, 5, "kinterp: " + ki_fn_names[fi] + "() wants " + to_string(expected) + " args, got " + to_string(got));
     }
@@ -849,10 +849,10 @@ fn ki_preparse() {
     while ki_tok_idx < ki_tok_count {
         if ki_peek_type() == TOK_KW && ki_peek_val() == "fn" {
             ki_advance(); // fn
-            let name = ki_peek_val();
+            let mut name = ki_peek_val();
             ki_advance(); // name
             ki_advance(); // (
-            let params = [];
+            let mut params = [];
             while ki_peek_type() != TOK_RPAREN && ki_peek_type() != TOK_EOF {
                 if ki_peek_type() == TOK_IDENT {
                     push(params, ki_peek_val());
@@ -862,14 +862,14 @@ fn ki_preparse() {
             }
             ki_advance(); // )
             ki_expect_val("{");
-            let body_start = ki_tok_idx;
+            let mut body_start = ki_tok_idx;
             let mut depth = 1;
             while depth > 0 && ki_peek_type() != TOK_EOF {
                 if ki_peek_val() == "{" { depth = depth + 1; }
                 if ki_peek_val() == "}" { depth = depth - 1; }
                 if depth > 0 { ki_advance(); }
             }
-            let body_end = ki_tok_idx;
+            let mut body_end = ki_tok_idx;
             ki_advance(); // closing }
             ki_fn_register(name, params, body_start, body_end);
         } else {
@@ -889,7 +889,7 @@ fn kinterp_exec(source) {
     ki_depth = 0;
 
     // Lex
-    let tok_count = ki_lex(source);
+    let mut tok_count = ki_lex(source);
 
     // Pre-parse functions
     ki_preparse();
@@ -902,19 +902,19 @@ fn kinterp_exec(source) {
 
 // Execute H-L file from VFS path
 fn kinterp_exec_file(path) {
-    let fd = vfs_open(path, 0);
+    let mut fd = vfs_open(path, 0);
     if fd < 0 {
         print("kinterp: cannot open " + path);
         return 0 - 1;
     }
-    let stat = vfs_stat(path);
-    let size = stat[0];
+    let mut stat = vfs_stat(path);
+    let mut size = stat[0];
     if size > KI_MAX_SOURCE {
         vfs_close(fd);
         print("kinterp: file too large (" + to_string(size) + " bytes)");
         return 0 - 1;
     }
-    let content = vfs_read(fd, 0, size);
+    let mut content = vfs_read(fd, 0, size);
     vfs_close(fd);
     return kinterp_exec(content);
 }
@@ -1016,7 +1016,7 @@ fn kirvm_reg_set(r, val) {
 fn kirvm_exec_from(start_pc) {
     let mut pc = start_pc;
     let mut step_count = 0;
-    let max_steps = 100000;
+    let mut max_steps = 100000;
     let mut result = 0;
 
     while pc < ir_count && step_count < max_steps {
@@ -1025,10 +1025,10 @@ fn kirvm_exec_from(start_pc) {
         // Skip dead instructions
         if ir_dead[pc] != 0 { pc = pc + 1; }
         else {
-            let op = ir_op[pc];
-            let dst = ir_dst[pc];
-            let s1 = ir_src1[pc];
-            let s2 = ir_src2[pc];
+            let mut op = ir_op[pc];
+            let mut dst = ir_dst[pc];
+            let mut s1 = ir_src1[pc];
+            let mut s2 = ir_src2[pc];
 
             if op == IR_CONST {
                 kirvm_reg_set(dst, s1);
@@ -1057,13 +1057,13 @@ fn kirvm_exec_from(start_pc) {
                 pc = pc + 1;
             }
             else if op == IR_DIV {
-                let divisor = kirvm_reg_get(s2);
+                let mut divisor = kirvm_reg_get(s2);
                 if divisor != 0 { kirvm_reg_set(dst, kirvm_reg_get(s1) / divisor); }
                 else { kirvm_reg_set(dst, 0); }
                 pc = pc + 1;
             }
             else if op == IR_MOD {
-                let divisor = kirvm_reg_get(s2);
+                let mut divisor = kirvm_reg_get(s2);
                 if divisor != 0 { kirvm_reg_set(dst, kirvm_reg_get(s1) % divisor); }
                 else { kirvm_reg_set(dst, 0); }
                 pc = pc + 1;
@@ -1129,22 +1129,22 @@ fn kirvm_exec_from(start_pc) {
                 pc = pc + 1;
             }
             else if op == IR_JMP {
-                let target = kirvm_find_label(dst);
+                let mut target = kirvm_find_label(dst);
                 if target >= 0 { pc = target; }
                 else { pc = pc + 1; }
             }
             else if op == IR_JZ {
-                let cond_val = kirvm_reg_get(dst);
+                let mut cond_val = kirvm_reg_get(dst);
                 if cond_val == 0 {
-                    let target = kirvm_find_label(s1);
+                    let mut target = kirvm_find_label(s1);
                     if target >= 0 { pc = target; }
                     else { pc = pc + 1; }
                 } else { pc = pc + 1; }
             }
             else if op == IR_JNZ {
-                let cond_val = kirvm_reg_get(dst);
+                let mut cond_val = kirvm_reg_get(dst);
                 if cond_val != 0 {
-                    let target = kirvm_find_label(s1);
+                    let mut target = kirvm_find_label(s1);
                     if target >= 0 { pc = target; }
                     else { pc = pc + 1; }
                 } else { pc = pc + 1; }
@@ -1159,7 +1159,7 @@ fn kirvm_exec_from(start_pc) {
             }
             else if op == IR_CALL {
                 // CALL dst, label, argc
-                let fn_pc = kirvm_find_label(s1);
+                let mut fn_pc = kirvm_find_label(s1);
                 if fn_pc >= 0 {
                     if kirvm_call_depth < KIRVM_MAX_CALL_DEPTH {
                         push(kirvm_call_stack, pc + 1);
@@ -1221,14 +1221,14 @@ fn kinterp_exec_ir(source) {
     ki_var_count = 0;
     ki_fn_count = 0;
     ki_depth = 0;
-    let tok_count = ki_lex(source);
+    let mut tok_count = ki_lex(source);
 
     // Parse to AST (reuse kinterp lexer, build minimal AST)
     // For the IR path, we use ir.hl's AST lowering which expects
     // AST node arrays in the format: ["NodeType", ...]
     // We build a simple AST from tokens for the IR path
     ki_tok_idx = 0;
-    let ast = _kirvm_parse_program();
+    let mut ast = _kirvm_parse_program();
 
     // Lower AST → IR
     ir_lower_stmts(ast);
@@ -1254,17 +1254,17 @@ fn _kirvm_parse_program() {
 }
 
 fn _kirvm_parse_stmt() {
-    let tt = ki_peek_type();
-    let tv = ki_peek_val();
+    let mut tt = ki_peek_type();
+    let mut tv = ki_peek_val();
 
     // let [mut] name = expr;
     if tt == TOK_KW && tv == "let" {
         ki_advance();
         let mut is_mut = 0;
         if ki_peek_val() == "mut" { is_mut = 1; ki_advance(); }
-        let name = ki_peek_val();
+        let mut name = ki_peek_val();
         ki_advance();
-        let init = nil;
+        let mut init = nil;
         if ki_peek_val() == "=" {
             ki_advance();
             init = _kirvm_parse_expr();
@@ -1276,10 +1276,10 @@ fn _kirvm_parse_stmt() {
     // fn name(params) { body }
     if tt == TOK_KW && tv == "fn" {
         ki_advance();
-        let name = ki_peek_val();
+        let mut name = ki_peek_val();
         ki_advance();
         ki_expect_val("(");
-        let params = [];
+        let mut params = [];
         while ki_peek_type() != TOK_RPAREN && ki_peek_type() != TOK_EOF {
             if ki_peek_type() == TOK_IDENT { push(params, ki_peek_val()); }
             ki_advance();
@@ -1287,7 +1287,7 @@ fn _kirvm_parse_stmt() {
         }
         ki_expect_val(")");
         ki_expect_val("{");
-        let body = [];
+        let mut body = [];
         while ki_peek_type() != TOK_RBRACE && ki_peek_type() != TOK_EOF {
             let mut s = _kirvm_parse_stmt();
             if s != nil { push(body, s); }
@@ -1310,15 +1310,15 @@ fn _kirvm_parse_stmt() {
     // if cond { body } [else { body }]
     if tt == TOK_KW && tv == "if" {
         ki_advance();
-        let cond = _kirvm_parse_expr();
+        let mut cond = _kirvm_parse_expr();
         ki_expect_val("{");
-        let then_body = [];
+        let mut then_body = [];
         while ki_peek_type() != TOK_RBRACE && ki_peek_type() != TOK_EOF {
             let mut s = _kirvm_parse_stmt();
             if s != nil { push(then_body, s); }
         }
         if ki_peek_val() == "}" { ki_advance(); }
-        let else_body = nil;
+        let mut else_body = nil;
         if ki_peek_val() == "else" {
             ki_advance();
             ki_expect_val("{");
@@ -1335,9 +1335,9 @@ fn _kirvm_parse_stmt() {
     // while cond { body }
     if tt == TOK_KW && tv == "while" {
         ki_advance();
-        let cond = _kirvm_parse_expr();
+        let mut cond = _kirvm_parse_expr();
         ki_expect_val("{");
-        let body = [];
+        let mut body = [];
         while ki_peek_type() != TOK_RBRACE && ki_peek_type() != TOK_EOF {
             let mut s = _kirvm_parse_stmt();
             if s != nil { push(body, s); }
@@ -1365,7 +1365,7 @@ fn _kirvm_parse_stmt() {
 
     // Assignment or expression statement
     if tt == TOK_IDENT {
-        let name = tv;
+        let mut name = tv;
         ki_advance();
         if ki_peek_val() == "=" {
             ki_advance();
@@ -1376,7 +1376,7 @@ fn _kirvm_parse_stmt() {
         // Function call as statement
         if ki_peek_type() == TOK_LPAREN {
             ki_tok_idx = ki_tok_idx - 1;
-            let expr = _kirvm_parse_expr();
+            let mut expr = _kirvm_parse_expr();
             if ki_peek_val() == ";" { ki_advance(); }
             return ["ExprStmt", expr];
         }
@@ -1395,7 +1395,7 @@ fn _kirvm_parse_or() {
     let mut left = _kirvm_parse_and();
     while ki_peek_val() == "||" {
         ki_advance();
-        let right = _kirvm_parse_and();
+        let mut right = _kirvm_parse_and();
         left = ["BinOp", "||", left, right];
     }
     return left;
@@ -1405,7 +1405,7 @@ fn _kirvm_parse_and() {
     let mut left = _kirvm_parse_eq();
     while ki_peek_val() == "&&" {
         ki_advance();
-        let right = _kirvm_parse_eq();
+        let mut right = _kirvm_parse_eq();
         left = ["BinOp", "&&", left, right];
     }
     return left;
@@ -1414,9 +1414,9 @@ fn _kirvm_parse_and() {
 fn _kirvm_parse_eq() {
     let mut left = _kirvm_parse_cmp();
     while ki_peek_val() == "==" || ki_peek_val() == "!=" {
-        let op = ki_peek_val();
+        let mut op = ki_peek_val();
         ki_advance();
-        let right = _kirvm_parse_cmp();
+        let mut right = _kirvm_parse_cmp();
         left = ["BinOp", op, left, right];
     }
     return left;
@@ -1425,9 +1425,9 @@ fn _kirvm_parse_eq() {
 fn _kirvm_parse_cmp() {
     let mut left = _kirvm_parse_add();
     while ki_peek_val() == "<" || ki_peek_val() == ">" || ki_peek_val() == "<=" || ki_peek_val() == ">=" {
-        let op = ki_peek_val();
+        let mut op = ki_peek_val();
         ki_advance();
-        let right = _kirvm_parse_add();
+        let mut right = _kirvm_parse_add();
         left = ["BinOp", op, left, right];
     }
     return left;
@@ -1436,9 +1436,9 @@ fn _kirvm_parse_cmp() {
 fn _kirvm_parse_add() {
     let mut left = _kirvm_parse_mul();
     while ki_peek_val() == "+" || ki_peek_val() == "-" {
-        let op = ki_peek_val();
+        let mut op = ki_peek_val();
         ki_advance();
-        let right = _kirvm_parse_mul();
+        let mut right = _kirvm_parse_mul();
         left = ["BinOp", op, left, right];
     }
     return left;
@@ -1447,9 +1447,9 @@ fn _kirvm_parse_add() {
 fn _kirvm_parse_mul() {
     let mut left = _kirvm_parse_unary();
     while ki_peek_val() == "*" || ki_peek_val() == "/" || ki_peek_val() == "%" {
-        let op = ki_peek_val();
+        let mut op = ki_peek_val();
         ki_advance();
-        let right = _kirvm_parse_unary();
+        let mut right = _kirvm_parse_unary();
         left = ["BinOp", op, left, right];
     }
     return left;
@@ -1458,15 +1458,15 @@ fn _kirvm_parse_mul() {
 fn _kirvm_parse_unary() {
     if ki_peek_val() == "-" {
         ki_advance();
-        let inner = _kirvm_parse_primary();
+        let mut inner = _kirvm_parse_primary();
         return ["Unary", "-", inner];
     }
     return _kirvm_parse_primary();
 }
 
 fn _kirvm_parse_primary() {
-    let tt = ki_peek_type();
-    let tv = ki_peek_val();
+    let mut tt = ki_peek_type();
+    let mut tv = ki_peek_val();
 
     if tt == TOK_NUM {
         ki_advance();
@@ -1487,7 +1487,7 @@ fn _kirvm_parse_primary() {
     }
     if tt == TOK_LBRACK {
         ki_advance();
-        let elems = [];
+        let mut elems = [];
         while ki_peek_type() != TOK_RBRACK && ki_peek_type() != TOK_EOF {
             push(elems, _kirvm_parse_expr());
             if ki_peek_val() == "," { ki_advance(); }
@@ -1496,12 +1496,12 @@ fn _kirvm_parse_primary() {
         return ["Array", elems];
     }
     if tt == TOK_IDENT {
-        let name = tv;
+        let mut name = tv;
         ki_advance();
         // Function call
         if ki_peek_type() == TOK_LPAREN {
             ki_advance();
-            let args = [];
+            let mut args = [];
             while ki_peek_type() != TOK_RPAREN && ki_peek_type() != TOK_EOF {
                 push(args, _kirvm_parse_expr());
                 if ki_peek_val() == "," { ki_advance(); }

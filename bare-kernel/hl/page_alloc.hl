@@ -65,8 +65,8 @@ fn _buddy_log2_ceil(n) {
 // ============================================================
 
 fn _fl_push(order, page) {
-    let top = buddy_fl_top[order];
-    let list = buddy_fl[order];
+    let mut top = buddy_fl_top[order];
+    let mut list = buddy_fl[order];
     if top < len(list) {
         set_at(list, top, page);
     } else {
@@ -77,10 +77,10 @@ fn _fl_push(order, page) {
 }
 
 fn _fl_pop(order) {
-    let top = buddy_fl_top[order];
+    let mut top = buddy_fl_top[order];
     if top <= 0 { return 0 - 1; }
-    let new_top = top - 1;
-    let page = buddy_fl[order][new_top];
+    let mut new_top = top - 1;
+    let mut page = buddy_fl[order][new_top];
     set_at(buddy_fl_top, order, new_top);
     return page;
 }
@@ -90,8 +90,8 @@ fn _fl_len(order) {
 }
 
 fn _fl_find_remove(order, page) {
-    let top = buddy_fl_top[order];
-    let list = buddy_fl[order];
+    let mut top = buddy_fl_top[order];
+    let mut list = buddy_fl[order];
     let mut i = 0;
     while i < top {
         if list[i] == page {
@@ -109,12 +109,12 @@ fn _fl_find_remove(order, page) {
 // ============================================================
 
 fn _page_mark_used(page) {
-    let byte_idx = page / 8;
-    let bit_idx = page % 8;
+    let mut byte_idx = page / 8;
+    let mut bit_idx = page % 8;
     let mut shift = 1;
     let mut s = 0;
     while s < bit_idx { shift = shift * 2; s = s + 1; }
-    let byte_val = mem_read_byte(BITMAP_ADDR + byte_idx);
+    let mut byte_val = mem_read_byte(BITMAP_ADDR + byte_idx);
     if byte_val / shift % 2 == 0 {
         mem_write_byte(BITMAP_ADDR + byte_idx, byte_val + shift);
     }
@@ -122,12 +122,12 @@ fn _page_mark_used(page) {
 }
 
 fn _page_clear_used(page) {
-    let byte_idx = page / 8;
-    let bit_idx = page % 8;
+    let mut byte_idx = page / 8;
+    let mut bit_idx = page % 8;
     let mut shift = 1;
     let mut s = 0;
     while s < bit_idx { shift = shift * 2; s = s + 1; }
-    let byte_val = mem_read_byte(BITMAP_ADDR + byte_idx);
+    let mut byte_val = mem_read_byte(BITMAP_ADDR + byte_idx);
     if byte_val / shift % 2 == 1 {
         mem_write_byte(BITMAP_ADDR + byte_idx, byte_val - shift);
     }
@@ -135,12 +135,12 @@ fn _page_clear_used(page) {
 }
 
 fn _page_is_free_bmp(page) {
-    let byte_idx = page / 8;
-    let bit_idx = page % 8;
+    let mut byte_idx = page / 8;
+    let mut bit_idx = page % 8;
     let mut shift = 1;
     let mut s = 0;
     while s < bit_idx { shift = shift * 2; s = s + 1; }
-    let byte_val = mem_read_byte(BITMAP_ADDR + byte_idx);
+    let mut byte_val = mem_read_byte(BITMAP_ADDR + byte_idx);
     if byte_val / shift % 2 == 0 { return 1; }
     return 0;
 }
@@ -151,13 +151,13 @@ fn _bitmap_init() {
         mem_write_byte(BITMAP_ADDR + i, 0);
         i = i + 1;
     }
-    let full_bytes = RESERVED_PAGES / 8;
+    let mut full_bytes = RESERVED_PAGES / 8;
     i = 0;
     while i < full_bytes {
         mem_write_byte(BITMAP_ADDR + i, 255);
         i = i + 1;
     }
-    let rem = RESERVED_PAGES % 8;
+    let mut rem = RESERVED_PAGES % 8;
     if rem > 0 {
         let mut mask = 0;
         let mut b = 0;
@@ -207,7 +207,7 @@ fn _buddy_build_fast() {
         let mut found = 0;
         while o >= 0 {
             if found == 0 {
-                let bs = _buddy_pow2(o);
+                let mut bs = _buddy_pow2(o);
                 if page % bs == 0 {
                     if page + bs <= TOTAL_PAGES {
                         best = o;
@@ -236,7 +236,7 @@ fn _buddy_build_from_bitmap() {
             let mut found = 0;
             while o > 0 {
                 if found == 0 {
-                    let bs = _buddy_pow2(o);
+                    let mut bs = _buddy_pow2(o);
                     if page % bs == 0 {
                         if page + bs <= TOTAL_PAGES {
                             let mut ok = 1;
@@ -288,7 +288,7 @@ fn _buddy_alloc_raw(order) {
 
 // Free a block of 2^order pages and coalesce with buddy
 fn _buddy_free_block(page, order) {
-    let pages = _buddy_pow2(order);
+    let mut pages = _buddy_pow2(order);
     buddy_free_count = buddy_free_count + pages;
     // Sync bitmap
     let mut p = 0;
@@ -312,7 +312,7 @@ fn _buddy_free_block(page, order) {
             done = 1;
         }
         if done == 0 {
-            let buddy = cur ^ _buddy_pow2(co);
+            let mut buddy = cur ^ _buddy_pow2(co);
             let mut can = 0;
             if buddy >= FIRST_FREE_PAGE {
                 if buddy + _buddy_pow2(co) <= TOTAL_PAGES {
@@ -338,13 +338,13 @@ fn _buddy_free_block(page, order) {
 // ============================================================
 
 fn page_alloc_init_e820() {
-    let e_count = e820_count();
+    let mut e_count = e820_count();
     if e_count > 0 {
         let mut max_addr = 0;
         let mut i = 0;
         while i < e_count {
             if e820_entry_type(i) == E820_TYPE_USABLE {
-                let end = e820_entry_base(i) + e820_entry_length(i);
+                let mut end = e820_entry_base(i) + e820_entry_length(i);
                 if end > max_addr { max_addr = end; }
             }
             i = i + 1;
@@ -360,12 +360,12 @@ fn page_alloc_init_e820() {
     if e_count > 0 {
         let mut i = 0;
         while i < e_count {
-            let etype = e820_entry_type(i);
+            let mut etype = e820_entry_type(i);
             if etype != E820_TYPE_USABLE {
                 let mut base = e820_entry_base(i);
-                let length = e820_entry_length(i);
-                let start_page = base / PAGE_SIZE;
-                let end_page = (base + length + PAGE_SIZE - 1) / PAGE_SIZE;
+                let mut length = e820_entry_length(i);
+                let mut start_page = base / PAGE_SIZE;
+                let mut end_page = (base + length + PAGE_SIZE - 1) / PAGE_SIZE;
                 let mut p = start_page;
                 while p < end_page {
                     if p < TOTAL_PAGES { _page_mark_used(p); }
@@ -399,7 +399,7 @@ fn page_alloc() {
     if buddy_ready == 0 { page_alloc_init(); }
     let mut addr = _buddy_alloc_raw(0);
     if addr == 0 { return 0; }
-    let page = addr / PAGE_SIZE;
+    let mut page = addr / PAGE_SIZE;
     // Track as order-0 allocation
     if page >= FIRST_FREE_PAGE {
         let mut idx = page - FIRST_FREE_PAGE;
@@ -417,16 +417,16 @@ fn page_alloc_contiguous(count) {
     if buddy_ready == 0 { page_alloc_init(); }
     if count <= 0 { return 0; }
     if count == 1 { return page_alloc(); }
-    let order = _buddy_log2_ceil(count);
+    let mut order = _buddy_log2_ceil(count);
     if order >= BUDDY_MAX_ORDER { return 0; }
-    let block_pages = _buddy_pow2(order);
+    let mut block_pages = _buddy_pow2(order);
     let mut addr = _buddy_alloc_raw(order);
     if addr == 0 { return 0; }
-    let base_page = addr / PAGE_SIZE;
+    let mut base_page = addr / PAGE_SIZE;
     // Mark each requested page as order-0 (individually freeable)
     let mut i = 0;
     while i < count {
-        let pg = base_page + i;
+        let mut pg = base_page + i;
         if pg >= FIRST_FREE_PAGE {
             let mut idx = pg - FIRST_FREE_PAGE;
             if idx < len(buddy_ord) {
@@ -449,12 +449,12 @@ fn page_alloc_contiguous(count) {
 // Free a page given its physical address.
 fn page_free(addr) {
     if addr == 0 { return 0; }
-    let page = addr / PAGE_SIZE;
+    let mut page = addr / PAGE_SIZE;
     if page < FIRST_FREE_PAGE { return 0; }
     if page >= TOTAL_PAGES { return 0; }
     let mut idx = page - FIRST_FREE_PAGE;
     if idx >= len(buddy_ord) { return 0; }
-    let order = buddy_ord[idx];
+    let mut order = buddy_ord[idx];
     if order < 0 { return 0; }
     return _buddy_free_block(page, order);
 }

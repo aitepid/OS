@@ -79,7 +79,7 @@ fn _trace_build_probe(seq) {
 
 fn traceroute_on_recv(data) {
     if len(data) < 1 { return 0; }
-    let ptype = data[0];
+    let mut ptype = data[0];
     if ptype == 11 { trace_resp_type = 11; trace_resp_rdy = 1; trace_resp_t = get_ticks(); }
     if ptype == 3  { trace_resp_type = 3;  trace_resp_rdy = 1; trace_resp_t = get_ticks(); }
     // Extract sender IP from bytes 12-15 of ICMP (IP header of original pkt)
@@ -111,16 +111,16 @@ fn _trace_probe_hop(dest_ip, ttl) {
     trace_resp_type = 0;
     trace_resp_src  = [0, 0, 0, 0];
 
-    let pkt  = _trace_build_probe(trace_seq);
-    let sock = udp_bind(TRACE_LPORT);
+    let mut pkt = _trace_build_probe(trace_seq);
+    let mut sock = udp_bind(TRACE_LPORT);
     if sock < 0 { return [0 - 1, 0, [0, 0, 0, 0]]; }
 
-    let t_send = get_ticks();
+    let mut t_send = get_ticks();
     // Set TTL field before send (stored in packet byte 8 for our convention)
     set_at(pkt, 8, ttl);
     udp_send(dest_ip, TRACE_PORT + trace_seq, TRACE_LPORT, pkt);
 
-    let deadline = t_send + TRACE_TIMEOUT;
+    let mut deadline = t_send + TRACE_TIMEOUT;
     let mut rtt = 0 - 1;
     let mut go  = 1;
     while go == 1 {
@@ -140,9 +140,9 @@ fn _trace_probe_hop(dest_ip, ttl) {
 // ============================================================
 
 fn traceroute_host(host, max_hops) {
-    let dest_ip = dns_resolve(host);
+    let mut dest_ip = dns_resolve(host);
     if len(dest_ip) < 4 { return "traceroute: cannot resolve " + host; }
-    let dest_str = _trace_ip_str(dest_ip);
+    let mut dest_str = _trace_ip_str(dest_ip);
 
     let mut lim = max_hops;
     if lim <= 0  { lim = 15; }
@@ -155,19 +155,19 @@ fn traceroute_host(host, max_hops) {
     let mut hop = 1;
     let mut reached = 0;
     while hop <= lim {
-        let res  = _trace_probe_hop(dest_ip, hop);
-        let rtt  = res[0];
-        let icmp = res[1];
-        let src  = res[2];
+        let mut res = _trace_probe_hop(dest_ip, hop);
+        let mut rtt = res[0];
+        let mut icmp = res[1];
+        let mut src = res[2];
 
-        let hop_str = to_string(hop);
+        let mut hop_str = to_string(hop);
         if len(hop_str) < 2 { hop_str = " " + hop_str; }
 
         if rtt < 0 {
             out = out + " " + hop_str + "  * * *  (no reply)\n";
         } else {
-            let ms = rtt * 10;
-            let src_str = _trace_ip_str(src);
+            let mut ms = rtt * 10;
+            let mut src_str = _trace_ip_str(src);
             out = out + " " + hop_str + "  " + src_str
                       + "  " + to_string(ms) + " ms";
             if icmp == 11 { out = out + "  (TTL exceeded)"; }

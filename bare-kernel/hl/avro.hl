@@ -78,7 +78,7 @@ fn _avro_enc_varint(pos, value) {
 fn _avro_dec_varint(buf, pos) {
     let mut value = 0;
     let mut shift = 0;
-    let done  = 0;
+    let mut done = 0;
     while done == 0 {
         let mut byte = buf[pos];
         pos   = pos + 1;
@@ -99,7 +99,7 @@ fn avro_add_boolean(v) {
 }
 
 fn avro_add_int(v) {
-    let zz = _avro_zigzag_enc(v);
+    let mut zz = _avro_zigzag_enc(v);
     avro_out_len = _avro_enc_varint(avro_out_len, zz);
     return avro_out_len;
 }
@@ -131,7 +131,7 @@ fn avro_decode_boolean(buf) {
 }
 
 fn avro_decode_int(buf) {
-    let raw = _avro_dec_varint(buf, avro_dec_pos);
+    let mut raw = _avro_dec_varint(buf, avro_dec_pos);
     return _avro_zigzag_dec(raw);
 }
 
@@ -151,8 +151,8 @@ fn avro_test() {
     avro_add_boolean(1);
     avro_add_boolean(0);
     avro_decode_start(0);
-    let b1 = avro_decode_boolean(avro_out);
-    let b0 = avro_decode_boolean(avro_out);
+    let mut b1 = avro_decode_boolean(avro_out);
+    let mut b0 = avro_decode_boolean(avro_out);
     if b1 != 1 { pass = 0; }
     if b0 != 0 { pass = 0; }
 
@@ -163,10 +163,10 @@ fn avro_test() {
     avro_add_int(0);
     avro_add_int(127);
     avro_decode_start(0);
-    let v1 = avro_decode_int(avro_out);
-    let v2 = avro_decode_int(avro_out);
-    let v3 = avro_decode_int(avro_out);
-    let v4 = avro_decode_int(avro_out);
+    let mut v1 = avro_decode_int(avro_out);
+    let mut v2 = avro_decode_int(avro_out);
+    let mut v3 = avro_decode_int(avro_out);
+    let mut v4 = avro_decode_int(avro_out);
     if v1 != 42     { pass = 0; }
     if v2 != 0 - 17 { pass = 0; }
     if v3 != 0      { pass = 0; }
@@ -175,15 +175,15 @@ fn avro_test() {
     // Multi-byte varint: value >= 128 needs 2 bytes
     avro_start();
     avro_add_int(300);
-    let varint_len = avro_get_length();
+    let mut varint_len = avro_get_length();
     if varint_len < 2 { pass = 0; }   // 300 zigzag-encodes to 600, needs 2 varint bytes
     avro_decode_start(0);
-    let v5 = avro_decode_int(avro_out);
+    let mut v5 = avro_decode_int(avro_out);
     if v5 != 300 { pass = 0; }
 
     // ZigZag properties
-    let zz_pos = _avro_zigzag_enc(10);
-    let zz_neg = _avro_zigzag_enc(0 - 10);
+    let mut zz_pos = _avro_zigzag_enc(10);
+    let mut zz_neg = _avro_zigzag_enc(0 - 10);
     if zz_pos != 20               { pass = 0; }
     if zz_neg != 19               { pass = 0; }
     if _avro_zigzag_dec(20) != 10 { pass = 0; }

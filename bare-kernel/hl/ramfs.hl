@@ -70,7 +70,7 @@ fn fs_find(parent_idx, name) {
     let mut i = 0;
     while i < FS_MAX_FILES {
         let mut addr = FS_TABLE + i * FS_ENTRY_SIZE;
-        let flags = mem_read_u64(addr);
+        let mut flags = mem_read_u64(addr);
         if flags % 2 == 1 { // FS_USED
             let mut p = mem_read_u64(addr + 104);
             if p == parent_idx {
@@ -87,7 +87,7 @@ fn fs_create(parent_idx, name, is_dir) {
     let mut i = 0;
     while i < FS_MAX_FILES {
         let mut addr = FS_TABLE + i * FS_ENTRY_SIZE;
-        let flags = mem_read_u64(addr);
+        let mut flags = mem_read_u64(addr);
         if flags == 0 {
             let mut f = FS_USED;
             if is_dir == 1 { f = f + FS_DIR; }
@@ -106,7 +106,7 @@ fn fs_create(parent_idx, name, is_dir) {
 // Write data to a file
 fn fs_write(file_idx, data, data_len) {
     let mut addr = FS_TABLE + file_idx * FS_ENTRY_SIZE;
-    let data_off = mem_read_u64(addr + 80);
+    let mut data_off = mem_read_u64(addr + 80);
     // Copy data to data area
     let mut i = 0;
     while i < data_len {
@@ -123,8 +123,8 @@ fn fs_write(file_idx, data, data_len) {
 // Read data from a file
 fn fs_read(file_idx, buf, max_len) {
     let mut addr = FS_TABLE + file_idx * FS_ENTRY_SIZE;
-    let size = mem_read_u64(addr + 72);
-    let data_off = mem_read_u64(addr + 80);
+    let mut size = mem_read_u64(addr + 72);
+    let mut data_off = mem_read_u64(addr + 80);
     let mut to_read = size;
     if max_len < to_read { to_read = max_len; }
     let mut i = 0;
@@ -138,8 +138,8 @@ fn fs_read(file_idx, buf, max_len) {
 // VFS-compatible wrappers
 fn ramfs_read(inode, buf, pos, count) {
     let mut addr = FS_TABLE + inode * FS_ENTRY_SIZE;
-    let size = mem_read_u64(addr + 72);
-    let data_off = mem_read_u64(addr + 80);
+    let mut size = mem_read_u64(addr + 72);
+    let mut data_off = mem_read_u64(addr + 80);
     if pos >= size { return 0; }
     let mut avail = size - pos;
     if count < avail { avail = count; }
@@ -153,14 +153,14 @@ fn ramfs_read(inode, buf, pos, count) {
 
 fn ramfs_write(inode, data, pos, count) {
     let mut addr = FS_TABLE + inode * FS_ENTRY_SIZE;
-    let data_off = mem_read_u64(addr + 80);
+    let mut data_off = mem_read_u64(addr + 80);
     let mut i = 0;
     while i < count {
         mem_write_u8(FS_DATA + data_off + pos + i, mem_read_u8(data + i));
         i = i + 1;
     }
-    let new_size = pos + count;
-    let old_size = mem_read_u64(addr + 72);
+    let mut new_size = pos + count;
+    let mut old_size = mem_read_u64(addr + 72);
     if new_size > old_size { mem_write_u64(addr + 72, new_size); }
     if data_off + new_size > fs_data_next { fs_data_next = data_off + new_size; }
     return count;
@@ -170,15 +170,15 @@ fn ramfs_stat(path) {
     let mut idx = fs_find(0, path);
     if idx < 0 { return [0, 0, 0, 0]; }
     let mut addr = FS_TABLE + idx * FS_ENTRY_SIZE;
-    let size = mem_read_u64(addr + 72);
-    let flags = mem_read_u64(addr);
-    let ftype = 1; // regular
+    let mut size = mem_read_u64(addr + 72);
+    let mut flags = mem_read_u64(addr);
+    let mut ftype = 1; // regular
     if (flags / 2) % 2 == 1 { ftype = 2; } // directory
     return [size, ftype, 0, 0];
 }
 
 fn ramfs_readdir(path) {
-    let parent = fs_find(0, path);
+    let mut parent = fs_find(0, path);
     if parent < 0 { parent = 0; }
     return fs_list(parent);
 }
@@ -196,7 +196,7 @@ fn fs_list(parent_idx) {
     let mut i = 0;
     while i < FS_MAX_FILES {
         let mut addr = FS_TABLE + i * FS_ENTRY_SIZE;
-        let flags = mem_read_u64(addr);
+        let mut flags = mem_read_u64(addr);
         if flags % 2 == 1 {
             let mut p = mem_read_u64(addr + 104);
             if p == parent_idx {

@@ -71,9 +71,9 @@ fn nvme_init(bus, dev, func) {
     nvme_bar = nvme_bar - (nvme_bar % 16);  // mask type bits
 
     // Check version
-    let vs = nvme_reg_read32(NVME_VS);
-    let major = vs / 65536;
-    let minor = (vs / 256) % 256;
+    let mut vs = nvme_reg_read32(NVME_VS);
+    let mut major = vs / 65536;
+    let mut minor = (vs / 256) % 256;
     print("nvme: controller v" + to_string(major) + "." + to_string(minor));
 
     // Disable controller
@@ -95,7 +95,7 @@ fn nvme_init(bus, dev, func) {
     mem_zero(nvme_acq_addr, 4096);
 
     // Set Admin Queue Attributes: SQ size | CQ size
-    let aqa = (NVME_QUEUE_SIZE - 1) * 65536 + (NVME_QUEUE_SIZE - 1);
+    let mut aqa = (NVME_QUEUE_SIZE - 1) * 65536 + (NVME_QUEUE_SIZE - 1);
     nvme_reg_write32(NVME_AQA, aqa);
 
     // Set Admin Submission Queue Base Address
@@ -107,7 +107,7 @@ fn nvme_init(bus, dev, func) {
     // Enable controller: MPS=0 (4K pages), CSS=0 (NVM), EN=1
     // CC = (0 << 20) | (0 << 16) | (6 << 7) | (4 << 4) | 1
     //    = 0 | 0 | 0x300 | 0x40 | 1 = 0x341
-    let cc = 6 * 128 + 4 * 16 + 1;  // IOSQES=6(64B), IOCQES=4(16B), EN=1
+    let mut cc = 6 * 128 + 4 * 16 + 1;  // IOSQES=6(64B), IOCQES=4(16B), EN=1
     nvme_reg_write32(NVME_CC, cc);
 
     // Wait for CSTS.RDY = 1
@@ -138,11 +138,11 @@ fn nvme_init(bus, dev, func) {
 
 // Submit admin command and wait for completion
 fn nvme_admin_cmd(opcode, nsid, prp1, cdw10, cdw11) {
-    let sq_entry = nvme_asq_addr + nvme_sq_tail * NVME_SQ_ENTRY_SIZE;
+    let mut sq_entry = nvme_asq_addr + nvme_sq_tail * NVME_SQ_ENTRY_SIZE;
     mem_zero(sq_entry, NVME_SQ_ENTRY_SIZE);
 
     // CDW0: opcode | CID
-    let cid = nvme_sq_tail;
+    let mut cid = nvme_sq_tail;
     mem_write_u32(sq_entry + 0, opcode + cid * 65536);
     // NSID
     mem_write_u32(sq_entry + 4, nsid);
@@ -158,13 +158,13 @@ fn nvme_admin_cmd(opcode, nsid, prp1, cdw10, cdw11) {
 
     // Poll completion queue
     let mut timeout = 100000;
-    let cq_entry = nvme_acq_addr + nvme_cq_head * NVME_CQ_ENTRY_SIZE;
+    let mut cq_entry = nvme_acq_addr + nvme_cq_head * NVME_CQ_ENTRY_SIZE;
     while timeout > 0 {
-        let status_phase = mem_read_u16(cq_entry + 14);
+        let mut status_phase = mem_read_u16(cq_entry + 14);
         let mut phase = status_phase % 2;
         if phase == nvme_cq_phase {
             // Completion received
-            let status = status_phase / 2;
+            let mut status = status_phase / 2;
             // Advance CQ head
             nvme_cq_head = (nvme_cq_head + 1) % NVME_QUEUE_SIZE;
             if nvme_cq_head == 0 { nvme_cq_phase = 1 - nvme_cq_phase; }
@@ -186,9 +186,9 @@ fn nvme_create_io_queues() {
 
     // Create I/O Completion Queue (opcode 0x05)
     // CDW10: QSIZE | QID=1
-    let cdw10_cq = (NVME_QUEUE_SIZE - 1) * 65536 + 1;
+    let mut cdw10_cq = (NVME_QUEUE_SIZE - 1) * 65536 + 1;
     // CDW11: PC=1 (physically contiguous)
-    let status = nvme_admin_cmd(5, 0, nvme_iocq_addr, cdw10_cq, 1);
+    let mut status = nvme_admin_cmd(5, 0, nvme_iocq_addr, cdw10_cq, 1);
     if status != 0 {
         print("nvme: create IOCQ failed: " + to_string(status));
         return 0 - 1;
@@ -196,7 +196,7 @@ fn nvme_create_io_queues() {
 
     // Create I/O Submission Queue (opcode 0x01)
     // CDW10: QSIZE | QID=1
-    let cdw10_sq = (NVME_QUEUE_SIZE - 1) * 65536 + 1;
+    let mut cdw10_sq = (NVME_QUEUE_SIZE - 1) * 65536 + 1;
     // CDW11: PC=1 | CQID=1
     status = nvme_admin_cmd(1, 0, nvme_iosq_addr, cdw10_sq, 1 + 1 * 65536);
     if status != 0 {
@@ -209,12 +209,12 @@ fn nvme_create_io_queues() {
 }
 
 fn nvme_identify_ns(nsid) {
-    let id_buf = page_alloc();
+    let mut id_buf = page_alloc();
     mem_zero(id_buf, 4096);
-    let status = nvme_admin_cmd(6, nsid, id_buf, 0, 0);
+    let mut status = nvme_admin_cmd(6, nsid, id_buf, 0, 0);
     if status == 0 {
         nvme_ns_size = mem_read_u64(id_buf + 0);  // NSZE (namespace size in blocks)
-        let lba_exp = mem_read_u8(id_buf + 26 + 4 * (mem_read_u8(id_buf + 26) % 16));
+        let mut lba_exp = mem_read_u8(id_buf + 26 + 4 * (mem_read_u8(id_buf + 26) % 16));
         print("nvme: ns1 size=" + to_string(nvme_ns_size) + " blocks");
     }
     page_free(id_buf);

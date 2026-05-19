@@ -86,7 +86,7 @@ fn pn_increment() { set_at(pn_pos, crdt_node_id, pn_pos[crdt_node_id] + 1); retu
 fn pn_decrement() { set_at(pn_neg, crdt_node_id, pn_neg[crdt_node_id] + 1); return 0; }
 
 fn pn_value() {
-    let pos_sum = 0; let neg_sum = 0;
+    let mut pos_sum = 0; let neg_sum = 0;
     let mut i = 0;
     while i < pn_node_count {
         pos_sum = pos_sum + pn_pos[i];
@@ -245,7 +245,7 @@ fn lww_contains(elem) {
 fn lww_merge(remote_elems, remote_add_ts, remote_rem_ts, remote_count) {
     let mut i = 0;
     while i < remote_count {
-        let elem = remote_elems[i];
+        let mut elem = remote_elems[i];
         let mut idx = _lww_find(elem);
         if idx < 0 {
             if lww_count < CRDT_MAX_ELEMS {
@@ -266,7 +266,7 @@ fn lww_merge(remote_elems, remote_add_ts, remote_rem_ts, remote_count) {
 }
 
 fn lww_status() {
-    let present = 0;
+    let mut present = 0;
     let mut i = 0;
     while i < lww_count {
         if lww_add_ts[i] > lww_rem_ts[i] { present = present + 1; }
@@ -321,7 +321,7 @@ fn orset_contains(elem) {
 }
 
 fn orset_status() {
-    let active = 0;
+    let mut active = 0;
     let mut i = 0;
     while i < orset_count { if orset_removed[i] == 0 { active = active + 1; } i = i + 1; }
     return "OR-Set: entries=" + to_string(orset_count)
@@ -352,42 +352,42 @@ fn crdt_test() {
     // G-Counter: 3-node cluster
     gc_init(1, 3);
     gc_increment(); gc_increment(); gc_increment();  // node 1 adds 3
-    let remote_gc = [5, 0, 2];  // node 0: 5, node 2: 2
+    let mut remote_gc = [5, 0, 2];  // node 0: 5, node 2: 2
     gc_merge(remote_gc);
-    let gc_val = gc_value();  // should be 3+5+2=10
+    let mut gc_val = gc_value();  // should be 3+5+2=10
 
     // PN-Counter
     pn_init(1, 3);
     pn_increment(); pn_increment(); pn_increment(); pn_increment();
     pn_decrement();
-    let pn_val = pn_value();  // 4-1=3
+    let mut pn_val = pn_value();  // 4-1=3
 
     // G-Set
     gset_init();
     gset_add(10); gset_add(20); gset_add(30); gset_add(20);
-    let gs_has20 = gset_contains(20);
-    let gs_has99 = gset_contains(99);
+    let mut gs_has20 = gset_contains(20);
+    let mut gs_has99 = gset_contains(99);
 
     // 2P-Set
     tpset_init();
     tpset_add(100); tpset_add(200); tpset_add(300);
     tpset_remove(200);
-    let tp_has200 = tpset_contains(200);
-    let tp_has300 = tpset_contains(300);
+    let mut tp_has200 = tpset_contains(200);
+    let mut tp_has300 = tpset_contains(300);
 
     // LWW-Set
     lww_init();
     lww_add(42); lww_add(84); lww_add(126);
     lww_remove(84);
-    let lww_has84  = lww_contains(84);
-    let lww_has42  = lww_contains(42);
+    let mut lww_has84 = lww_contains(84);
+    let mut lww_has42 = lww_contains(42);
 
     // OR-Set: add, remove, re-add (unlike 2P-Set, re-add works)
     orset_init();
     orset_add(7); orset_add(8); orset_add(9);
     orset_remove(8);
     orset_add(8);  // re-add after remove -- should be present
-    let or_has8 = orset_contains(8);
+    let mut or_has8 = orset_contains(8);
 
     print("crdt test: " + gc_status());
     print("crdt test: " + pn_status());

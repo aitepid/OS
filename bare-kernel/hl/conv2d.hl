@@ -101,10 +101,10 @@ fn _cv_pad_input(r, c, ch, h_in, w_in) {
 
 fn conv2d_forward(in_ch, out_ch, k_size, stride, padding) {
     // Compute output dimensions
-    let h_in   = CV_MAX_H;
-    let w_in   = CV_MAX_W;
-    let h_out  = (h_in + 2 * padding - k_size) / stride + 1;
-    let w_out  = (w_in + 2 * padding - k_size) / stride + 1;
+    let mut h_in = CV_MAX_H;
+    let mut w_in = CV_MAX_W;
+    let mut h_out = (h_in + 2 * padding - k_size) / stride + 1;
+    let mut w_out = (w_in + 2 * padding - k_size) / stride + 1;
     if h_out > CV_MAX_H { h_out = CV_MAX_H; }
     if w_out > CV_MAX_W { w_out = CV_MAX_W; }
 
@@ -114,11 +114,11 @@ fn conv2d_forward(in_ch, out_ch, k_size, stride, padding) {
     cv_in_ch_last = in_ch;
 
     // Clear output
-    let oc = 0;
+    let mut oc = 0;
     while oc < out_ch {
-        let or = 0;
+        let mut or = 0;
         while or < h_out {
-            let ow = 0;
+            let mut ow = 0;
             while ow < w_out {
                 set_at(cv_output, oc * CV_IN_STRIDE + or * CV_MAX_W + ow, 0);
                 ow += 1;
@@ -131,26 +131,26 @@ fn conv2d_forward(in_ch, out_ch, k_size, stride, padding) {
     // Convolution: for each output position and channel
     oc = 0;
     while oc < out_ch {
-        let or = 0;
+        let mut or = 0;
         while or < h_out {
-            let ow = 0;
+            let mut ow = 0;
             while ow < w_out {
                 // Compute input region start
-                let ir_start = or * stride - padding;
-                let ic_start = ow * stride - padding;
-                let accum    = cv_bias[oc] * CV_SCALE;
+                let mut ir_start = or * stride - padding;
+                let mut ic_start = ow * stride - padding;
+                let mut accum = cv_bias[oc] * CV_SCALE;
 
                 // Convolve over in_ch × k_size × k_size
-                let ic = 0;
+                let mut ic = 0;
                 while ic < in_ch {
-                    let kr = 0;
+                    let mut kr = 0;
                     while kr < k_size {
-                        let kc = 0;
+                        let mut kc = 0;
                         while kc < k_size {
-                            let ir = ir_start + kr;
-                            let icc= ic_start + kc;
-                            let xv = _cv_pad_input(ir, icc, ic, h_in, w_in);
-                            let wv = cv_get_kernel(oc, ic, kr, kc);
+                            let mut ir = ir_start + kr;
+                            let mut icc = ic_start + kc;
+                            let mut xv = _cv_pad_input(ir, icc, ic, h_in, w_in);
+                            let mut wv = cv_get_kernel(oc, ic, kr, kc);
                             accum  = accum + xv * wv;
                             kc += 1;
                         }
@@ -160,7 +160,7 @@ fn conv2d_forward(in_ch, out_ch, k_size, stride, padding) {
                 }
 
                 // Divide by scale, apply ReLU
-                let out_val = accum / CV_SCALE;
+                let mut out_val = accum / CV_SCALE;
                 out_val = _cv_relu(out_val);
                 set_at(cv_output, oc * CV_IN_STRIDE + or * CV_MAX_W + ow, out_val);
                 ow += 1;
@@ -199,14 +199,14 @@ fn cv_test() {
     let mut n = conv2d_forward(1, 1, 3, 1, 1);
 
     // Check output[0,0,0] = relu(input[0,0]) = 1
-    let v00 = cv_get_output(0, 0, 0);
+    let mut v00 = cv_get_output(0, 0, 0);
     // Check output[1,2,0] = relu(input[1,2]) = 7
-    let v12 = cv_get_output(1, 2, 0);
+    let mut v12 = cv_get_output(1, 2, 0);
     // Check output[3,3,0] = relu(input[3,3]) = 16
-    let v33 = cv_get_output(3, 3, 0);
+    let mut v33 = cv_get_output(3, 3, 0);
 
-    let oh = cv_output_h();
-    let ow = cv_output_w();
+    let mut oh = cv_output_h();
+    let mut ow = cv_output_w();
 
     print("cv_test: n=" + to_string(n)
           + " v00=" + to_string(v00)

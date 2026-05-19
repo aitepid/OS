@@ -84,9 +84,9 @@ fn _irc_alloc() {
 // ============================================================
 
 fn _irc_read_resp(id) {
-    let tcb  = irc_tcb[id];
+    let mut tcb = irc_tcb[id];
     let mut addr = TCP_TABLE + tcb * TCB_SIZE;
-    let rx_buf = mem_read_u64(addr + 64);
+    let mut rx_buf = mem_read_u64(addr + 64);
     if rx_buf == 0 { return ""; }
     let mut s = "";
     let mut j = 0;
@@ -109,12 +109,12 @@ fn _irc_get_command(line) {
     let mut start = 0;
     if str_sub(line, 0, 1) == ":" {
         // skip prefix
-        let sp = str_find(line, " ");
+        let mut sp = str_find(line, " ");
         if sp < 0 { return ""; }
         start = sp + 1;
     }
-    let rest = str_sub(line, start, len(line));
-    let sp = str_find(rest, " ");
+    let mut rest = str_sub(line, start, len(line));
+    let mut sp = str_find(rest, " ");
     if sp < 0 { return rest; }
     return str_sub(rest, 0, sp);
 }
@@ -130,16 +130,16 @@ fn _irc_get_trailing(line) {
 fn _irc_get_params(line) {
     let mut start = 0;
     if str_sub(line, 0, 1) == ":" {
-        let sp = str_find(line, " ");
+        let mut sp = str_find(line, " ");
         if sp < 0 { return ""; }
         start = sp + 1;
     }
-    let rest = str_sub(line, start, len(line));
-    let sp = str_find(rest, " ");
+    let mut rest = str_sub(line, start, len(line));
+    let mut sp = str_find(rest, " ");
     if sp < 0 { return ""; }
-    let after_cmd = str_sub(rest, sp + 1, len(rest));
+    let mut after_cmd = str_sub(rest, sp + 1, len(rest));
     // Strip trailing ":..." part
-    let tc = str_find(after_cmd, " :");
+    let mut tc = str_find(after_cmd, " :");
     if tc < 0 { return after_cmd; }
     return str_sub(after_cmd, 0, tc);
 }
@@ -148,9 +148,9 @@ fn _irc_get_params(line) {
 fn _irc_prefix_nick(line) {
     if len(line) == 0 { return ""; }
     if str_sub(line, 0, 1) != ":" { return ""; }
-    let end = str_find(line, "!");
+    let mut end = str_find(line, "!");
     if end < 0 {
-        let sp = str_find(line, " ");
+        let mut sp = str_find(line, " ");
         if sp < 0 { return str_sub(line, 1, len(line)); }
         return str_sub(line, 1, sp);
     }
@@ -160,11 +160,11 @@ fn _irc_prefix_nick(line) {
 // Process one IRC line for session id
 fn _irc_process_line(id, line) {
     if len(line) == 0 { return 0; }
-    let cmd = _irc_get_command(line);
+    let mut cmd = _irc_get_command(line);
 
     // PING → PONG
     if cmd == "PING" {
-        let server = _irc_get_trailing(line);
+        let mut server = _irc_get_trailing(line);
         tcp_send(irc_tcb[id], "PONG :" + server + "\r\n");
         return 0;
     }
@@ -178,10 +178,10 @@ fn _irc_process_line(id, line) {
 
     // PRIVMSG — store as last_msg
     if cmd == "PRIVMSG" {
-        let from    = _irc_prefix_nick(line);
-        let target  = _irc_get_params(line);
-        let text    = _irc_get_trailing(line);
-        let msg_str = "<" + from + "> " + text;
+        let mut from = _irc_prefix_nick(line);
+        let mut target = _irc_get_params(line);
+        let mut text = _irc_get_trailing(line);
+        let mut msg_str = "<" + from + "> " + text;
         set_at(irc_last_msg, id, msg_str);
         klog(1, "irc", "[" + to_string(id) + "] " + target + " " + msg_str);
         return 0;
@@ -189,9 +189,9 @@ fn _irc_process_line(id, line) {
 
     // JOIN confirmation
     if cmd == "JOIN" {
-        let who = _irc_prefix_nick(line);
+        let mut who = _irc_prefix_nick(line);
         if who == irc_nick[id] {
-            let ch = _irc_get_trailing(line);
+            let mut ch = _irc_get_trailing(line);
             set_at(irc_channel, id, ch);
             set_at(irc_state,   id, IRC_ST_JOINED);
             print("irc[" + to_string(id) + "]: joined " + ch);
@@ -214,7 +214,7 @@ fn _irc_process_resp(id, resp) {
     let mut start = 0;
     let mut go = 1;
     while go == 1 {
-        let cr = str_find_from(resp, "\r\n", start);
+        let mut cr = str_find_from(resp, "\r\n", start);
         if cr < 0 {
             if start < len(resp) { _irc_process_line(id, str_sub(resp, start, len(resp))); }
             go = 0;
@@ -231,13 +231,13 @@ fn _irc_process_resp(id, resp) {
 // ============================================================
 
 fn irc_connect(host, port) {
-    let id = _irc_alloc();
+    let mut id = _irc_alloc();
     if id < 0 { print("irc: no free slots"); return 0 - 1; }
 
-    let ip = dns_resolve(host);
+    let mut ip = dns_resolve(host);
     if ip == 0 { print("irc: dns_resolve failed for " + host); return 0 - 1; }
 
-    let tcb = tcp_connect(ip, port);
+    let mut tcb = tcp_connect(ip, port);
     if tcb < 0 { print("irc: tcp_connect failed to " + host); return 0 - 1; }
 
     set_at(irc_active,  id, 1);
@@ -276,7 +276,7 @@ fn irc_say(id, target, msg) {
 fn irc_part(id) {
     if id < 0 { return 0; }
     if irc_active[id] == 0 { return 0; }
-    let ch = irc_channel[id];
+    let mut ch = irc_channel[id];
     if len(ch) > 0 { tcp_send(irc_tcb[id], "PART " + ch + "\r\n"); }
     set_at(irc_state,   id, IRC_ST_REGISTERED);
     set_at(irc_channel, id, "");
@@ -287,7 +287,7 @@ fn irc_quit(id, reason) {
     if id < 0 { return 0; }
     if id >= IRC_MAX { return 0; }
     if irc_active[id] == 0 { return 0; }
-    let msg = reason;
+    let mut msg = reason;
     if len(msg) == 0 { msg = "HicOS"; }
     tcp_send(irc_tcb[id], "QUIT :" + msg + "\r\n");
     tcp_close(irc_tcb[id]);
@@ -305,7 +305,7 @@ fn irc_tick() {
     let mut i = 0;
     while i < IRC_MAX {
         if irc_active[i] == 1 {
-            let resp = _irc_read_resp(i);
+            let mut resp = _irc_read_resp(i);
             if len(resp) > 0 { _irc_process_resp(i, resp); }
         }
         i = i + 1;
@@ -316,7 +316,7 @@ fn irc_tick() {
 fn irc_recv(id) {
     if id < 0 { return ""; }
     if id >= IRC_MAX { return ""; }
-    let msg = irc_last_msg[id];
+    let mut msg = irc_last_msg[id];
     set_at(irc_last_msg, id, "");
     return msg;
 }
@@ -329,8 +329,8 @@ fn irc_status(id) {
     if id < 0 { return "irc: invalid"; }
     if id >= IRC_MAX { return "irc: invalid"; }
     if irc_active[id] == 0 { return "irc[" + to_string(id) + "] free"; }
-    let st_names = ["free", "connecting", "registered", "joined", "error"];
-    let st = irc_state[id];
+    let mut st_names = ["free", "connecting", "registered", "joined", "error"];
+    let mut st = irc_state[id];
     let mut st_s = "?";
     if st >= 0 { if st <= 4 { st_s = st_names[st]; } }
     return "irc[" + to_string(id) + "] " + st_s

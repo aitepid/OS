@@ -81,7 +81,7 @@ fn wm_find_top_visible() {
     let mut i = 0;
     while i < wm_window_count {
         let mut addr = WM_TABLE_ADDR + i * 128;
-        let flags = mem_read_u64(addr + 48);
+        let mut flags = mem_read_u64(addr + 48);
         let mut z = mem_read_u64(addr + 40);
         if wm_is_visible(flags) == 1 {
             if wm_is_minimized(flags) == 0 {
@@ -99,9 +99,9 @@ fn wm_find_top_visible() {
 fn wm_raise_window(win_id) {
     if win_id < 0 { return 0; }
     if win_id >= wm_window_count { return 0; }
-    let target = WM_TABLE_ADDR + win_id * 128;
-    let old_z = mem_read_u64(target + 40);
-    let top_z = wm_window_count - 1;
+    let mut target = WM_TABLE_ADDR + win_id * 128;
+    let mut old_z = mem_read_u64(target + 40);
+    let mut top_z = wm_window_count - 1;
     if old_z >= top_z { return 0; }
     let mut i = 0;
     while i < wm_window_count {
@@ -124,9 +124,9 @@ fn wm_focus_window(win_id) {
     let mut i = 0;
     while i < wm_window_count {
         let mut addr = WM_TABLE_ADDR + i * 128;
-        let flags = mem_read_u64(addr + 48);
+        let mut flags = mem_read_u64(addr + 48);
         if wm_is_visible(flags) == 1 {
-            let minimized = wm_is_minimized(flags);
+            let mut minimized = wm_is_minimized(flags);
             let mut focused = 0;
             if i == win_id {
                 if minimized == 0 {
@@ -145,15 +145,15 @@ fn wm_focus_window(win_id) {
 fn wm_hit_test_window(win_id, px, py) {
     if win_id < 0 { return 0; }
     if win_id >= wm_window_count { return 0; }
-    let title_h = ui_theme_title_height();
+    let mut title_h = ui_theme_title_height();
     let mut addr = WM_TABLE_ADDR + win_id * 128;
-    let flags = mem_read_u64(addr + 48);
+    let mut flags = mem_read_u64(addr + 48);
     if wm_is_visible(flags) == 0 { return 0; }
     if wm_is_minimized(flags) == 1 { return 0; }
-    let wx = mem_read_u64(addr + 8);
-    let wy = mem_read_u64(addr + 16);
-    let ww = mem_read_u64(addr + 24);
-    let wh = mem_read_u64(addr + 32) + title_h;
+    let mut wx = mem_read_u64(addr + 8);
+    let mut wy = mem_read_u64(addr + 16);
+    let mut ww = mem_read_u64(addr + 24);
+    let mut wh = mem_read_u64(addr + 32) + title_h;
     if px >= wx {
         if px < wx + ww {
             if py >= wy {
@@ -165,11 +165,11 @@ fn wm_hit_test_window(win_id, px, py) {
 }
 
 fn wm_hit_test_titlebar(win_id, px, py) {
-    let title_h = ui_theme_title_height();
+    let mut title_h = ui_theme_title_height();
     let mut addr = WM_TABLE_ADDR + win_id * 128;
-    let wx = mem_read_u64(addr + 8);
-    let wy = mem_read_u64(addr + 16);
-    let ww = mem_read_u64(addr + 24);
+    let mut wx = mem_read_u64(addr + 8);
+    let mut wy = mem_read_u64(addr + 16);
+    let mut ww = mem_read_u64(addr + 24);
     if px >= wx {
         if px < wx + ww {
             if py >= wy {
@@ -182,11 +182,11 @@ fn wm_hit_test_titlebar(win_id, px, py) {
 
 fn wm_hit_test_close(win_id, px, py) {
     let mut addr = WM_TABLE_ADDR + win_id * 128;
-    let wx = mem_read_u64(addr + 8);
-    let wy = mem_read_u64(addr + 16);
-    let ww = mem_read_u64(addr + 24);
-    let bx = wx + ww - 18;
-    let by = wy + 2;
+    let mut wx = mem_read_u64(addr + 8);
+    let mut wy = mem_read_u64(addr + 16);
+    let mut ww = mem_read_u64(addr + 24);
+    let mut bx = wx + ww - 18;
+    let mut by = wy + 2;
     if px >= bx {
         if px < bx + 16 {
             if py >= by {
@@ -199,11 +199,11 @@ fn wm_hit_test_close(win_id, px, py) {
 
 fn wm_hit_test_minimize(win_id, px, py) {
     let mut addr = WM_TABLE_ADDR + win_id * 128;
-    let wx = mem_read_u64(addr + 8);
-    let wy = mem_read_u64(addr + 16);
-    let ww = mem_read_u64(addr + 24);
-    let bx = wx + ww - 38;
-    let by = wy + 2;
+    let mut wx = mem_read_u64(addr + 8);
+    let mut wy = mem_read_u64(addr + 16);
+    let mut ww = mem_read_u64(addr + 24);
+    let mut bx = wx + ww - 38;
+    let mut by = wy + 2;
     if px >= bx {
         if px < bx + 16 {
             if py >= by {
@@ -218,7 +218,7 @@ fn wm_minimize_window(win_id) {
     if win_id < 0 { return 0; }
     if win_id >= wm_window_count { return 0; }
     let mut addr = WM_TABLE_ADDR + win_id * 128;
-    let flags = mem_read_u64(addr + 48);
+    let mut flags = mem_read_u64(addr + 48);
     if wm_is_visible(flags) == 0 { return 0; }
     mem_write_u64(addr + 48, wm_make_flags(1, 0, 1));
     if wm_focused_id == win_id {
@@ -234,7 +234,7 @@ fn wm_restore_window(win_id) {
     if win_id < 0 { return 0; }
     if win_id >= wm_window_count { return 0; }
     let mut addr = WM_TABLE_ADDR + win_id * 128;
-    let flags = mem_read_u64(addr + 48);
+    let mut flags = mem_read_u64(addr + 48);
     if wm_is_visible(flags) == 0 { return 0; }
     mem_write_u64(addr + 48, wm_make_flags(1, 0, 0));
     wm_focus_window(win_id);
@@ -247,14 +247,14 @@ let WM_DOCK_BTN_H = 28;
 let WM_DOCK_BTN_PAD = 4;
 
 fn wm_draw_taskbar() {
-    let dock_h = ui_theme_dock_height();
-    let dock_y = vesa_height - dock_h;
+    let mut dock_h = ui_theme_dock_height();
+    let mut dock_y = vesa_height - dock_h;
     let mut x = WM_DOCK_BTN_PAD;
-    let btn_y = dock_y + (dock_h - WM_DOCK_BTN_H) / 2;
+    let mut btn_y = dock_y + (dock_h - WM_DOCK_BTN_H) / 2;
     let mut i = 0;
     while i < wm_window_count {
         let mut addr = WM_TABLE_ADDR + i * 128;
-        let flags = mem_read_u64(addr + 48);
+        let mut flags = mem_read_u64(addr + 48);
         if wm_is_visible(flags) == 1 {
             let mut bg = ui_theme_border_color();
             if i == wm_focused_id {
@@ -272,17 +272,17 @@ fn wm_draw_taskbar() {
 }
 
 fn wm_hit_test_taskbar(px, py) {
-    let dock_h = ui_theme_dock_height();
-    let dock_y = vesa_height - dock_h;
+    let mut dock_h = ui_theme_dock_height();
+    let mut dock_y = vesa_height - dock_h;
     if py < dock_y { return 0 - 1; }
-    let btn_y = dock_y + (dock_h - WM_DOCK_BTN_H) / 2;
+    let mut btn_y = dock_y + (dock_h - WM_DOCK_BTN_H) / 2;
     if py < btn_y { return 0 - 1; }
     if py >= btn_y + WM_DOCK_BTN_H { return 0 - 1; }
     let mut x = WM_DOCK_BTN_PAD;
     let mut i = 0;
     while i < wm_window_count {
         let mut addr = WM_TABLE_ADDR + i * 128;
-        let flags = mem_read_u64(addr + 48);
+        let mut flags = mem_read_u64(addr + 48);
         if wm_is_visible(flags) == 1 {
             if px >= x {
                 if px < x + WM_DOCK_BTN_W { return i; }
@@ -295,8 +295,8 @@ fn wm_hit_test_taskbar(px, py) {
 }
 
 fn wm_draw_topbar_text() {
-    let top_h = ui_theme_topbar_height();
-    let ty = (top_h - 16) / 2;
+    let mut top_h = ui_theme_topbar_height();
+    let mut ty = (top_h - 16) / 2;
     // "HicOS" brand at left
     ui_draw_text(8, ty, "HicOS", ui_theme_text_color(), 0);
     return 0;
@@ -312,8 +312,8 @@ fn wm_init() {
 }
 
 fn wm_draw_desktop_chrome() {
-    let top_h = ui_theme_topbar_height();
-    let dock_h = ui_theme_dock_height();
+    let mut top_h = ui_theme_topbar_height();
+    let mut dock_h = ui_theme_dock_height();
     vesa_fill_rect(0, 0, vesa_width, top_h, ui_theme_panel_color());
     vesa_fill_rect(0, top_h - 1, vesa_width, 1, ui_theme_border_color());
     wm_draw_topbar_text();
@@ -325,7 +325,7 @@ fn wm_draw_desktop_chrome() {
 
 fn wm_create_window(x, y, w, h, title, owner) {
     if wm_window_count >= WM_MAX_WINDOWS { return 0 - 1; }
-    let id = wm_window_count;
+    let mut id = wm_window_count;
     wm_window_count = wm_window_count + 1;
     let mut addr = WM_TABLE_ADDR + id * 128;
     mem_write_u64(addr, id);
@@ -349,8 +349,8 @@ fn wm_draw_window(win_id) {
     let mut y = mem_read_u64(addr+16);
     let mut w = mem_read_u64(addr+24);
     let mut h = mem_read_u64(addr+32);
-    let flags = mem_read_u64(addr+48);
-    let title_h = ui_theme_title_height();
+    let mut flags = mem_read_u64(addr+48);
+    let mut title_h = ui_theme_title_height();
 
     if wm_is_visible(flags) == 0 { return 0; }
     if wm_is_minimized(flags) == 1 { return 0; }
@@ -364,9 +364,9 @@ fn wm_draw_window(win_id) {
     vesa_fill_rect(x, y, w, title_h, title_color);
 
     // Title text
-    let t_str = wm_get_title(win_id);
-    let t_ty = y + (title_h - 16) / 2;
-    let max_chars = (w - 48) / 8;
+    let mut t_str = wm_get_title(win_id);
+    let mut t_ty = y + (title_h - 16) / 2;
+    let mut max_chars = (w - 48) / 8;
     if max_chars > 0 {
         let mut draw_str = t_str;
         if len(draw_str) > max_chars { draw_str = substr(draw_str, 0, max_chars); }
@@ -470,13 +470,13 @@ fn wm_mouse_move(dx, dy) {
 
     if wm_dragging == 1 {
         let mut addr = WM_TABLE_ADDR + wm_drag_win * 128;
-        let ww = mem_read_u64(addr + 24);
-        let wh = mem_read_u64(addr + 32) + ui_theme_title_height();
+        let mut ww = mem_read_u64(addr + 24);
+        let mut wh = mem_read_u64(addr + 32) + ui_theme_title_height();
         let mut nx = wm_mouse_x - wm_drag_off_x;
         let mut ny = wm_mouse_y - wm_drag_off_y;
-        let min_y = ui_theme_topbar_height();
-        let max_x = vesa_width - ww;
-        let max_y = vesa_height - ui_theme_dock_height() - wh;
+        let mut min_y = ui_theme_topbar_height();
+        let mut max_x = vesa_width - ww;
+        let mut max_y = vesa_height - ui_theme_dock_height() - wh;
         if nx < 0 { nx = 0; }
         if ny < min_y { ny = min_y; }
         if nx > max_x { nx = max_x; }
@@ -503,7 +503,7 @@ fn wm_mouse_click(button) {
     let mut i = 0;
     while i < wm_window_count {
         let mut addr = WM_TABLE_ADDR + i * 128;
-        let wz = mem_read_u64(addr+40);
+        let mut wz = mem_read_u64(addr+40);
         if wm_hit_test_window(i, wm_mouse_x, wm_mouse_y) == 1 {
             if wz > best_z {
                 best_z = wz;
@@ -523,10 +523,10 @@ fn wm_mouse_click(button) {
         if uidsk_handle_click(wm_mouse_x, wm_mouse_y) == 1 { return 0; }
     }
     // Check taskbar click
-    let dock_win = wm_hit_test_taskbar(wm_mouse_x, wm_mouse_y);
+    let mut dock_win = wm_hit_test_taskbar(wm_mouse_x, wm_mouse_y);
     if dock_win >= 0 {
         let mut addr = WM_TABLE_ADDR + dock_win * 128;
-        let flags = mem_read_u64(addr + 48);
+        let mut flags = mem_read_u64(addr + 48);
         if wm_is_minimized(flags) == 1 {
             wm_restore_window(dock_win);
         } else {
@@ -766,11 +766,11 @@ fn wm_render_all() {
 
 // Open default terminal window at boot (positioned after topbar)
 fn wm_open_terminal_window() {
-    let top_h = ui_theme_topbar_height();
-    let margin = 20;
+    let mut top_h = ui_theme_topbar_height();
+    let mut margin = 20;
     let mut w = 640;
     let mut h = 400;
-    let win_id = wm_create_window(margin, top_h + margin, w, h, "Terminal", 0);
+    let mut win_id = wm_create_window(margin, top_h + margin, w, h, "Terminal", 0);
     if win_id >= 0 {
         uiterm_open(win_id);
         wm_render_all();

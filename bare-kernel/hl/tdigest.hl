@@ -48,8 +48,8 @@ fn tdigest_init() {
 fn _td_sort() {
     let mut i = 1;
     while i < td_size {
-        let km = td_mean[i];
-        let kc = td_count[i];
+        let mut km = td_mean[i];
+        let mut kc = td_count[i];
         let mut j = i - 1;
         while j >= 0 {
             if td_mean[j] > km {
@@ -76,7 +76,7 @@ fn _td_k_limit(q_times_1000) {
     let mut dist = q_times_1000 - 500;
     if dist < 0 { dist = -dist; }
     // Max centroid size: (1 - dist/500) × TD_COMPRESSION / 2
-    let max_size = (TD_COMPRESSION * (500 - dist)) / (500 * 2) + 1;
+    let mut max_size = (TD_COMPRESSION * (500 - dist)) / (500 * 2) + 1;
     return max_size;
 }
 
@@ -84,24 +84,24 @@ fn _td_k_limit(q_times_1000) {
 fn _td_compress() {
     if td_size <= TD_COMPRESSION { return 0; }
     _td_sort();
-    let new_mean  = [];
-    let new_count = [];
-    let new_size  = 0;
-    let cumulative = 0;
+    let mut new_mean = [];
+    let mut new_count = [];
+    let mut new_size = 0;
+    let mut cumulative = 0;
     let mut i = 0;
     while i < td_size {
-        let q_times_1000 = (cumulative * 1000) / td_total;
-        let limit = _td_k_limit(q_times_1000);
+        let mut q_times_1000 = (cumulative * 1000) / td_total;
+        let mut limit = _td_k_limit(q_times_1000);
         if new_size == 0 {
             set_at(new_mean,  new_size, td_mean[i]);
             set_at(new_count, new_size, td_count[i]);
             new_size = new_size + 1;
         } else {
-            let last = new_size - 1;
+            let mut last = new_size - 1;
             if new_count[last] + td_count[i] <= limit {
                 // Merge into last centroid (weighted mean)
-                let total_c = new_count[last] + td_count[i];
-                let new_m = (new_mean[last] * new_count[last] + td_mean[i] * td_count[i]) / total_c;
+                let mut total_c = new_count[last] + td_count[i];
+                let mut new_m = (new_mean[last] * new_count[last] + td_mean[i] * td_count[i]) / total_c;
                 set_at(new_mean,  last, new_m);
                 set_at(new_count, last, total_c);
             } else {
@@ -129,8 +129,8 @@ fn tdigest_add(val_scaled) {
     if val_scaled < td_min { td_min = val_scaled; }
     if val_scaled > td_max { td_max = val_scaled; }
     // Find nearest centroid to merge with
-    let nearest = -1;
-    let min_dist = 2147483647;
+    let mut nearest = -1;
+    let mut min_dist = 2147483647;
     let mut i = 0;
     while i < td_size {
         let mut d = td_mean[i] - val_scaled;
@@ -141,17 +141,17 @@ fn tdigest_add(val_scaled) {
     td_total = td_total + 1;
     // Check if we can absorb into nearest centroid
     if nearest >= 0 {
-        let q_times_1000 = 0;
+        let mut q_times_1000 = 0;
         if td_total > 0 {
-            let cum = 0;
+            let mut cum = 0;
             i = 0;
             while i < nearest { cum = cum + td_count[i]; i = i + 1; }
             q_times_1000 = (cum * 1000) / td_total;
         }
-        let limit = _td_k_limit(q_times_1000);
+        let mut limit = _td_k_limit(q_times_1000);
         if td_count[nearest] < limit {
-            let nc = td_count[nearest] + 1;
-            let nm = (td_mean[nearest] * td_count[nearest] + val_scaled) / nc;
+            let mut nc = td_count[nearest] + 1;
+            let mut nm = (td_mean[nearest] * td_count[nearest] + val_scaled) / nc;
             set_at(td_mean,  nearest, nm);
             set_at(td_count, nearest, nc);
             return 0;
@@ -175,17 +175,17 @@ fn tdigest_quantile(q_times_1000) {
     if q_times_1000 <= 0 { return td_min; }
     if q_times_1000 >= 1000 { return td_max; }
     _td_sort();
-    let target_count = (q_times_1000 * td_total) / 1000;
-    let cumulative = 0;
+    let mut target_count = (q_times_1000 * td_total) / 1000;
+    let mut cumulative = 0;
     let mut i = 0;
     while i < td_size {
-        let next_cum = cumulative + td_count[i];
+        let mut next_cum = cumulative + td_count[i];
         if next_cum >= target_count {
             // Interpolate within this centroid
             if td_count[i] == 1 { return td_mean[i]; }
             // Linear interpolation between adjacent centroid means
             if i == 0 { return td_mean[0]; }
-            let frac = (target_count - cumulative) * TD_SCALE / td_count[i];
+            let mut frac = (target_count - cumulative) * TD_SCALE / td_count[i];
             return td_mean[i - 1] + (td_mean[i] - td_mean[i - 1]) * frac / TD_SCALE;
         }
         cumulative = next_cum;
@@ -221,17 +221,17 @@ fn tdigest_test() {
     // Add values 1..100 (scaled)
     let mut i = 1;
     while i <= 100 { tdigest_add(i * TD_SCALE); i = i + 1; }
-    let p50  = tdigest_quantile(500)  / TD_SCALE;   // ~50
-    let p90  = tdigest_quantile(900)  / TD_SCALE;   // ~90
-    let p99  = tdigest_quantile(990)  / TD_SCALE;   // ~99
-    let p01  = tdigest_quantile(10)   / TD_SCALE;   // ~1
+    let mut p50 = tdigest_quantile(500)  / TD_SCALE;   // ~50
+    let mut p90 = tdigest_quantile(900)  / TD_SCALE;   // ~90
+    let mut p99 = tdigest_quantile(990)  / TD_SCALE;   // ~99
+    let mut p01 = tdigest_quantile(10)   / TD_SCALE;   // ~1
     // Add skewed distribution: 1000 ones + 1 outlier (1000)
     tdigest_init();
     i = 0;
     while i < 1000 { tdigest_add(1 * TD_SCALE); i = i + 1; }
     tdigest_add(1000 * TD_SCALE);
-    let p999 = tdigest_quantile(999) / TD_SCALE;   // ~1 (outlier at p999)
-    let p999x = tdigest_quantile(1000) / TD_SCALE; // 1000 (max)
+    let mut p999 = tdigest_quantile(999) / TD_SCALE;   // ~1 (outlier at p999)
+    let mut p999x = tdigest_quantile(1000) / TD_SCALE; // 1000 (max)
     print("tdigest test: " + tdigest_status());
     print("tdigest test: p50=" + to_string(p50) + " p90=" + to_string(p90)
         + " p99=" + to_string(p99) + " p01=" + to_string(p01));

@@ -216,13 +216,13 @@ fn sh_set_line_len(len) {
 // using the loop variable itself as a break flag.
 fn sh_scan_token(pos) {
     if pos >= sh_line_len { return 0; }
-    let ch = sh_line_buf[pos];
+    let mut ch = sh_line_buf[pos];
 
     // Whitespace
     if sh_is_space(ch) == 1 {
-        let wend = sh_line_len;
-        let ws   = pos + 1;
-        let wdone = 0;
+        let mut wend = sh_line_len;
+        let mut ws = pos + 1;
+        let mut wdone = 0;
         while ws < sh_line_len {
             if wdone == 0 {
                 if sh_is_space(sh_line_buf[ws]) == 0 {
@@ -248,9 +248,9 @@ fn sh_scan_token(pos) {
 
     // String: starts with '"' (34); scan to closing '"' (inclusive)
     if ch == 34 {
-        let send = sh_line_len;
-        let ss   = pos + 1;
-        let sdone = 0;
+        let mut send = sh_line_len;
+        let mut ss = pos + 1;
+        let mut sdone = 0;
         while ss < sh_line_len {
             if sdone == 0 {
                 if sh_line_buf[ss] == 34 {
@@ -266,9 +266,9 @@ fn sh_scan_token(pos) {
 
     // Number: starts with digit
     if sh_is_digit(ch) == 1 {
-        let nend = sh_line_len;
-        let ns   = pos + 1;
-        let ndone = 0;
+        let mut nend = sh_line_len;
+        let mut ns = pos + 1;
+        let mut ndone = 0;
         while ns < sh_line_len {
             if ndone == 0 {
                 if sh_is_digit(sh_line_buf[ns]) == 0 {
@@ -284,9 +284,9 @@ fn sh_scan_token(pos) {
 
     // Identifier or keyword: starts with alpha/underscore
     if sh_is_alpha(ch) == 1 {
-        let iend = sh_line_len;
-        let is_  = pos + 1;
-        let idone = 0;
+        let mut iend = sh_line_len;
+        let mut is_ = pos + 1;
+        let mut idone = 0;
         while is_ < sh_line_len {
             if idone == 0 {
                 if sh_is_alnum(sh_line_buf[is_]) == 0 {
@@ -297,8 +297,8 @@ fn sh_scan_token(pos) {
             }
             if idone == 0 { is_ = is_ + 1; }
         }
-        let ilen = iend - pos;
-        let tok_type = SH_TYPE_IDENT;
+        let mut ilen = iend - pos;
+        let mut tok_type = SH_TYPE_IDENT;
         if _sh_is_keyword(pos, ilen) == 1 { tok_type = SH_TYPE_KEYWORD; }
         return ilen * 10 + tok_type;
     }
@@ -311,12 +311,12 @@ fn sh_scan_token(pos) {
 fn sh_highlight_current_line() {
     let mut pos = 0;
     while pos < sh_line_len {
-        let packed = sh_scan_token(pos);
+        let mut packed = sh_scan_token(pos);
         if packed == 0 { pos = sh_line_len; }
         if packed != 0 {
-            let ttype = packed - (packed / 10) * 10;
-            let tlen  = packed / 10;
-            let color = _sh_type_to_color(ttype);
+            let mut ttype = packed - (packed / 10) * 10;
+            let mut tlen = packed / 10;
+            let mut color = _sh_type_to_color(ttype);
             let mut ci = 0;
             while ci < tlen {
                 if pos + ci < sh_line_len {
@@ -345,10 +345,10 @@ fn sh_test() {
     sh_add_rule(2, 2, SH_TYPE_STRING);
     sh_add_rule(3, 3, SH_TYPE_COMMENT);
 
-    let cnt  = sh_count();
-    let c1   = sh_get_color(1);
-    let c2   = sh_get_color(2);
-    let t3   = sh_get_type(3);
+    let mut cnt = sh_count();
+    let mut c1 = sh_get_color(1);
+    let mut c2 = sh_get_color(2);
+    let mut t3 = sh_get_type(3);
 
     if cnt != 3              { pass = 0; }
     if c1  != 1              { pass = 0; }
@@ -363,9 +363,9 @@ fn sh_test() {
     sh_set_line_char(1, 110);
     sh_set_line_char(2, 32);
     sh_set_line_len(3);
-    let tok0 = sh_scan_token(0);   // expect 2*10+0 = 20 (keyword, len=2)
+    let mut tok0 = sh_scan_token(0);   // expect 2*10+0 = 20 (keyword, len=2)
     if tok0 != 20 { pass = 0; }
-    let tok2 = sh_scan_token(2);   // expect 1*10+6 = 16 (space, len=1)
+    let mut tok2 = sh_scan_token(2);   // expect 1*10+6 = 16 (space, len=1)
     if tok2 != 16 { pass = 0; }
 
     // Lexer test 2: "42" → number(2)
@@ -373,7 +373,7 @@ fn sh_test() {
     sh_set_line_char(0, 52);
     sh_set_line_char(1, 50);
     sh_set_line_len(2);
-    let tok_num = sh_scan_token(0);  // expect 2*10+3 = 23 (number, len=2)
+    let mut tok_num = sh_scan_token(0);  // expect 2*10+3 = 23 (number, len=2)
     if tok_num != 23 { pass = 0; }
 
     // Lexer test 3: "//" → comment
@@ -381,7 +381,7 @@ fn sh_test() {
     sh_set_line_char(0, 47);
     sh_set_line_char(1, 47);
     sh_set_line_len(2);
-    let tok_cmt = sh_scan_token(0);  // expect 2*10+2 = 22 (comment, len=2)
+    let mut tok_cmt = sh_scan_token(0);  // expect 2*10+2 = 22 (comment, len=2)
     if tok_cmt != 22 { pass = 0; }
 
     // Highlight test: "let" → all 3 cols should get SH_COLOR_KEYWORD
@@ -391,9 +391,9 @@ fn sh_test() {
     sh_set_line_char(2, 116);
     sh_set_line_len(3);
     sh_highlight_current_line();
-    let col0 = sh_get_color_at(0);
-    let col1 = sh_get_color_at(1);
-    let col2 = sh_get_color_at(2);
+    let mut col0 = sh_get_color_at(0);
+    let mut col1 = sh_get_color_at(1);
+    let mut col2 = sh_get_color_at(2);
     if col0 != SH_COLOR_KEYWORD { pass = 0; }
     if col1 != SH_COLOR_KEYWORD { pass = 0; }
     if col2 != SH_COLOR_KEYWORD { pass = 0; }

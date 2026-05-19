@@ -98,10 +98,10 @@ fn _uitm_read_tasks() {
         let mut base = UITM_TASK_TBL + i * UITM_TASK_SZ;
         let mut state = mem_read_u64(base + 16);    // state field
         if state != 0 {
-            let pid   = mem_read_u64(base);          // pid
-            let pri   = mem_read_u64(base + 24);     // priority
-            let tics  = mem_read_u64(base + 32);     // ticks used
-            let mem   = mem_read_u64(base + 40);     // memory pages
+            let mut pid = mem_read_u64(base);          // pid
+            let mut pri = mem_read_u64(base + 24);     // priority
+            let mut tics = mem_read_u64(base + 32);     // ticks used
+            let mut mem = mem_read_u64(base + 40);     // memory pages
             // Name: 16 bytes at +48 (null-terminated ASCII)
             let mut nm = "";
             let mut j = 0;
@@ -144,9 +144,9 @@ fn _uitm_state_color(s) {
 
 fn uitaskman_open() {
     if uitm_win_id >= 0 { return 0; }
-    let top_h = ui_theme_topbar_height();
-    let sx = 80;
-    let sy = top_h + 40;
+    let mut top_h = ui_theme_topbar_height();
+    let mut sx = 80;
+    let mut sy = top_h + 40;
     uitm_win_id = wm_create_window(sx, sy, UITM_W, UITM_H, "Task Manager", 0);
     uitm_scroll   = 0;
     uitm_selected = 0 - 1;
@@ -174,8 +174,8 @@ fn _uitm_wy() { return mem_read_u64(WM_TABLE_ADDR + uitm_win_id * 128 + 16) + ui
 
 fn uitaskman_draw() {
     if uitm_win_id < 0 { return 0; }
-    let wx = _uitm_wx();
-    let wy = _uitm_wy();
+    let mut wx = _uitm_wx();
+    let mut wy = _uitm_wy();
 
     // Background
     ui_fill_rect(wx, wy, UITM_W, UITM_H, UITM_BG);
@@ -190,26 +190,26 @@ fn uitaskman_draw() {
     ui_draw_text(wx + UITM_COL_MEM,   wy + 6, "Mem KB", UITM_ACCENT);
 
     // Status bar at bottom
-    let stat_y = wy + UITM_H - 20;
+    let mut stat_y = wy + UITM_H - 20;
     ui_fill_rect(wx, stat_y, UITM_W, 20, UITM_HDR_BG);
     ui_draw_text(wx + 6, stat_y + 3,
         "Procs: " + to_string(uitm_count) + "  [R]efresh  [K]ill  ↑↓ scroll",
         UITM_HDR_FG);
 
     // Visible area
-    let content_h = UITM_H - UITM_HDR_H - 20;
+    let mut content_h = UITM_H - UITM_HDR_H - 20;
     uitm_visible_rows = content_h / UITM_ROW_H;
     let mut i = 0;
     while i < uitm_visible_rows {
-        let ti = i + uitm_scroll;
+        let mut ti = i + uitm_scroll;
         if ti >= uitm_count { i = uitm_visible_rows; }
         else {
-            let ry = wy + UITM_HDR_H + i * UITM_ROW_H;
-            let row_bg = UITM_ROW_ODD;
+            let mut ry = wy + UITM_HDR_H + i * UITM_ROW_H;
+            let mut row_bg = UITM_ROW_ODD;
             if i % 2 == 0 { row_bg = UITM_ROW_EVEN; }
             if ti == uitm_selected { row_bg = UITM_ROW_SEL; }
             ui_fill_rect(wx, ry, UITM_W, UITM_ROW_H, row_bg);
-            let sc = _uitm_state_color(uitm_states[ti]);
+            let mut sc = _uitm_state_color(uitm_states[ti]);
             ui_draw_text(wx + UITM_COL_PID,   ry + 2, to_string(uitm_pids[ti]),   UITM_FG);
             ui_draw_text(wx + UITM_COL_NAME,  ry + 2, uitm_names[ti],             UITM_FG);
             ui_draw_text(wx + UITM_COL_STATE, ry + 2, _uitm_state_str(uitm_states[ti]), sc);
@@ -237,7 +237,7 @@ fn uitaskman_key(k) {
     if k == 107 {   // 'k' — kill selected
         if uitm_selected >= 0 {
             if uitm_selected < uitm_count {
-                let pid = uitm_pids[uitm_selected];
+                let mut pid = uitm_pids[uitm_selected];
                 task_kill(pid, 9);
                 print("taskman: SIGKILL → pid " + to_string(pid));
                 _uitm_read_tasks();
@@ -265,13 +265,13 @@ fn uitaskman_key(k) {
 
 fn uitaskman_click(mx, my) {
     if uitm_win_id < 0 { return 0; }
-    let wx = _uitm_wx();
-    let wy = _uitm_wy();
+    let mut wx = _uitm_wx();
+    let mut wy = _uitm_wy();
     if mx < wx { return 0; }
     if mx > wx + UITM_W { return 0; }
-    let rel_y = my - wy - UITM_HDR_H;
+    let mut rel_y = my - wy - UITM_HDR_H;
     if rel_y < 0 { return 0; }
-    let row_idx = rel_y / UITM_ROW_H + uitm_scroll;
+    let mut row_idx = rel_y / UITM_ROW_H + uitm_scroll;
     if row_idx < uitm_count {
         uitm_selected = row_idx;
         uitaskman_draw();

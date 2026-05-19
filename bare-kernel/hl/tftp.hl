@@ -117,23 +117,23 @@ fn _tftp_build_ack(block) {
 // ============================================================
 
 fn tftp_get(host, remote, local) {
-    let ip = dns_resolve(host);
-    let rrq_pkt = _tftp_build_rrq(remote);
+    let mut ip = dns_resolve(host);
+    let mut rrq_pkt = _tftp_build_rrq(remote);
     udp_send(ip, TFTP_PORT, TFTP_LPORT, rrq_pkt);
 
     let mut total = 0;
     let mut block = 1;
     let mut done = 0;
-    let deadline = get_ticks() + TFTP_TIMEOUT;
+    let mut deadline = get_ticks() + TFTP_TIMEOUT;
     while done == 0 {
         if get_ticks() > deadline { print("tftp: get timeout"); return 0 - 1; }
-        let resp = udp_recv(TFTP_LPORT, TFTP_BUF, TFTP_BUF_SZ);
+        let mut resp = udp_recv(TFTP_LPORT, TFTP_BUF, TFTP_BUF_SZ);
         if len(resp) > 0 {
-            let op = str_char_code(resp, 0) * 256 + str_char_code(resp, 1);
+            let mut op = str_char_code(resp, 0) * 256 + str_char_code(resp, 1);
             if op == 3 {   // DATA
-                let blk = str_char_code(resp, 2) * 256 + str_char_code(resp, 3);
+                let mut blk = str_char_code(resp, 2) * 256 + str_char_code(resp, 3);
                 if blk == block {
-                    let data_sz = len(resp) - 4;
+                    let mut data_sz = len(resp) - 4;
                     // Copy data to staging buffer
                     let mut di = 0;
                     while di < data_sz {
@@ -143,7 +143,7 @@ fn tftp_get(host, remote, local) {
                     }
                     total = total + data_sz;
                     // Send ACK
-                    let ack_pkt = _tftp_build_ack(block);
+                    let mut ack_pkt = _tftp_build_ack(block);
                     udp_send(ip, TFTP_PORT, TFTP_LPORT, ack_pkt);
                     block = block + 1;
                     if data_sz < TFTP_BLOCK_SZ { done = 1; }
@@ -157,7 +157,7 @@ fn tftp_get(host, remote, local) {
 
     // Write staging buffer to VFS
     if total > 0 {
-        let fd = vfs_open(local, 1);
+        let mut fd = vfs_open(local, 1);
         if fd < 0 { print("tftp: cannot create " + local); return 0 - 1; }
         vfs_write(fd, TFTP_DATA_BUF, total);
         vfs_close(fd);
@@ -172,16 +172,16 @@ fn tftp_get(host, remote, local) {
 // ============================================================
 
 fn tftp_put(host, remote, local) {
-    let ip = dns_resolve(host);
+    let mut ip = dns_resolve(host);
     // Read local file into staging buffer
-    let fd = vfs_open(local, 0);
+    let mut fd = vfs_open(local, 0);
     if fd < 0 { print("tftp: cannot open " + local); return 0 - 1; }
-    let file_sz = vfs_read(fd, TFTP_DATA_BUF, TFTP_DATA_SZ);
+    let mut file_sz = vfs_read(fd, TFTP_DATA_BUF, TFTP_DATA_SZ);
     vfs_close(fd);
     if file_sz <= 0 { return 0; }
 
     // Send WRQ
-    let wrq_pkt = _tftp_build_wrq(remote);
+    let mut wrq_pkt = _tftp_build_wrq(remote);
     udp_send(ip, TFTP_PORT, TFTP_LPORT, wrq_pkt);
 
     // Wait for ACK 0
@@ -189,9 +189,9 @@ fn tftp_put(host, remote, local) {
     let mut acked = 0;
     while acked == 0 {
         if get_ticks() > deadline { print("tftp: put timeout"); return 0 - 1; }
-        let resp = udp_recv(TFTP_LPORT, TFTP_BUF, TFTP_BUF_SZ);
+        let mut resp = udp_recv(TFTP_LPORT, TFTP_BUF, TFTP_BUF_SZ);
         if len(resp) >= 4 {
-            let op = str_char_code(resp, 0) * 256 + str_char_code(resp, 1);
+            let mut op = str_char_code(resp, 0) * 256 + str_char_code(resp, 1);
             if op == 4 { acked = 1; }
         }
     }
@@ -201,7 +201,7 @@ fn tftp_put(host, remote, local) {
     let mut block = 1;
     let mut done = 0;
     while done == 0 {
-        let remaining = file_sz - sent;
+        let mut remaining = file_sz - sent;
         let mut sz = TFTP_BLOCK_SZ;
         if remaining < TFTP_BLOCK_SZ { sz = remaining; }
         // Build DATA packet
@@ -218,9 +218,9 @@ fn tftp_put(host, remote, local) {
         let mut got_ack = 0;
         while got_ack == 0 {
             if get_ticks() > deadline { print("tftp: put ACK timeout"); return 0 - 1; }
-            let resp = udp_recv(TFTP_LPORT, TFTP_BUF, TFTP_BUF_SZ);
+            let mut resp = udp_recv(TFTP_LPORT, TFTP_BUF, TFTP_BUF_SZ);
             if len(resp) >= 4 {
-                let op2 = str_char_code(resp, 0) * 256 + str_char_code(resp, 1);
+                let mut op2 = str_char_code(resp, 0) * 256 + str_char_code(resp, 1);
                 if op2 == 4 { got_ack = 1; }
             }
         }
@@ -242,7 +242,7 @@ fn tftp_put(host, remote, local) {
 fn tftp_on_recv(data) {
     if tftp_server_on == 0 { return 0; }
     if len(data) < 4 { return 0; }
-    let op = str_char_code(data, 0) * 256 + str_char_code(data, 1);
+    let mut op = str_char_code(data, 0) * 256 + str_char_code(data, 1);
     if op == 1 {   // RRQ
         // Extract filename: bytes 2..NUL
         let mut fname = "";
@@ -260,7 +260,7 @@ fn tftp_on_recv(data) {
 
 fn tftp_server_tick() {
     if tftp_server_on == 0 { return 0; }
-    let data = udp_recv(TFTP_PORT, TFTP_BUF, TFTP_BUF_SZ);
+    let mut data = udp_recv(TFTP_PORT, TFTP_BUF, TFTP_BUF_SZ);
     if len(data) > 0 { tftp_on_recv(data); }
     return 0;
 }

@@ -67,7 +67,7 @@ fn wavelet_load(data, n) {
 // One-level Haar forward step on length-n prefix of wv_coeffs
 // Output: first n/2 = averages (approximation), last n/2 = differences (detail)
 fn _wv_haar_forward_step(n) {
-    let half = n / 2;
+    let mut half = n / 2;
     let mut i = 0;
     while i < half {
         let mut a = wv_coeffs[2 * i];
@@ -84,11 +84,11 @@ fn _wv_haar_forward_step(n) {
 
 // One-level Haar inverse step on length-n prefix of wv_coeffs
 fn _wv_haar_inverse_step(n) {
-    let half = n / 2;
+    let mut half = n / 2;
     let mut i = 0;
     while i < half {
-        let avg  = wv_coeffs[i];
-        let diff = wv_coeffs[half + i];
+        let mut avg = wv_coeffs[i];
+        let mut diff = wv_coeffs[half + i];
         // a = (avg + diff) / √2,  b = (avg - diff) / √2
         set_at(wv_temp, 2 * i,     (avg + diff) * WAVELET_SCALE / WAVELET_SQRT2);
         set_at(wv_temp, 2 * i + 1, (avg - diff) * WAVELET_SCALE / WAVELET_SQRT2);
@@ -104,7 +104,7 @@ fn wavelet_forward(levels) {
     if levels > WAVELET_MAX_LEVELS { levels = WAVELET_MAX_LEVELS; }
     wv_levels = levels;
     let mut n = wv_len;
-    let l = 0;
+    let mut l = 0;
     while l < levels {
         if n < 2 { l = levels; }
         else { _wv_haar_forward_step(n); n = n / 2; }
@@ -124,7 +124,7 @@ fn wavelet_forward(levels) {
 fn wavelet_inverse(levels) {
     let mut n = wv_len;
     // Find starting size after forward transform
-    let l = 0;
+    let mut l = 0;
     while l < levels { n = n / 2; l = l + 1; }
     // Reconstruct bottom-up
     l = 0;
@@ -139,10 +139,10 @@ fn wavelet_inverse(levels) {
 // Threshold compression: zero coefficients with |c| < threshold
 // Returns count of zeroed coefficients
 fn wavelet_threshold(threshold) {
-    let zeroed = 0;
+    let mut zeroed = 0;
     // Skip the coarsest approximation (first few coefficients)
-    let approx_size = wv_len;
-    let l = 0;
+    let mut approx_size = wv_len;
+    let mut l = 0;
     while l < wv_levels { approx_size = approx_size / 2; l = l + 1; }
     let mut i = approx_size;  // threshold only detail coefficients
     while i < wv_len {
@@ -156,7 +156,7 @@ fn wavelet_threshold(threshold) {
 
 // Compute compression ratio × 1000 (non-zero coefficients / total)
 fn wavelet_compression_ratio() {
-    let nonzero = 0;
+    let mut nonzero = 0;
     let mut i = 0;
     while i < wv_len {
         if wv_coeffs[i] != 0 { nonzero = nonzero + 1; }
@@ -171,7 +171,7 @@ fn wavelet_2d_forward(n, levels) {
     // Row-wise transform
     let mut r = 0;
     while r < n {
-        let row_start = r * n;
+        let mut row_start = r * n;
         // Copy row to temp, apply DWT, copy back
         let mut i = 0;
         while i < n { set_at(wv_temp, i, wv_coeffs[row_start + i]); i = i + 1; }
@@ -197,24 +197,24 @@ fn wavelet_info() {
 fn wavelet_test() {
     wavelet_init();
     // Signal: 8-point square wave [1000,1000,1000,1000,-1000,-1000,-1000,-1000]
-    let sig = [1000, 1000, 1000, 1000, -1000, -1000, -1000, -1000];
+    let mut sig = [1000, 1000, 1000, 1000, -1000, -1000, -1000, -1000];
     wavelet_load(sig, 8);
     wavelet_forward(3);
     // After 3-level Haar DWT, energy should be preserved
-    let energy_ratio = 0;
+    let mut energy_ratio = 0;
     if wv_energy_in > 0 { energy_ratio = (wv_energy_out * 1000) / wv_energy_in; }
     // Threshold: zero small detail coefficients
-    let zeroed = wavelet_threshold(100);
-    let comp_ratio = wavelet_compression_ratio();
+    let mut zeroed = wavelet_threshold(100);
+    let mut comp_ratio = wavelet_compression_ratio();
     // Reconstruct
     wavelet_inverse(3);
-    let reconstructed_0 = wv_coeffs[0];  // should be ~1000
+    let mut reconstructed_0 = wv_coeffs[0];  // should be ~1000
     // Ramp signal [0, 125, 250, 375, 500, 625, 750, 875]
     wavelet_init();
-    let ramp = [0, 125, 250, 375, 500, 625, 750, 875];
+    let mut ramp = [0, 125, 250, 375, 500, 625, 750, 875];
     wavelet_load(ramp, 8);
     wavelet_forward(3);
-    let ramp_energy = wv_energy_out;
+    let mut ramp_energy = wv_energy_out;
     print("wavelet test: " + wavelet_info());
     print("wavelet test: energy_ratio=" + to_string(energy_ratio)
         + "/1000 zeroed=" + to_string(zeroed)

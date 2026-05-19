@@ -120,7 +120,7 @@ fn _jpeg_read16_be(data, pos) {
 
 // Find next JPEG marker (0xFF followed by non-0x00 byte)
 fn _jpeg_find_marker(data, pos) {
-    let data_len = len(data);
+    let mut data_len = len(data);
     while pos < data_len - 1 {
         if data[pos] == 255 {
             if data[pos + 1] != 0 { return pos; }
@@ -132,7 +132,7 @@ fn _jpeg_find_marker(data, pos) {
 
 // Parse SOF0 segment: extract image dimensions and components
 fn _jpeg_parse_sof(data, pos) {
-    let length    = _jpeg_read16_be(data, pos);
+    let mut length = _jpeg_read16_be(data, pos);
     pos = pos + 2;
     jpeg_precision  = data[pos]; pos = pos + 1;
     jpeg_height     = _jpeg_read16_be(data, pos); pos = pos + 2;
@@ -149,16 +149,16 @@ fn _jpeg_parse_sof(data, pos) {
 
 // Parse DQT segment: load quantization table
 fn _jpeg_parse_dqt(data, pos) {
-    let length  = _jpeg_read16_be(data, pos);
-    let end_pos = pos + length;
+    let mut length = _jpeg_read16_be(data, pos);
+    let mut end_pos = pos + length;
     pos = pos + 2;
     while pos < end_pos {
-        let qt_info = data[pos]; pos = pos + 1;
-        let qt_id   = qt_info - ((qt_info / 16) * 16);   // lower nibble
-        let qt_prec = qt_info / 16;                        // upper nibble (0=8bit, 1=16bit)
+        let mut qt_info = data[pos]; pos = pos + 1;
+        let mut qt_id = qt_info - ((qt_info / 16) * 16);   // lower nibble
+        let mut qt_prec = qt_info / 16;                        // upper nibble (0=8bit, 1=16bit)
         let mut i = 0;
         while i < 64 {
-            let qv = data[pos]; pos = pos + 1;
+            let mut qv = data[pos]; pos = pos + 1;
             if qt_prec == 1 { qv = qv * 256 + data[pos]; pos = pos + 1; }
             if qt_id == 0 { set_at(jpeg_qtable0, JPEG_ZIGZAG[i], qv); }
             if qt_id == 1 { set_at(jpeg_qtable1, JPEG_ZIGZAG[i], qv); }
@@ -172,34 +172,34 @@ fn _jpeg_parse_dqt(data, pos) {
 // Input: 64 dequantized DCT coefficients
 // Output: 64 spatial-domain values
 fn _jpeg_idct_block(coeffs) {
-    let output = [];
+    let mut output = [];
     let mut i = 0;
     while i < 64 { set_at(output, i, 0); i = i + 1; }
     // Row-wise 1D IDCT
     let mut row = 0;
     while row < 8 {
         let mut base = row * 8;
-        let s0 = coeffs[base + 0];
-        let s1 = coeffs[base + 1];
-        let s2 = coeffs[base + 2];
-        let s3 = coeffs[base + 3];
-        let s4 = coeffs[base + 4];
-        let s5 = coeffs[base + 5];
-        let s6 = coeffs[base + 6];
-        let s7 = coeffs[base + 7];
+        let mut s0 = coeffs[base + 0];
+        let mut s1 = coeffs[base + 1];
+        let mut s2 = coeffs[base + 2];
+        let mut s3 = coeffs[base + 3];
+        let mut s4 = coeffs[base + 4];
+        let mut s5 = coeffs[base + 5];
+        let mut s6 = coeffs[base + 6];
+        let mut s7 = coeffs[base + 7];
         // Simplified butterfly (4-point IDCT approximation)
-        let p0 = (s0 + s4) * 1000;
-        let p1 = (s0 - s4) * 1000;
-        let p2 = s2 * JPEG_IDCT_A1 - s6 * JPEG_IDCT_A1;
-        let p3 = s2 * JPEG_IDCT_A1 + s6 * JPEG_IDCT_A1;
-        let q0 = p0 + p3;  let q1 = p1 + p2;
-        let q2 = p1 - p2;  let q3 = p0 - p3;
-        let r0 = s1 * JPEG_IDCT_A2 + s7 * JPEG_IDCT_A4;
-        let r1 = s5 * JPEG_IDCT_A1;
-        let r2 = s3 * JPEG_IDCT_A1;
-        let r3 = s1 * JPEG_IDCT_A4 - s7 * JPEG_IDCT_A2;
-        let rr0 = r0 + r1;  let rr3 = r3 + r2;
-        let rr1 = r0 - r1;  let rr2 = r3 - r2;
+        let mut p0 = (s0 + s4) * 1000;
+        let mut p1 = (s0 - s4) * 1000;
+        let mut p2 = s2 * JPEG_IDCT_A1 - s6 * JPEG_IDCT_A1;
+        let mut p3 = s2 * JPEG_IDCT_A1 + s6 * JPEG_IDCT_A1;
+        let mut q0 = p0 + p3;  let q1 = p1 + p2;
+        let mut q2 = p1 - p2;  let q3 = p0 - p3;
+        let mut r0 = s1 * JPEG_IDCT_A2 + s7 * JPEG_IDCT_A4;
+        let mut r1 = s5 * JPEG_IDCT_A1;
+        let mut r2 = s3 * JPEG_IDCT_A1;
+        let mut r3 = s1 * JPEG_IDCT_A4 - s7 * JPEG_IDCT_A2;
+        let mut rr0 = r0 + r1;  let rr3 = r3 + r2;
+        let mut rr1 = r0 - r1;  let rr2 = r3 - r2;
         set_at(output, base + 0, (q0 + rr0) / 8000);
         set_at(output, base + 1, (q1 + rr1) / 8000);
         set_at(output, base + 2, (q2 + rr2) / 8000);
@@ -213,18 +213,18 @@ fn _jpeg_idct_block(coeffs) {
     // Column-wise 1D IDCT
     let mut col = 0;
     while col < 8 {
-        let s0 = output[col];       let s1 = output[col + 8];
-        let s2 = output[col + 16];  let s3 = output[col + 24];
-        let s4 = output[col + 32];  let s5 = output[col + 40];
-        let s6 = output[col + 48];  let s7 = output[col + 56];
-        let p0 = (s0 + s4) * 1000;
-        let p1 = (s0 - s4) * 1000;
-        let p2 = s2 * JPEG_IDCT_A1 - s6 * JPEG_IDCT_A1;
-        let p3 = s2 * JPEG_IDCT_A1 + s6 * JPEG_IDCT_A1;
-        let q0 = p0 + p3;  let q1 = p1 + p2;
-        let q2 = p1 - p2;  let q3 = p0 - p3;
-        let r0 = s1 * JPEG_IDCT_A2 + s7 * JPEG_IDCT_A4;
-        let r1 = s5 * JPEG_IDCT_A1;
+        let mut s0 = output[col];       let s1 = output[col + 8];
+        let mut s2 = output[col + 16];  let s3 = output[col + 24];
+        let mut s4 = output[col + 32];  let s5 = output[col + 40];
+        let mut s6 = output[col + 48];  let s7 = output[col + 56];
+        let mut p0 = (s0 + s4) * 1000;
+        let mut p1 = (s0 - s4) * 1000;
+        let mut p2 = s2 * JPEG_IDCT_A1 - s6 * JPEG_IDCT_A1;
+        let mut p3 = s2 * JPEG_IDCT_A1 + s6 * JPEG_IDCT_A1;
+        let mut q0 = p0 + p3;  let q1 = p1 + p2;
+        let mut q2 = p1 - p2;  let q3 = p0 - p3;
+        let mut r0 = s1 * JPEG_IDCT_A2 + s7 * JPEG_IDCT_A4;
+        let mut r1 = s5 * JPEG_IDCT_A1;
         set_at(output, col,       (q0 + r0 + r1) / 8000);
         set_at(output, col + 8,  (q1 + r0 - r1) / 8000);
         set_at(output, col + 16, (q2 - r0 + r1) / 8000);
@@ -249,18 +249,18 @@ fn _jpeg_clamp(v) {
 fn _jpeg_ycbcr_to_rgb(Y_block, Cb_block, Cr_block, dst_x, dst_y) {
     let mut i = 0;
     while i < 64 {
-        let bx = i - ((i / 8) * 8);
-        let by = i / 8;
-        let px = dst_x + bx;
+        let mut bx = i - ((i / 8) * 8);
+        let mut by = i / 8;
+        let mut px = dst_x + bx;
         let mut py = dst_y + by;
         if px < jpeg_width { if py < jpeg_height {
-            let Y  = Y_block[i]  + 128;
-            let Cb = Cb_block[i];
-            let Cr = Cr_block[i];
-            let R = _jpeg_clamp(Y + (Cr * JPEG_YCR_R / 1000));
-            let G = _jpeg_clamp(Y - (Cr * JPEG_YCR_G1 / 1000) - (Cb * JPEG_YCB_G2 / 1000));
-            let B = _jpeg_clamp(Y + (Cb * JPEG_YCB_B / 1000));
-            let pixel_idx = (py * jpeg_width + px) * 4;
+            let mut Y = Y_block[i]  + 128;
+            let mut Cb = Cb_block[i];
+            let mut Cr = Cr_block[i];
+            let mut R = _jpeg_clamp(Y + (Cr * JPEG_YCR_R / 1000));
+            let mut G = _jpeg_clamp(Y - (Cr * JPEG_YCR_G1 / 1000) - (Cb * JPEG_YCB_G2 / 1000));
+            let mut B = _jpeg_clamp(Y + (Cb * JPEG_YCB_B / 1000));
+            let mut pixel_idx = (py * jpeg_width + px) * 4;
             set_at(jpeg_pixels, pixel_idx,     R);
             set_at(jpeg_pixels, pixel_idx + 1, G);
             set_at(jpeg_pixels, pixel_idx + 2, B);
@@ -284,40 +284,40 @@ fn _jpeg_dequantize(coeffs, qtable) {
 
 // Decode JPEG from byte array (simplified: marker scan + stub decode)
 fn jpeg_decode(data) {
-    let data_len = len(data);
+    let mut data_len = len(data);
     if data_len < 4 { return 1; }
     // Check SOI marker
     if data[0] != 255 { return 2; }
     if data[1] != 216 { return 2; }   // 0xD8
     let mut pos = 2;
-    let found_sof = 0;
+    let mut found_sof = 0;
     while pos < data_len - 1 {
         if data[pos] == 255 {
-            let marker_byte = data[pos + 1];
-            let marker = 255 * 256 + marker_byte;
+            let mut marker_byte = data[pos + 1];
+            let mut marker = 255 * 256 + marker_byte;
             pos = pos + 2;
             if marker_byte == 217 { pos = data_len; }  // EOI
             else if marker_byte == 192 {
                 // SOF0
                 _jpeg_parse_sof(data, pos);
                 found_sof = 1;
-                let seg_len = _jpeg_read16_be(data, pos);
+                let mut seg_len = _jpeg_read16_be(data, pos);
                 pos = pos + seg_len;
             } else if marker_byte == 219 {
                 // DQT
                 _jpeg_parse_dqt(data, pos);
-                let seg_len = _jpeg_read16_be(data, pos);
+                let mut seg_len = _jpeg_read16_be(data, pos);
                 pos = pos + seg_len;
             } else if marker_byte == 218 {
                 // SOS: stop here (entropy-coded scan data requires full Huffman decoder)
                 pos = data_len;
             } else if marker_byte == 254 {
                 // COM
-                let seg_len = _jpeg_read16_be(data, pos);
+                let mut seg_len = _jpeg_read16_be(data, pos);
                 pos = pos + seg_len;
             } else if marker_byte >= 224 { if marker_byte <= 239 {
                 // APPn
-                let seg_len = _jpeg_read16_be(data, pos);
+                let mut seg_len = _jpeg_read16_be(data, pos);
                 pos = pos + seg_len;
             }}
             else { pos = data_len; }
@@ -331,12 +331,12 @@ fn jpeg_decode(data) {
     if total > 4096 { total = 4096; }
     let mut i = 0;
     while i < total {
-        let bx = i - ((i / jpeg_width) * jpeg_width);
-        let by = i / jpeg_width;
-        let Y  = (bx * 4 + by * 8) - (((bx * 4 + by * 8) / 256) * 256);
-        let R  = _jpeg_clamp(Y + 30);
-        let G  = _jpeg_clamp(Y - 10);
-        let B  = _jpeg_clamp(Y + 50);
+        let mut bx = i - ((i / jpeg_width) * jpeg_width);
+        let mut by = i / jpeg_width;
+        let mut Y = (bx * 4 + by * 8) - (((bx * 4 + by * 8) / 256) * 256);
+        let mut R = _jpeg_clamp(Y + 30);
+        let mut G = _jpeg_clamp(Y - 10);
+        let mut B = _jpeg_clamp(Y + 50);
         set_at(jpeg_pixels, i * 4,     R);
         set_at(jpeg_pixels, i * 4 + 1, G);
         set_at(jpeg_pixels, i * 4 + 2, B);
@@ -359,7 +359,7 @@ fn jpeg_get_pixel(x, y) {
 
 fn jpeg_info() {
     if jpeg_loaded == 0 { return "jpeg: no image loaded"; }
-    let ct_str = "Grayscale";
+    let mut ct_str = "Grayscale";
     if jpeg_components == 3 { ct_str = "YCbCr"; }
     if jpeg_components == 4 { ct_str = "CMYK"; }
     return "jpeg: " + to_string(jpeg_width) + "x" + to_string(jpeg_height)
@@ -369,7 +369,7 @@ fn jpeg_info() {
 
 fn jpeg_idct_test() {
     // Test IDCT with a simple all-zero block (except DC)
-    let coeffs = [0,0,0,0,0,0,0,0,
+    let mut coeffs = [0,0,0,0,0,0,0,0,
                   0,0,0,0,0,0,0,0,
                   0,0,0,0,0,0,0,0,
                   0,0,0,0,0,0,0,0,
@@ -385,7 +385,7 @@ fn jpeg_idct_test() {
 fn jpeg_test() {
     jpeg_init();
     // Build a minimal JPEG: SOI + APP0(JFIF) + SOF0(8x8 grayscale) + EOI
-    let data = [255, 216,          // SOI
+    let mut data = [255, 216,          // SOI
                 255, 224,          // APP0 marker
                 0, 16,             // APP0 length=16
                 74, 70, 73, 70, 0, // "JFIF\0"
@@ -400,7 +400,7 @@ fn jpeg_test() {
                 1, 17, 0,          // component: id=1, sampling=1x1, qtable=0
                 255, 217];         // EOI
     let mut result = jpeg_decode(data);
-    let dc_val = jpeg_idct_test();
+    let mut dc_val = jpeg_idct_test();
     return "jpeg: decode=" + to_string(result) + " " + jpeg_info()
         + " idct_dc=" + to_string(dc_val) + " [ISO 10918-1 ok]";
 }

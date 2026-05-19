@@ -122,9 +122,9 @@ fn rs_add_batch(items, n) {
 // key_i = rand_i^(1/weight_i) — item with highest key is in sample
 fn rs_w_add(item, weight) {
     // Compute priority key: rand^(1/weight) ≈ rand / weight (simplified)
-    let rnd = _rs_rand_unit() + 1;  // [1, RS_SCALE]
+    let mut rnd = _rs_rand_unit() + 1;  // [1, RS_SCALE]
     // key = rnd / weight (higher weight → more likely higher key)
-    let key = (rnd * RS_SCALE) / weight;
+    let mut key = (rnd * RS_SCALE) / weight;
     rs_w_seen = rs_w_seen + 1;
     if rs_w_seen <= rs_w_capacity {
         set_at(rs_w_items, rs_w_seen - 1, item);
@@ -132,7 +132,7 @@ fn rs_w_add(item, weight) {
         return 1;
     }
     // Find minimum key in reservoir
-    let min_idx = 0; let min_key = rs_w_keys[0];
+    let mut min_idx = 0; let min_key = rs_w_keys[0];
     let mut i = 1;
     while i < rs_w_capacity {
         if rs_w_keys[i] < min_key { min_key = rs_w_keys[i]; min_idx = i; }
@@ -170,8 +170,8 @@ fn rs_bern_init(p_per_mille) {
 fn rs_strat_add(item, stratum) {
     if stratum >= RS_MAX_STRATA { return 0; }
     if stratum >= rs_strata_count { rs_strata_count = stratum + 1; }
-    let k2 = rs_strata_capacities[stratum];
-    let n2 = rs_strata_seen[stratum] + 1;
+    let mut k2 = rs_strata_capacities[stratum];
+    let mut n2 = rs_strata_seen[stratum] + 1;
     set_at(rs_strata_seen, stratum, n2);
     let mut base = stratum * RS_MAX_SIZE;
     if n2 <= k2 {
@@ -194,7 +194,7 @@ fn rs_estimate_population() {
 
 // Check if value x is in the reservoir (membership test)
 fn rs_contains(x) {
-    let filled = rs_capacity;
+    let mut filled = rs_capacity;
     if rs_seen < filled { filled = rs_seen; }
     let mut i = 0;
     while i < filled { if rs_reservoir[i] == x { return 1; } i = i + 1; }
@@ -202,7 +202,7 @@ fn rs_contains(x) {
 }
 
 fn rs_status() {
-    let filled = rs_capacity;
+    let mut filled = rs_capacity;
     if rs_seen < filled { filled = rs_seen; }
     return "reservoir: k=" + to_string(rs_capacity)
         + " seen=" + to_string(rs_seen)
@@ -217,8 +217,8 @@ fn reservoir_sampling_test() {
     let mut i = 1;
     while i <= 100 { rs_add(i); i = i + 1; }
     // Reservoir should have exactly 10 items, all in [1, 100]
-    let filled = 10;
-    let valid = 1;
+    let mut filled = 10;
+    let mut valid = 1;
     i = 0;
     while i < filled {
         if rs_reservoir[i] < 1 { valid = 0; }
@@ -229,14 +229,14 @@ fn reservoir_sampling_test() {
     i = 0;
     while i < 10 { rs_w_add(i, 1); i = i + 1; }
     rs_w_add(999, 1000);  // weight 1000
-    let has_999 = 0;
+    let mut has_999 = 0;
     i = 0;
     while i < rs_w_capacity { if rs_w_items[i] == 999 { has_999 = 1; } i = i + 1; }
     // Bernoulli: p=100/1000=10%, stream 100 items
     rs_bern_init(100);
     i = 1;
     while i <= 100 { rs_bern_add(i); i = i + 1; }
-    let bern_count = rs_bern_count;  // ~10
+    let mut bern_count = rs_bern_count;  // ~10
     // Stratified: 2 strata, 5 items each from streams of 50
     i = 1;
     while i <= 50 { rs_strat_add(i, 0); i = i + 1; }

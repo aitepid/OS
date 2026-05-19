@@ -79,8 +79,8 @@ fn pc_gethandler(signum) {
 
 fn pc_fork() {
     if pc_proc_count >= PC_MAX_PROCS { return 0 - 1; }
-    let idx   = pc_proc_count;
-    let child = pc_next_pid;
+    let mut idx = pc_proc_count;
+    let mut child = pc_next_pid;
     set_at(pc_proc_pid,    idx, child);
     set_at(pc_proc_ppid,   idx, pc_next_pid - 1);
     set_at(pc_proc_pgid,   idx, child);
@@ -121,8 +121,8 @@ fn pc_waitpid(pid) {
 
 // Count processes currently in running state (status == 0).
 fn pc_proc_count_running() {
-    let cnt = 0;
-    let i   = 0;
+    let mut cnt = 0;
+    let mut i = 0;
     while i < pc_proc_count {
         if pc_proc_status[i] == 0 { cnt = cnt + 1; }
         i = i + 1;
@@ -161,28 +161,28 @@ fn posix_compat_test() {
     if h != 42 { pass = 0; }
 
     pc_raise(PC_SIG_INT);
-    let pend = pc_signal_pending(PC_SIG_INT);
+    let mut pend = pc_signal_pending(PC_SIG_INT);
     if pend != 1 { pass = 0; }
 
     pc_signal_clear(PC_SIG_INT);
-    let pend2 = pc_signal_pending(PC_SIG_INT);
+    let mut pend2 = pc_signal_pending(PC_SIG_INT);
     if pend2 != 0 { pass = 0; }
 
     // Process fork + wait
-    let pid1 = pc_fork();
-    let pid2 = pc_fork();
+    let mut pid1 = pc_fork();
+    let mut pid2 = pc_fork();
     if pc_proc_count != 2 { pass = 0; }
 
-    let running = pc_proc_count_running();
+    let mut running = pc_proc_count_running();
     if running != 2 { pass = 0; }
 
     pc_waitpid(pid1);
-    let running2 = pc_proc_count_running();
+    let mut running2 = pc_proc_count_running();
     if running2 != 1 { pass = 0; }
 
     // kill routes through pc_raise — verify signal pending
     pc_kill(pid2, PC_SIG_TERM);
-    let term_pend = pc_signal_pending(PC_SIG_TERM);
+    let mut term_pend = pc_signal_pending(PC_SIG_TERM);
     if term_pend != 1 { pass = 0; }
 
     print("posix_compat_test: h=" + to_string(h)

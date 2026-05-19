@@ -99,7 +99,7 @@ fn _ftp_send(id, line) {
 
 fn _ftp_read_ctrl(id) {
     let mut addr = TCP_TABLE + ftp_tcb[id] * TCB_SIZE;
-    let rx_buf = mem_read_u64(addr + 64);
+    let mut rx_buf = mem_read_u64(addr + 64);
     if rx_buf == 0 { return ""; }
     let mut s = "";
     let mut j = 0;
@@ -114,7 +114,7 @@ fn _ftp_read_ctrl(id) {
 
 fn _ftp_read_data_tcb(dtcb) {
     let mut addr = TCP_TABLE + dtcb * TCB_SIZE;
-    let rx_buf = mem_read_u64(addr + 64);
+    let mut rx_buf = mem_read_u64(addr + 64);
     if rx_buf == 0 { return ""; }
     let mut s = "";
     let mut j = 0;
@@ -129,9 +129,9 @@ fn _ftp_read_data_tcb(dtcb) {
 
 // Wait up to timeout_ticks for a response containing code_str
 fn _ftp_wait_code(id, code_str, timeout_ticks) {
-    let deadline = get_ticks() + timeout_ticks;
+    let mut deadline = get_ticks() + timeout_ticks;
     while get_ticks() < deadline {
-        let resp = _ftp_read_ctrl(id);
+        let mut resp = _ftp_read_ctrl(id);
         if len(resp) >= 3 {
             if str_find(resp, code_str) >= 0 { return resp; }
         }
@@ -145,11 +145,11 @@ fn _ftp_wait_code(id, code_str, timeout_ticks) {
 // ============================================================
 
 fn _ftp_pasv_parse(resp) {
-    let lp = str_find(resp, "(");
-    let rp = str_find(resp, ")");
+    let mut lp = str_find(resp, "(");
+    let mut rp = str_find(resp, ")");
     if lp < 0 { return []; }
     if rp < 0 { return []; }
-    let inner = str_sub(resp, lp + 1, rp);
+    let mut inner = str_sub(resp, lp + 1, rp);
     let mut nums = [];
     let mut cur = "";
     let mut k = 0;
@@ -165,20 +165,20 @@ fn _ftp_pasv_parse(resp) {
     }
     push(nums, parse_int(cur));
     if len(nums) < 6 { return []; }
-    let ip   = [nums[0], nums[1], nums[2], nums[3]];
-    let port = nums[4] * 256 + nums[5];
+    let mut ip = [nums[0], nums[1], nums[2], nums[3]];
+    let mut port = nums[4] * 256 + nums[5];
     return [ip, port];
 }
 
 // Open PASV data connection; returns data TCB or -1
 fn _ftp_open_data(id) {
     _ftp_send(id, "PASV");
-    let resp = _ftp_wait_code(id, "227", 200);
+    let mut resp = _ftp_wait_code(id, "227", 200);
     if len(resp) == 0 { return 0 - 1; }
-    let parsed = _ftp_pasv_parse(resp);
+    let mut parsed = _ftp_pasv_parse(resp);
     if len(parsed) < 2 { return 0 - 1; }
-    let ip   = parsed[0];
-    let port = parsed[1];
+    let mut ip = parsed[0];
+    let mut port = parsed[1];
     return tcp_connect(ip, port);
 }
 
@@ -187,10 +187,10 @@ fn _ftp_open_data(id) {
 // ============================================================
 
 fn ftp_connect(host) {
-    let id = _ftp_alloc();
+    let mut id = _ftp_alloc();
     if id < 0 { print("ftp: no free slots"); return 0 - 1; }
-    let ip = dns_resolve(host);
-    let tcb = tcp_connect(ip, 21);
+    let mut ip = dns_resolve(host);
+    let mut tcb = tcp_connect(ip, 21);
     if tcb < 0 { print("ftp: tcp_connect failed to " + host); return 0 - 1; }
     set_at(ftp_active, id, 1);
     set_at(ftp_tcb,    id, tcb);
@@ -198,7 +198,7 @@ fn ftp_connect(host) {
     set_at(ftp_host,   id, host);
     set_at(ftp_cwd_s,  id, "/");
     ftp_count = ftp_count + 1;
-    let greeting = _ftp_wait_code(id, "220", 300);
+    let mut greeting = _ftp_wait_code(id, "220", 300);
     if len(greeting) == 0 {
         print("ftp: no greeting from " + host);
     }
@@ -210,10 +210,10 @@ fn ftp_auth(id, user, pass) {
     if id < 0 { return 0 - 1; }
     if ftp_active[id] == 0 { return 0 - 1; }
     _ftp_send(id, "USER " + user);
-    let r1 = _ftp_wait_code(id, "331", 200);
+    let mut r1 = _ftp_wait_code(id, "331", 200);
     if len(r1) == 0 { set_at(ftp_state, id, FTP_ST_ERR); return 0 - 1; }
     _ftp_send(id, "PASS " + pass);
-    let r2 = _ftp_wait_code(id, "230", 300);
+    let mut r2 = _ftp_wait_code(id, "230", 300);
     if len(r2) == 0 { set_at(ftp_state, id, FTP_ST_ERR); return 0 - 1; }
     _ftp_send(id, "TYPE I");
     _ftp_wait_code(id, "200", 100);
@@ -233,7 +233,7 @@ fn ftp_cwd(id, path) {
     if id < 0 { return 0 - 1; }
     if ftp_active[id] == 0 { return 0 - 1; }
     _ftp_send(id, "CWD " + path);
-    let resp = _ftp_wait_code(id, "250", 200);
+    let mut resp = _ftp_wait_code(id, "250", 200);
     if len(resp) > 0 { set_at(ftp_cwd_s, id, path); return 0; }
     return 0 - 1;
 }
@@ -241,18 +241,18 @@ fn ftp_cwd(id, path) {
 fn ftp_list(id, path) {
     if id < 0 { return "ftp: invalid id"; }
     if ftp_active[id] == 0 { return "ftp: not active"; }
-    let dtcb = _ftp_open_data(id);
+    let mut dtcb = _ftp_open_data(id);
     if dtcb < 0 { return "ftp: PASV failed"; }
     if len(path) > 0 { _ftp_send(id, "LIST " + path); }
     else { _ftp_send(id, "LIST"); }
     let mut r = _ftp_wait_code(id, "150", 200);
     if len(r) == 0 { tcp_close(dtcb); return "ftp: LIST timeout"; }
     let mut out = "";
-    let deadline = get_ticks() + 400;
+    let mut deadline = get_ticks() + 400;
     while get_ticks() < deadline {
-        let chunk = _ftp_read_data_tcb(dtcb);
+        let mut chunk = _ftp_read_data_tcb(dtcb);
         if len(chunk) > 0 { out = out + chunk; }
-        let ctrl = _ftp_read_ctrl(id);
+        let mut ctrl = _ftp_read_ctrl(id);
         if str_find(ctrl, "226") >= 0 {
             tcp_close(dtcb);
             return out;
@@ -265,18 +265,18 @@ fn ftp_list(id, path) {
 fn ftp_get(id, remote, localpath) {
     if id < 0 { return 0 - 1; }
     if ftp_active[id] == 0 { return 0 - 1; }
-    let dtcb = _ftp_open_data(id);
+    let mut dtcb = _ftp_open_data(id);
     if dtcb < 0 { return 0 - 1; }
     _ftp_send(id, "RETR " + remote);
     let mut r = _ftp_wait_code(id, "150", 200);
     if len(r) == 0 { tcp_close(dtcb); return 0 - 1; }
     let mut total = 0;
-    let deadline = get_ticks() + 1000;
+    let mut deadline = get_ticks() + 1000;
     let mut done = 0;
     while done == 0 {
         if get_ticks() >= deadline { done = 1; }
         let mut addr = TCP_TABLE + dtcb * TCB_SIZE;
-        let rx_buf = mem_read_u64(addr + 64);
+        let mut rx_buf = mem_read_u64(addr + 64);
         if rx_buf != 0 {
             let mut j = 0;
             while j < FTP_BUF_SZ - total {
@@ -286,12 +286,12 @@ fn ftp_get(id, remote, localpath) {
             }
             mem_zero(rx_buf, FTP_BUF_SZ);
         }
-        let ctrl = _ftp_read_ctrl(id);
+        let mut ctrl = _ftp_read_ctrl(id);
         if str_find(ctrl, "226") >= 0 { done = 1; }
     }
     tcp_close(dtcb);
     if total > 0 {
-        let fd = vfs_open(localpath, 1);
+        let mut fd = vfs_open(localpath, 1);
         if fd < 0 { return 0 - 1; }
         vfs_write(fd, FTP_BUF, total);
         vfs_close(fd);
@@ -303,12 +303,12 @@ fn ftp_get(id, remote, localpath) {
 fn ftp_put(id, localpath, remote) {
     if id < 0 { return 0 - 1; }
     if ftp_active[id] == 0 { return 0 - 1; }
-    let fd = vfs_open(localpath, 0);
+    let mut fd = vfs_open(localpath, 0);
     if fd < 0 { print("ftp: cannot open " + localpath); return 0 - 1; }
     let mut n = vfs_read(fd, FTP_BUF, FTP_BUF_SZ);
     vfs_close(fd);
     if n <= 0 { return 0 - 1; }
-    let dtcb = _ftp_open_data(id);
+    let mut dtcb = _ftp_open_data(id);
     if dtcb < 0 { return 0 - 1; }
     _ftp_send(id, "STOR " + remote);
     let mut r = _ftp_wait_code(id, "150", 200);
@@ -346,9 +346,9 @@ fn ftp_status(id) {
     if id < 0 { return "ftp: invalid"; }
     if id >= FTP_MAX { return "ftp: invalid"; }
     if ftp_active[id] == 0 { return "ftp[" + to_string(id) + "] free"; }
-    let st_names = ["free", "connected", "authing", "idle", "error"];
-    let st = ftp_state[id];
-    let st_s = "?";
+    let mut st_names = ["free", "connected", "authing", "idle", "error"];
+    let mut st = ftp_state[id];
+    let mut st_s = "?";
     if st >= 0 { if st <= 4 { st_s = st_names[st]; } }
     return "ftp[" + to_string(id) + "] " + st_s
         + " host=" + ftp_host[id]

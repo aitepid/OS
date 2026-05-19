@@ -31,7 +31,7 @@ let mut fw_cache_addrs = [];
 let mut fw_cache_sizes = [];
 
 fn firmware_request(name) {
-    let path = FW_PATH_PREFIX + name;
+    let mut path = FW_PATH_PREFIX + name;
 
     // Check cache first
     let mut ci = 0;
@@ -43,15 +43,15 @@ fn firmware_request(name) {
     }
 
     // Open file via VFS
-    let fd = vfs_open(path, 0);  // O_RDONLY = 0
+    let mut fd = vfs_open(path, 0);  // O_RDONLY = 0
     if fd < 0 {
         print("firmware: not found: " + path);
         return [0, 0];  // [addr, size]
     }
 
     // Get file size via stat
-    let stat = vfs_stat(path);
-    let size = stat[0];
+    let mut stat = vfs_stat(path);
+    let mut size = stat[0];
     if size == 0 {
         vfs_close(fd);
         return [0, 0];
@@ -63,8 +63,8 @@ fn firmware_request(name) {
     }
 
     // Allocate buffer (page-aligned)
-    let pages = (size + 4095) / 4096;
-    let buf = page_alloc_contiguous(pages);
+    let mut pages = (size + 4095) / 4096;
+    let mut buf = page_alloc_contiguous(pages);
     if buf == 0 {
         print("firmware: allocation failed for " + to_string(pages) + " pages");
         vfs_close(fd);
@@ -72,7 +72,7 @@ fn firmware_request(name) {
     }
 
     // Read into buffer
-    let bytes_read = vfs_read(fd, buf, size);
+    let mut bytes_read = vfs_read(fd, buf, size);
     vfs_close(fd);
 
     // Cache the result
@@ -91,18 +91,18 @@ fn firmware_release(name) {
     while i < len(fw_cache_names) {
         if fw_cache_names[i] == name {
             let mut addr = fw_cache_addrs[i];
-            let size = fw_cache_sizes[i];
+            let mut size = fw_cache_sizes[i];
             // Zero for security
             mem_zero(addr, size);
             // Free pages
-            let pages = (size + 4095) / 4096;
+            let mut pages = (size + 4095) / 4096;
             let mut p = 0;
             while p < pages {
                 page_free(addr + p * 4096);
                 p = p + 1;
             }
             // Remove from cache (swap with last)
-            let last = len(fw_cache_names) - 1;
+            let mut last = len(fw_cache_names) - 1;
             fw_cache_names[i] = fw_cache_names[last];
             fw_cache_addrs[i] = fw_cache_addrs[last];
             fw_cache_sizes[i] = fw_cache_sizes[last];

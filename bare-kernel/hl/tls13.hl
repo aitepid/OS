@@ -96,7 +96,7 @@ fn _tls_mix(a, b) {
 }
 
 fn tls_new_session() {
-    let sid = tls_n_sessions;
+    let mut sid = tls_n_sessions;
     tls_n_sessions += 1;
     return sid;
 }
@@ -105,7 +105,7 @@ fn tls_client_hello(sid, client_rand, eph_priv) {
     set_at(tls_client_rand, sid, client_rand);
     set_at(tls_eph_priv,    sid, eph_priv);
     // eph_pub = eph_priv * 2 + 1 mod TLS_PRIME
-    let epub = eph_priv * 2 + 1;
+    let mut epub = eph_priv * 2 + 1;
     epub = epub - (epub / TLS_PRIME) * TLS_PRIME;
     set_at(tls_eph_pub, sid, epub);
     set_at(tls_state,   sid, TLS_CH_SENT);
@@ -115,18 +115,18 @@ fn tls_client_hello(sid, client_rand, eph_priv) {
 fn tls_server_hello(sid, server_rand, server_eph_pub) {
     set_at(tls_server_rand, sid, server_rand);
     // DH shared secret = eph_priv * server_eph_pub mod TLS_PRIME
-    let dh = tls_eph_priv[sid] * server_eph_pub;
-    let shared = dh - (dh / TLS_PRIME) * TLS_PRIME;
+    let mut dh = tls_eph_priv[sid] * server_eph_pub;
+    let mut shared = dh - (dh / TLS_PRIME) * TLS_PRIME;
 
     // Key schedule
-    let early  = _tls_hkdf_expand(0, tls_client_rand[sid]);
-    let hs     = _tls_mix(early, shared);
-    let hs_s   = _tls_hkdf_expand(hs, server_rand);
-    let master = _tls_hkdf_expand(hs_s, shared);
-    let ck     = _tls_hkdf_expand(master, 1);
-    let sk     = _tls_hkdf_expand(master, 2);
-    let civ    = _tls_hkdf_expand(ck, 3);
-    let siv    = _tls_hkdf_expand(sk, 4);
+    let mut early = _tls_hkdf_expand(0, tls_client_rand[sid]);
+    let mut hs = _tls_mix(early, shared);
+    let mut hs_s = _tls_hkdf_expand(hs, server_rand);
+    let mut master = _tls_hkdf_expand(hs_s, shared);
+    let mut ck = _tls_hkdf_expand(master, 1);
+    let mut sk = _tls_hkdf_expand(master, 2);
+    let mut civ = _tls_hkdf_expand(ck, 3);
+    let mut siv = _tls_hkdf_expand(sk, 4);
 
     set_at(tls_early_secret,  sid, early);
     set_at(tls_hs_secret,     sid, hs_s);
@@ -151,9 +151,9 @@ fn tls_send(sid, plaintext) {
     if tls_state[sid] != TLS_ESTAB {
         return 0 - 1;
     }
-    let ck  = tls_client_key[sid];
-    let seq = tls_send_seq[sid];
-    let ct  = plaintext + ck + seq;
+    let mut ck = tls_client_key[sid];
+    let mut seq = tls_send_seq[sid];
+    let mut ct = plaintext + ck + seq;
     ct = ct - (ct / TLS_SPACE) * TLS_SPACE;
     set_at(tls_send_seq, sid, seq + 1);
     return ct;
@@ -164,9 +164,9 @@ fn tls_recv(sid, ciphertext) {
     if tls_state[sid] != TLS_ESTAB {
         return 0 - 1;
     }
-    let sk  = tls_server_key[sid];
-    let seq = tls_recv_seq[sid];
-    let pt  = ciphertext - sk - seq + TLS_SPACE + TLS_SPACE;
+    let mut sk = tls_server_key[sid];
+    let mut seq = tls_recv_seq[sid];
+    let mut pt = ciphertext - sk - seq + TLS_SPACE + TLS_SPACE;
     pt = pt - (pt / TLS_SPACE) * TLS_SPACE;
     set_at(tls_recv_seq, sid, seq + 1);
     return pt;
@@ -192,27 +192,27 @@ fn tls_get_master_secret(sid)  { return tls_master_secret[sid]; }
 fn tls_test() {
     tls_init();
 
-    let sid = tls_new_session();
+    let mut sid = tls_new_session();
 
     // ClientHello: rand=1111, eph_priv=333
-    let epub = tls_client_hello(sid, 1111, 333);
+    let mut epub = tls_client_hello(sid, 1111, 333);
 
     // ServerHello: server_rand=2222, server_eph_pub=777
-    let ck = tls_server_hello(sid, 2222, 777);
+    let mut ck = tls_server_hello(sid, 2222, 777);
 
     // Finish handshake
     tls_handshake_finish(sid);
 
     let mut state = tls_session_state(sid);
-    let sk    = tls_get_server_key(sid);
-    let ms    = tls_get_master_secret(sid);
+    let mut sk = tls_get_server_key(sid);
+    let mut ms = tls_get_master_secret(sid);
 
     // Send plaintext=9999
-    let ct = tls_send(sid, 9999);
+    let mut ct = tls_send(sid, 9999);
 
     // Simulate server decrypts: ct was encrypted with client_key+0
     // So to recover: pt_check = (ct - ck + SPACE) mod SPACE
-    let pt_check = ct - ck + TLS_SPACE;
+    let mut pt_check = ct - ck + TLS_SPACE;
     pt_check = pt_check - (pt_check / TLS_SPACE) * TLS_SPACE;
 
     print("tls_test: state=" + to_string(state)

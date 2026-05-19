@@ -53,7 +53,7 @@ fn b64_init() {
 // ============================================================
 
 fn _b64_read(path) {
-    let fd = vfs_open(path, 0);
+    let mut fd = vfs_open(path, 0);
     if fd < 0 { return 0; }
     let mut n = vfs_read(fd, B64_IN_BUF, B64_BUF_SZ);
     vfs_close(fd);
@@ -61,7 +61,7 @@ fn _b64_read(path) {
 }
 
 fn _b64_write(path, sz) {
-    let fd = vfs_open(path, 1);
+    let mut fd = vfs_open(path, 1);
     if fd < 0 { return 0 - 1; }
     vfs_write(fd, B64_OUT_BUF, sz);
     vfs_close(fd);
@@ -90,25 +90,25 @@ fn _b64_dec_char(c) {
 // ============================================================
 
 fn b64_encode_file(src, dst) {
-    let in_sz = _b64_read(src);
+    let mut in_sz = _b64_read(src);
     if in_sz <= 0 { return 0 - 1; }
 
     let mut out = 0;
     let mut i   = 0;
     while i < in_sz {
-        let b1 = _b64_rb(i);
-        let b2_raw = i + 1;
-        let b3_raw = i + 2;
-        let b2 = 0;
-        let b3 = 0;
+        let mut b1 = _b64_rb(i);
+        let mut b2_raw = i + 1;
+        let mut b3_raw = i + 2;
+        let mut b2 = 0;
+        let mut b3 = 0;
         if b2_raw < in_sz { b2 = _b64_rb(b2_raw); }
         if b3_raw < in_sz { b3 = _b64_rb(b3_raw); }
 
         // 6-bit groups (arithmetic shift)
-        let v1 = b1 / 4;
-        let v2 = (b1 % 4) * 16 + b2 / 16;
-        let v3 = (b2 % 16) * 4 + b3 / 64;
-        let v4 = b3 % 64;
+        let mut v1 = b1 / 4;
+        let mut v2 = (b1 % 4) * 16 + b2 / 16;
+        let mut v3 = (b2 % 16) * 4 + b3 / 64;
+        let mut v4 = b3 % 64;
 
         _b64_wb(out, B64_ALPHA[v1]); out = out + 1;
         _b64_wb(out, B64_ALPHA[v2]); out = out + 1;
@@ -138,35 +138,35 @@ fn b64_encode_file(src, dst) {
 // ============================================================
 
 fn b64_decode_file(src, dst) {
-    let in_sz = _b64_read(src);
+    let mut in_sz = _b64_read(src);
     if in_sz <= 0 { return 0 - 1; }
 
     // Write decoded bytes directly into OUT_BUF
     let mut out = 0;
     let mut i   = 0;
     while i + 3 < in_sz {
-        let c1 = _b64_rb(i);
-        let c2 = _b64_rb(i + 1);
-        let c3 = _b64_rb(i + 2);
-        let c4 = _b64_rb(i + 3);
-        let v1 = _b64_dec_char(c1);
-        let v2 = _b64_dec_char(c2);
-        let v3 = _b64_dec_char(c3);
-        let v4 = _b64_dec_char(c4);
+        let mut c1 = _b64_rb(i);
+        let mut c2 = _b64_rb(i + 1);
+        let mut c3 = _b64_rb(i + 2);
+        let mut c4 = _b64_rb(i + 3);
+        let mut v1 = _b64_dec_char(c1);
+        let mut v2 = _b64_dec_char(c2);
+        let mut v3 = _b64_dec_char(c3);
+        let mut v4 = _b64_dec_char(c4);
         if v1 >= 0 {
             if v2 >= 0 {
                 // Byte 1: top 6 bits of v1 + top 2 bits of v2
-                let byte1 = v1 * 4 + v2 / 16;
+                let mut byte1 = v1 * 4 + v2 / 16;
                 _b64_wb(out, byte1); out = out + 1;
                 if c3 == 61 { i = in_sz; }  // padding → done
                 else {
                     if v3 >= 0 {
-                        let byte2 = (v2 % 16) * 16 + v3 / 4;
+                        let mut byte2 = (v2 % 16) * 16 + v3 / 4;
                         _b64_wb(out, byte2); out = out + 1;
                         if c4 == 61 { i = in_sz; }
                         else {
                             if v4 >= 0 {
-                                let byte3 = (v3 % 4) * 64 + v4;
+                                let mut byte3 = (v3 % 4) * 64 + v4;
                                 _b64_wb(out, byte3); out = out + 1;
                             }
                         }
@@ -202,9 +202,9 @@ fn b64_encode_str(text) {
     let mut out = 0;
     i = 0;
     while i < n {
-        let b1 = mem_read_u8(B64_IN_BUF + i);
-        let b2 = 0;
-        let b3 = 0;
+        let mut b1 = mem_read_u8(B64_IN_BUF + i);
+        let mut b2 = 0;
+        let mut b3 = 0;
         if i + 1 < n { b2 = mem_read_u8(B64_IN_BUF + i + 1); }
         if i + 2 < n { b3 = mem_read_u8(B64_IN_BUF + i + 2); }
         _b64_wb(out, B64_ALPHA[b1 / 4]); out = out + 1;
@@ -233,19 +233,19 @@ fn b64_decode_str(b64) {
     let mut out = 0;
     let mut i = 0;
     while i + 3 < n {
-        let v1 = _b64_dec_char(str_char_code(b64, i));
-        let v2 = _b64_dec_char(str_char_code(b64, i + 1));
-        let v3 = _b64_dec_char(str_char_code(b64, i + 2));
-        let v4 = _b64_dec_char(str_char_code(b64, i + 3));
+        let mut v1 = _b64_dec_char(str_char_code(b64, i));
+        let mut v2 = _b64_dec_char(str_char_code(b64, i + 1));
+        let mut v3 = _b64_dec_char(str_char_code(b64, i + 2));
+        let mut v4 = _b64_dec_char(str_char_code(b64, i + 3));
         if v1 >= 0 {
             if v2 >= 0 {
                 _b64_wb(out, v1 * 4 + v2 / 16); out = out + 1;
-                let c3ch = str_char_code(b64, i + 2);
+                let mut c3ch = str_char_code(b64, i + 2);
                 if c3ch == 61 { i = n; }
                 else {
                     if v3 >= 0 {
                         _b64_wb(out, (v2 % 16) * 16 + v3 / 4); out = out + 1;
-                        let c4ch = str_char_code(b64, i + 3);
+                        let mut c4ch = str_char_code(b64, i + 3);
                         if c4ch == 61 { i = n; }
                         else {
                             if v4 >= 0 { _b64_wb(out, (v3 % 4) * 64 + v4); out = out + 1; }

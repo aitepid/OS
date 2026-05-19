@@ -132,7 +132,7 @@ fn _toml_detect_type(val) {
 fn _toml_parse_val(raw) {
     let mut n = len(raw);
     if n == 0 { return ""; }
-    let c0 = str_char_code(raw, 0);
+    let mut c0 = str_char_code(raw, 0);
     // Quoted string: strip outer quotes
     if c0 == 34 {   // '"'
         if n >= 2 { return str_sub(raw, 1, n - 1); }
@@ -216,7 +216,7 @@ fn toml_delete(section, key) {
 // ============================================================
 
 fn toml_load(path) {
-    let fd = vfs_open(path, 0);
+    let mut fd = vfs_open(path, 0);
     if fd < 0 { print("toml: cannot open " + path); return 0 - 1; }
     let mut n = vfs_read(fd, TOML_BUF, TOML_BUF_SZ);
     vfs_close(fd);
@@ -236,32 +236,32 @@ fn toml_load(path) {
 
     // Split on newlines, process each line
     let mut line_start = 0;
-    let tlen = len(text);
+    let mut tlen = len(text);
     let mut li = 0;
     while li <= tlen {
-        let at_end = 0;
+        let mut at_end = 0;
         if li == tlen { let at_end = 1; }
-        let is_nl = 0;
+        let mut is_nl = 0;
         if li < tlen { if str_char_code(text, li) == 10 { let is_nl = 1; } }
         if is_nl == 1 {
-            let line = _toml_trim(str_sub(text, line_start, li));
+            let mut line = _toml_trim(str_sub(text, line_start, li));
             line_start = li + 1;
-            let llen = len(line);
+            let mut llen = len(line);
             if llen == 0 { li = li + 1; }
             else {
-                let c0 = str_char_code(line, 0);
+                let mut c0 = str_char_code(line, 0);
                 if c0 == 35 { li = li + 1; }   // '#' comment
                 else {
                     if c0 == 91 {   // '[' section header
-                        let rb = str_find(line, "]");
+                        let mut rb = str_find(line, "]");
                         if rb > 0 { cur_section = str_sub(line, 1, rb); }
                         li = li + 1;
                     } else {
                         // key = value
-                        let eq = str_find(line, "=");
+                        let mut eq = str_find(line, "=");
                         if eq > 0 {
-                            let key = _toml_trim(str_sub(line, 0, eq));
-                            let raw = _toml_trim(str_sub(line, eq + 1, llen));
+                            let mut key = _toml_trim(str_sub(line, 0, eq));
+                            let mut raw = _toml_trim(str_sub(line, eq + 1, llen));
                             // Strip inline comment after unquoted value
                             let mut val = _toml_parse_val(raw);
                             toml_set(cur_section, key, val);
@@ -292,7 +292,7 @@ fn toml_save(path) {
                 text = text + "\n[" + cur_sec + "]\n";
             }
         }
-        let typ = toml_types[i];
+        let mut typ = toml_types[i];
         let mut val = toml_vals[i];
         let mut val_out = val;
         if typ == "s" { val_out = "\"" + val + "\""; }
@@ -307,7 +307,7 @@ fn toml_save(path) {
         mem_write_u8(TOML_BUF + j, str_char_code(text, j));
         j = j + 1;
     }
-    let fd = vfs_open(path, 1);
+    let mut fd = vfs_open(path, 1);
     if fd < 0 { print("toml: cannot create " + path); return 0 - 1; }
     vfs_write(fd, TOML_BUF, n);
     vfs_close(fd);

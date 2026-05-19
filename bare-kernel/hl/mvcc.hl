@@ -43,7 +43,7 @@ fn mvcc_tick() {
 
 fn mvcc_begin_tx(slot) {
     // Assign snapshot timestamp to txn slot
-    let ts = mvcc_tick();
+    let mut ts = mvcc_tick();
     set_at(mv_tx_snap, slot, ts);
     return ts;
 }
@@ -69,7 +69,7 @@ fn mvcc_write(key, val, xmin_ts) {
     }
     // Append new version
     if mv_n >= MV_MAXVER { return 0 - 1; }
-    let id = mv_n;
+    let mut id = mv_n;
     set_at(mv_key,  id, key);
     set_at(mv_val,  id, val);
     set_at(mv_xmin, id, xmin_ts);
@@ -82,16 +82,16 @@ fn mvcc_write(key, val, xmin_ts) {
 fn mvcc_read(key, snap_ts) {
     // Return value of key visible at snap_ts, or -1 if not found
     // Scan newest-first to return latest valid version
-    let best_val  = 0 - 1;
-    let best_xmin = 0;
+    let mut best_val = 0 - 1;
+    let mut best_xmin = 0;
     let mut i = 0;
     while i < mv_n {
         if mv_live[i] == 1 {
             if mv_key[i] == key {
-                let xmin = mv_xmin[i];
-                let xmax = mv_xmax[i];
+                let mut xmin = mv_xmin[i];
+                let mut xmax = mv_xmax[i];
                 // Visible if xmin <= snap_ts AND (xmax == 0 OR xmax > snap_ts)
-                let vis = 0;
+                let mut vis = 0;
                 if xmin <= snap_ts {
                     if xmax == MV_NULL {
                         vis = 1;
@@ -115,7 +115,7 @@ fn mvcc_read(key, snap_ts) {
 
 fn mvcc_vacuum(horizon) {
     // Remove (mark dead) versions with xmax > 0 and xmax <= horizon
-    let removed = 0;
+    let mut removed = 0;
     let mut i = 0;
     while i < mv_n {
         if mv_live[i] == 1 {
@@ -146,34 +146,34 @@ fn mvcc_test() {
     mvcc_init();
 
     // Txn A (snap ts=1): write key=5 val=50
-    let tsA = mvcc_begin_tx(0);   // ts=1
+    let mut tsA = mvcc_begin_tx(0);   // ts=1
     mvcc_write(5, 50, tsA);
 
     // Txn B (snap ts=2): write key=5 val=55 (newer version)
-    let tsB = mvcc_begin_tx(1);   // ts=2
+    let mut tsB = mvcc_begin_tx(1);   // ts=2
     mvcc_write(5, 55, tsB);
 
     // Txn C (snap ts=3): write key=7 val=70
-    let tsC = mvcc_begin_tx(2);   // ts=3
+    let mut tsC = mvcc_begin_tx(2);   // ts=3
     mvcc_write(7, 70, tsC);
 
     // Read key=5 at snapshot ts=1 -> should see val=50 (version created at ts=1)
-    let r1 = mvcc_read(5, 1);
+    let mut r1 = mvcc_read(5, 1);
     // Read key=5 at snapshot ts=2 -> should see val=55 (version created at ts=2)
-    let r2 = mvcc_read(5, 2);
+    let mut r2 = mvcc_read(5, 2);
     // Read key=5 at snapshot ts=3 -> should see val=55 (still current)
-    let r3 = mvcc_read(5, 3);
+    let mut r3 = mvcc_read(5, 3);
     // Read key=7 at snapshot ts=2 -> miss (created at ts=3)
-    let r4 = mvcc_read(7, 2);
+    let mut r4 = mvcc_read(7, 2);
     // Read key=7 at snapshot ts=3 -> val=70
-    let r5 = mvcc_read(7, 3);
+    let mut r5 = mvcc_read(7, 3);
 
     print("mvcc_test: r1=" + to_string(r1) + " r2=" + to_string(r2) + " r3=" + to_string(r3));
     print("mvcc_test: r4=" + to_string(r4) + " r5=" + to_string(r5));
     print("mvcc_test: vers=" + to_string(mvcc_ver_count()) + " live=" + to_string(mvcc_live_count()));
 
     // Vacuum: remove versions with xmax <= 2 (old ver of key=5 closed at ts=2)
-    let vac = mvcc_vacuum(2);
+    let mut vac = mvcc_vacuum(2);
     print("mvcc_test: vacuumed=" + to_string(vac) + " live_after=" + to_string(mvcc_live_count()));
 
     if r1 == 50 {

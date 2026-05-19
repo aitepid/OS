@@ -29,18 +29,18 @@ fn procfs_read(path) {
     }
 
     if path == "/proc/uptime" {
-        let secs = uptime_secs();
-        let idle = secs / 2;  // approximate idle as half
+        let mut secs = uptime_secs();
+        let mut idle = secs / 2;  // approximate idle as half
         return to_string(secs) + "." + "00 " + to_string(idle) + ".00";
     }
 
     if path == "/proc/meminfo" {
-        let free_pages = page_count_free();
-        let total_pages = free_pages + 1025;
-        let total_kb = total_pages * 4;
-        let free_kb = free_pages * 4;
-        let used_kb = total_kb - free_kb;
-        let swap_free_kb = (16384 - swap_used) * 4;
+        let mut free_pages = page_count_free();
+        let mut total_pages = free_pages + 1025;
+        let mut total_kb = total_pages * 4;
+        let mut free_kb = free_pages * 4;
+        let mut used_kb = total_kb - free_kb;
+        let mut swap_free_kb = (16384 - swap_used) * 4;
         return "MemTotal:     " + to_string(total_kb) + " kB\n"
              + "MemFree:      " + to_string(free_kb) + " kB\n"
              + "MemUsed:      " + to_string(used_kb) + " kB\n"
@@ -49,7 +49,7 @@ fn procfs_read(path) {
     }
 
     if path == "/proc/cpuinfo" {
-        let ncpus = smp_cpu_count();
+        let mut ncpus = smp_cpu_count();
         let mut out = "";
         let mut i = 0;
         while i < ncpus {
@@ -69,15 +69,15 @@ fn procfs_read(path) {
         let mut i = 0;
         while i < mount_count {
             let mut addr = MOUNT_TABLE + i * 64;
-            let valid = mem_read_u64(addr);
+            let mut valid = mem_read_u64(addr);
             if valid == 1 {
-                let fs_type = mem_read_u64(addr + 16);
-                let mount_path = mem_read_string(addr + 8, 64);
-                let fs_name = "unknown";
+                let mut fs_type = mem_read_u64(addr + 16);
+                let mut mount_path = mem_read_string(addr + 8, 64);
+                let mut fs_name = "unknown";
                 if fs_type < len(PROCFS_FS_NAMES) {
                     fs_name = PROCFS_FS_NAMES[fs_type];
                 }
-                let rw = "rw";
+                let mut rw = "rw";
                 if fs_type == 3 { rw = "ro"; }  // ext4 is read-only
                 if fs_type == 4 { rw = "ro"; }  // procfs is read-only
                 out = out + fs_name + " " + mount_path + " " + fs_name + " " + rw + " 0 0\n";
@@ -88,15 +88,15 @@ fn procfs_read(path) {
     }
 
     if path == "/proc/stat" {
-        let ticks = get_ticks();
-        let active = task_count_active();
+        let mut ticks = get_ticks();
+        let mut active = task_count_active();
         return "cpu  " + to_string(ticks) + " 0 0 0 0 0 0\n"
              + "processes " + to_string(active) + "\n"
              + "running " + to_string(active) + "\n";
     }
 
     if path == "/proc/net/arp" {
-        let tbl = arp_table_snapshot();
+        let mut tbl = arp_table_snapshot();
         let mut out = "IP address       HW type  HW address         Flags  Device\n";
         let mut i = 0;
         while i < len(tbl) {
@@ -121,14 +121,14 @@ fn procfs_read(path) {
     }
 
     // /proc/<pid>/status  — look up task by PID
-    let parts = _vfs_split_path(path);
+    let mut parts = _vfs_split_path(path);
     if len(parts) == 3 {
         if parts[2] == "status" {
-            let pid = parse_int(parts[1]);
+            let mut pid = parse_int(parts[1]);
             if pid >= 0 {
-                let taddr = task_addr(pid);
-                let tstate = mem_read_u64(taddr + 8);
-                let tname = mem_read_string(taddr + 32, 32);
+                let mut taddr = task_addr(pid);
+                let mut tstate = mem_read_u64(taddr + 8);
+                let mut tname = mem_read_string(taddr + 32, 32);
                 return "Name:\t" + tname + "\n"
                      + "Pid:\t" + to_string(pid) + "\n"
                      + "State:\t" + to_string(tstate) + "\n"

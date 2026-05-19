@@ -50,14 +50,14 @@ fn zlib_compress(data, data_len) {
     pos = pos + 1;
 
     // DEFLATE compressed payload
-    let compressed_len = _zlib_deflate(data, data_len, zlib_output_buf, pos);
+    let mut compressed_len = _zlib_deflate(data, data_len, zlib_output_buf, pos);
     if compressed_len < 0 {
         return 0 - 1;
     }
     pos = pos + compressed_len;
 
     // Adler-32 checksum (4 bytes, big-endian)
-    let adler = _zlib_adler32(data, data_len);
+    let mut adler = _zlib_adler32(data, data_len);
     set_at(zlib_output_buf, pos,     (adler / 16777216) % 256);
     set_at(zlib_output_buf, pos + 1, (adler / 65536)    % 256);
     set_at(zlib_output_buf, pos + 2, (adler / 256)      % 256);
@@ -75,28 +75,28 @@ fn zlib_decompress(data, data_len) {
         return 0 - 1;
     }
 
-    let cmf = data[0];
-    let flg = data[1];
+    let mut cmf = data[0];
+    let mut flg = data[1];
 
-    let cm = cmf % 16;
+    let mut cm = cmf % 16;
     if cm != 8 {
         print("ZLIB: unsupported compression method");
         return 0 - 2;
     }
 
-    let check = (cmf * 256 + flg) % 31;
+    let mut check = (cmf * 256 + flg) % 31;
     if check != 0 {
         print("ZLIB: invalid header");
         return 0 - 3;
     }
 
-    let decompressed_len = _zlib_inflate(data, 2, data_len - 6, zlib_output_buf);
+    let mut decompressed_len = _zlib_inflate(data, 2, data_len - 6, zlib_output_buf);
     if decompressed_len < 0 {
         return 0 - 4;
     }
 
-    let stored_adler   = _zlib_read_u32_be(data, data_len - 4);
-    let computed_adler = _zlib_adler32(zlib_output_buf, decompressed_len);
+    let mut stored_adler = _zlib_read_u32_be(data, data_len - 4);
+    let mut computed_adler = _zlib_adler32(zlib_output_buf, decompressed_len);
 
     if stored_adler != computed_adler {
         print("ZLIB: checksum mismatch");
@@ -137,7 +137,7 @@ fn _zlib_deflate(data, data_len, output, start_pos) {
         pos = pos + 2;
 
         // NLEN = one's complement of LEN
-        let nlen = 65535 - block_size;
+        let mut nlen = 65535 - block_size;
         set_at(output, pos,     nlen % 256);
         set_at(output, pos + 1, nlen / 256);
         pos = pos + 2;
@@ -168,16 +168,16 @@ fn _zlib_inflate(data, start_pos, compressed_len, output) {
             is_final = 1;
         }
         if is_final == 0 {
-            let header   = data[pos];
+            let mut header = data[pos];
             pos      = pos + 1;
 
             is_final = header % 2;
-            let btype    = (header / 2) % 4;
+            let mut btype = (header / 2) % 4;
 
             if btype == 0 {
-                let block_len = data[pos] + data[pos + 1] * 256;
+                let mut block_len = data[pos] + data[pos + 1] * 256;
                 pos = pos + 2;
-                let nlen      = data[pos] + data[pos + 1] * 256;
+                let mut nlen = data[pos] + data[pos + 1] * 256;
                 pos = pos + 2;
 
                 if block_len + nlen != 65535 {
@@ -207,7 +207,7 @@ fn _zlib_adler32(data, data_len) {
     let mut s1 = 1;
     let mut s2 = 0;
     let mut i  = 0;
-    let MOD_ADLER = 65521;
+    let mut MOD_ADLER = 65521;
 
     while i < data_len {
         s1 = (s1 + data[i]) % MOD_ADLER;
@@ -220,10 +220,10 @@ fn _zlib_adler32(data, data_len) {
 
 // Read a 32-bit big-endian value
 fn _zlib_read_u32_be(buf, offset) {
-    let b0 = buf[offset];
-    let b1 = buf[offset + 1];
-    let b2 = buf[offset + 2];
-    let b3 = buf[offset + 3];
+    let mut b0 = buf[offset];
+    let mut b1 = buf[offset + 1];
+    let mut b2 = buf[offset + 2];
+    let mut b3 = buf[offset + 3];
     return b0 * 16777216 + b1 * 65536 + b2 * 256 + b3;
 }
 
@@ -269,7 +269,7 @@ fn zlib_format_info(original_len, compressed_len) {
 // Append a string into buf at pos — returns updated pos
 fn _zlib_append_str(buf, pos, str) {
     let mut i    = 0;
-    let str_len  = len(str);
+    let mut str_len = len(str);
     while i < str_len {
         set_at(buf, pos, str[i]);
         pos = pos + 1;
@@ -305,10 +305,10 @@ fn _zlib_append_num(buf, pos, num) {
 
 // Self-test
 fn zlib_test() {
-    let test_str = "Hello, ZLIB! This is a test string for compression.";
-    let tlen     = len(test_str);
+    let mut test_str = "Hello, ZLIB! This is a test string for compression.";
+    let mut tlen = len(test_str);
 
-    let comp_len = zlib_compress(test_str, tlen);
+    let mut comp_len = zlib_compress(test_str, tlen);
     if comp_len < 1 {
         print("ZLIB test: compression failed");
         return 0 - 1;
@@ -316,7 +316,7 @@ fn zlib_test() {
 
     print("ZLIB test: compression succeeded");
 
-    let decomp_len = zlib_decompress(zlib_output_buf, comp_len);
+    let mut decomp_len = zlib_decompress(zlib_output_buf, comp_len);
     if decomp_len < 1 {
         print("ZLIB test: decompression failed");
         return 0 - 2;

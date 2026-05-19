@@ -65,8 +65,8 @@ fn _xxhash_pow2(exp) {
 // ---------------------------------------------------------------------------
 fn _xxhash_rotl32(value, bits) {
     if bits == 0 { return value; }
-    let left  = (value * _xxhash_pow2(bits)) % 4294967296;
-    let right = value / _xxhash_pow2(32 - bits);
+    let mut left = (value * _xxhash_pow2(bits)) % 4294967296;
+    let mut right = value / _xxhash_pow2(32 - bits);
     return (left + right) % 4294967296;
 }
 
@@ -74,7 +74,7 @@ fn _xxhash_rotl32(value, bits) {
 // _xxhash_read32 -- read 4-byte little-endian word from string data
 // ---------------------------------------------------------------------------
 fn _xxhash_read32(data, pos, dlen) {
-    let b0 = str_char_code(data, pos);
+    let mut b0 = str_char_code(data, pos);
     let mut b1 = 0;
     let mut b2 = 0;
     let mut b3 = 0;
@@ -110,7 +110,7 @@ fn _xxhash_avalanche32(hash) {
 // xxhash32 -- hash a string with xxHash32; returns 32-bit digest
 // ---------------------------------------------------------------------------
 fn xxhash32(data, dlen) {
-    let seed = xxhash_seed;
+    let mut seed = xxhash_seed;
     let mut hash = 0;
 
     if dlen >= 16 {
@@ -128,10 +128,10 @@ fn xxhash32(data, dlen) {
                 done_blocks = 1;
             }
             if done_blocks == 0 {
-                let k1 = _xxhash_read32(data, pos,      dlen);
-                let k2 = _xxhash_read32(data, pos + 4,  dlen);
-                let k3 = _xxhash_read32(data, pos + 8,  dlen);
-                let k4 = _xxhash_read32(data, pos + 12, dlen);
+                let mut k1 = _xxhash_read32(data, pos,      dlen);
+                let mut k2 = _xxhash_read32(data, pos + 4,  dlen);
+                let mut k3 = _xxhash_read32(data, pos + 8,  dlen);
+                let mut k4 = _xxhash_read32(data, pos + 12, dlen);
                 v1 = _xxhash_round32(v1, k1);
                 v2 = _xxhash_round32(v2, k2);
                 v3 = _xxhash_round32(v3, k3);
@@ -150,7 +150,7 @@ fn xxhash32(data, dlen) {
                 rem_done = 1;
             }
             if rem_done == 0 {
-                let bval = str_char_code(data, pos);
+                let mut bval = str_char_code(data, pos);
                 hash = (hash + bval * XXHASH_PRIME5_32) % 4294967296;
                 hash = (_xxhash_rotl32(hash, 11) * XXHASH_PRIME1_32) % 4294967296;
                 pos = pos + 1;
@@ -168,7 +168,7 @@ fn xxhash32(data, dlen) {
                 sdone = 1;
             }
             if sdone == 0 {
-                let bval = str_char_code(data, pos);
+                let mut bval = str_char_code(data, pos);
                 hash = (hash + bval * XXHASH_PRIME5_32) % 4294967296;
                 hash = (_xxhash_rotl32(hash, 11) * XXHASH_PRIME1_32) % 4294967296;
                 pos = pos + 1;
@@ -188,14 +188,14 @@ fn xxhash32(data, dlen) {
 // xxhash64 -- simplified 64-bit hash: two xxHash32 passes, different seeds
 // ---------------------------------------------------------------------------
 fn xxhash64(data, dlen) {
-    let seed1 = xxhash_seed;
-    let seed2 = (xxhash_seed * 2654435761) % 4294967296;
+    let mut seed1 = xxhash_seed;
+    let mut seed2 = (xxhash_seed * 2654435761) % 4294967296;
 
     xxhash_seed = seed1;
-    let hash1 = xxhash32(data, dlen);
+    let mut hash1 = xxhash32(data, dlen);
 
     xxhash_seed = seed2;
-    let hash2 = xxhash32(data, dlen);
+    let mut hash2 = xxhash32(data, dlen);
 
     xxhash_seed = seed1;
 
@@ -217,12 +217,12 @@ fn xxhash64(data, dlen) {
 // _xxhash_to_hex -- render 32-bit value into xxhash_hex_buf
 // ---------------------------------------------------------------------------
 fn _xxhash_to_hex(value) {
-    let hex_chars = "0123456789abcdef";
+    let mut hex_chars = "0123456789abcdef";
     let mut pos = 0;
     let mut i = 7;
     while i >= 0 {
-        let shift  = i * 4;
-        let nibble = (value / _xxhash_pow2(shift)) % 16;
+        let mut shift = i * 4;
+        let mut nibble = (value / _xxhash_pow2(shift)) % 16;
         set_at(xxhash_hex_buf, pos, str_char_code(hex_chars, nibble));
         pos = pos + 1;
         i = i - 1;
@@ -242,11 +242,11 @@ fn xxhash_get_hex() {
 // xxhash_get_hex64 -- return 64-bit state as 16-char hex string
 // ---------------------------------------------------------------------------
 fn xxhash_get_hex64() {
-    let hex_chars = "0123456789abcdef";
+    let mut hex_chars = "0123456789abcdef";
     let mut pos = 0;
     let mut i = 7;
     while i >= 0 {
-        let bval = xxhash_state[i];
+        let mut bval = xxhash_state[i];
         set_at(xxhash_hex64_buf, pos, str_char_code(hex_chars, bval / 16));
         pos = pos + 1;
         set_at(xxhash_hex64_buf, pos, str_char_code(hex_chars, bval % 16));
@@ -269,12 +269,12 @@ fn xxhash_get_result() {
 // ---------------------------------------------------------------------------
 fn xxhash_benchmark(data, dlen, iterations) {
     let mut i = 0;
-    let start_ticks = get_ticks();
+    let mut start_ticks = get_ticks();
     while i < iterations {
         xxhash32(data, dlen);
         i = i + 1;
     }
-    let end_ticks = get_ticks();
+    let mut end_ticks = get_ticks();
     return end_ticks - start_ticks;
 }
 
@@ -282,13 +282,13 @@ fn xxhash_benchmark(data, dlen, iterations) {
 // xxhash_test -- basic self-test
 // ---------------------------------------------------------------------------
 fn xxhash_test() {
-    let test_data = "The quick brown fox jumps over the lazy dog";
-    let dlen = len(test_data);
+    let mut test_data = "The quick brown fox jumps over the lazy dog";
+    let mut dlen = len(test_data);
 
     // Determinism with default seed
     xxhash_set_seed(0);
-    let hash1 = xxhash32(test_data, dlen);
-    let hash2 = xxhash32(test_data, dlen);
+    let mut hash1 = xxhash32(test_data, dlen);
+    let mut hash2 = xxhash32(test_data, dlen);
     if hash1 != hash2 {
         print("xxhash_test: determinism failed");
         return 0 - 1;
@@ -296,7 +296,7 @@ fn xxhash_test() {
 
     // Seed variation produces different hash
     xxhash_set_seed(12345);
-    let hash3 = xxhash32(test_data, dlen);
+    let mut hash3 = xxhash32(test_data, dlen);
     if hash1 == hash3 {
         print("xxhash_test: seed variation failed");
         return 0 - 2;

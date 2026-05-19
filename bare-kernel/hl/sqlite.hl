@@ -89,7 +89,7 @@ fn _db_find(name) {
 fn _db_split(s, delim) {
     let mut parts = [];
     let mut n = len(s);
-    let dl = len(delim);
+    let mut dl = len(delim);
     let mut start = 0;
     let mut go = 1;
     while go == 1 {
@@ -107,7 +107,7 @@ fn _db_split(s, delim) {
 
 // Find index of col_name in tab-separated schema string
 fn _db_col_idx(schema, col_name) {
-    let cols = _db_split(schema, DB_TAB_STR);
+    let mut cols = _db_split(schema, DB_TAB_STR);
     let mut i = 0;
     while i < len(cols) {
         if cols[i] == col_name { return i; }
@@ -118,7 +118,7 @@ fn _db_col_idx(schema, col_name) {
 
 // Get value at column index from a tab-separated row string
 fn _db_row_val(row, col_idx) {
-    let cols = _db_split(row, DB_TAB_STR);
+    let mut cols = _db_split(row, DB_TAB_STR);
     if col_idx < 0 { return ""; }
     if col_idx >= len(cols) { return ""; }
     return cols[col_idx];
@@ -130,7 +130,7 @@ fn _db_row_val(row, col_idx) {
 
 fn db_create(name, schema) {
     if _db_find(name) >= 0 { return 0 - 1; }   // already exists
-    let id = _db_alloc();
+    let mut id = _db_alloc();
     if id < 0 { print("sqlite: table limit reached"); return 0 - 1; }
     set_at(db_active,  id, 1);
     set_at(db_names,   id, name);
@@ -180,9 +180,9 @@ fn db_count(id) {
 fn db_delete_where(id, col_name, val) {
     if id < 0 { return 0; }
     if db_active[id] == 0 { return 0; }
-    let col_idx = _db_col_idx(db_schemas[id], col_name);
+    let mut col_idx = _db_col_idx(db_schemas[id], col_name);
     if col_idx < 0 { return 0; }
-    let rows = _db_split(db_data[id], DB_NL_STR);
+    let mut rows = _db_split(db_data[id], DB_NL_STR);
     let mut new_data = "";
     let mut del_cnt  = 0;
     let mut i = 0;
@@ -206,11 +206,11 @@ fn db_delete_where(id, col_name, val) {
 fn db_update_where(id, wcol, wval, scol, sval) {
     if id < 0 { return 0; }
     if db_active[id] == 0 { return 0; }
-    let widx = _db_col_idx(db_schemas[id], wcol);
-    let sidx = _db_col_idx(db_schemas[id], scol);
+    let mut widx = _db_col_idx(db_schemas[id], wcol);
+    let mut sidx = _db_col_idx(db_schemas[id], scol);
     if widx < 0 { return 0; }
     if sidx < 0 { return 0; }
-    let rows = _db_split(db_data[id], DB_NL_STR);
+    let mut rows = _db_split(db_data[id], DB_NL_STR);
     let mut new_data = "";
     let mut upd_cnt  = 0;
     let mut i = 0;
@@ -219,7 +219,7 @@ fn db_update_where(id, wcol, wval, scol, sval) {
         if len(r) > 0 {
             if _db_row_val(r, widx) == wval {
                 // Rebuild row with updated column
-                let cols = _db_split(r, DB_TAB_STR);
+                let mut cols = _db_split(r, DB_TAB_STR);
                 let mut new_row = "";
                 let mut j = 0;
                 while j < len(cols) {
@@ -249,9 +249,9 @@ fn db_update_where(id, wcol, wval, scol, sval) {
 fn db_select_where(id, col_name, val) {
     if id < 0 { return "sqlite: invalid id"; }
     if db_active[id] == 0 { return "sqlite: table not found"; }
-    let col_idx = _db_col_idx(db_schemas[id], col_name);
+    let mut col_idx = _db_col_idx(db_schemas[id], col_name);
     if col_idx < 0 { return "sqlite: column '" + col_name + "' not found"; }
-    let rows = _db_split(db_data[id], DB_NL_STR);
+    let mut rows = _db_split(db_data[id], DB_NL_STR);
     let mut out = db_schemas[id] + DB_NL_STR;
     let mut found = 0;
     let mut i = 0;
@@ -271,7 +271,7 @@ fn db_select_where(id, col_name, val) {
 fn db_select_all(id) {
     if id < 0 { return "sqlite: invalid id"; }
     if db_active[id] == 0 { return "sqlite: table not found"; }
-    let hdr = "=== " + db_names[id] + " ===\n" + db_schemas[id] + DB_NL_STR;
+    let mut hdr = "=== " + db_names[id] + " ===\n" + db_schemas[id] + DB_NL_STR;
     if db_counts[id] == 0 { return hdr + "(empty)"; }
     return hdr + db_data[id] + DB_NL_STR + "(" + to_string(db_counts[id]) + " row(s))";
 }

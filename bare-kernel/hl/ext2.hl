@@ -75,7 +75,7 @@ fn _ic_init() {
 
 fn _ic_lookup(ino) {
     if _ic_ready == 0 { _ic_init(); }
-    let bucket = _ic_hash(ino);
+    let mut bucket = _ic_hash(ino);
     let mut cur = _ic_ht[bucket];
     while cur >= 0 {
         if _ic_valid[cur] == 1 {
@@ -92,7 +92,7 @@ fn _ic_lookup(ino) {
 
 fn _ic_insert(ino, data) {
     if _ic_ready == 0 { _ic_init(); }
-    let bucket = _ic_hash(ino);
+    let mut bucket = _ic_hash(ino);
     // Find free slot
     let mut slot = 0 - 1;
     let mut i = 0;
@@ -120,8 +120,8 @@ fn _ic_insert(ino, data) {
 }
 
 fn _ic_unchain(slot) {
-    let ino = _ic_ino[slot];
-    let bucket = _ic_hash(ino);
+    let mut ino = _ic_ino[slot];
+    let mut bucket = _ic_hash(ino);
     let mut prev = 0 - 1;
     let mut cur = _ic_ht[bucket];
     while cur >= 0 {
@@ -149,20 +149,20 @@ fn ext2_icache_status() {
 // ============================================================
 
 fn ext2_init(partition_start_lba) {
-    let sb_sector = partition_start_lba + 2;
-    let cache_blk = sb_sector / 8;
-    let sb_addr = bcache_read(0, cache_blk);
-    let sb_off_in_block = (sb_sector % 8) * 512;
+    let mut sb_sector = partition_start_lba + 2;
+    let mut cache_blk = sb_sector / 8;
+    let mut sb_addr = bcache_read(0, cache_blk);
+    let mut sb_off_in_block = (sb_sector % 8) * 512;
 
-    let magic = mem_read_u16(sb_addr + sb_off_in_block + 56);
+    let mut magic = mem_read_u16(sb_addr + sb_off_in_block + 56);
     if magic != EXT2_MAGIC {
         print("ext2: bad magic 0x" + format_hex(magic, 4) + " (expected 0xEF53)");
         return 0;
     }
 
-    let s_inodes_count = mem_read_u32(sb_addr + sb_off_in_block + 0);
-    let s_blocks_count = mem_read_u32(sb_addr + sb_off_in_block + 4);
-    let s_log_block_size = mem_read_u32(sb_addr + sb_off_in_block + 24);
+    let mut s_inodes_count = mem_read_u32(sb_addr + sb_off_in_block + 0);
+    let mut s_blocks_count = mem_read_u32(sb_addr + sb_off_in_block + 4);
+    let mut s_log_block_size = mem_read_u32(sb_addr + sb_off_in_block + 24);
     ext2_block_size = 1024;
     let mut shift = 0;
     while shift < s_log_block_size { ext2_block_size = ext2_block_size * 2; shift = shift + 1; }
@@ -192,10 +192,10 @@ fn ext2_init(partition_start_lba) {
 // ============================================================
 
 fn _ext2_disk_read(byte_offset, count) {
-    let sector = _ext2_part_lba + byte_offset / 512;
-    let cache_block = sector / 8;
+    let mut sector = _ext2_part_lba + byte_offset / 512;
+    let mut cache_block = sector / 8;
     let mut addr = bcache_read(0, cache_block);
-    let off_in_block = (sector % 8) * 512 + byte_offset % 512;
+    let mut off_in_block = (sector % 8) * 512 + byte_offset % 512;
     let mut data = [];
     let mut i = 0;
     while i < count {
@@ -214,7 +214,7 @@ fn ext2_read_u16(arr, off) {
 }
 
 fn ext2_read_block(blk_num) {
-    let byte_off = blk_num * ext2_block_size;
+    let mut byte_off = blk_num * ext2_block_size;
     return _ext2_disk_read(byte_off, ext2_block_size);
 }
 
@@ -224,24 +224,24 @@ fn ext2_read_block(blk_num) {
 
 fn _ext2_read_inode_disk(inode_num) {
     if inode_num == 0 { return []; }
-    let group = (inode_num - 1) / ext2_inodes_per_group;
-    let index = (inode_num - 1) % ext2_inodes_per_group;
+    let mut group = (inode_num - 1) / ext2_inodes_per_group;
+    let mut index = (inode_num - 1) % ext2_inodes_per_group;
 
-    let bgdt_byte_off = ext2_bgdt_block * ext2_block_size + group * 32;
-    let bgdt_data = _ext2_disk_read(bgdt_byte_off, 32);
-    let inode_table_blk = ext2_read_u32(bgdt_data, 8);
+    let mut bgdt_byte_off = ext2_bgdt_block * ext2_block_size + group * 32;
+    let mut bgdt_data = _ext2_disk_read(bgdt_byte_off, 32);
+    let mut inode_table_blk = ext2_read_u32(bgdt_data, 8);
 
-    let inode_byte_off = inode_table_blk * ext2_block_size + index * ext2_inode_size;
+    let mut inode_byte_off = inode_table_blk * ext2_block_size + index * ext2_inode_size;
     return _ext2_disk_read(inode_byte_off, ext2_inode_size);
 }
 
 fn ext2_read_inode(inode_num) {
     if inode_num == 0 { return []; }
     // Check cache first O(1)
-    let cached = _ic_lookup(inode_num);
+    let mut cached = _ic_lookup(inode_num);
     if len(cached) > 0 { return cached; }
     // Cache miss: read from disk
-    let data = _ext2_read_inode_disk(inode_num);
+    let mut data = _ext2_read_inode_disk(inode_num);
     if len(data) > 0 {
         _ic_insert(inode_num, data);
     }
@@ -254,7 +254,7 @@ fn ext2_read_inode(inode_num) {
 
 fn ext2_read_file(inode_data, max_size) {
     let mut data = [];
-    let file_size = ext2_read_u32(inode_data, 4);
+    let mut file_size = ext2_read_u32(inode_data, 4);
     let mut limit = file_size;
     if max_size > 0 {
         if max_size < limit { limit = max_size; }
@@ -265,10 +265,10 @@ fn ext2_read_file(inode_data, max_size) {
     while i < 12 {
         if len(data) >= limit { i = 12; }
         else {
-            let blk = ext2_read_u32(inode_data, 40 + i * 4);
+            let mut blk = ext2_read_u32(inode_data, 40 + i * 4);
             if blk == 0 { i = 12; }
             else {
-                let block_data = ext2_read_block(blk);
+                let mut block_data = ext2_read_block(blk);
                 let mut j = 0;
                 while j < len(block_data) {
                     if len(data) >= limit { j = len(block_data); }
@@ -283,17 +283,17 @@ fn ext2_read_file(inode_data, max_size) {
     }
     // Indirect block (i_block[12])
     if len(data) < limit {
-        let ind_blk = ext2_read_u32(inode_data, 40 + 12 * 4);
+        let mut ind_blk = ext2_read_u32(inode_data, 40 + 12 * 4);
         if ind_blk != 0 {
-            let ind_data = ext2_read_block(ind_blk);
+            let mut ind_data = ext2_read_block(ind_blk);
             let mut k = 0;
             while k < ext2_block_size / 4 {
                 if len(data) >= limit { k = ext2_block_size; }
                 else {
-                    let blk = ext2_read_u32(ind_data, k * 4);
+                    let mut blk = ext2_read_u32(ind_data, k * 4);
                     if blk == 0 { k = ext2_block_size; }
                     else {
-                        let block_data = ext2_read_block(blk);
+                        let mut block_data = ext2_read_block(blk);
                         let mut j = 0;
                         while j < len(block_data) {
                             if len(data) >= limit { j = len(block_data); }
@@ -316,14 +316,14 @@ fn ext2_read_file(inode_data, max_size) {
 // ============================================================
 
 fn ext2_list_dir(inode_num) {
-    let inode = ext2_read_inode(inode_num);
-    let dir_data = ext2_read_file(inode, 0);
+    let mut inode = ext2_read_inode(inode_num);
+    let mut dir_data = ext2_read_file(inode, 0);
     let mut entries = [];
     let mut off = 0;
     while off < len(dir_data) {
-        let entry_inode = ext2_read_u32(dir_data, off);
-        let rec_len = ext2_read_u16(dir_data, off + 4);
-        let name_len = dir_data[off + 6];
+        let mut entry_inode = ext2_read_u32(dir_data, off);
+        let mut rec_len = ext2_read_u16(dir_data, off + 4);
+        let mut name_len = dir_data[off + 6];
         if rec_len == 0 { off = len(dir_data); }
         else {
             if entry_inode != 0 {
@@ -342,7 +342,7 @@ fn ext2_list_dir(inode_num) {
 }
 
 fn ext2_lookup(dir_inode, name) {
-    let entries = ext2_list_dir(dir_inode);
+    let mut entries = ext2_list_dir(dir_inode);
     let mut i = 0;
     while i < len(entries) {
         if entries[i][1] == name { return entries[i][0]; }
@@ -353,11 +353,11 @@ fn ext2_lookup(dir_inode, name) {
 
 fn ext2_resolve(path) {
     let mut current = EXT2_ROOT_INODE;
-    let parts = str_split(path, "/");
+    let mut parts = str_split(path, "/");
     let mut i = 0;
     while i < len(parts) {
         if len(parts[i]) > 0 {
-            let name_str = parts[i];
+            let mut name_str = parts[i];
             let mut name_bytes = [];
             let mut j = 0;
             while j < len(name_str) {
@@ -374,9 +374,9 @@ fn ext2_resolve(path) {
 }
 
 fn ext2_read_path(path) {
-    let inode_num = ext2_resolve(path);
+    let mut inode_num = ext2_resolve(path);
     if inode_num == 0 { return []; }
-    let inode = ext2_read_inode(inode_num);
+    let mut inode = ext2_read_inode(inode_num);
     return ext2_read_file(inode, 0);
 }
 
@@ -390,12 +390,12 @@ fn ext2_file_mode(inode_data) {
 
 fn ext2_is_dir(inode_data) {
     let mut mode = ext2_file_mode(inode_data);
-    let ftype = (mode / 4096) % 16;
+    let mut ftype = (mode / 4096) % 16;
     return ftype == 4;
 }
 
 fn ext2_vfs_mount(mount_point, partition_lba) {
-    let ok = ext2_init(partition_lba);
+    let mut ok = ext2_init(partition_lba);
     if ok == 0 { return 0; }
     print("ext2: mounted at " + mount_point);
     return 1;

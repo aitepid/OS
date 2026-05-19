@@ -78,7 +78,7 @@ fn _gs_lpm_encode(msg_hash) {
 }
 
 fn gs_open(service_hash, method_hash, stream_type) {
-    let sid = gs_n_streams;
+    let mut sid = gs_n_streams;
     set_at(gs_service,  sid, service_hash);
     set_at(gs_method,   sid, method_hash);
     set_at(gs_type,     sid, stream_type);
@@ -102,7 +102,7 @@ fn gs_add_meta(sid, key_hash, val_hash) {
 
 fn gs_send(sid, msg_hash) {
     if gs_state[sid] != GS_OPEN { return 0 - 1; }
-    let seq  = gs_send_seq[sid];
+    let mut seq = gs_send_seq[sid];
     let mut slot = sid * GS_MSG_STRIDE + seq - (seq / GS_MSGBUF) * GS_MSGBUF;
     set_at(gs_msg_send, slot, _gs_lpm_encode(msg_hash));
     set_at(gs_send_seq, sid, seq + 1);
@@ -111,20 +111,20 @@ fn gs_send(sid, msg_hash) {
     if gs_type[sid] == GS_SERVER {
         let mut r = 0;
         while r < 3 {
-            let resp = msg_hash * (r + 1) + service_hash_for(sid);
-            let p    = 65521;
+            let mut resp = msg_hash * (r + 1) + service_hash_for(sid);
+            let mut p = 65521;
             resp = resp - (resp / p) * p;
-            let rslot = sid * GS_MSG_STRIDE + gs_recv_seq[sid];
+            let mut rslot = sid * GS_MSG_STRIDE + gs_recv_seq[sid];
             set_at(gs_msg_recv, rslot, resp);
             set_at(gs_recv_seq, sid, gs_recv_seq[sid] + 1);
             r += 1;
         }
     }
     if gs_type[sid] == GS_UNARY {
-        let resp = msg_hash * 7 + gs_method[sid];
-        let p    = 65521;
+        let mut resp = msg_hash * 7 + gs_method[sid];
+        let mut p = 65521;
         resp = resp - (resp / p) * p;
-        let rslot = sid * GS_MSG_STRIDE;
+        let mut rslot = sid * GS_MSG_STRIDE;
         set_at(gs_msg_recv, rslot, resp);
         set_at(gs_recv_seq, sid, 1);
     }
@@ -135,10 +135,10 @@ fn service_hash_for(sid) { return gs_service[sid]; }
 
 fn gs_recv(sid) {
     // Pop next received message; returns -1 if none
-    let seq = gs_recv_seq[sid];
+    let mut seq = gs_recv_seq[sid];
     if seq == 0 { return 0 - 1; }
     let mut slot = sid * GS_MSG_STRIDE;
-    let msg  = gs_msg_recv[slot];
+    let mut msg = gs_msg_recv[slot];
     // Shift remaining messages
     let mut i = 0;
     while i < seq - 1 {
@@ -168,24 +168,24 @@ fn gs_test() {
     grpc_stream_init();
 
     // Unary RPC: route = method 1001 on service 2001
-    let s0  = gs_open(2001, 1001, GS_UNARY);
+    let mut s0 = gs_open(2001, 1001, GS_UNARY);
     gs_add_meta(s0, 100, 200);  // authorization header
-    let seq = gs_send(s0, 9999);
-    let r0  = gs_recv(s0);
-    let r0b = gs_recv(s0);  // should be -1 (no more)
+    let mut seq = gs_send(s0, 9999);
+    let mut r0 = gs_recv(s0);
+    let mut r0b = gs_recv(s0);  // should be -1 (no more)
     gs_close(s0);
 
     // Server-streaming RPC: method 1002
-    let s1 = gs_open(2001, 1002, GS_SERVER);
+    let mut s1 = gs_open(2001, 1002, GS_SERVER);
     gs_send(s1, 1234);
-    let sr0 = gs_recv(s1);
-    let sr1 = gs_recv(s1);
-    let sr2 = gs_recv(s1);
-    let sr3 = gs_recv(s1);  // should be -1
+    let mut sr0 = gs_recv(s1);
+    let mut sr1 = gs_recv(s1);
+    let mut sr2 = gs_recv(s1);
+    let mut sr3 = gs_recv(s1);  // should be -1
 
-    let pend = gs_pending_count(s1);
+    let mut pend = gs_pending_count(s1);
     gs_close(s1);
-    let st = gs_stream_state(s0);
+    let mut st = gs_stream_state(s0);
 
     print("gs_test: s0=" + to_string(s0)
           + " r0=" + to_string(r0)

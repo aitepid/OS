@@ -105,7 +105,7 @@ fn _imap_send(id, line) {
 // Read response from TCB RX buffer into IMAP_BUF; returns string
 fn _imap_read(id) {
     let mut addr = TCP_TABLE + imap_tcb[id] * TCB_SIZE;
-    let rx_buf = mem_read_u64(addr + 64);
+    let mut rx_buf = mem_read_u64(addr + 64);
     if rx_buf == 0 { return ""; }
     let mut s = "";
     let mut j = 0;
@@ -129,10 +129,10 @@ fn _imap_ok(resp, tag) {
 // ============================================================
 
 fn imap_connect(host, port) {
-    let id = _imap_alloc();
+    let mut id = _imap_alloc();
     if id < 0 { print("imap: no free slots"); return 0 - 1; }
-    let ip = dns_resolve(host);
-    let tcb = tcp_connect(ip, port);
+    let mut ip = dns_resolve(host);
+    let mut tcb = tcp_connect(ip, port);
     if tcb < 0 { print("imap: tcp_connect failed to " + host); return 0 - 1; }
     set_at(imap_active,  id, 1);
     set_at(imap_tcb,     id, tcb);
@@ -147,10 +147,10 @@ fn imap_connect(host, port) {
 fn imap_login(id, user, pass) {
     if id < 0 { return 0 - 1; }
     if imap_active[id] == 0 { return 0 - 1; }
-    let tag = _imap_tag(id);
+    let mut tag = _imap_tag(id);
     _imap_send(id, tag + " LOGIN " + user + " " + pass);
     // Poll response (up to 200 ticks = 2 seconds)
-    let deadline = get_ticks() + 200;
+    let mut deadline = get_ticks() + 200;
     let mut resp = "";
     while get_ticks() < deadline {
         resp = _imap_read(id);
@@ -170,15 +170,15 @@ fn imap_login(id, user, pass) {
 fn imap_select(id, mailbox) {
     if id < 0 { return 0 - 1; }
     if imap_active[id] == 0 { return 0 - 1; }
-    let tag = _imap_tag(id);
+    let mut tag = _imap_tag(id);
     _imap_send(id, tag + " SELECT " + mailbox);
-    let deadline = get_ticks() + 200;
+    let mut deadline = get_ticks() + 200;
     let mut msg_count = 0;
     while get_ticks() < deadline {
-        let resp = _imap_read(id);
+        let mut resp = _imap_read(id);
         if len(resp) > 0 {
             // Parse "* N EXISTS"
-            let ei = str_find(resp, " EXISTS");
+            let mut ei = str_find(resp, " EXISTS");
             if ei > 0 {
                 // Scan back for the number
                 let mut ni = ei - 1;
@@ -187,7 +187,7 @@ fn imap_select(id, mailbox) {
                     if c < 48 { ni = 0 - 1; }
                     else { if c > 57 { ni = 0 - 1; } else { ni = ni - 1; } }
                 }
-                let num_s = str_sub(resp, ni + 1, ei);
+                let mut num_s = str_sub(resp, ni + 1, ei);
                 msg_count = parse_int(num_s);
             }
             if _imap_ok(resp, tag) == 1 {
@@ -206,11 +206,11 @@ fn imap_select(id, mailbox) {
 fn imap_list(id) {
     if id < 0 { return "imap: invalid id"; }
     if imap_active[id] == 0 { return "imap: session not active"; }
-    let tag = _imap_tag(id);
+    let mut tag = _imap_tag(id);
     _imap_send(id, tag + " LIST \"\" *");
-    let deadline = get_ticks() + 300;
+    let mut deadline = get_ticks() + 300;
     while get_ticks() < deadline {
-        let resp = _imap_read(id);
+        let mut resp = _imap_read(id);
         if len(resp) > 0 { return resp; }
     }
     return "(timeout)";
@@ -219,14 +219,14 @@ fn imap_list(id) {
 fn imap_fetch(id, seq_from, seq_to) {
     if id < 0 { return "imap: invalid id"; }
     if imap_active[id] == 0 { return "imap: not active"; }
-    let seq = to_string(seq_from) + ":" + to_string(seq_to);
-    let tag = _imap_tag(id);
+    let mut seq = to_string(seq_from) + ":" + to_string(seq_to);
+    let mut tag = _imap_tag(id);
     _imap_send(id, tag + " FETCH " + seq
         + " (FLAGS BODY[HEADER.FIELDS (FROM SUBJECT DATE)])");
-    let deadline = get_ticks() + 500;
+    let mut deadline = get_ticks() + 500;
     let mut out = "";
     while get_ticks() < deadline {
-        let resp = _imap_read(id);
+        let mut resp = _imap_read(id);
         if len(resp) > 0 { out = out + resp; }
         if _imap_ok(out, tag) == 1 { return out; }
     }
@@ -236,7 +236,7 @@ fn imap_fetch(id, seq_from, seq_to) {
 fn imap_logout(id) {
     if id < 0 { return 0; }
     if imap_active[id] == 0 { return 0; }
-    let tag = _imap_tag(id);
+    let mut tag = _imap_tag(id);
     _imap_send(id, tag + " LOGOUT");
     tcp_close(imap_tcb[id]);
     set_at(imap_active, id, 0);
@@ -253,7 +253,7 @@ fn imap_tick() {
     let mut i = 0;
     while i < IMAP_MAX {
         if imap_active[i] == 1 {
-            let resp = _imap_read(i);
+            let mut resp = _imap_read(i);
             if len(resp) > 0 {
                 if str_find(resp, "* BYE") >= 0 {
                     klog(1, "imap", "server sent BYE on session " + to_string(i));
@@ -276,9 +276,9 @@ fn imap_status(id) {
     if id < 0 { return "imap: invalid"; }
     if id >= IMAP_MAX { return "imap: invalid"; }
     if imap_active[id] == 0 { return "imap[" + to_string(id) + "] free"; }
-    let st_names = ["free", "connected", "auth", "selected", "error"];
-    let st = imap_state[id];
-    let st_s = "?";
+    let mut st_names = ["free", "connected", "auth", "selected", "error"];
+    let mut st = imap_state[id];
+    let mut st_s = "?";
     if st >= 0 { if st <= 4 { st_s = st_names[st]; } }
     return "imap[" + to_string(id) + "] " + st_s
         + " host=" + imap_host[id]

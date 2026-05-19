@@ -67,7 +67,7 @@ fn _cpio_parse_hex(buf_addr, offset, len) {
 }
 
 fn _cpio_align4(n) {
-    let rem = n % 4;
+    let mut rem = n % 4;
     if rem == 0 { return n; }
     return n + (4 - rem);
 }
@@ -77,22 +77,22 @@ fn cpio_parse_buf() {
     let mut offset = 0;
 
     while offset < CPIO_BUF_SZ - 110 {
-        let magic = _cpio_parse_hex(CPIO_BUF, offset, 6);
+        let mut magic = _cpio_parse_hex(CPIO_BUF, offset, 6);
         if magic != 458753 { return cpio_count; }  // 070701 in decimal
 
-        let inode = _cpio_parse_hex(CPIO_BUF, offset + 6, 8);
+        let mut inode = _cpio_parse_hex(CPIO_BUF, offset + 6, 8);
         let mut mode = _cpio_parse_hex(CPIO_BUF, offset + 14, 8);
-        let uid = _cpio_parse_hex(CPIO_BUF, offset + 22, 8);
-        let gid = _cpio_parse_hex(CPIO_BUF, offset + 30, 8);
-        let nlink = _cpio_parse_hex(CPIO_BUF, offset + 38, 8);
-        let mtime = _cpio_parse_hex(CPIO_BUF, offset + 46, 8);
-        let filesize = _cpio_parse_hex(CPIO_BUF, offset + 54, 8);
-        let devmaj = _cpio_parse_hex(CPIO_BUF, offset + 62, 8);
-        let devmin = _cpio_parse_hex(CPIO_BUF, offset + 70, 8);
-        let rdevmaj = _cpio_parse_hex(CPIO_BUF, offset + 78, 8);
-        let rdevmin = _cpio_parse_hex(CPIO_BUF, offset + 86, 8);
-        let namesize = _cpio_parse_hex(CPIO_BUF, offset + 94, 8);
-        let check = _cpio_parse_hex(CPIO_BUF, offset + 102, 8);
+        let mut uid = _cpio_parse_hex(CPIO_BUF, offset + 22, 8);
+        let mut gid = _cpio_parse_hex(CPIO_BUF, offset + 30, 8);
+        let mut nlink = _cpio_parse_hex(CPIO_BUF, offset + 38, 8);
+        let mut mtime = _cpio_parse_hex(CPIO_BUF, offset + 46, 8);
+        let mut filesize = _cpio_parse_hex(CPIO_BUF, offset + 54, 8);
+        let mut devmaj = _cpio_parse_hex(CPIO_BUF, offset + 62, 8);
+        let mut devmin = _cpio_parse_hex(CPIO_BUF, offset + 70, 8);
+        let mut rdevmaj = _cpio_parse_hex(CPIO_BUF, offset + 78, 8);
+        let mut rdevmin = _cpio_parse_hex(CPIO_BUF, offset + 86, 8);
+        let mut namesize = _cpio_parse_hex(CPIO_BUF, offset + 94, 8);
+        let mut check = _cpio_parse_hex(CPIO_BUF, offset + 102, 8);
 
         offset = offset + 110;
 
@@ -108,7 +108,7 @@ fn cpio_parse_buf() {
         if name == "TRAILER!!!" { return cpio_count; }
 
         offset = _cpio_align4(offset + namesize);
-        let data_offset = offset;
+        let mut data_offset = offset;
 
         if cpio_count < CPIO_MAX {
             set_at(cpio_names, cpio_count, name);
@@ -125,7 +125,7 @@ fn cpio_parse_buf() {
 }
 
 fn cpio_load(path) {
-    let fd = vfs_open(path, 0);
+    let mut fd = vfs_open(path, 0);
     if fd < 0 { return 0 - 1; }
 
     let mut n = vfs_read(fd, CPIO_BUF, CPIO_BUF_SZ);
@@ -142,8 +142,8 @@ fn cpio_list() {
     let mut out = "CPIO Archive (" + to_string(cpio_count) + " entries):\n";
     let mut i = 0;
     while i < cpio_count {
-        let name = cpio_names[i];
-        let size = cpio_sizes[i];
+        let mut name = cpio_names[i];
+        let mut size = cpio_sizes[i];
         let mut mode = cpio_modes[i];
         out = out + "  " + name + "  " + to_string(size) + " bytes  mode=" + to_string(mode) + "\n";
         i = i + 1;
@@ -155,10 +155,10 @@ fn cpio_extract(index, dest_path) {
     if index < 0 { return 0 - 1; }
     if index >= cpio_count { return 0 - 1; }
 
-    let size = cpio_sizes[index];
-    let offset = cpio_offsets[index];
+    let mut size = cpio_sizes[index];
+    let mut offset = cpio_offsets[index];
 
-    let fd = vfs_open(dest_path, 1);
+    let mut fd = vfs_open(dest_path, 1);
     if fd < 0 { return 0 - 2; }
 
     let mut w = vfs_write(fd, CPIO_BUF + offset, size);
@@ -174,9 +174,9 @@ fn cpio_extract_all(dest_dir) {
     let mut i = 0;
     let mut ok = 0;
     while i < cpio_count {
-        let name = cpio_names[i];
-        let dest = dest_dir + "/" + name;
-        let res = cpio_extract(i, dest);
+        let mut name = cpio_names[i];
+        let mut dest = dest_dir + "/" + name;
+        let mut res = cpio_extract(i, dest);
         if res == 0 { ok = ok + 1; }
         i = i + 1;
     }
@@ -198,7 +198,7 @@ fn cpio_get_size(index) {
 fn cpio_selftest() {
     cpio_clear();
 
-    let header_offset = 0;
+    let mut header_offset = 0;
     let mut i = 0;
     while i < 6 { mem_write_byte(CPIO_BUF + i, str_char_code("070701", i)); i = i + 1; }
 
@@ -207,7 +207,7 @@ fn cpio_selftest() {
     while i < 16 { mem_write_byte(CPIO_BUF + 6 + i, 48); i = i + 1; }
 
     i = 0;
-    let test_name = "test.txt";
+    let mut test_name = "test.txt";
     while i < 8 {
         mem_write_byte(CPIO_BUF + 110 + i, str_char_code(test_name, i));
         i = i + 1;

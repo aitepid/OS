@@ -83,9 +83,9 @@ fn _pop3_alloc() {
 // Read response from TCB RX buffer into session's POP3_BUF slot.
 // Returns response string (up to POP3_BUF_SZ bytes).
 fn _pop3_read_resp(id) {
-    let tcb  = pop3_tcb[id];
+    let mut tcb = pop3_tcb[id];
     let mut addr = TCP_TABLE + tcb * TCB_SIZE;
-    let rx_buf = mem_read_u64(addr + 64);
+    let mut rx_buf = mem_read_u64(addr + 64);
     if rx_buf == 0 { return ""; }
     let mut slot = POP3_BUF + id * POP3_BUF_SZ;
     let mut s = "";
@@ -111,13 +111,13 @@ fn _pop3_is_ok(resp) {
 // ============================================================
 
 fn pop3_connect(host, port) {
-    let id = _pop3_alloc();
+    let mut id = _pop3_alloc();
     if id < 0 { print("pop3: no free slots"); return 0 - 1; }
 
-    let ip = dns_resolve(host);
+    let mut ip = dns_resolve(host);
     if ip == 0 { print("pop3: dns_resolve failed for " + host); return 0 - 1; }
 
-    let tcb = tcp_connect(ip, port);
+    let mut tcb = tcp_connect(ip, port);
     if tcb < 0 { print("pop3: tcp_connect failed to " + host); return 0 - 1; }
 
     set_at(pop3_active, id, 1);
@@ -136,13 +136,13 @@ fn pop3_auth(id, user, pass) {
     if id >= POP3_MAX { return 0 - 1; }
     if pop3_active[id] == 0 { return 0 - 1; }
 
-    let tcb = pop3_tcb[id];
+    let mut tcb = pop3_tcb[id];
     tcp_send(tcb, "USER " + user + "\r\n");
     set_at(pop3_state, id, POP3_ST_AUTH);
     set_at(pop3_user,  id, user);
 
     // Give server a moment, then send PASS
-    let deadline = get_ticks() + 100;
+    let mut deadline = get_ticks() + 100;
     while get_ticks() < deadline {}
 
     tcp_send(tcb, "PASS " + pass + "\r\n");
@@ -174,16 +174,16 @@ fn pop3_stat(id) {
     tcp_send(pop3_tcb[id], "STAT\r\n");
     set_at(pop3_state, id, POP3_ST_BUSY);
 
-    let deadline = get_ticks() + 200;
+    let mut deadline = get_ticks() + 200;
     while get_ticks() < deadline {}
 
-    let resp = _pop3_read_resp(id);
+    let mut resp = _pop3_read_resp(id);
     set_at(pop3_state, id, POP3_ST_READY);
 
     if _pop3_is_ok(resp) == 0 { return [0 - 1, 0 - 1]; }
     // Parse: "+OK N M"
-    let body = str_sub(resp, 4, len(resp));
-    let sp = str_find(body, " ");
+    let mut body = str_sub(resp, 4, len(resp));
+    let mut sp = str_find(body, " ");
     if sp < 0 { return [0, 0]; }
     let mut count = parse_int(str_sub(body, 0, sp));
     let mut total = parse_int(str_sub(body, sp + 1, len(body)));
@@ -197,10 +197,10 @@ fn pop3_list(id) {
     tcp_send(pop3_tcb[id], "LIST\r\n");
     set_at(pop3_state, id, POP3_ST_BUSY);
 
-    let deadline = get_ticks() + 300;
+    let mut deadline = get_ticks() + 300;
     while get_ticks() < deadline {}
 
-    let resp = _pop3_read_resp(id);
+    let mut resp = _pop3_read_resp(id);
     set_at(pop3_state, id, POP3_ST_READY);
 
     if _pop3_is_ok(resp) == 0 { return "pop3[" + to_string(id) + "] LIST error: " + resp; }
@@ -214,18 +214,18 @@ fn pop3_retr(id, msg_num) {
     tcp_send(pop3_tcb[id], "RETR " + to_string(msg_num) + "\r\n");
     set_at(pop3_state, id, POP3_ST_BUSY);
 
-    let deadline = get_ticks() + 500;
+    let mut deadline = get_ticks() + 500;
     while get_ticks() < deadline {}
 
-    let resp = _pop3_read_resp(id);
+    let mut resp = _pop3_read_resp(id);
     set_at(pop3_state, id, POP3_ST_READY);
 
     if _pop3_is_ok(resp) == 0 { return "pop3: RETR error: " + resp; }
     // Strip "+OK N octets\r\n" prefix and trailing ".\r\n"
-    let nl = str_find(resp, "\n");
+    let mut nl = str_find(resp, "\n");
     if nl < 0 { return resp; }
-    let body = str_sub(resp, nl + 1, len(resp));
-    let dot_end = len(body) - 3;
+    let mut body = str_sub(resp, nl + 1, len(resp));
+    let mut dot_end = len(body) - 3;
     if dot_end > 0 { return str_sub(body, 0, dot_end); }
     return body;
 }
@@ -247,7 +247,7 @@ fn pop3_tick() {
     while i < POP3_MAX {
         if pop3_active[i] == 1 {
             if pop3_state[i] == POP3_ST_BUSY {
-                let resp = _pop3_read_resp(i);
+                let mut resp = _pop3_read_resp(i);
                 if len(resp) > 0 {
                     if _pop3_is_ok(resp) == 0 {
                         klog(2, "pop3", "error on session " + to_string(i) + ": " + resp);
@@ -271,8 +271,8 @@ fn pop3_status(id) {
     if id < 0 { return "pop3: invalid"; }
     if id >= POP3_MAX { return "pop3: invalid"; }
     if pop3_active[id] == 0 { return "pop3[" + to_string(id) + "] free"; }
-    let st_names = ["free", "connecting", "auth", "ready", "busy", "error"];
-    let st = pop3_state[id];
+    let mut st_names = ["free", "connecting", "auth", "ready", "busy", "error"];
+    let mut st = pop3_state[id];
     let mut st_s = "?";
     if st >= 0 { if st <= 5 { st_s = st_names[st]; } }
     return "pop3[" + to_string(id) + "] " + st_s

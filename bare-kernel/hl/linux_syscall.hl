@@ -76,7 +76,7 @@ fn ls_syscall(sysno, arg0, arg1) {
 
     if sysno == LS_SYS_MMAP {
         if ls_map_count < LS_MAX_MAPPINGS {
-            let mi = ls_map_count;
+            let mut mi = ls_map_count;
             set_at(ls_map_addr, mi, ls_brk_ptr);
             set_at(ls_map_len,  mi, arg1);
             set_at(ls_map_used, mi, 1);
@@ -87,7 +87,7 @@ fn ls_syscall(sysno, arg0, arg1) {
     }
 
     if sysno == LS_SYS_MUNMAP {
-        let i    = 0;
+        let mut i = 0;
         let mut done = 0;
         while i < ls_map_count {
             if done == 0 {
@@ -138,8 +138,8 @@ fn ls_get_brk()           { return ls_brk_ptr; }
 fn ls_get_map_count()     { return ls_map_count; }
 
 fn ls_active_map_count() {
-    let cnt = 0;
-    let i   = 0;
+    let mut cnt = 0;
+    let mut i = 0;
     while i < ls_map_count {
         if ls_map_used[i] == 1 { cnt = cnt + 1; }
         i = i + 1;
@@ -167,24 +167,24 @@ fn linux_syscall_test() {
     if ls_get_total_writes() != 1 { pass = 0; }
 
     // mmap
-    let mapped = ls_syscall(LS_SYS_MMAP, 0, 4096);
+    let mut mapped = ls_syscall(LS_SYS_MMAP, 0, 4096);
     if mapped != 0x400000 { pass = 0; }
     if ls_get_map_count() != 1 { pass = 0; }
 
     // munmap
     ls_syscall(LS_SYS_MUNMAP, mapped, 4096);
-    let active = ls_active_map_count();
+    let mut active = ls_active_map_count();
     if active != 0 { pass = 0; }
 
     // brk
-    let brk1 = ls_syscall(LS_SYS_BRK, 0x500000, 0);
+    let mut brk1 = ls_syscall(LS_SYS_BRK, 0x500000, 0);
     if brk1 != 0x500000 { pass = 0; }
 
     // exit
     ls_syscall(LS_SYS_EXIT, 42, 0);
     if ls_get_exit_code() != 42 { pass = 0; }
 
-    let total_calls = ls_get_call_count();
+    let mut total_calls = ls_get_call_count();
     if total_calls != 6 { pass = 0; }
 
     if pass == 1 { print("linux_syscall_test PASS"); }

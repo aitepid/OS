@@ -75,7 +75,7 @@ let mut kmod_patch_total = 0;  // total patches applied
 // FNV-1a hash for module/symbol name lookup
 fn kmod_fnv1a(name) {
     let mut hash = 2166136261;  // FNV offset basis (32-bit)
-    let nlen = str_len(name);
+    let mut nlen = str_len(name);
     let mut i = 0;
     while i < nlen {
         let mut byte = char_code(name, i);
@@ -129,7 +129,7 @@ fn kmod_find_by_name(name) {
         let mut base = KMOD_TABLE_ADDR + i * KMOD_SLOT_SIZE;
         let mut state = mem_read_u32(base);
         if state != KMOD_FREE {
-            let slot_hash = mem_read_u32(base + 4);
+            let mut slot_hash = mem_read_u32(base + 4);
             if slot_hash == hash {
                 return i;
             }
@@ -142,7 +142,7 @@ fn kmod_find_by_name(name) {
 // Allocate code region from arena, returns address or 0
 fn kmod_arena_alloc(size) {
     // Align to 16 bytes
-    let aligned = ((size + 15) / 16) * 16;
+    let mut aligned = ((size + 15) / 16) * 16;
     if kmod_arena_next + aligned > KMOD_ARENA_SIZE {
         print("kmod: arena exhausted (need " + to_string(aligned) + " bytes)");
         return 0;
@@ -154,7 +154,7 @@ fn kmod_arena_alloc(size) {
 
 // Write module name to slot (max 31 chars + null)
 fn kmod_write_name(base_addr, name) {
-    let nlen = str_len(name);
+    let mut nlen = str_len(name);
     if nlen > 31 { nlen = 31; }
     let mut i = 0;
     while i < nlen {
@@ -189,7 +189,7 @@ fn kmod_read_name(slot_idx) {
 // Returns slot index or -1 on failure
 fn kmod_load(name, code_addr, code_size, data_addr, data_size, entry_off, cleanup_off) {
     // Check if already loaded
-    let existing = kmod_find_by_name(name);
+    let mut existing = kmod_find_by_name(name);
     if existing >= 0 {
         print("kmod: module '" + name + "' already loaded at slot " + to_string(existing));
         return 0 - 1;
@@ -202,7 +202,7 @@ fn kmod_load(name, code_addr, code_size, data_addr, data_size, entry_off, cleanu
     }
 
     // Allocate code region
-    let dest_code = kmod_arena_alloc(code_size);
+    let mut dest_code = kmod_arena_alloc(code_size);
     if dest_code == 0 { return 0 - 1; }
 
     // Allocate data region (if any)
@@ -264,7 +264,7 @@ fn kmod_activate(slot) {
         return 0 - 1;
     }
     mem_write_u32(base, KMOD_ACTIVE);
-    let entry = mem_read_u64(base + 72);
+    let mut entry = mem_read_u64(base + 72);
     // In a real implementation, would call entry via function pointer
     // For now: mark as active and log
     print("kmod: activated slot " + to_string(slot) + " entry=0x" + format_hex(entry, 8));
@@ -280,7 +280,7 @@ fn kmod_unload(name) {
     }
     let mut base = KMOD_TABLE_ADDR + slot * KMOD_SLOT_SIZE;
     let mut state = mem_read_u32(base);
-    let flags = mem_read_u32(base + 116);
+    let mut flags = mem_read_u32(base + 116);
 
     // Cannot unload critical modules
     if (flags / KMOD_FLAG_CRITICAL) % 2 == 1 {
@@ -289,7 +289,7 @@ fn kmod_unload(name) {
     }
 
     // Check ref_count
-    let refs = mem_read_u32(base + 92);
+    let mut refs = mem_read_u32(base + 92);
     if refs > 0 {
         print("kmod: module '" + name + "' has " + to_string(refs) + " active references, marking UNLOADING");
         mem_write_u32(base, KMOD_UNLOADING);
@@ -297,16 +297,16 @@ fn kmod_unload(name) {
     }
 
     // Check if other modules depend on this slot
-    let slot_bit = 1;
+    let mut slot_bit = 1;
     let mut shift = 0;
     while shift < slot { slot_bit = slot_bit * 2; shift = shift + 1; }
     let mut i = 0;
     while i < KMOD_MAX_MODULES {
         if i != slot {
-            let other_base = KMOD_TABLE_ADDR + i * KMOD_SLOT_SIZE;
-            let other_state = mem_read_u32(other_base);
+            let mut other_base = KMOD_TABLE_ADDR + i * KMOD_SLOT_SIZE;
+            let mut other_state = mem_read_u32(other_base);
             if other_state == KMOD_ACTIVE {
-                let dep = mem_read_u64(other_base + 96);
+                let mut dep = mem_read_u64(other_base + 96);
                 if (dep / slot_bit) % 2 == 1 {
                     print("kmod: module at slot " + to_string(i) + " depends on '" + name + "'");
                     return 0 - 1;
@@ -317,7 +317,7 @@ fn kmod_unload(name) {
     }
 
     // Call cleanup function
-    let cleanup = mem_read_u64(base + 80);
+    let mut cleanup = mem_read_u64(base + 80);
     if cleanup != 0 {
         print("kmod: calling cleanup for '" + name + "' at 0x" + format_hex(cleanup, 8));
     }
@@ -338,7 +338,7 @@ fn kmod_hotpatch(tramp_idx, new_target, module_slot) {
         print("kmod: trampoline index out of range");
         return 0 - 1;
     }
-    let tramp_base = KMOD_TRAMP_ADDR + tramp_idx * KMOD_TRAMP_SIZE;
+    let mut tramp_base = KMOD_TRAMP_ADDR + tramp_idx * KMOD_TRAMP_SIZE;
 
     // Write MOV RAX, imm64; JMP RAX sequence (10 bytes)
     // 48 B8 <imm64>   = MOV RAX, imm64
@@ -355,8 +355,8 @@ fn kmod_hotpatch(tramp_idx, new_target, module_slot) {
     // Increment patch count for module
     if module_slot >= 0 {
         if module_slot < KMOD_MAX_MODULES {
-            let mod_base = KMOD_TABLE_ADDR + module_slot * KMOD_SLOT_SIZE;
-            let pc = mem_read_u32(mod_base + 112);
+            let mut mod_base = KMOD_TABLE_ADDR + module_slot * KMOD_SLOT_SIZE;
+            let mut pc = mem_read_u32(mod_base + 112);
             mem_write_u32(mod_base + 112, pc + 1);
         }
     }
@@ -369,8 +369,8 @@ fn kmod_hotpatch(tramp_idx, new_target, module_slot) {
 // Register a trampoline for a named symbol
 fn kmod_register_tramp(tramp_idx, symbol_name, target_addr, module_slot) {
     if tramp_idx >= KMOD_MAX_TRAMPS { return 0 - 1; }
-    let sym_hash = kmod_fnv1a(symbol_name);
-    let tramp_base = KMOD_TRAMP_ADDR + tramp_idx * KMOD_TRAMP_SIZE;
+    let mut sym_hash = kmod_fnv1a(symbol_name);
+    let mut tramp_base = KMOD_TRAMP_ADDR + tramp_idx * KMOD_TRAMP_SIZE;
 
     // Write initial JMP target
     mem_write_u8(tramp_base + 0, 72);     // 0x48 REX.W
@@ -392,8 +392,8 @@ fn kmod_add_dep(dep_slot, target_slot) {
     if target_slot < 0 { return 0 - 1; }
     if target_slot >= KMOD_MAX_MODULES { return 0 - 1; }
     let mut base = KMOD_TABLE_ADDR + dep_slot * KMOD_SLOT_SIZE;
-    let dep = mem_read_u64(base + 96);
-    let bit = 1;
+    let mut dep = mem_read_u64(base + 96);
+    let mut bit = 1;
     let mut shift = 0;
     while shift < target_slot { bit = bit * 2; shift = shift + 1; }
     mem_write_u64(base + 96, dep + bit);
@@ -405,7 +405,7 @@ fn kmod_ref_get(slot) {
     if slot < 0 { return 0; }
     if slot >= KMOD_MAX_MODULES { return 0; }
     let mut base = KMOD_TABLE_ADDR + slot * KMOD_SLOT_SIZE;
-    let refs = mem_read_u32(base + 92);
+    let mut refs = mem_read_u32(base + 92);
     mem_write_u32(base + 92, refs + 1);
     return refs + 1;
 }
@@ -415,14 +415,14 @@ fn kmod_ref_put(slot) {
     if slot < 0 { return 0; }
     if slot >= KMOD_MAX_MODULES { return 0; }
     let mut base = KMOD_TABLE_ADDR + slot * KMOD_SLOT_SIZE;
-    let refs = mem_read_u32(base + 92);
+    let mut refs = mem_read_u32(base + 92);
     if refs == 0 { return 0; }
     mem_write_u32(base + 92, refs - 1);
     // If deferred unload pending and refs now 0, finalize
     if refs - 1 == 0 {
         let mut state = mem_read_u32(base);
         if state == KMOD_UNLOADING {
-            let name = kmod_read_name(slot);
+            let mut name = kmod_read_name(slot);
             mem_write_u32(base, KMOD_FREE);
             kmod_count = kmod_count - 1;
             print("kmod: deferred unload complete for '" + name + "'");
@@ -443,14 +443,14 @@ fn kmod_set_flags(slot, flags) {
 // Hot-replace: load new version of an already-loaded module
 // The old version's trampolines are redirected to the new code.
 fn kmod_replace(name, code_addr, code_size, data_addr, data_size, entry_off, cleanup_off) {
-    let old_slot = kmod_find_by_name(name);
+    let mut old_slot = kmod_find_by_name(name);
     if old_slot < 0 {
         print("kmod: module '" + name + "' not found for replacement, loading fresh");
         return kmod_load(name, code_addr, code_size, data_addr, data_size, entry_off, cleanup_off);
     }
 
-    let old_base = KMOD_TABLE_ADDR + old_slot * KMOD_SLOT_SIZE;
-    let old_flags = mem_read_u32(old_base + 116);
+    let mut old_base = KMOD_TABLE_ADDR + old_slot * KMOD_SLOT_SIZE;
+    let mut old_flags = mem_read_u32(old_base + 116);
 
     // Cannot replace critical modules inline
     if (old_flags / KMOD_FLAG_CRITICAL) % 2 == 1 {
@@ -459,7 +459,7 @@ fn kmod_replace(name, code_addr, code_size, data_addr, data_size, entry_off, cle
     }
 
     // Allocate new code region
-    let new_code = kmod_arena_alloc(code_size);
+    let mut new_code = kmod_arena_alloc(code_size);
     if new_code == 0 { return 0 - 1; }
 
     // Allocate new data region
@@ -486,7 +486,7 @@ fn kmod_replace(name, code_addr, code_size, data_addr, data_size, entry_off, cle
     }
 
     // Update slot to point to new code
-    let old_version = mem_read_u32(old_base + 88);
+    let mut old_version = mem_read_u32(old_base + 88);
     mem_write_u64(old_base + 40, new_code);
     mem_write_u64(old_base + 48, code_size);
     mem_write_u64(old_base + 56, new_data);
@@ -497,26 +497,26 @@ fn kmod_replace(name, code_addr, code_size, data_addr, data_size, entry_off, cle
     mem_write_u64(old_base + 104, timer_ticks());
 
     // Scan trampolines and redirect any owned by this module
-    let name_hash = kmod_fnv1a(name);
+    let mut name_hash = kmod_fnv1a(name);
     let mut redirected = 0;
     i = 0;
     while i < KMOD_MAX_TRAMPS {
-        let tb = KMOD_TRAMP_ADDR + i * KMOD_TRAMP_SIZE;
-        let owner = mem_read_u16(tb + 12);
+        let mut tb = KMOD_TRAMP_ADDR + i * KMOD_TRAMP_SIZE;
+        let mut owner = mem_read_u16(tb + 12);
         if owner == old_slot {
             // Trampoline belongs to this module — compute offset and redirect
-            let old_code_base = mem_read_u64(old_base + 40);
-            let old_target = mem_read_u64(tb + 2);
+            let mut old_code_base = mem_read_u64(old_base + 40);
+            let mut old_target = mem_read_u64(tb + 2);
             // Adjust target: same relative offset in new code
-            let offset = old_target - old_code_base;
-            let new_target = new_code + offset;
+            let mut offset = old_target - old_code_base;
+            let mut new_target = new_code + offset;
             mem_write_u64(tb + 2, new_target);
             redirected = redirected + 1;
         }
         i = i + 1;
     }
 
-    let pc = mem_read_u32(old_base + 112);
+    let mut pc = mem_read_u32(old_base + 112);
     mem_write_u32(old_base + 112, pc + redirected);
     kmod_patch_total = kmod_patch_total + redirected;
 
@@ -535,13 +535,13 @@ fn kmod_status() {
         let mut base = KMOD_TABLE_ADDR + i * KMOD_SLOT_SIZE;
         let mut state = mem_read_u32(base);
         if state != KMOD_FREE {
-            let name = kmod_read_name(i);
-            let code_addr = mem_read_u64(base + 40);
-            let code_size = mem_read_u64(base + 48);
-            let version = mem_read_u32(base + 88);
-            let refs = mem_read_u32(base + 92);
-            let patches = mem_read_u32(base + 112);
-            let state_str = "UNKNOWN";
+            let mut name = kmod_read_name(i);
+            let mut code_addr = mem_read_u64(base + 40);
+            let mut code_size = mem_read_u64(base + 48);
+            let mut version = mem_read_u32(base + 88);
+            let mut refs = mem_read_u32(base + 92);
+            let mut patches = mem_read_u32(base + 112);
+            let mut state_str = "UNKNOWN";
             if state == KMOD_LOADED { state_str = "LOADED"; }
             if state == KMOD_ACTIVE { state_str = "ACTIVE"; }
             if state == KMOD_UNLOADING { state_str = "UNLOADING"; }
@@ -560,7 +560,7 @@ fn kmod_selftest() {
 
     // Test 1: load synthetic module
     // Write 16 bytes of NOP sled as synthetic code
-    let test_code_addr = KMOD_ARENA_ADDR + KMOD_ARENA_SIZE - 256;
+    let mut test_code_addr = KMOD_ARENA_ADDR + KMOD_ARENA_SIZE - 256;
     let mut i = 0;
     while i < 16 {
         mem_write_u8(test_code_addr + i, 144);  // 0x90 NOP
@@ -574,41 +574,41 @@ fn kmod_selftest() {
     if found == slot { pass = pass + 1; } else { fail = fail + 1; }
 
     // Test 3: activate
-    let act = kmod_activate(slot);
+    let mut act = kmod_activate(slot);
     if act == 0 { pass = pass + 1; } else { fail = fail + 1; }
 
     // Test 4: register trampoline
     let mut base = KMOD_TABLE_ADDR + slot * KMOD_SLOT_SIZE;
-    let code_base = mem_read_u64(base + 40);
+    let mut code_base = mem_read_u64(base + 40);
     kmod_register_tramp(0, "test_fn", code_base, slot);
-    let tramp_target = mem_read_u64(KMOD_TRAMP_ADDR + 2);
+    let mut tramp_target = mem_read_u64(KMOD_TRAMP_ADDR + 2);
     if tramp_target == code_base { pass = pass + 1; } else { fail = fail + 1; }
 
     // Test 5: hotpatch trampoline
     kmod_hotpatch(0, code_base + 8, slot);
-    let new_target = mem_read_u64(KMOD_TRAMP_ADDR + 2);
+    let mut new_target = mem_read_u64(KMOD_TRAMP_ADDR + 2);
     if new_target == code_base + 8 { pass = pass + 1; } else { fail = fail + 1; }
 
     // Test 6: ref counting
     kmod_ref_get(slot);
-    let refs1 = mem_read_u32(base + 92);
+    let mut refs1 = mem_read_u32(base + 92);
     if refs1 == 1 { pass = pass + 1; } else { fail = fail + 1; }
     kmod_ref_put(slot);
-    let refs2 = mem_read_u32(base + 92);
+    let mut refs2 = mem_read_u32(base + 92);
     if refs2 == 0 { pass = pass + 1; } else { fail = fail + 1; }
 
     // Test 7: replace module
-    let slot2 = kmod_replace("test_mod", test_code_addr, 16, 0, 0, 0, 0);
+    let mut slot2 = kmod_replace("test_mod", test_code_addr, 16, 0, 0, 0, 0);
     if slot2 == slot { pass = pass + 1; } else { fail = fail + 1; }
-    let ver = mem_read_u32(base + 88);
+    let mut ver = mem_read_u32(base + 88);
     if ver == 2 { pass = pass + 1; } else { fail = fail + 1; }
 
     // Test 8: unload
-    let ul = kmod_unload("test_mod");
+    let mut ul = kmod_unload("test_mod");
     if ul == 0 { pass = pass + 1; } else { fail = fail + 1; }
 
     // Test 9: verify slot freed
-    let after = kmod_find_by_name("test_mod");
+    let mut after = kmod_find_by_name("test_mod");
     if after < 0 { pass = pass + 1; } else { fail = fail + 1; }
 
     print("kmod: self-test complete — " + to_string(pass) + " passed, " + to_string(fail) + " failed");

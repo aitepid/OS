@@ -93,7 +93,7 @@ fn _rb_rotate_left(ep, x) {
     if _nd_left(ep, y) != _RB_NIL { _nd_set_parent(ep, _nd_left(ep, y), x); }
     // y.parent = x.parent
     _nd_set_parent(ep, y, _nd_parent(ep, x));
-    let xp = _nd_parent(ep, x);
+    let mut xp = _nd_parent(ep, x);
     if xp == _RB_NIL {
         set_at(_ep_roots, ep, y);
     } else if x == _nd_left(ep, xp) {
@@ -112,7 +112,7 @@ fn _rb_rotate_right(ep, y) {
     _nd_set_left(ep, y, _nd_right(ep, x));
     if _nd_right(ep, x) != _RB_NIL { _nd_set_parent(ep, _nd_right(ep, x), y); }
     _nd_set_parent(ep, x, _nd_parent(ep, y));
-    let yp = _nd_parent(ep, y);
+    let mut yp = _nd_parent(ep, y);
     if yp == _RB_NIL {
         set_at(_ep_roots, ep, x);
     } else if y == _nd_left(ep, yp) {
@@ -130,11 +130,11 @@ fn _rb_insert_fixup(ep, z) {
     let mut node = z;
     while _nd_parent(ep, node) != _RB_NIL && _nd_color(ep, _nd_parent(ep, node)) == _RB_RED {
         let mut p = _nd_parent(ep, node);
-        let gp = _nd_parent(ep, p);
+        let mut gp = _nd_parent(ep, p);
         if gp == _RB_NIL { _nd_set_color(ep, p, _RB_BLACK); return 0; }
 
         if p == _nd_left(ep, gp) {
-            let uncle = _nd_right(ep, gp);
+            let mut uncle = _nd_right(ep, gp);
             if _nd_color(ep, uncle) == _RB_RED {
                 // Case 1: uncle is red → recolor
                 _nd_set_color(ep, p, _RB_BLACK);
@@ -157,7 +157,7 @@ fn _rb_insert_fixup(ep, z) {
             }
         } else {
             // Mirror: parent is right child of grandparent
-            let uncle = _nd_left(ep, gp);
+            let mut uncle = _nd_left(ep, gp);
             if _nd_color(ep, uncle) == _RB_RED {
                 _nd_set_color(ep, p, _RB_BLACK);
                 _nd_set_color(ep, uncle, _RB_BLACK);
@@ -185,7 +185,7 @@ fn _rb_insert_fixup(ep, z) {
 fn _rb_find(ep, fd) {
     let mut cur = _ep_roots[ep];
     while cur != _RB_NIL {
-        let cur_fd = _nd_fd(ep, cur);
+        let mut cur_fd = _nd_fd(ep, cur);
         if fd == cur_fd { return cur; }
         if fd < cur_fd {
             cur = _nd_left(ep, cur);
@@ -199,9 +199,9 @@ fn _rb_find(ep, fd) {
 // --- Insert fd into RB tree ---
 fn _rb_insert(ep, fd, events, data) {
     // Allocate node: [fd, events, data, NIL, NIL, NIL, RED]
-    let node_idx = len(_ep_nodes[ep]);
+    let mut node_idx = len(_ep_nodes[ep]);
     // Spatial locality hint (pre-sort by Hilbert key for cache friendliness)
-    let _hkey = hilbert_encode(fd % 64, ep, 0);
+    let mut _hkey = hilbert_encode(fd % 64, ep, 0);
     push(_ep_nodes[ep], [fd, events, data, _RB_NIL, _RB_NIL, _RB_NIL, _RB_RED]);
 
     // BST insert
@@ -256,7 +256,7 @@ fn _ep_mark_ready(ep, fd, revents, events_mask) {
         if idx != _RB_NIL { _ep_nodes[ep][idx][0] = 0 - 1; }
     }
     // Wake any futex waiters
-    let wait_addr = _EP_WAIT_BASE + ep * 8;
+    let mut wait_addr = _EP_WAIT_BASE + ep * 8;
     mem_write_u64(wait_addr, 1);
     futex_wake(wait_addr, 1);
     return 0;
@@ -327,15 +327,15 @@ fn sys_epoll_wait(epfd, max_events, timeout_ms) {
     if _ep_active[epfd] == 0 { return []; }
 
     // Reset wait word
-    let wait_addr = _EP_WAIT_BASE + epfd * 8;
+    let mut wait_addr = _EP_WAIT_BASE + epfd * 8;
     mem_write_u64(wait_addr, 0);
 
     // Phase 1: Check all registered fds for readiness, populate ready list
     let mut i = 0;
     while i < len(_ep_nodes[epfd]) {
-        let node = _ep_nodes[epfd][i];
-        let fd = node[0];
-        let events = node[1];
+        let mut node = _ep_nodes[epfd][i];
+        let mut fd = node[0];
+        let mut events = node[1];
         if fd >= 0 {
             let mut revents = 0;
             // Check pipe readiness
@@ -352,14 +352,14 @@ fn sys_epoll_wait(epfd, max_events, timeout_ms) {
     // Phase 2: If no events and timeout > 0, block via futex
     if len(_ep_ready[epfd]) == 0 {
         if timeout_ms > 0 {
-            let timeout_ticks = timeout_ms * 100;
+            let mut timeout_ticks = timeout_ms * 100;
             futex_wait_timeout(wait_addr, 0, timeout_ticks);
             // Re-scan after wake
             i = 0;
             while i < len(_ep_nodes[epfd]) {
-                let node = _ep_nodes[epfd][i];
-                let fd = node[0];
-                let events = node[1];
+                let mut node = _ep_nodes[epfd][i];
+                let mut fd = node[0];
+                let mut events = node[1];
                 if fd >= 0 {
                     let mut revents = 0;
                     if pipe_available(fd) > 0 { revents = revents + POLLIN; }
@@ -398,8 +398,8 @@ fn sys_poll(fds, nfds, timeout_ms) {
     let mut ready = 0;
     let mut i = 0;
     while i < nfds {
-        let fd = fds[i * 3];
-        let events = fds[i * 3 + 1];
+        let mut fd = fds[i * 3];
+        let mut events = fds[i * 3 + 1];
         let mut revents = 0;
         if (events % 2) == 1 {
             if pipe_available(fd) > 0 { revents = revents + POLLIN; }
@@ -427,7 +427,7 @@ let mut _ti = 0;
 let mut _add_ok = 1;
 while _ti < 32 {
     // Insert in non-sequential order for tree balancing exercise
-    let test_fd = (_ti * 17 + 5) % 64;
+    let mut test_fd = (_ti * 17 + 5) % 64;
     sys_epoll_ctl(_test_ep, EPOLL_CTL_ADD, test_fd, POLLIN);
     if _rb_find(_test_ep, test_fd) == _RB_NIL { _add_ok = 0; }
     _ti = _ti + 1;

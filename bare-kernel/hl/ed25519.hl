@@ -23,11 +23,11 @@ fn ed25519_init() {
 
 // Generate key pair (simplified; uses uptime-based seed)
 fn ed25519_generate_keys() {
-    let seed = get_uptime() * get_ticks();
+    let mut seed = get_uptime() * get_ticks();
     let mut i = 0;
 
     while i < ED25519_KEY_SIZE {
-        let byte_val = (seed + i * 7919) % 256;
+        let mut byte_val = (seed + i * 7919) % 256;
         set_at(ed25519_private_key, i, byte_val);
         i = i + 1;
     }
@@ -35,8 +35,8 @@ fn ed25519_generate_keys() {
     // Derive public key from private key (simplified, not cryptographically sound)
     i = 0;
     while i < ED25519_KEY_SIZE {
-        let priv_byte = ed25519_private_key[i];
-        let pub_byte = (priv_byte * 9 + 13) % 256;
+        let mut priv_byte = ed25519_private_key[i];
+        let mut pub_byte = (priv_byte * 9 + 13) % 256;
         set_at(ed25519_public_key, i, pub_byte);
         i = i + 1;
     }
@@ -47,7 +47,7 @@ fn ed25519_generate_keys() {
 // Load private key from buffer
 fn ed25519_set_private_key(key) {
     let mut i = 0;
-    let klen = len(key);
+    let mut klen = len(key);
     while i < ED25519_KEY_SIZE {
         if i < klen {
             set_at(ed25519_private_key, i, key[i]);
@@ -62,7 +62,7 @@ fn ed25519_set_private_key(key) {
 // Load public key from buffer
 fn ed25519_set_public_key(key) {
     let mut i = 0;
-    let klen = len(key);
+    let mut klen = len(key);
     while i < ED25519_KEY_SIZE {
         if i < klen {
             set_at(ed25519_public_key, i, key[i]);
@@ -76,15 +76,15 @@ fn ed25519_set_public_key(key) {
 
 // Sign message (simplified Ed25519 signature)
 fn ed25519_sign(message) {
-    let msg_len = len(message);
-    let msg_hash = _ed25519_hash(message, msg_len);
+    let mut msg_len = len(message);
+    let mut msg_hash = _ed25519_hash(message, msg_len);
 
     // Build signature bytes from private key + hash (not actual Ed25519 math)
     let mut i = 0;
     while i < ED25519_SIG_SIZE {
-        let priv_byte = ed25519_private_key[i % ED25519_KEY_SIZE];
-        let hash_part = (msg_hash / _ed25519_pow256(i % 4)) % 256;
-        let sig_byte = (priv_byte + hash_part + i * 17) % 256;
+        let mut priv_byte = ed25519_private_key[i % ED25519_KEY_SIZE];
+        let mut hash_part = (msg_hash / _ed25519_pow256(i % 4)) % 256;
+        let mut sig_byte = (priv_byte + hash_part + i * 17) % 256;
         set_at(ed25519_signature, i, sig_byte);
         i = i + 1;
     }
@@ -94,17 +94,17 @@ fn ed25519_sign(message) {
 
 // Verify signature (simplified)
 fn ed25519_verify(message, signature) {
-    let msg_len = len(message);
-    let msg_hash = _ed25519_hash(message, msg_len);
+    let mut msg_len = len(message);
+    let mut msg_hash = _ed25519_hash(message, msg_len);
 
     let mut i = 0;
     let mut match_count = 0;
 
     while i < ED25519_SIG_SIZE {
-        let sig_byte = signature[i];
-        let pub_byte = ed25519_public_key[i % ED25519_KEY_SIZE];
-        let hash_part = (msg_hash / _ed25519_pow256(i % 4)) % 256;
-        let expected = (pub_byte + hash_part + i * 17) % 256;
+        let mut sig_byte = signature[i];
+        let mut pub_byte = ed25519_public_key[i % ED25519_KEY_SIZE];
+        let mut hash_part = (msg_hash / _ed25519_pow256(i % 4)) % 256;
+        let mut expected = (pub_byte + hash_part + i * 17) % 256;
         if sig_byte == expected {
             match_count = match_count + 1;
         }
@@ -125,7 +125,7 @@ fn _ed25519_hash(data, dlen) {
     let mut i = 0;
 
     while i < dlen {
-        let byte_val = data[i];
+        let mut byte_val = data[i];
         hash = (hash * 31 + byte_val) % 4294967296;
         i = i + 1;
     }
@@ -154,14 +154,14 @@ fn ed25519_get_signature() {
 
 // Convert byte buffer to partial hex string (first 16 bytes + ellipsis)
 fn _ed25519_to_hex(data, dlen) {
-    let hex_chars = "0123456789abcdef";
+    let mut hex_chars = "0123456789abcdef";
     let mut pos = 0;
     let mut i = 0;
 
     while i < dlen && i < 16 {
-        let byte_val = data[i];
-        let high = byte_val / 16;
-        let low = byte_val % 16;
+        let mut byte_val = data[i];
+        let mut high = byte_val / 16;
+        let mut low = byte_val % 16;
         set_at(ed25519_hex_buf, pos, hex_chars[high]);
         pos = pos + 1;
         set_at(ed25519_hex_buf, pos, hex_chars[low]);
@@ -197,7 +197,7 @@ fn ed25519_format_keys() {
 // Helper: append string to buffer, return updated pos
 fn _ed25519_append_str(buf, pos, str) {
     let mut i = 0;
-    let slen = len(str);
+    let mut slen = len(str);
     while i < slen {
         set_at(buf, pos, str[i]);
         pos = pos + 1;
@@ -239,18 +239,18 @@ fn ed25519_test() {
     ed25519_generate_keys();
 
     // Sign a test message
-    let message = "Test message for Ed25519";
-    let signature = ed25519_sign(message);
+    let mut message = "Test message for Ed25519";
+    let mut signature = ed25519_sign(message);
 
     // Verify the signature matches
-    let valid = ed25519_verify(message, signature);
+    let mut valid = ed25519_verify(message, signature);
     if valid != 1 {
         print("Ed25519 test: verification failed");
         return 0 - 1;
     }
 
     // Verify a wrong message does NOT validate
-    let wrong_valid = ed25519_verify("Wrong message", signature);
+    let mut wrong_valid = ed25519_verify("Wrong message", signature);
     if wrong_valid == 1 {
         print("Ed25519 test: false positive");
         return 0 - 2;

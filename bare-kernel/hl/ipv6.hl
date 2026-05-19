@@ -77,10 +77,10 @@ fn ipv6_build_header(payload_len, next_header, hop_limit, dst) {
 
 fn ipv6_handle(data) {
     if len(data) < IPV6_HEADER_LEN { return 0; }
-    let version = data[0] / 16;
+    let mut version = data[0] / 16;
     if version != 6 { return 0; }
-    let payload_len = data[4] * 256 + data[5];
-    let next_hdr = data[6];
+    let mut payload_len = data[4] * 256 + data[5];
+    let mut next_hdr = data[6];
     // Extract src/dst addresses
     if next_hdr == IPV6_NEXT_ICMPV6 {
         return icmpv6_handle(data, IPV6_HEADER_LEN, payload_len);
@@ -104,7 +104,7 @@ let ICMPV6_NEIGHBOR_ADVERT = 136;
 
 fn icmpv6_handle(pkt, offset, length) {
     if length < 4 { return 0; }
-    let icmp_type = pkt[offset];
+    let mut icmp_type = pkt[offset];
     if icmp_type == ICMPV6_ECHO_REQUEST {
         // Build echo reply
         return 0;
@@ -123,13 +123,13 @@ fn icmpv6_handle(pkt, offset, length) {
 // NDP: send Router Solicitation to discover routers
 fn ndp_router_solicit() {
     // ICMPv6 type 133, dst = ff02::2 (all-routers)
-    let dst = [255,2,0,0,0,0,0,0,0,0,0,0,0,0,0,2];
+    let mut dst = [255,2,0,0,0,0,0,0,0,0,0,0,0,0,0,2];
     let mut icmp = [];
     push(icmp, ICMPV6_ROUTER_SOLICIT);
     push(icmp, 0);  // code
     push(icmp, 0); push(icmp, 0);  // checksum field
     push(icmp, 0); push(icmp, 0); push(icmp, 0); push(icmp, 0);  // reserved
-    let hdr = ipv6_build_header(len(icmp), IPV6_NEXT_ICMPV6, 255, dst);
+    let mut hdr = ipv6_build_header(len(icmp), IPV6_NEXT_ICMPV6, 255, dst);
     // send hdr + icmp
     return 0;
 }

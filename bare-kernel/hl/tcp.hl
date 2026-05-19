@@ -108,26 +108,26 @@ fn _tcp_cc_init(addr) {
 
 // Effective send window = min(cwnd, receiver_window)
 fn _tcp_send_window(addr) {
-    let cwnd = mem_read_u64(addr + 128);
-    let rwnd = mem_read_u64(addr + 40);
+    let mut cwnd = mem_read_u64(addr + 128);
+    let mut rwnd = mem_read_u64(addr + 40);
     if cwnd < rwnd { return cwnd; }
     return rwnd;
 }
 
 // Called when new ACK received (not duplicate)
 fn _tcp_cc_on_ack(addr, acked_bytes) {
-    let cwnd = mem_read_u64(addr + 128);
-    let ssthresh = mem_read_u64(addr + 136);
+    let mut cwnd = mem_read_u64(addr + 128);
+    let mut ssthresh = mem_read_u64(addr + 136);
     let mut new_cwnd = cwnd;
 
     if cwnd < ssthresh {
         // Slow start: cwnd += min(acked_bytes, MSS) per ACK
-        let inc = acked_bytes;
+        let mut inc = acked_bytes;
         if inc > TCP_MSS { inc = TCP_MSS; }
         new_cwnd = cwnd + inc;
     } else {
         // Congestion avoidance: cwnd += MSS * MSS / cwnd per ACK
-        let inc = TCP_MSS * TCP_MSS / cwnd;
+        let mut inc = TCP_MSS * TCP_MSS / cwnd;
         if inc < 1 { inc = 1; }
         new_cwnd = cwnd + inc;
     }
@@ -139,12 +139,12 @@ fn _tcp_cc_on_ack(addr, acked_bytes) {
 
 // Called on duplicate ACK
 fn _tcp_cc_on_dup_ack(addr) {
-    let dup = mem_read_u64(addr + 144) + 1;
+    let mut dup = mem_read_u64(addr + 144) + 1;
     mem_write_u64(addr + 144, dup);
 
     if dup == TCP_DUP_ACK_THRESHOLD {
         // Fast retransmit: ssthresh = cwnd / 2, cwnd = ssthresh + 3*MSS
-        let cwnd = mem_read_u64(addr + 128);
+        let mut cwnd = mem_read_u64(addr + 128);
         let mut new_ss = cwnd / 2;
         if new_ss < 2 * TCP_MSS { new_ss = 2 * TCP_MSS; }
         mem_write_u64(addr + 136, new_ss);
@@ -154,7 +154,7 @@ fn _tcp_cc_on_dup_ack(addr) {
 
     if dup > TCP_DUP_ACK_THRESHOLD {
         // Fast recovery: cwnd += MSS for each additional dup ACK
-        let cwnd = mem_read_u64(addr + 128);
+        let mut cwnd = mem_read_u64(addr + 128);
         mem_write_u64(addr + 128, cwnd + TCP_MSS);
     }
 
@@ -163,15 +163,15 @@ fn _tcp_cc_on_dup_ack(addr) {
 
 // Called on timeout
 fn _tcp_cc_on_timeout(addr) {
-    let cwnd = mem_read_u64(addr + 128);
+    let mut cwnd = mem_read_u64(addr + 128);
     let mut new_ss = cwnd / 2;
     if new_ss < 2 * TCP_MSS { new_ss = 2 * TCP_MSS; }
     mem_write_u64(addr + 136, new_ss);
     mem_write_u64(addr + 128, TCP_MSS); // cwnd = 1 MSS
     mem_write_u64(addr + 144, 0);       // reset dup counter
     // Double RTO (exponential backoff)
-    let rto = mem_read_u64(addr + 168);
-    let new_rto = rto * 2;
+    let mut rto = mem_read_u64(addr + 168);
+    let mut new_rto = rto * 2;
     if new_rto > TCP_MAX_RTO { new_rto = TCP_MAX_RTO; }
     mem_write_u64(addr + 168, new_rto);
     return 0;
@@ -179,8 +179,8 @@ fn _tcp_cc_on_timeout(addr) {
 
 // Jacobson/Karels RTT estimation
 fn _tcp_update_rtt(addr, sample_ms) {
-    let srtt = mem_read_u64(addr + 152);
-    let rttvar = mem_read_u64(addr + 160);
+    let mut srtt = mem_read_u64(addr + 152);
+    let mut rttvar = mem_read_u64(addr + 160);
 
     if srtt == 0 {
         // First measurement
@@ -191,15 +191,15 @@ fn _tcp_update_rtt(addr, sample_ms) {
         let mut err = sample_ms * 8 - srtt;
         if err < 0 { err = 0 - err; }
         // RTTVAR = 3/4 * RTTVAR + 1/4 * |err/8|
-        let new_var = rttvar * 3 / 4 + err / 8 / 4;
-        let new_srtt = srtt * 7 / 8 + sample_ms;
+        let mut new_var = rttvar * 3 / 4 + err / 8 / 4;
+        let mut new_srtt = srtt * 7 / 8 + sample_ms;
         mem_write_u64(addr + 152, new_srtt);
         mem_write_u64(addr + 160, new_var);
     }
 
     // RTO = SRTT/8 + 4 * RTTVAR
-    let new_srtt = mem_read_u64(addr + 152);
-    let new_var = mem_read_u64(addr + 160);
+    let mut new_srtt = mem_read_u64(addr + 152);
+    let mut new_var = mem_read_u64(addr + 160);
     let mut rto = new_srtt / 8 + 4 * new_var;
     if rto < TCP_MIN_RTO { rto = TCP_MIN_RTO; }
     if rto > TCP_MAX_RTO { rto = TCP_MAX_RTO; }
@@ -234,7 +234,7 @@ fn tcp_build_header(src_port, dst_port, seq, ack, flags, window) {
 fn tcp_connect(remote_ip, remote_port) {
     let mut idx = tcp_alloc_tcb();
     if idx < 0 { return 0 - 1; }
-    let local_port = tcp_alloc_port();
+    let mut local_port = tcp_alloc_port();
     let mut addr = TCP_TABLE + idx * TCB_SIZE;
     mem_write_u64(addr + 0, TCP_SYN_SENT);
     mem_write_u32(addr + 8, ip_pack(my_ip[0],my_ip[1],my_ip[2],my_ip[3]));
@@ -243,8 +243,8 @@ fn tcp_connect(remote_ip, remote_port) {
     mem_write_u32(addr + 20, remote_port);
     mem_write_u64(addr + 40, 65535);
     _tcp_cc_init(addr);
-    let seq = 1000;
-    let hdr = tcp_build_header(local_port, remote_port, seq, 0, TCP_SYN, 65535);
+    let mut seq = 1000;
+    let mut hdr = tcp_build_header(local_port, remote_port, seq, 0, TCP_SYN, 65535);
     return idx;
 }
 
@@ -264,18 +264,18 @@ fn tcp_listen(local_port) {
 
 fn tcp_input(src_ip, seg_data) {
     if len(seg_data) < 20 { return 0; }
-    let src_port = seg_data[0] * 256 + seg_data[1];
-    let dst_port = seg_data[2] * 256 + seg_data[3];
-    let seq = seg_data[4]*16777216 + seg_data[5]*65536 + seg_data[6]*256 + seg_data[7];
-    let ack = seg_data[8]*16777216 + seg_data[9]*65536 + seg_data[10]*256 + seg_data[11];
-    let flags = seg_data[13];
-    let data_off = (seg_data[12] / 16) * 4;
-    let rwnd = seg_data[14] * 256 + seg_data[15];
+    let mut src_port = seg_data[0] * 256 + seg_data[1];
+    let mut dst_port = seg_data[2] * 256 + seg_data[3];
+    let mut seq = seg_data[4]*16777216 + seg_data[5]*65536 + seg_data[6]*256 + seg_data[7];
+    let mut ack = seg_data[8]*16777216 + seg_data[9]*65536 + seg_data[10]*256 + seg_data[11];
+    let mut flags = seg_data[13];
+    let mut data_off = (seg_data[12] / 16) * 4;
+    let mut rwnd = seg_data[14] * 256 + seg_data[15];
 
     let mut i = 0;
     while i < MAX_TCP {
         let mut state = mem_read_u64(TCP_TABLE + i * TCB_SIZE);
-        let lport = mem_read_u32(TCP_TABLE + i * TCB_SIZE + 12);
+        let mut lport = mem_read_u32(TCP_TABLE + i * TCB_SIZE + 12);
         if lport == dst_port {
             if state != TCP_CLOSED {
                 tcp_process_segment(i, src_ip, src_port, seq, ack, flags, seg_data, data_off, rwnd);
@@ -291,9 +291,9 @@ fn tcp_process_segment(tcb_idx, src_ip, src_port, seq, ack, flags, data, data_of
     let mut addr = TCP_TABLE + tcb_idx * TCB_SIZE;
     let mut state = mem_read_u64(addr);
 
-    let is_syn = (flags / 2) % 2;
-    let is_ack = (flags / 16) % 2;
-    let is_fin = flags % 2;
+    let mut is_syn = (flags / 2) % 2;
+    let mut is_ack = (flags / 16) % 2;
+    let mut is_fin = flags % 2;
 
     // Update receiver window
     if rwnd > 0 { mem_write_u64(addr + 40, rwnd); }
@@ -316,17 +316,17 @@ fn tcp_process_segment(tcb_idx, src_ip, src_port, seq, ack, flags, data, data_of
     }
     if state == TCP_ESTABLISHED {
         if is_ack == 1 {
-            let last_ack = mem_read_u64(addr + 176);
+            let mut last_ack = mem_read_u64(addr + 176);
             if ack > last_ack {
                 // New ACK: advance, update congestion
-                let acked = ack - last_ack;
+                let mut acked = ack - last_ack;
                 mem_write_u64(addr + 176, ack);
                 _tcp_cc_on_ack(addr, acked);
                 // RTT sample
-                let send_t = mem_read_u64(addr + 184);
+                let mut send_t = mem_read_u64(addr + 184);
                 if send_t > 0 {
-                    let now = mem_read_u64(3145728); // tick @ 0x300000
-                    let sample = (now - send_t) * 10; // ticks -> ms (100Hz)
+                    let mut now = mem_read_u64(3145728); // tick @ 0x300000
+                    let mut sample = (now - send_t) * 10; // ticks -> ms (100Hz)
                     if sample > 0 { _tcp_update_rtt(addr, sample); }
                     mem_write_u64(addr + 184, 0);
                 }
@@ -355,20 +355,20 @@ fn tcp_send(tcb_idx, payload) {
     let mut state = mem_read_u64(addr);
     if state != TCP_ESTABLISHED { return 0; }
 
-    let local_port = mem_read_u32(addr + 12);
-    let remote_ip = mem_read_u32(addr + 16);
-    let remote_port = mem_read_u32(addr + 20);
-    let seq = mem_read_u64(addr + 24);
-    let ack_num = mem_read_u64(addr + 32);
+    let mut local_port = mem_read_u32(addr + 12);
+    let mut remote_ip = mem_read_u32(addr + 16);
+    let mut remote_port = mem_read_u32(addr + 20);
+    let mut seq = mem_read_u64(addr + 24);
+    let mut ack_num = mem_read_u64(addr + 32);
 
     // Limit by effective window
-    let snd_wnd = _tcp_send_window(addr);
+    let mut snd_wnd = _tcp_send_window(addr);
     let mut send_len = len(payload);
     if send_len > snd_wnd { send_len = snd_wnd; }
     if send_len > TCP_MSS { send_len = TCP_MSS; }
     if send_len <= 0 { return 0; }
 
-    let hdr = tcp_build_header(local_port, remote_port, seq, ack_num, TCP_PSH + TCP_ACK, 65535);
+    let mut hdr = tcp_build_header(local_port, remote_port, seq, ack_num, TCP_PSH + TCP_ACK, 65535);
 
     let mut tcp_pkt = [];
     let mut i = 0;
@@ -376,13 +376,13 @@ fn tcp_send(tcb_idx, payload) {
     i = 0;
     while i < send_len { push(tcp_pkt, payload[i]); i = i + 1; }
 
-    let dst_ip = ip_unpack(remote_ip);
-    let ip_pkt = build_ip_tcp_packet(dst_ip, tcp_pkt);
+    let mut dst_ip = ip_unpack(remote_ip);
+    let mut ip_pkt = build_ip_tcp_packet(dst_ip, tcp_pkt);
     virtio_net_send_pkt(ip_pkt);
 
     mem_write_u64(addr + 24, seq + send_len);
     // Record send tick for RTT
-    let now = mem_read_u64(3145728); // 0x300000
+    let mut now = mem_read_u64(3145728); // 0x300000
     if mem_read_u64(addr + 184) == 0 {
         mem_write_u64(addr + 184, now);
     }
@@ -402,15 +402,15 @@ fn tcp_close(tcb_idx) {
         if state != TCP_CLOSE_WAIT { return 0; }
     }
 
-    let local_port = mem_read_u32(addr + 12);
-    let remote_port = mem_read_u32(addr + 20);
-    let seq = mem_read_u64(addr + 24);
-    let ack_num = mem_read_u64(addr + 32);
+    let mut local_port = mem_read_u32(addr + 12);
+    let mut remote_port = mem_read_u32(addr + 20);
+    let mut seq = mem_read_u64(addr + 24);
+    let mut ack_num = mem_read_u64(addr + 32);
 
-    let hdr = tcp_build_header(local_port, remote_port, seq, ack_num, TCP_FIN + TCP_ACK, 0);
-    let remote_ip = mem_read_u32(addr + 16);
-    let dst_ip = ip_unpack(remote_ip);
-    let ip_pkt = build_ip_tcp_packet(dst_ip, hdr);
+    let mut hdr = tcp_build_header(local_port, remote_port, seq, ack_num, TCP_FIN + TCP_ACK, 0);
+    let mut remote_ip = mem_read_u32(addr + 16);
+    let mut dst_ip = ip_unpack(remote_ip);
+    let mut ip_pkt = build_ip_tcp_packet(dst_ip, hdr);
     virtio_net_send_pkt(ip_pkt);
 
     if state == TCP_ESTABLISHED {
@@ -430,7 +430,7 @@ fn build_ip_tcp_packet(dst_ip, tcp_data) {
     while i < 6 { push(pkt, my_mac[i]); i = i + 1; }
     push(pkt, 8); push(pkt, 0);
 
-    let ip_total = 20 + len(tcp_data);
+    let mut ip_total = 20 + len(tcp_data);
     push(pkt, 69); push(pkt, 0);
     push(pkt, (ip_total / 256) % 256);
     push(pkt, ip_total % 256);
@@ -446,7 +446,7 @@ fn build_ip_tcp_packet(dst_ip, tcp_data) {
     let mut ip_hdr = [];
     i = 14;
     while i < 34 { push(ip_hdr, pkt[i]); i = i + 1; }
-    let cksum = ip_checksum(ip_hdr);
+    let mut cksum = ip_checksum(ip_hdr);
     set_at(pkt, 24, (cksum / 256) % 256);
     set_at(pkt, 25, cksum % 256);
 
@@ -461,10 +461,10 @@ fn build_ip_tcp_packet(dst_ip, tcp_data) {
 
 fn tcp_cc_info(tcb_idx) {
     let mut addr = TCP_TABLE + tcb_idx * TCB_SIZE;
-    let cwnd = mem_read_u64(addr + 128);
-    let ssthresh = mem_read_u64(addr + 136);
-    let rto = mem_read_u64(addr + 168);
-    let srtt = mem_read_u64(addr + 152) / 8;
+    let mut cwnd = mem_read_u64(addr + 128);
+    let mut ssthresh = mem_read_u64(addr + 136);
+    let mut rto = mem_read_u64(addr + 168);
+    let mut srtt = mem_read_u64(addr + 152) / 8;
     let mut phase = "slow-start";
     if cwnd >= ssthresh { phase = "cong-avoid"; }
     return "cwnd=" + to_string(cwnd) + " ss=" + to_string(ssthresh) + " rto=" + to_string(rto) + "ms srtt=" + to_string(srtt) + "ms [" + phase + "]";
@@ -486,11 +486,11 @@ fn tcp_loopback_test() {
     mem_zero(TCP_TABLE + 0 * TCB_SIZE, TCB_SIZE);
     mem_zero(TCP_TABLE + 1 * TCB_SIZE, TCB_SIZE);
 
-    let srv_idx = 0;
-    let cli_idx = 1;
-    let srv_addr = TCP_TABLE + srv_idx * TCB_SIZE;
-    let cli_addr = TCP_TABLE + cli_idx * TCB_SIZE;
-    let cli_port = 50000;
+    let mut srv_idx = 0;
+    let mut cli_idx = 1;
+    let mut srv_addr = TCP_TABLE + srv_idx * TCB_SIZE;
+    let mut cli_addr = TCP_TABLE + cli_idx * TCB_SIZE;
+    let mut cli_port = 50000;
 
     // --- Server: LISTEN ---
     mem_write_u64(srv_addr, TCP_LISTEN);
@@ -498,7 +498,7 @@ fn tcp_loopback_test() {
     _tcp_cc_init(srv_addr);
 
     // --- Client: SYN_SENT ---
-    let cli_seq = 1000;
+    let mut cli_seq = 1000;
     mem_write_u64(cli_addr, TCP_SYN_SENT);
     mem_write_u32(cli_addr + 8, LOOPBACK_IP);
     mem_write_u32(cli_addr + 12, cli_port);
@@ -510,45 +510,45 @@ fn tcp_loopback_test() {
 
     // === Step 1: Client → Server SYN ===
     // Build minimal 20-byte TCP segment: cli_port → LOOPBACK_PORT, SYN
-    let syn_seg = _tcp_lo_build_seg(cli_port, LOOPBACK_PORT, cli_seq, 0, TCP_SYN, 65535, []);
+    let mut syn_seg = _tcp_lo_build_seg(cli_port, LOOPBACK_PORT, cli_seq, 0, TCP_SYN, 65535, []);
     tcp_process_segment(srv_idx, LOOPBACK_IP, cli_port, cli_seq, 0, TCP_SYN, syn_seg, 20, 65535);
 
-    let srv_state1 = mem_read_u64(srv_addr);
+    let mut srv_state1 = mem_read_u64(srv_addr);
     // Server should be SYN_RCVD
     let mut ok = 1;
     if srv_state1 != TCP_SYN_RCVD { ok = 0; }
 
     // === Step 2: Server → Client SYN+ACK ===
-    let srv_seq = 2000;
+    let mut srv_seq = 2000;
     mem_write_u64(srv_addr + 24, srv_seq);
-    let synack_seg = _tcp_lo_build_seg(LOOPBACK_PORT, cli_port, srv_seq, cli_seq + 1, TCP_SYN + TCP_ACK, 65535, []);
+    let mut synack_seg = _tcp_lo_build_seg(LOOPBACK_PORT, cli_port, srv_seq, cli_seq + 1, TCP_SYN + TCP_ACK, 65535, []);
     // Client receives SYN+ACK → ESTABLISHED
     mem_write_u64(cli_addr, TCP_ESTABLISHED);
     mem_write_u64(cli_addr + 32, srv_seq + 1);
     mem_write_u64(cli_addr + 176, cli_seq);  // last_ack_seq
 
     // === Step 3: Client → Server ACK (completes handshake) ===
-    let ack_seg = _tcp_lo_build_seg(cli_port, LOOPBACK_PORT, cli_seq + 1, srv_seq + 1, TCP_ACK, 65535, []);
+    let mut ack_seg = _tcp_lo_build_seg(cli_port, LOOPBACK_PORT, cli_seq + 1, srv_seq + 1, TCP_ACK, 65535, []);
     tcp_process_segment(srv_idx, LOOPBACK_IP, cli_port, cli_seq + 1, srv_seq + 1, TCP_ACK, ack_seg, 20, 65535);
 
-    let srv_state2 = mem_read_u64(srv_addr);
+    let mut srv_state2 = mem_read_u64(srv_addr);
     if srv_state2 != TCP_ESTABLISHED { ok = 0; }
 
     // === Step 4: Client → Server DATA ("HELLO") ===
-    let payload = [72, 69, 76, 76, 79];  // "HELLO"
-    let data_seg = _tcp_lo_build_seg(cli_port, LOOPBACK_PORT, cli_seq + 1, srv_seq + 1, TCP_PSH + TCP_ACK, 65535, payload);
-    let data_result = tcp_process_segment(srv_idx, LOOPBACK_IP, cli_port, cli_seq + 1, srv_seq + 1, TCP_PSH + TCP_ACK, data_seg, 20, 65535);
+    let mut payload = [72, 69, 76, 76, 79];  // "HELLO"
+    let mut data_seg = _tcp_lo_build_seg(cli_port, LOOPBACK_PORT, cli_seq + 1, srv_seq + 1, TCP_PSH + TCP_ACK, 65535, payload);
+    let mut data_result = tcp_process_segment(srv_idx, LOOPBACK_IP, cli_port, cli_seq + 1, srv_seq + 1, TCP_PSH + TCP_ACK, data_seg, 20, 65535);
 
     // Server should still be ESTABLISHED, data_result = 5 (payload bytes)
-    let srv_state3 = mem_read_u64(srv_addr);
+    let mut srv_state3 = mem_read_u64(srv_addr);
     if srv_state3 != TCP_ESTABLISHED { ok = 0; }
     if data_result != 5 { ok = 0; }
 
     // === Step 5: Client → Server FIN ===
-    let fin_seg = _tcp_lo_build_seg(cli_port, LOOPBACK_PORT, cli_seq + 6, srv_seq + 1, TCP_FIN + TCP_ACK, 65535, []);
+    let mut fin_seg = _tcp_lo_build_seg(cli_port, LOOPBACK_PORT, cli_seq + 6, srv_seq + 1, TCP_FIN + TCP_ACK, 65535, []);
     tcp_process_segment(srv_idx, LOOPBACK_IP, cli_port, cli_seq + 6, srv_seq + 1, TCP_FIN + TCP_ACK, fin_seg, 20, 65535);
 
-    let srv_state4 = mem_read_u64(srv_addr);
+    let mut srv_state4 = mem_read_u64(srv_addr);
     if srv_state4 != TCP_CLOSE_WAIT { ok = 0; }
 
     // Clean up
@@ -604,7 +604,7 @@ fn tcp_loopback_status() {
 
 // Return summary of all non-closed TCP connections (multi-line string)
 fn tcp_connections_summary() {
-    let state_names = ["CLOSED", "LISTEN", "SYN_SENT", "SYN_RCVD", "ESTABLISHED",
+    let mut state_names = ["CLOSED", "LISTEN", "SYN_SENT", "SYN_RCVD", "ESTABLISHED",
                        "FIN_WAIT1", "FIN_WAIT2", "CLOSE_WAIT", "CLOSING", "LAST_ACK", "TIME_WAIT"];
     let mut out = "";
     let mut i = 0;
@@ -612,20 +612,20 @@ fn tcp_connections_summary() {
         let mut addr = TCP_TABLE + i * TCB_SIZE;
         let mut state = mem_read_u64(addr);
         if state != TCP_CLOSED {
-            let local_ip  = mem_read_u32(addr + 8);
-            let local_port = mem_read_u32(addr + 12);
-            let rem_ip    = mem_read_u32(addr + 16);
-            let rem_port  = mem_read_u32(addr + 20);
-            let cwnd      = mem_read_u64(addr + 128);
-            let sname = "UNKNOWN";
+            let mut local_ip = mem_read_u32(addr + 8);
+            let mut local_port = mem_read_u32(addr + 12);
+            let mut rem_ip = mem_read_u32(addr + 16);
+            let mut rem_port = mem_read_u32(addr + 20);
+            let mut cwnd = mem_read_u64(addr + 128);
+            let mut sname = "UNKNOWN";
             if state >= 0 {
                 if state <= 10 { sname = state_names[state]; }
             }
-            let lip_s = to_string((local_ip / 16777216) % 256) + "."
+            let mut lip_s = to_string((local_ip / 16777216) % 256) + "."
                       + to_string((local_ip / 65536) % 256) + "."
                       + to_string((local_ip / 256) % 256) + "."
                       + to_string(local_ip % 256) + ":" + to_string(local_port);
-            let rip_s = to_string((rem_ip / 16777216) % 256) + "."
+            let mut rip_s = to_string((rem_ip / 16777216) % 256) + "."
                       + to_string((rem_ip / 65536) % 256) + "."
                       + to_string((rem_ip / 256) % 256) + "."
                       + to_string(rem_ip % 256) + ":" + to_string(rem_port);

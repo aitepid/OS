@@ -55,8 +55,8 @@ fn _uibrowse_strip_html(html) {
             in_tag = 1;
             // Detect block-level tags: add newline for </p> <br> <li> etc.
             if i + 2 < n {
-                let tag3 = str_sub(html, i, i + 3);
-                let tag4 = str_sub(html, i, i + 4);
+                let mut tag3 = str_sub(html, i, i + 3);
+                let mut tag4 = str_sub(html, i, i + 4);
                 if tag3 == "<br" { out = out + "\n"; }
                 if tag3 == "<p>" { out = out + "\n"; }
                 if tag4 == "</p>" { out = out + "\n"; }
@@ -74,7 +74,7 @@ fn _uibrowse_strip_html(html) {
             if c == "&" {
                 // Decode entity
                 if i + 4 < n {
-                    let ent = str_sub(html, i, i + 5);
+                    let mut ent = str_sub(html, i, i + 5);
                     if ent == "&amp;" { out = out + "&"; i = i + 4; }
                     else if str_sub(html, i, i + 4) == "&lt;" { out = out + "<"; i = i + 3; }
                     else if str_sub(html, i, i + 4) == "&gt;" { out = out + ">"; i = i + 3; }
@@ -141,7 +141,7 @@ fn _uibrowse_parse_url(url) {
     // Strip "http://"
     if str_starts_with(u, "http://") { u = str_sub(u, 7, len(u)); }
     if str_starts_with(u, "https://") { u = str_sub(u, 8, len(u)); }
-    let sl = str_find(u, "/");
+    let mut sl = str_find(u, "/");
     if sl < 0 { return [u, "/"]; }
     return [str_sub(u, 0, sl), str_sub(u, sl, len(u))];
 }
@@ -159,13 +159,13 @@ fn uibrowse_navigate(url) {
     uibrowse_lines    = [];
     _uibrowse_toolbar_draw();
 
-    let parts = _uibrowse_parse_url(url);
-    let host  = parts[0];
-    let path  = parts[1];
+    let mut parts = _uibrowse_parse_url(url);
+    let mut host = parts[0];
+    let mut path = parts[1];
 
     // Open TCP connection directly (avoids TLS complexity)
-    let ip  = dns_resolve(host);
-    let tcb = tcp_connect(ip, 80);
+    let mut ip = dns_resolve(host);
+    let mut tcb = tcp_connect(ip, 80);
     if tcb < 0 {
         uibrowse_status = "Error: cannot connect to " + host;
         uibrowse_lines  = ["Connection failed: " + host, "", "Check hostname and network."];
@@ -175,7 +175,7 @@ fn uibrowse_navigate(url) {
     }
 
     // Send HTTP/1.0 GET
-    let req = "GET " + path + " HTTP/1.0\r\n"
+    let mut req = "GET " + path + " HTTP/1.0\r\n"
         + "Host: " + host + "\r\n"
         + "User-Agent: HicOS-Browser/1.0\r\n"
         + "Connection: close\r\n"
@@ -184,7 +184,7 @@ fn uibrowse_navigate(url) {
 
     // Read response into buffer
     let mut resp = "";
-    let buf_addr = 10158080;  // 0x9B0000 — 64 KB response buffer
+    let mut buf_addr = 10158080;  // 0x9B0000 — 64 KB response buffer
     let mut n = tcp_recv(tcb, buf_addr, 65535);
     tcp_close(tcb);
 
@@ -205,8 +205,8 @@ fn uibrowse_navigate(url) {
     }
 
     // Extract body + strip HTML
-    let body  = _uibrowse_http_body(resp);
-    let plain = _uibrowse_strip_html(body);
+    let mut body = _uibrowse_http_body(resp);
+    let mut plain = _uibrowse_strip_html(body);
     uibrowse_lines  = _uibrowse_wrap(plain);
     uibrowse_status = url + " (" + to_string(len(uibrowse_lines)) + " lines)";
     _uibrowse_content_draw();
@@ -226,11 +226,11 @@ fn uibrowse_back() {
 // ============================================================
 
 fn _uibrowse_toolbar_draw() {
-    let wx  = UIBROW_WIN_X;
-    let wy  = UIBROW_WIN_Y + 20;   // below title bar
-    let bg  = ui_theme_panel_color();
-    let bdr = ui_theme_border_color();
-    let fg  = ui_theme_text_color();
+    let mut wx = UIBROW_WIN_X;
+    let mut wy = UIBROW_WIN_Y + 20;   // below title bar
+    let mut bg = ui_theme_panel_color();
+    let mut bdr = ui_theme_border_color();
+    let mut fg = ui_theme_text_color();
 
     // URL bar background
     vesa_fill_rect(wx, wy, UIBROW_WIN_W, UIBROW_URLBAR_H, bg);
@@ -239,7 +239,7 @@ fn _uibrowse_toolbar_draw() {
     // URL input field
     vesa_fill_rect(wx + 4, wy + 4, UIBROW_WIN_W - 140, 20, ui_theme_surface_color());
     vesa_rect(wx + 4, wy + 4, UIBROW_WIN_W - 140, 20, bdr);
-    let url_disp = uibrowse_url_input;
+    let mut url_disp = uibrowse_url_input;
     if len(url_disp) == 0 { url_disp = uibrowse_url; }
     ui_draw_text(wx + 8, wy + 6, url_disp, fg, 0);
 
@@ -249,7 +249,7 @@ fn _uibrowse_toolbar_draw() {
     ui_button(wx + UIBROW_WIN_W - 44,  wy + 4, 40, 20, "Rld");
 
     // Status bar
-    let sy = wy + UIBROW_URLBAR_H;
+    let mut sy = wy + UIBROW_URLBAR_H;
     vesa_fill_rect(wx, sy, UIBROW_WIN_W, UIBROW_STATUS_H, bg);
     ui_draw_text(wx + 4, sy + 1, uibrowse_status, fg, 0);
     return 0;
@@ -257,21 +257,21 @@ fn _uibrowse_toolbar_draw() {
 
 fn _uibrowse_content_draw() {
     if uibrowse_open_flag == 0 { return 0; }
-    let cx  = UIBROW_WIN_X;
-    let cy  = UIBROW_WIN_Y + 20 + UIBROW_URLBAR_H + UIBROW_STATUS_H;
-    let cw  = UIBROW_WIN_W;
-    let ch  = UIBROW_CONTENT_H;
-    let bg  = ui_theme_surface_color();
-    let fg  = ui_theme_text_color();
+    let mut cx = UIBROW_WIN_X;
+    let mut cy = UIBROW_WIN_Y + 20 + UIBROW_URLBAR_H + UIBROW_STATUS_H;
+    let mut cw = UIBROW_WIN_W;
+    let mut ch = UIBROW_CONTENT_H;
+    let mut bg = ui_theme_surface_color();
+    let mut fg = ui_theme_text_color();
 
     vesa_fill_rect(cx, cy, cw, ch, bg);
 
     let mut total = len(uibrowse_lines);
     let mut row = 0;
     while row < UIBROW_PAGE_LINES {
-        let li = uibrowse_scroll + row;
+        let mut li = uibrowse_scroll + row;
         if li < total {
-            let line = uibrowse_lines[li];
+            let mut line = uibrowse_lines[li];
             ui_draw_text(cx + 4, cy + 2 + row * 18, line, fg, 0);
         }
         row = row + 1;
@@ -279,7 +279,7 @@ fn _uibrowse_content_draw() {
 
     // Scroll indicator
     if total > UIBROW_PAGE_LINES {
-        let pct = (uibrowse_scroll * 100) / (total - UIBROW_PAGE_LINES);
+        let mut pct = (uibrowse_scroll * 100) / (total - UIBROW_PAGE_LINES);
         vesa_fill_rect(cx + cw - 8, cy + (ch * pct / 100), 6, 16, ui_theme_accent_color());
     }
     return 0;
@@ -287,9 +287,9 @@ fn _uibrowse_content_draw() {
 
 fn uibrowse_draw() {
     if uibrowse_open_flag == 0 { return 0; }
-    let wx = UIBROW_WIN_X;
-    let wy = UIBROW_WIN_Y;
-    let bdr = ui_theme_border_color();
+    let mut wx = UIBROW_WIN_X;
+    let mut wy = UIBROW_WIN_Y;
+    let mut bdr = ui_theme_border_color();
     // Window outline + title
     vesa_fill_rect(wx, wy, UIBROW_WIN_W, 20, ui_theme_panel_color());
     ui_draw_text(wx + 8, wy + 2, "Browser  " + uibrowse_url, ui_theme_text_color(), 0);
@@ -359,8 +359,8 @@ fn uibrowse_key(k) {
 
 fn uibrowse_click(mx, my) {
     if uibrowse_open_flag == 0 { return 0; }
-    let wx = UIBROW_WIN_X;
-    let wy = UIBROW_WIN_Y + 20;
+    let mut wx = UIBROW_WIN_X;
+    let mut wy = UIBROW_WIN_Y + 20;
     // Toolbar button hit tests
     if ui_button_hit(wx + UIBROW_WIN_W - 132, wy + 4, 40, 20, mx, my) == 1 {
         let mut u = uibrowse_url_input;

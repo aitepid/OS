@@ -31,7 +31,7 @@ fn spinlock_init(lock_addr) {
 fn spinlock_acquire(lock_addr) {
     let mut acquired = 0;
     while acquired == 0 {
-        let old = mem_read_u64(lock_addr);
+        let mut old = mem_read_u64(lock_addr);
         if old == 0 {
             mem_write_u64(lock_addr, 1);
             acquired = 1;
@@ -46,7 +46,7 @@ fn spinlock_release(lock_addr) {
 }
 
 fn spinlock_try(lock_addr) {
-    let old = mem_read_u64(lock_addr);
+    let mut old = mem_read_u64(lock_addr);
     if old == 0 {
         mem_write_u64(lock_addr, 1);
         return 1;
@@ -117,7 +117,7 @@ fn _fq_enqueue(addr, task_id, timeout_tick) {
     set_at(_fq_entries, base + 4, 1);  // waiting
 
     // Prepend to bucket
-    let bucket = _fq_hash(addr);
+    let mut bucket = _fq_hash(addr);
     set_at(_fq_entries, base + 2, _fq_bucket_head[bucket]);
     set_at(_fq_bucket_head, bucket, slot);
     _fq_total_waits = _fq_total_waits + 1;
@@ -125,7 +125,7 @@ fn _fq_enqueue(addr, task_id, timeout_tick) {
 }
 
 fn _fq_dequeue_one(addr) {
-    let bucket = _fq_hash(addr);
+    let mut bucket = _fq_hash(addr);
     let mut prev = 0 - 1;
     let mut cur = _fq_bucket_head[bucket];
     while cur >= 0 {
@@ -139,7 +139,7 @@ fn _fq_dequeue_one(addr) {
                 } else {
                     set_at(_fq_entries, prev * _FQ_ENTRY_SIZE + 2, next);
                 }
-                let task_id = _fq_entries[base + 1];
+                let mut task_id = _fq_entries[base + 1];
                 set_at(_fq_entries, base + 4, 0);  // free
                 _fq_total_wakes = _fq_total_wakes + 1;
                 return task_id;
@@ -157,9 +157,9 @@ fn _fq_dequeue_one(addr) {
 
 fn futex_wait(addr, expected_val) {
     if _fq_ready == 0 { _fq_init(); }
-    let current_val = mem_read_u64(addr);
+    let mut current_val = mem_read_u64(addr);
     if current_val != expected_val { return 0; }
-    let task_id = current_task;
+    let mut task_id = current_task;
     _fq_enqueue(addr, task_id, 0);
     // In native: set task state to BLOCKED, call schedule()
     // Interpreter: spin until woken
@@ -168,7 +168,7 @@ fn futex_wait(addr, expected_val) {
     while spin < 100000 {
         // Check if we've been woken (entry freed)
         let mut found = 0;
-        let bucket = _fq_hash(addr);
+        let mut bucket = _fq_hash(addr);
         let mut c = _fq_bucket_head[bucket];
         let mut still_waiting = 0;
         while c >= 0 {
@@ -188,7 +188,7 @@ fn futex_wake(addr, count) {
     if _fq_ready == 0 { _fq_init(); }
     let mut woken = 0;
     while woken < count {
-        let task_id = _fq_dequeue_one(addr);
+        let mut task_id = _fq_dequeue_one(addr);
         if task_id < 0 { return woken; }
         // In native: set task state to READY
         woken = woken + 1;
@@ -198,15 +198,15 @@ fn futex_wake(addr, count) {
 
 fn futex_wait_timeout(addr, expected_val, timeout_ticks) {
     if _fq_ready == 0 { _fq_init(); }
-    let current_val = mem_read_u64(addr);
+    let mut current_val = mem_read_u64(addr);
     if current_val != expected_val { return 0; }
-    let task_id = current_task;
-    let deadline = timeout_ticks;
+    let mut task_id = current_task;
+    let mut deadline = timeout_ticks;
     _fq_enqueue(addr, task_id, deadline);
     // Spin with timeout
     let mut spin = 0;
     while spin < timeout_ticks {
-        let bucket = _fq_hash(addr);
+        let mut bucket = _fq_hash(addr);
         let mut c = _fq_bucket_head[bucket];
         let mut still_waiting = 0;
         while c >= 0 {
@@ -220,7 +220,7 @@ fn futex_wait_timeout(addr, expected_val, timeout_ticks) {
         spin = spin + 1;
     }
     // Timeout: remove ourselves from queue
-    let bucket = _fq_hash(addr);
+    let mut bucket = _fq_hash(addr);
     let mut prev = 0 - 1;
     let mut cur = _fq_bucket_head[bucket];
     while cur >= 0 {
@@ -244,7 +244,7 @@ fn futex_requeue(addr1, addr2, count) {
     if _fq_ready == 0 { _fq_init(); }
     let mut moved = 0;
     while moved < count {
-        let task_id = _fq_dequeue_one(addr1);
+        let mut task_id = _fq_dequeue_one(addr1);
         if task_id < 0 { return moved; }
         _fq_enqueue(addr2, task_id, 0);
         moved = moved + 1;
@@ -262,7 +262,7 @@ fn mutex_init(mutex_addr) {
 }
 
 fn mutex_lock(mutex_addr) {
-    let old = mem_read_u64(mutex_addr);
+    let mut old = mem_read_u64(mutex_addr);
     if old == 0 {
         mem_write_u64(mutex_addr, 1);
         return 0;
@@ -281,7 +281,7 @@ fn mutex_lock(mutex_addr) {
 }
 
 fn mutex_unlock(mutex_addr) {
-    let old = mem_read_u64(mutex_addr);
+    let mut old = mem_read_u64(mutex_addr);
     mem_write_u64(mutex_addr, 0);
     if old == 2 {
         futex_wake(mutex_addr, 1);
@@ -290,7 +290,7 @@ fn mutex_unlock(mutex_addr) {
 }
 
 fn mutex_trylock(mutex_addr) {
-    let old = mem_read_u64(mutex_addr);
+    let mut old = mem_read_u64(mutex_addr);
     if old == 0 {
         mem_write_u64(mutex_addr, 1);
         return 1;
@@ -352,7 +352,7 @@ fn rwlock_read_lock(rw_addr) {
 }
 
 fn rwlock_read_unlock(rw_addr) {
-    let old = mem_read_u64(rw_addr);
+    let mut old = mem_read_u64(rw_addr);
     mem_write_u64(rw_addr, old - 1);
     if old == 1 { futex_wake(rw_addr, 1); }
     return 0;

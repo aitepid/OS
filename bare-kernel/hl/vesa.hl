@@ -34,7 +34,7 @@ let VBE_MODE_INFO_ADDR = 32768;  // 0x8000
 
 // Initialize VESA from VBE mode info block
 fn vesa_init(mode_info_addr) {
-    let attr = mem_read_u16(mode_info_addr);
+    let mut attr = mem_read_u16(mode_info_addr);
     // Check if mode info looks valid (attributes should have bit 0 set)
     if attr % 2 == 1 {
         vesa_width = mem_read_u16(mode_info_addr + 18);
@@ -94,12 +94,12 @@ fn vesa_info() {
 // Scroll the framebuffer up by one text line (16 pixels)
 fn vesa_scroll_up(line_height, bg_color) {
     if vesa_enabled == 0 { return 0; }
-    let bytes_per_line = vesa_pitch * line_height;
-    let total_bytes = vesa_pitch * vesa_height;
+    let mut bytes_per_line = vesa_pitch * line_height;
+    let mut total_bytes = vesa_pitch * vesa_height;
     // Copy rows up
     let mut dst = vesa_fb_addr;
     let mut src = vesa_fb_addr + bytes_per_line;
-    let copy_bytes = total_bytes - bytes_per_line;
+    let mut copy_bytes = total_bytes - bytes_per_line;
     mem_copy(dst, src, copy_bytes);
     // Clear bottom line
     mem_set(vesa_fb_addr + copy_bytes, bg_color % 256, bytes_per_line);
@@ -151,12 +151,12 @@ fn vesa_fill_rect_fast(x, y, w, h, color) {
     while row < y + h {
         if row >= 0 {
             if row < vesa_height {
-                let cx = x;
+                let mut cx = x;
                 let mut cw = w;
                 if cx < 0 { cw = cw + cx; }
                 if cx + cw > vesa_width { cw = vesa_width - cx; }
                 if cw > 0 {
-                    let row_addr = vesa_fb_addr + row * vesa_pitch + cx * 4;
+                    let mut row_addr = vesa_fb_addr + row * vesa_pitch + cx * 4;
                     mem_set32(row_addr, color, cw);
                 }
             }
@@ -212,7 +212,7 @@ fn vesa_rect(x, y, w, h, color) {
 fn vesa_draw_glyph(x, y, glyph, fg, bg) {
     let mut row = 0;
     while row < 8 {
-        let bits = glyph[row];
+        let mut bits = glyph[row];
         let mut col = 0;
         while col < 8 {
             let mut bit = bits;
@@ -272,8 +272,8 @@ fn vesa_flush_dirty() {
     if vesa_dirty_x2 > vesa_width  { vesa_dirty_x2 = vesa_width; }
     if vesa_dirty_y2 > vesa_height { vesa_dirty_y2 = vesa_height; }
 
-    let dw = vesa_dirty_x2 - vesa_dirty_x1;
-    let dh = vesa_dirty_y2 - vesa_dirty_y1;
+    let mut dw = vesa_dirty_x2 - vesa_dirty_x1;
+    let mut dh = vesa_dirty_y2 - vesa_dirty_y1;
     if dw > 0 {
         if dh > 0 {
             gpu_blit(vesa_dirty_x1, vesa_dirty_y1, dw, dh);
@@ -295,22 +295,22 @@ fn vesa_flip() {
 // from (src_x, src_y) to (dst_x, dst_y) with size (w, h)
 fn vesa_blit_rect(dst_x, dst_y, src_x, src_y, w, h) {
     if vesa_enabled == 0 { return 0; }
-    let bpp_bytes = vesa_bpp / 8;
-    let row_bytes = w * bpp_bytes;
+    let mut bpp_bytes = vesa_bpp / 8;
+    let mut row_bytes = w * bpp_bytes;
     let mut row = 0;
     // Copy direction: top-to-bottom if dst_y <= src_y, else bottom-to-top
     if dst_y <= src_y {
         while row < h {
-            let src_off = vesa_fb_addr + (src_y + row) * vesa_pitch + src_x * bpp_bytes;
-            let dst_off = vesa_fb_addr + (dst_y + row) * vesa_pitch + dst_x * bpp_bytes;
+            let mut src_off = vesa_fb_addr + (src_y + row) * vesa_pitch + src_x * bpp_bytes;
+            let mut dst_off = vesa_fb_addr + (dst_y + row) * vesa_pitch + dst_x * bpp_bytes;
             mem_copy(dst_off, src_off, row_bytes);
             row = row + 1;
         }
     } else {
         row = h - 1;
         while row >= 0 {
-            let src_off = vesa_fb_addr + (src_y + row) * vesa_pitch + src_x * bpp_bytes;
-            let dst_off = vesa_fb_addr + (dst_y + row) * vesa_pitch + dst_x * bpp_bytes;
+            let mut src_off = vesa_fb_addr + (src_y + row) * vesa_pitch + src_x * bpp_bytes;
+            let mut dst_off = vesa_fb_addr + (dst_y + row) * vesa_pitch + dst_x * bpp_bytes;
             mem_copy(dst_off, src_off, row_bytes);
             row = row - 1;
         }
@@ -323,11 +323,11 @@ fn vesa_blit_rect(dst_x, dst_y, src_x, src_y, w, h) {
 // src_addr: raw BGRA32 pixel data, row-packed (no pitch padding)
 fn vesa_blit_from(x, y, w, h, src_addr) {
     if vesa_enabled == 0 { return 0; }
-    let bpp_bytes = vesa_bpp / 8;
+    let mut bpp_bytes = vesa_bpp / 8;
     let mut row = 0;
     while row < h {
-        let src_off = src_addr + row * w * bpp_bytes;
-        let dst_off = vesa_fb_addr + (y + row) * vesa_pitch + x * bpp_bytes;
+        let mut src_off = src_addr + row * w * bpp_bytes;
+        let mut dst_off = vesa_fb_addr + (y + row) * vesa_pitch + x * bpp_bytes;
         mem_copy(dst_off, src_off, w * bpp_bytes);
         row = row + 1;
     }

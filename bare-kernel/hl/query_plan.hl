@@ -37,7 +37,7 @@ fn query_plan_init() {
 }
 
 fn _qp_alloc(tp) {
-    let id = qp_n;
+    let mut id = qp_n;
     set_at(qp_type,  id, tp);
     set_at(qp_table, id, 0);
     set_at(qp_index, id, 0 - 1);
@@ -58,7 +58,7 @@ fn _qp_ilog2(n) {
 
 fn qp_scan(table_id, n_rows, index_id, sel_rows) {
     // Plan a table scan; index_id>=0 → INDEXSCAN
-    let nd = 0;
+    let mut nd = 0;
     if index_id >= 0 {
         nd = _qp_alloc(QP_INDEXSCAN);
         set_at(qp_cost, nd, _qp_ilog2(n_rows) * sel_rows + 1);
@@ -74,10 +74,10 @@ fn qp_scan(table_id, n_rows, index_id, sel_rows) {
 
 fn qp_join(left_nd, right_nd) {
     // Choose HASHJOIN if both outputs > 100 rows, else NESTLOOP
-    let lr = qp_rows[left_nd];
-    let rr = qp_rows[right_nd];
-    let nd = 0;
-    let join_cost = 0;
+    let mut lr = qp_rows[left_nd];
+    let mut rr = qp_rows[right_nd];
+    let mut nd = 0;
+    let mut join_cost = 0;
     if lr > 100 {
         if rr > 100 {
             nd = _qp_alloc(QP_HASHJOIN);
@@ -99,7 +99,7 @@ fn qp_join(left_nd, right_nd) {
 
 fn qp_filter(child_nd, sel_rows) {
     // WHERE clause push-down
-    let nd = _qp_alloc(QP_FILTER);
+    let mut nd = _qp_alloc(QP_FILTER);
     set_at(qp_left,  nd, child_nd);
     set_at(qp_rows,  nd, sel_rows);
     set_at(qp_cost,  nd, qp_cost[child_nd] + qp_rows[child_nd]);
@@ -108,8 +108,8 @@ fn qp_filter(child_nd, sel_rows) {
 
 fn qp_sort(child_nd) {
     // ORDER BY — sort cost n*log2(n)
-    let n  = qp_rows[child_nd];
-    let nd = _qp_alloc(QP_SORT);
+    let mut n = qp_rows[child_nd];
+    let mut nd = _qp_alloc(QP_SORT);
     set_at(qp_left,  nd, child_nd);
     set_at(qp_rows,  nd, n);
     set_at(qp_cost,  nd, qp_cost[child_nd] + n * _qp_ilog2(n + 1));
@@ -118,8 +118,8 @@ fn qp_sort(child_nd) {
 
 fn qp_agg(child_nd, n_groups) {
     // GROUP BY — AGG cost = input rows
-    let n  = qp_rows[child_nd];
-    let nd = _qp_alloc(QP_AGG);
+    let mut n = qp_rows[child_nd];
+    let mut nd = _qp_alloc(QP_AGG);
     set_at(qp_left,  nd, child_nd);
     set_at(qp_rows,  nd, n_groups);
     set_at(qp_cost,  nd, qp_cost[child_nd] + n);
@@ -128,7 +128,7 @@ fn qp_agg(child_nd, n_groups) {
 
 fn qp_proj(child_nd) {
     // SELECT col list — zero extra cost
-    let nd = _qp_alloc(QP_PROJ);
+    let mut nd = _qp_alloc(QP_PROJ);
     set_at(qp_left, nd, child_nd);
     set_at(qp_rows, nd, qp_rows[child_nd]);
     set_at(qp_cost, nd, qp_cost[child_nd]);
@@ -169,24 +169,24 @@ fn qp_test() {
     // T1: 1000 rows, indexed col (idx=0), sel=5
     // T2: 200 rows, no index, full scan
 
-    let s1  = qp_scan(1, 1000, 0, 5);     // INDEXSCAN T1 → 5 rows
-    let s2  = qp_scan(2, 200, 0 - 1, 200); // SEQSCAN T2 → 200 rows
-    let jn  = qp_join(s1, s2);             // NESTLOOP (5 * 200)
-    let srt = qp_sort(jn);                 // SORT
-    let agg = qp_agg(srt, 3);             // AGG 3 groups
-    let prj = qp_proj(agg);               // PROJ
+    let mut s1 = qp_scan(1, 1000, 0, 5);     // INDEXSCAN T1 → 5 rows
+    let mut s2 = qp_scan(2, 200, 0 - 1, 200); // SEQSCAN T2 → 200 rows
+    let mut jn = qp_join(s1, s2);             // NESTLOOP (5 * 200)
+    let mut srt = qp_sort(jn);                 // SORT
+    let mut agg = qp_agg(srt, 3);             // AGG 3 groups
+    let mut prj = qp_proj(agg);               // PROJ
 
     qp_root = prj;
     qp_explain(prj);
 
     print("qp_test: nodes=" + to_string(qp_n) + " total_cost=" + to_string(qp_total_cost(prj)));
 
-    let t1 = qp_type[s1];
-    let t2 = qp_type[s2];
-    let t3 = qp_type[jn];
-    let t4 = qp_type[srt];
-    let t5 = qp_type[agg];
-    let t6 = qp_type[prj];
+    let mut t1 = qp_type[s1];
+    let mut t2 = qp_type[s2];
+    let mut t3 = qp_type[jn];
+    let mut t4 = qp_type[srt];
+    let mut t5 = qp_type[agg];
+    let mut t6 = qp_type[prj];
 
     if t1 == QP_INDEXSCAN {
         if t2 == QP_SEQSCAN {

@@ -89,10 +89,10 @@ fn _sm3_reset_state() {
 // _sm3_read32_be -- read 4-byte big-endian word from array buf at offset
 // ---------------------------------------------------------------------------
 fn _sm3_read32_be(buf, offset) {
-    let b0 = buf[offset];
-    let b1 = buf[offset + 1];
-    let b2 = buf[offset + 2];
-    let b3 = buf[offset + 3];
+    let mut b0 = buf[offset];
+    let mut b1 = buf[offset + 1];
+    let mut b2 = buf[offset + 2];
+    let mut b3 = buf[offset + 3];
     return b0 * 16777216 + b1 * 65536 + b2 * 256 + b3;
 }
 
@@ -100,10 +100,10 @@ fn _sm3_read32_be(buf, offset) {
 // _sm3_read32 -- read 4-byte little-endian word from array buf at offset
 // ---------------------------------------------------------------------------
 fn _sm3_read32(buf, offset) {
-    let b0 = buf[offset];
-    let b1 = buf[offset + 1];
-    let b2 = buf[offset + 2];
-    let b3 = buf[offset + 3];
+    let mut b0 = buf[offset];
+    let mut b1 = buf[offset + 1];
+    let mut b2 = buf[offset + 2];
+    let mut b3 = buf[offset + 3];
     return b0 + b1 * 256 + b2 * 65536 + b3 * 16777216;
 }
 
@@ -123,8 +123,8 @@ fn _sm3_write32(buf, offset, value) {
 // ---------------------------------------------------------------------------
 fn _sm3_process_block(block) {
     // Local working arrays: message schedule
-    let w       = array(272, 0);   // 68 words x 4 bytes
-    let w_prime = array(256, 0);   // 64 words x 4 bytes
+    let mut w = array(272, 0);   // 68 words x 4 bytes
+    let mut w_prime = array(256, 0);   // 64 words x 4 bytes
 
     // Load first 16 words from block (big-endian)
     let mut i = 0;
@@ -137,10 +137,10 @@ fn _sm3_process_block(block) {
     // Extend message schedule to 68 words (simplified)
     i = 16;
     while i < 68 {
-        let wi3  = _sm3_read32(w, (i - 3)  * 4);
-        let wi8  = _sm3_read32(w, (i - 8)  * 4);
-        let wi13 = _sm3_read32(w, (i - 13) * 4);
-        let wi16 = _sm3_read32(w, (i - 16) * 4);
+        let mut wi3 = _sm3_read32(w, (i - 3)  * 4);
+        let mut wi8 = _sm3_read32(w, (i - 8)  * 4);
+        let mut wi13 = _sm3_read32(w, (i - 13) * 4);
+        let mut wi16 = _sm3_read32(w, (i - 16) * 4);
         let mut word = (wi16 + wi13 + wi8 + wi3) % 4294967296;
         _sm3_write32(w, i * 4, word);
         i = i + 1;
@@ -149,9 +149,9 @@ fn _sm3_process_block(block) {
     // Compute W' (simplified XOR as addition mod 2^32)
     i = 0;
     while i < 64 {
-        let wi  = _sm3_read32(w, i       * 4);
-        let wi4 = _sm3_read32(w, (i + 4) * 4);
-        let wpi = (wi + wi4) % 4294967296;
+        let mut wi = _sm3_read32(w, i       * 4);
+        let mut wi4 = _sm3_read32(w, (i + 4) * 4);
+        let mut wpi = (wi + wi4) % 4294967296;
         _sm3_write32(w_prime, i * 4, wpi);
         i = i + 1;
     }
@@ -168,10 +168,10 @@ fn _sm3_process_block(block) {
 
     i = 0;
     while i < 16 {
-        let wi  = _sm3_read32(w,       i * 4);
-        let wpi = _sm3_read32(w_prime, i * 4);
-        let t1  = (a + e + wi)  % 4294967296;
-        let t2  = (b + f + wpi) % 4294967296;
+        let mut wi = _sm3_read32(w,       i * 4);
+        let mut wpi = _sm3_read32(w_prime, i * 4);
+        let mut t1 = (a + e + wi)  % 4294967296;
+        let mut t2 = (b + f + wpi) % 4294967296;
         h = g;
         g = f;
         f = e;
@@ -238,7 +238,7 @@ fn _sm3_finalize() {
     }
 
     // Append 64-bit message length in bits (big-endian, high 32 bits = 0)
-    let bit_len = sm3_total_len * 8;
+    let mut bit_len = sm3_total_len * 8;
     set_at(sm3_buffer, 56, 0);
     set_at(sm3_buffer, 57, 0);
     set_at(sm3_buffer, 58, 0);
@@ -263,7 +263,7 @@ fn sm3_hash(data, dlen) {
     // Feed bytes from string into buffer
     let mut pos = 0;
     while pos < dlen {
-        let bval = str_char_code(data, pos);
+        let mut bval = str_char_code(data, pos);
         set_at(sm3_buffer, sm3_buffer_len, bval);
         sm3_buffer_len = sm3_buffer_len + 1;
         sm3_total_len  = sm3_total_len  + 1;
@@ -284,11 +284,11 @@ fn sm3_hash(data, dlen) {
 // sm3_get_hex -- encode sm3_state as 64-char hex string in sm3_hex_buf
 // ---------------------------------------------------------------------------
 fn sm3_get_hex() {
-    let hex_chars = "0123456789abcdef";
+    let mut hex_chars = "0123456789abcdef";
     let mut pos = 0;
     let mut i = 0;
     while i < SM3_DIGEST_SIZE {
-        let bval = sm3_state[i];
+        let mut bval = sm3_state[i];
         set_at(sm3_hex_buf, pos, str_char_code(hex_chars, bval / 16));
         pos = pos + 1;
         set_at(sm3_hex_buf, pos, str_char_code(hex_chars, bval % 16));
@@ -303,13 +303,13 @@ fn sm3_get_hex() {
 // sm3_test -- basic self-test
 // ---------------------------------------------------------------------------
 fn sm3_test() {
-    let test_data = "abc";
+    let mut test_data = "abc";
 
     // First hash
     sm3_hash(test_data, len(test_data));
 
     // Save first 8 state bytes for comparison
-    let saved = array(8, 0);
+    let mut saved = array(8, 0);
     let mut si = 0;
     while si < 8 {
         set_at(saved, si, sm3_state[si]);

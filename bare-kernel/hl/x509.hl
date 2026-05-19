@@ -80,11 +80,11 @@ fn _x509_read_tag(data, pos) {
 // Read ASN.1 length at position, return [length, bytes_consumed]
 fn _x509_read_len(data, pos) {
     if pos >= len(data) { return [0, 1]; }
-    let first = data[pos];
+    let mut first = data[pos];
     if first < 128 { return [first, 1]; }
     // Long form
-    let num_bytes = first - 128;
-    let length = 0;
+    let mut num_bytes = first - 128;
+    let mut length = 0;
     let mut i = 0;
     while i < num_bytes {
         length = length * 256 + data[pos + 1 + i];
@@ -96,24 +96,24 @@ fn _x509_read_len(data, pos) {
 // Skip an ASN.1 element, return new position
 fn _x509_skip_element(data, pos) {
     if pos >= len(data) { return pos; }
-    let tag = data[pos];
+    let mut tag = data[pos];
     pos = pos + 1;
-    let len_result = _x509_read_len(data, pos);
-    let elem_len = len_result[0];
-    let len_bytes = len_result[1];
+    let mut len_result = _x509_read_len(data, pos);
+    let mut elem_len = len_result[0];
+    let mut len_bytes = len_result[1];
     return pos + len_bytes + elem_len;
 }
 
 // Read INTEGER as hex string
 fn _x509_read_int_hex(data, pos) {
-    let tag = _x509_read_tag(data, pos);
+    let mut tag = _x509_read_tag(data, pos);
     if tag != X509_TAG_INT { return ""; }
     pos = pos + 1;
-    let len_result = _x509_read_len(data, pos);
-    let int_len = len_result[0];
-    let len_bytes = len_result[1];
+    let mut len_result = _x509_read_len(data, pos);
+    let mut int_len = len_result[0];
+    let mut len_bytes = len_result[1];
     pos = pos + len_bytes;
-    let hex_chars = "0123456789abcdef";
+    let mut hex_chars = "0123456789abcdef";
     let mut result = "";
     let mut i = 0;
     if int_len > 20 { int_len = 20; }   // cap serial at 20 bytes display
@@ -129,7 +129,7 @@ fn _x509_read_int_hex(data, pos) {
 
 // Read STRING (UTF8, PrintableString, IA5String, etc.)
 fn _x509_read_string(data, pos) {
-    let tag = _x509_read_tag(data, pos);
+    let mut tag = _x509_read_tag(data, pos);
     // Accept any string type
     if tag != X509_TAG_UTF8STR {
         if tag != X509_TAG_PRINTSTR {
@@ -143,9 +143,9 @@ fn _x509_read_string(data, pos) {
         }
     }
     pos = pos + 1;
-    let len_result = _x509_read_len(data, pos);
-    let str_len = len_result[0];
-    let len_bytes = len_result[1];
+    let mut len_result = _x509_read_len(data, pos);
+    let mut str_len = len_result[0];
+    let mut len_bytes = len_result[1];
     pos = pos + len_bytes;
     let mut result = "";
     let mut i = 0;
@@ -158,19 +158,19 @@ fn _x509_read_string(data, pos) {
 
 // Parse OID bytes to dotted notation (simplified)
 fn _x509_parse_oid(data, pos) {
-    let tag = _x509_read_tag(data, pos);
+    let mut tag = _x509_read_tag(data, pos);
     if tag != X509_TAG_OID { return ""; }
     pos = pos + 1;
-    let len_result = _x509_read_len(data, pos);
-    let oid_len = len_result[0];
-    let len_bytes = len_result[1];
+    let mut len_result = _x509_read_len(data, pos);
+    let mut oid_len = len_result[0];
+    let mut len_bytes = len_result[1];
     pos = pos + len_bytes;
     if oid_len == 0 { return ""; }
     // First byte encodes first two components: first = byte/40, second = byte mod 40
-    let first_byte = data[pos];
-    let c1 = first_byte / 40;
-    let c2 = first_byte - c1 * 40;
-    let oid_str = to_string(c1) + "." + to_string(c2);
+    let mut first_byte = data[pos];
+    let mut c1 = first_byte / 40;
+    let mut c2 = first_byte - c1 * 40;
+    let mut oid_str = to_string(c1) + "." + to_string(c2);
     let mut i = 1;
     while i < oid_len {
         let mut value = 0;
@@ -200,26 +200,26 @@ fn _x509_oid_to_key_alg(oid_str) {
 
 // Find CN attribute in Distinguished Name SEQUENCE
 fn _x509_parse_dn(data, pos, end_pos) {
-    let cn = "";
+    let mut cn = "";
     while pos < end_pos {
-        let tag = _x509_read_tag(data, pos);
+        let mut tag = _x509_read_tag(data, pos);
         if tag != X509_TAG_SET { return cn; }
         pos = pos + 1;
-        let lr = _x509_read_len(data, pos);
-        let set_len = lr[0];
-        let lb = lr[1];
+        let mut lr = _x509_read_len(data, pos);
+        let mut set_len = lr[0];
+        let mut lb = lr[1];
         pos = pos + lb;
-        let set_end = pos + set_len;
+        let mut set_end = pos + set_len;
         // SEQUENCE inside SET
-        let stag = _x509_read_tag(data, pos);
+        let mut stag = _x509_read_tag(data, pos);
         if stag == X509_TAG_SEQUENCE {
             pos = pos + 1;
-            let slr = _x509_read_len(data, pos);
-            let slen = slr[0];
-            let slb = slr[1];
+            let mut slr = _x509_read_len(data, pos);
+            let mut slen = slr[0];
+            let mut slb = slr[1];
             pos = pos + slb;
             // OID
-            let attr_oid = _x509_parse_oid(data, pos);
+            let mut attr_oid = _x509_parse_oid(data, pos);
             pos = _x509_skip_element(data, pos);
             // Value
             let mut val = _x509_read_string(data, pos);
@@ -238,31 +238,31 @@ fn x509_parse(der_data) {
     let mut idx = x509_cert_count;
     if idx >= X509_MAX_CERTS { return 1; }
     let mut pos = 0;
-    let data = der_data;
-    let data_len = len(data);
+    let mut data = der_data;
+    let mut data_len = len(data);
     // Outer SEQUENCE (Certificate)
     if _x509_read_tag(data, pos) != X509_TAG_SEQUENCE { return 2; }
     pos = pos + 1;
-    let outer_lr = _x509_read_len(data, pos);
+    let mut outer_lr = _x509_read_len(data, pos);
     pos = pos + outer_lr[1];
     // TBSCertificate SEQUENCE
     if _x509_read_tag(data, pos) != X509_TAG_SEQUENCE { return 3; }
     pos = pos + 1;
-    let tbs_lr = _x509_read_len(data, pos);
-    let tbs_len = tbs_lr[0];
-    let tbs_lb  = tbs_lr[1];
+    let mut tbs_lr = _x509_read_len(data, pos);
+    let mut tbs_len = tbs_lr[0];
+    let mut tbs_lb = tbs_lr[1];
     pos = pos + tbs_lb;
-    let tbs_end = pos + tbs_len;
+    let mut tbs_end = pos + tbs_len;
     // [0] EXPLICIT version (optional, default v1)
-    let version = X509_VER_V1;
+    let mut version = X509_VER_V1;
     if _x509_read_tag(data, pos) == 160 {   // CONTEXT[0]
         pos = pos + 1;
-        let vlr = _x509_read_len(data, pos);
+        let mut vlr = _x509_read_len(data, pos);
         pos = pos + vlr[1];
         // INTEGER
         if _x509_read_tag(data, pos) == X509_TAG_INT {
             pos = pos + 1;
-            let ilr = _x509_read_len(data, pos);
+            let mut ilr = _x509_read_len(data, pos);
             pos = pos + ilr[1];
             version = data[pos];
             pos = pos + ilr[0];
@@ -270,78 +270,78 @@ fn x509_parse(der_data) {
     }
     set_at(x509_version, idx, version);
     // serialNumber INTEGER
-    let serial = _x509_read_int_hex(data, pos);
+    let mut serial = _x509_read_int_hex(data, pos);
     set_at(x509_serial, idx, serial);
     pos = _x509_skip_element(data, pos);
     // signature AlgorithmIdentifier SEQUENCE
     if _x509_read_tag(data, pos) == X509_TAG_SEQUENCE {
-        let alg_end = _x509_skip_element(data, pos);
+        let mut alg_end = _x509_skip_element(data, pos);
         pos = pos + 1;
-        let alr = _x509_read_len(data, pos);
+        let mut alr = _x509_read_len(data, pos);
         pos = pos + alr[1];
-        let sig_oid = _x509_parse_oid(data, pos);
+        let mut sig_oid = _x509_parse_oid(data, pos);
         pos = alg_end;
     }
     // issuer Name SEQUENCE
     if _x509_read_tag(data, pos) == X509_TAG_SEQUENCE {
         pos = pos + 1;
-        let ilr = _x509_read_len(data, pos);
-        let issuer_len = ilr[0];
-        let issuer_lb  = ilr[1];
-        let issuer_end = pos + issuer_lb + issuer_len;
+        let mut ilr = _x509_read_len(data, pos);
+        let mut issuer_len = ilr[0];
+        let mut issuer_lb = ilr[1];
+        let mut issuer_end = pos + issuer_lb + issuer_len;
         pos = pos + issuer_lb;
-        let issuer_cn = _x509_parse_dn(data, pos, issuer_end);
+        let mut issuer_cn = _x509_parse_dn(data, pos, issuer_end);
         set_at(x509_issuer_cn, idx, issuer_cn);
         pos = issuer_end;
     }
     // validity SEQUENCE
     if _x509_read_tag(data, pos) == X509_TAG_SEQUENCE {
         pos = pos + 1;
-        let vlr = _x509_read_len(data, pos);
+        let mut vlr = _x509_read_len(data, pos);
         pos = pos + vlr[1];
-        let not_before = _x509_read_string(data, pos);
+        let mut not_before = _x509_read_string(data, pos);
         set_at(x509_not_before, idx, not_before);
         pos = _x509_skip_element(data, pos);
-        let not_after = _x509_read_string(data, pos);
+        let mut not_after = _x509_read_string(data, pos);
         set_at(x509_not_after, idx, not_after);
         pos = _x509_skip_element(data, pos);
     }
     // subject Name SEQUENCE
     if _x509_read_tag(data, pos) == X509_TAG_SEQUENCE {
         pos = pos + 1;
-        let slr = _x509_read_len(data, pos);
-        let subj_len = slr[0];
-        let subj_lb  = slr[1];
-        let subj_end = pos + subj_lb + subj_len;
+        let mut slr = _x509_read_len(data, pos);
+        let mut subj_len = slr[0];
+        let mut subj_lb = slr[1];
+        let mut subj_end = pos + subj_lb + subj_len;
         pos = pos + subj_lb;
-        let subject_cn = _x509_parse_dn(data, pos, subj_end);
+        let mut subject_cn = _x509_parse_dn(data, pos, subj_end);
         set_at(x509_subject_cn, idx, subject_cn);
         pos = subj_end;
     }
     // subjectPublicKeyInfo SEQUENCE
     if _x509_read_tag(data, pos) == X509_TAG_SEQUENCE {
         pos = pos + 1;
-        let pki_lr = _x509_read_len(data, pos);
-        let pki_len = pki_lr[0];
-        let pki_lb  = pki_lr[1];
-        let pki_end = pos + pki_lb + pki_len;
+        let mut pki_lr = _x509_read_len(data, pos);
+        let mut pki_len = pki_lr[0];
+        let mut pki_lb = pki_lr[1];
+        let mut pki_end = pos + pki_lb + pki_len;
         pos = pos + pki_lb;
         // AlgorithmIdentifier
         if _x509_read_tag(data, pos) == X509_TAG_SEQUENCE {
             pos = pos + 1;
-            let alg_lr = _x509_read_len(data, pos);
-            let alg_end = pos + alg_lr[1] + alg_lr[0];
+            let mut alg_lr = _x509_read_len(data, pos);
+            let mut alg_end = pos + alg_lr[1] + alg_lr[0];
             pos = pos + alg_lr[1];
-            let key_oid = _x509_parse_oid(data, pos);
-            let key_alg = _x509_oid_to_key_alg(key_oid);
+            let mut key_oid = _x509_parse_oid(data, pos);
+            let mut key_alg = _x509_oid_to_key_alg(key_oid);
             set_at(x509_key_alg, idx, key_alg);
             pos = alg_end;
         }
         // BIT STRING containing public key
         if _x509_read_tag(data, pos) == X509_TAG_BITSTRING {
             pos = pos + 1;
-            let bslr = _x509_read_len(data, pos);
-            let key_len = bslr[0];
+            let mut bslr = _x509_read_len(data, pos);
+            let mut key_len = bslr[0];
             set_at(x509_key_bits, idx, (key_len - 1) * 8);
             pos = pki_end;
         } else {
@@ -356,10 +356,10 @@ fn x509_parse(der_data) {
 // Parse PEM-encoded certificate (strips header/footer, base64-decodes)
 fn x509_parse_pem(pem_str) {
     // Find base64 content between -----BEGIN CERTIFICATE----- and -----END CERTIFICATE-----
-    let start_marker = "-----BEGIN CERTIFICATE-----";
-    let end_marker   = "-----END CERTIFICATE-----";
-    let slen = len(pem_str);
-    let start = 0;
+    let mut start_marker = "-----BEGIN CERTIFICATE-----";
+    let mut end_marker = "-----END CERTIFICATE-----";
+    let mut slen = len(pem_str);
+    let mut start = 0;
     let mut i = 0;
     // Find start marker
     while i < slen - 27 {
@@ -376,7 +376,7 @@ fn x509_parse_pem(pem_str) {
         if i == slen { i = 0; }
     }
     // Collect base64 chars until end marker
-    let b64_data = "";
+    let mut b64_data = "";
     i = start;
     while i < slen {
         let mut c = pem_str[i];
@@ -389,7 +389,7 @@ fn x509_parse_pem(pem_str) {
         i = i + 1;
     }
     // Base64 decode (simplified -- returns byte array representation info)
-    let decoded_len = (len(b64_data) * 3) / 4;
+    let mut decoded_len = (len(b64_data) * 3) / 4;
     return x509_parse_stub(decoded_len);
 }
 
@@ -435,9 +435,9 @@ fn x509_get_validity(cert_idx) {
 
 fn x509_get_key_info(cert_idx) {
     if cert_idx >= x509_cert_count { return ""; }
-    let alg = x509_key_alg[cert_idx];
-    let bits = x509_key_bits[cert_idx];
-    let alg_str = "Unknown";
+    let mut alg = x509_key_alg[cert_idx];
+    let mut bits = x509_key_bits[cert_idx];
+    let mut alg_str = "Unknown";
     if alg == X509_KEY_RSA     { alg_str = "RSA"; }
     if alg == X509_KEY_EC      { alg_str = "EC"; }
     if alg == X509_KEY_ED25519 { alg_str = "Ed25519"; }
@@ -475,9 +475,9 @@ fn x509_clear() {
 fn x509_test() {
     x509_clear();
     // Synthesize a test certificate
-    let test_size = 800;
+    let mut test_size = 800;
     x509_parse_stub(test_size);
-    let info = x509_info(0);
+    let mut info = x509_info(0);
     print("x509 test: " + info);
     return "x509: parsed v3 cert, subject=" + x509_subject_cn[0] + " key=" + x509_get_key_info(0) + " [RFC 5280 ok]";
 }

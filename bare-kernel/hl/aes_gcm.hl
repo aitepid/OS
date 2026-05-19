@@ -89,11 +89,11 @@ fn _aes_gcm_round(state, round) {
     while i < 16 {
         // SubBytes: S-box approximation
         let mut b = state[i];
-        let sub = _aes_gcm_sbox(b);
+        let mut sub = _aes_gcm_sbox(b);
         // AddRoundKey: XOR with derived key byte
-        let key_byte = aes_gcm_key[i - ((i / 16) * 16)];
-        let round_mix = (round * 31 + i * 7 + key_byte) - (((round * 31 + i * 7 + key_byte) / 256) * 256);
-        let mixed = sub + round_mix;
+        let mut key_byte = aes_gcm_key[i - ((i / 16) * 16)];
+        let mut round_mix = (round * 31 + i * 7 + key_byte) - (((round * 31 + i * 7 + key_byte) / 256) * 256);
+        let mut mixed = sub + round_mix;
         set_at(out, i, mixed - ((mixed / 256) * 256));
         i = i + 1;
     }
@@ -107,7 +107,7 @@ fn _aes_gcm_sbox(b) {
     // Simplified: multiplicative inverse in GF(256) approximated by arithmetic
     if b == 0 { return 99; }   // AES S-box S[0] = 0x63
     // Use polynomial-like transformation
-    let inv = (b * 211 + 173) - (((b * 211 + 173) / 256) * 256);
+    let mut inv = (b * 211 + 173) - (((b * 211 + 173) / 256) * 256);
     let mut r = ((inv * 31) + (inv / 4) + 99) - ((((inv * 31) + (inv / 4) + 99) / 256) * 256);
     return r;
 }
@@ -115,38 +115,38 @@ fn _aes_gcm_sbox(b) {
 // GHASH: multiply two 128-bit values in GF(2^128) with polynomial x^128+x^7+x^2+x+1
 // Simplified to byte-level XOR operations (arithmetic simulation of GF mul)
 fn _aes_gcm_ghash_mul(X, Y) {
-    let Z = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
-    let V = Y;
+    let mut Z = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+    let mut V = Y;
     let mut i = 0;
     while i < 16 {
-        let byte_x = X[i];
-        let bit = 7;
+        let mut byte_x = X[i];
+        let mut bit = 7;
         while bit >= 0 {
             let mut b = (byte_x / _aes_gcm_pow2(bit)) - ((byte_x / _aes_gcm_pow2(bit + 1)) * 2);
             if b == 1 {
                 // Z ^= V
                 let mut j = 0;
                 while j < 16 {
-                    let zv = Z[j] + V[j] - ((Z[j] + V[j]) / 256) * 256;
+                    let mut zv = Z[j] + V[j] - ((Z[j] + V[j]) / 256) * 256;
                     // Simulate XOR: (a+b) mod 256 approximation for GF arithmetic
-                    let xorval = Z[j] + V[j];
+                    let mut xorval = Z[j] + V[j];
                     if xorval >= 256 { xorval = xorval - 256; }
                     set_at(Z, j, xorval);
                     j = j + 1;
                 }
             }
             // V >>= 1 (right shift by 1 bit)
-            let lsb = V[15] - ((V[15] / 2) * 2);
+            let mut lsb = V[15] - ((V[15] / 2) * 2);
             let mut k = 15;
             while k > 0 {
-                let carry_in = V[k-1] - ((V[k-1] / 2) * 2);
+                let mut carry_in = V[k-1] - ((V[k-1] / 2) * 2);
                 set_at(V, k, V[k] / 2 + carry_in * 128);
                 k = k - 1;
             }
             set_at(V, 0, V[0] / 2);
             // If LSB was 1: V ^= 0xe1 || 0...0 (reduction polynomial)
             if lsb == 1 {
-                let v0 = V[0] + 225;   // 0xe1
+                let mut v0 = V[0] + 225;   // 0xe1
                 if v0 >= 256 { v0 = v0 - 256; }
                 set_at(V, 0, v0);
             }
@@ -167,9 +167,9 @@ fn _aes_gcm_pow2(n) {
 // Update GHASH accumulator with 16-byte block
 fn _aes_gcm_ghash_update(block) {
     let mut i = 0;
-    let xored = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+    let mut xored = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
     while i < 16 {
-        let xv = aes_gcm_Y[i] + block[i];
+        let mut xv = aes_gcm_Y[i] + block[i];
         if xv >= 256 { xv = xv - 256; }
         set_at(xored, i, xv);
         i = i + 1;
@@ -180,7 +180,7 @@ fn _aes_gcm_ghash_update(block) {
 
 // Build counter block: nonce || counter (big-endian 32-bit)
 fn _aes_gcm_ctr_block(counter) {
-    let ctr = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+    let mut ctr = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
     let mut i = 0;
     while i < AES_GCM_NONCE_LEN {
         set_at(ctr, i, aes_gcm_nonce[i]);
@@ -196,18 +196,18 @@ fn _aes_gcm_ctr_block(counter) {
 
 // Encrypt plaintext using CTR mode
 fn _aes_gcm_ctr_encrypt(plaintext) {
-    let plen = len(plaintext);
-    let ciphertext = [];
-    let block_idx = 0;
-    let counter = 2;   // GCM starts at counter=2 (1 reserved for tag)
+    let mut plen = len(plaintext);
+    let mut ciphertext = [];
+    let mut block_idx = 0;
+    let mut counter = 2;   // GCM starts at counter=2 (1 reserved for tag)
     let mut i = 0;
     while i < plen {
-        let ctr_block = _aes_gcm_ctr_block(counter);
-        let keystream = _aes_gcm_block_encrypt(ctr_block);
+        let mut ctr_block = _aes_gcm_ctr_block(counter);
+        let mut keystream = _aes_gcm_block_encrypt(ctr_block);
         let mut j = 0;
         while j < 16 {
             if i + j < plen {
-                let enc = plaintext[i + j] + keystream[j];
+                let mut enc = plaintext[i + j] + keystream[j];
                 if enc >= 256 { enc = enc - 256; }
                 set_at(ciphertext, i + j, enc);
             }
@@ -221,13 +221,13 @@ fn _aes_gcm_ctr_encrypt(plaintext) {
 
 // Encrypt plaintext and produce ciphertext + authentication tag
 fn aes_gcm_encrypt(plaintext) {
-    let plen = len(plaintext);
+    let mut plen = len(plaintext);
     // Reset GHASH state
     let mut i = 0;
     while i < 16 { set_at(aes_gcm_Y, i, 0); i = i + 1; }
     // Process AAD
-    let aad_blocks = aes_gcm_aad_len / 16;
-    let ai = 0;
+    let mut aad_blocks = aes_gcm_aad_len / 16;
+    let mut ai = 0;
     while ai < aad_blocks {
         let mut block = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
         let mut bi = 0;
@@ -241,7 +241,7 @@ fn aes_gcm_encrypt(plaintext) {
     // Pad remaining AAD bytes if any
     if aes_gcm_aad_len - aad_blocks * 16 > 0 {
         let mut block = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
-        let start = aad_blocks * 16;
+        let mut start = aad_blocks * 16;
         let mut bi = 0;
         while start + bi < aes_gcm_aad_len {
             set_at(block, bi, aes_gcm_aad[start + bi]);
@@ -250,13 +250,13 @@ fn aes_gcm_encrypt(plaintext) {
         _aes_gcm_ghash_update(block);
     }
     // Encrypt plaintext using CTR mode
-    let ciphertext = _aes_gcm_ctr_encrypt(plaintext);
+    let mut ciphertext = _aes_gcm_ctr_encrypt(plaintext);
     aes_gcm_ciphertext_len = plen;
     let mut ci = 0;
     while ci < plen { set_at(aes_gcm_ciphertext, ci, ciphertext[ci]); ci = ci + 1; }
     // GHASH ciphertext blocks
-    let ct_blocks = plen / 16;
-    let cbi = 0;
+    let mut ct_blocks = plen / 16;
+    let mut cbi = 0;
     while cbi < ct_blocks {
         let mut block = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
         let mut bi = 0;
@@ -267,15 +267,15 @@ fn aes_gcm_encrypt(plaintext) {
     // Pad remaining ciphertext
     if plen - ct_blocks * 16 > 0 {
         let mut block = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
-        let start = ct_blocks * 16;
+        let mut start = ct_blocks * 16;
         let mut bi = 0;
         while start + bi < plen { set_at(block, bi, ciphertext[start + bi]); bi = bi + 1; }
         _aes_gcm_ghash_update(block);
     }
     // GHASH length block: len(AAD) || len(C) in bits, big-endian 64-bit each
-    let len_block = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
-    let aad_bits = aes_gcm_aad_len * 8;
-    let ct_bits  = plen * 8;
+    let mut len_block = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+    let mut aad_bits = aes_gcm_aad_len * 8;
+    let mut ct_bits = plen * 8;
     set_at(len_block, 4,  (aad_bits / 16777216) - ((aad_bits / 4294967296) * 256));
     set_at(len_block, 5,  (aad_bits / 65536) - ((aad_bits / 16777216) * 256));
     set_at(len_block, 6,  (aad_bits / 256) - ((aad_bits / 65536) * 256));
@@ -286,11 +286,11 @@ fn aes_gcm_encrypt(plaintext) {
     set_at(len_block, 15, ct_bits - ((ct_bits / 256) * 256));
     _aes_gcm_ghash_update(len_block);
     // Tag = GHASH ^ AES_K(J0) where J0 = nonce || 0x00000001
-    let j0 = _aes_gcm_ctr_block(1);
-    let j0_enc = _aes_gcm_block_encrypt(j0);
-    let ti = 0;
+    let mut j0 = _aes_gcm_ctr_block(1);
+    let mut j0_enc = _aes_gcm_block_encrypt(j0);
+    let mut ti = 0;
     while ti < 16 {
-        let tag_byte = aes_gcm_Y[ti] + j0_enc[ti];
+        let mut tag_byte = aes_gcm_Y[ti] + j0_enc[ti];
         if tag_byte >= 256 { tag_byte = tag_byte - 256; }
         set_at(aes_gcm_tag, ti, tag_byte);
         ti = ti + 1;
@@ -301,12 +301,12 @@ fn aes_gcm_encrypt(plaintext) {
 // Decrypt and verify authentication tag
 fn aes_gcm_decrypt(ciphertext) {
     // Re-encrypt (CTR mode is symmetric) and verify tag
-    let plaintext = _aes_gcm_ctr_encrypt(ciphertext);
+    let mut plaintext = _aes_gcm_ctr_encrypt(ciphertext);
     return plaintext;
 }
 
 fn aes_gcm_get_tag() {
-    let hex_chars = "0123456789abcdef";
+    let mut hex_chars = "0123456789abcdef";
     let mut result = "";
     let mut i = 0;
     while i < AES_GCM_TAG_LEN {
@@ -320,10 +320,10 @@ fn aes_gcm_get_tag() {
 }
 
 fn aes_gcm_get_ciphertext_hex() {
-    let hex_chars = "0123456789abcdef";
+    let mut hex_chars = "0123456789abcdef";
     let mut result = "";
     let mut i = 0;
-    let limit = aes_gcm_ciphertext_len;
+    let mut limit = aes_gcm_ciphertext_len;
     if limit > 16 { limit = 16; }
     while i < limit {
         let mut b = aes_gcm_ciphertext[i];
@@ -337,15 +337,15 @@ fn aes_gcm_get_ciphertext_hex() {
 }
 
 fn aes_gcm_test() {
-    let key   = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15];
-    let nonce = [0,1,2,3,4,5,6,7,8,9,10,11];
-    let plain = [72,101,108,108,111,32,87,111,114,108,100,33,0,0,0,0];  // "Hello World!"
+    let mut key = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15];
+    let mut nonce = [0,1,2,3,4,5,6,7,8,9,10,11];
+    let mut plain = [72,101,108,108,111,32,87,111,114,108,100,33,0,0,0,0];  // "Hello World!"
     aes_gcm_set_key(key);
     aes_gcm_set_nonce(nonce);
     aes_gcm_set_aad([]);
     aes_gcm_encrypt(plain);
-    let tag_hex = aes_gcm_get_tag();
-    let ct_hex  = aes_gcm_get_ciphertext_hex();
+    let mut tag_hex = aes_gcm_get_tag();
+    let mut ct_hex = aes_gcm_get_ciphertext_hex();
     return "aes-gcm: ct=" + substr(ct_hex, 0, 8) + "... tag=" + substr(tag_hex, 0, 8) + "... [AEAD ok]";
 }
 

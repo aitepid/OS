@@ -54,12 +54,12 @@ fn _seg_build(node, start, end, data) {
         set_at(seg_max, node, data[start - 1]);
         return 0;
     }
-    let mid = (start + end) / 2;
+    let mut mid = (start + end) / 2;
     _seg_build(node * 2,     start, mid, data);
     _seg_build(node * 2 + 1, mid + 1, end, data);
     set_at(seg_sum, node, seg_sum[node*2] + seg_sum[node*2+1]);
-    let mn = seg_min[node*2]; if seg_min[node*2+1] < mn { mn = seg_min[node*2+1]; }
-    let mx = seg_max[node*2]; if seg_max[node*2+1] > mx { mx = seg_max[node*2+1]; }
+    let mut mn = seg_min[node*2]; if seg_min[node*2+1] < mn { mn = seg_min[node*2+1]; }
+    let mut mx = seg_max[node*2]; if seg_max[node*2+1] > mx { mx = seg_max[node*2+1]; }
     set_at(seg_min, node, mn);
     set_at(seg_max, node, mx);
     return 0;
@@ -74,10 +74,10 @@ fn seg_build(data, n) {
 // --- Push lazy down to children ---
 fn _seg_push_down(node, start, end) {
     if seg_lazy[node] == 0 { return 0; }
-    let mid = (start + end) / 2;
-    let lc = node * 2;
-    let rc = node * 2 + 1;
-    let lz = seg_lazy[node];
+    let mut mid = (start + end) / 2;
+    let mut lc = node * 2;
+    let mut rc = node * 2 + 1;
+    let mut lz = seg_lazy[node];
     set_at(seg_sum,  lc, seg_sum[lc]  + lz * (mid - start + 1));
     set_at(seg_min,  lc, seg_min[lc]  + lz);
     set_at(seg_max,  lc, seg_max[lc]  + lz);
@@ -92,8 +92,8 @@ fn _seg_push_down(node, start, end) {
 
 fn _seg_pull_up(node) {
     set_at(seg_sum, node, seg_sum[node*2] + seg_sum[node*2+1]);
-    let mn = seg_min[node*2]; if seg_min[node*2+1] < mn { mn = seg_min[node*2+1]; }
-    let mx = seg_max[node*2]; if seg_max[node*2+1] > mx { mx = seg_max[node*2+1]; }
+    let mut mn = seg_min[node*2]; if seg_min[node*2+1] < mn { mn = seg_min[node*2+1]; }
+    let mut mx = seg_max[node*2]; if seg_max[node*2+1] > mx { mx = seg_max[node*2+1]; }
     set_at(seg_min, node, mn);
     set_at(seg_max, node, mx);
     return 0;
@@ -108,7 +108,7 @@ fn _seg_update_pt(node, start, end, idx, val) {
         return 0;
     }
     _seg_push_down(node, start, end);
-    let mid = (start + end) / 2;
+    let mut mid = (start + end) / 2;
     if idx <= mid { _seg_update_pt(node*2,   start, mid, idx, val); }
     else          { _seg_update_pt(node*2+1, mid+1, end, idx, val); }
     _seg_pull_up(node);
@@ -134,7 +134,7 @@ fn _seg_range_add(node, start, end, l, r, delta) {
         }
     }
     _seg_push_down(node, start, end);
-    let mid = (start + end) / 2;
+    let mut mid = (start + end) / 2;
     _seg_range_add(node*2,   start, mid, l, r, delta);
     _seg_range_add(node*2+1, mid+1, end, l, r, delta);
     _seg_pull_up(node);
@@ -152,7 +152,7 @@ fn _seg_qsum(node, start, end, l, r) {
     if r < start { return 0; }
     if l <= start { if end <= r { return seg_sum[node]; } }
     _seg_push_down(node, start, end);
-    let mid = (start + end) / 2;
+    let mut mid = (start + end) / 2;
     return _seg_qsum(node*2, start, mid, l, r)
          + _seg_qsum(node*2+1, mid+1, end, l, r);
 }
@@ -162,9 +162,9 @@ fn _seg_qmin(node, start, end, l, r) {
     if r < start { return SEG_INF; }
     if l <= start { if end <= r { return seg_min[node]; } }
     _seg_push_down(node, start, end);
-    let mid = (start + end) / 2;
-    let lv = _seg_qmin(node*2,   start, mid, l, r);
-    let rv = _seg_qmin(node*2+1, mid+1, end, l, r);
+    let mut mid = (start + end) / 2;
+    let mut lv = _seg_qmin(node*2,   start, mid, l, r);
+    let mut rv = _seg_qmin(node*2+1, mid+1, end, l, r);
     if lv < rv { return lv; }
     return rv;
 }
@@ -174,9 +174,9 @@ fn _seg_qmax(node, start, end, l, r) {
     if r < start { return -SEG_INF; }
     if l <= start { if end <= r { return seg_max[node]; } }
     _seg_push_down(node, start, end);
-    let mid = (start + end) / 2;
-    let lv = _seg_qmax(node*2,   start, mid, l, r);
-    let rv = _seg_qmax(node*2+1, mid+1, end, l, r);
+    let mut mid = (start + end) / 2;
+    let mut lv = _seg_qmax(node*2,   start, mid, l, r);
+    let mut rv = _seg_qmax(node*2+1, mid+1, end, l, r);
     if lv > rv { return lv; }
     return rv;
 }
@@ -194,21 +194,21 @@ fn seg_status() {
 
 fn segment_tree_test() {
     // Build from [3,1,4,1,5,9,2,6]
-    let data = [3, 1, 4, 1, 5, 9, 2, 6];
+    let mut data = [3, 1, 4, 1, 5, 9, 2, 6];
     seg_build(data, 8);
-    let s_all = seg_query_sum(1, 8);    // 31
-    let s35   = seg_query_sum(3, 5);    // 4+1+5=10
-    let mn    = seg_query_min(1, 8);    // 1
-    let mx    = seg_query_max(1, 8);    // 9
+    let mut s_all = seg_query_sum(1, 8);    // 31
+    let mut s35 = seg_query_sum(3, 5);    // 4+1+5=10
+    let mut mn = seg_query_min(1, 8);    // 1
+    let mut mx = seg_query_max(1, 8);    // 9
     // Point update: position 4 = 10 → array [3,1,4,10,5,9,2,6]
     seg_update_point(4, 10);
-    let s35b  = seg_query_sum(3, 5);    // 4+10+5=19
-    let mn35b = seg_query_min(3, 5);    // 4
+    let mut s35b = seg_query_sum(3, 5);    // 4+10+5=19
+    let mut mn35b = seg_query_min(3, 5);    // 4
     // Range add: positions 2..6 += 2 → [3,3,6,12,7,11,2,6]
     seg_range_add(2, 6, 2);
-    let sall2 = seg_query_sum(1, 8);    // 50
-    let mn2   = seg_query_min(1, 8);    // 2
-    let mx2   = seg_query_max(1, 8);    // 12
+    let mut sall2 = seg_query_sum(1, 8);    // 50
+    let mut mn2 = seg_query_min(1, 8);    // 2
+    let mut mx2 = seg_query_max(1, 8);    // 12
     print("segtree test: " + seg_status());
     print("segtree test: sum=" + to_string(s_all)
         + " sum(3,5)=" + to_string(s35)

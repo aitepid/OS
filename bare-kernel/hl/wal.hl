@@ -47,7 +47,7 @@ fn _wal_checksum(lsn, tp, txid, k, v) {
 fn wal_append(tp, txid, k, v) {
     if wal_n >= WAL_MAXRECS { return 0 - 1; }
     let mut idx = wal_n;
-    let lsn = wal_lsn_next;
+    let mut lsn = wal_lsn_next;
     set_at(wal_lsn,  idx, lsn);
     set_at(wal_type, idx, tp);
     set_at(wal_txid, idx, txid);
@@ -66,14 +66,14 @@ fn wal_abort(txid)  { return wal_append(WAL_ABORT,  txid, 0, 0); }
 
 fn wal_checkpoint() {
     // Record a checkpoint at the current tail LSN
-    let lsn = wal_append(WAL_CHECKPOINT, 0, 0, 0);
+    let mut lsn = wal_append(WAL_CHECKPOINT, 0, 0, 0);
     wal_checkpoint_lsn = lsn;
     return lsn;
 }
 
 fn wal_verify(idx) {
     // Returns 1 if checksum matches, 0 if corrupted
-    let expected = _wal_checksum(wal_lsn[idx], wal_type[idx],
+    let mut expected = _wal_checksum(wal_lsn[idx], wal_type[idx],
                                   wal_txid[idx], wal_key[idx], wal_val[idx]);
     if wal_csum[idx] == expected { return 1; }
     return 0;
@@ -85,13 +85,13 @@ fn wal_replay(from_lsn) {
     wal_redo_n = 0;
 
     // Pass 1: mark committed txns
-    let committed = array(64, 0);   // txid -> 1 if committed
+    let mut committed = array(64, 0);   // txid -> 1 if committed
     let mut i = 0;
     while i < wal_n {
         if wal_lsn[i] >= from_lsn {
             if wal_verify(i) == 1 {
                 if wal_type[i] == WAL_COMMIT {
-                    let txid = wal_txid[i];
+                    let mut txid = wal_txid[i];
                     if txid < 64 { set_at(committed, txid, 1); }
                 }
             }
@@ -105,7 +105,7 @@ fn wal_replay(from_lsn) {
         if wal_lsn[i] >= from_lsn {
             if wal_verify(i) == 1 {
                 if wal_type[i] == WAL_WRITE {
-                    let txid = wal_txid[i];
+                    let mut txid = wal_txid[i];
                     if txid < 64 {
                         if committed[txid] == 1 {
                             if wal_redo_n < WAL_REDO_MAX {
@@ -147,16 +147,16 @@ fn wal_test() {
     wal_commit(3);
 
     // Checkpoint
-    let ckpt = wal_checkpoint();
+    let mut ckpt = wal_checkpoint();
 
     let mut n = wal_rec_count();
-    let rn = wal_replay(1);   // replay from LSN 1
+    let mut rn = wal_replay(1);   // replay from LSN 1
 
     print("wal_test: records=" + to_string(n) + " ckpt_lsn=" + to_string(ckpt));
     print("wal_test: redo_n=" + to_string(rn) + " redo[0].key=" + to_string(wal_redo_keys[0]));
 
     // Expect redo=3 (txn1: k=10,20; txn3: k=40); aborted txn2 excluded
-    let v0ok = wal_verify(0);
+    let mut v0ok = wal_verify(0);
     if rn == 3 {
         if v0ok == 1 {
             if wal_redo_keys[0] == 10 {

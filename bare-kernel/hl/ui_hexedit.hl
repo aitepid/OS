@@ -62,7 +62,7 @@ let mut hexed_status_msg = "Ready";
 
 fn _hexed_load_page() {
     if hexed_path == "" { return 0; }
-    let fd = vfs_open(hexed_path, O_RDONLY);
+    let mut fd = vfs_open(hexed_path, O_RDONLY);
     if fd < 0 { return 0; }
     vfs_seek(fd, hexed_page_off, 0);
     vfs_read(fd, HEXED_BUF, HEXED_BUF_SZ);
@@ -72,7 +72,7 @@ fn _hexed_load_page() {
 
 fn _hexed_save_page() {
     if hexed_path == "" { return 0; }
-    let fd = vfs_open(hexed_path, O_WRONLY);
+    let mut fd = vfs_open(hexed_path, O_WRONLY);
     if fd < 0 { return 0; }
     vfs_seek(fd, hexed_page_off, 0);
     vfs_write(fd, HEXED_BUF, HEXED_BUF_SZ);
@@ -89,7 +89,7 @@ fn hexed_load(path) {
     hexed_dirty    = 0;
     hexed_edit_mode = 0;
     // Get file size
-    let fd = vfs_open(path, O_RDONLY);
+    let mut fd = vfs_open(path, O_RDONLY);
     if fd < 0 {
         hexed_status_msg = "Error: cannot open " + path;
         return 0;
@@ -126,10 +126,10 @@ fn _hexed_byte_ascii(b) {
 // ============================================================
 
 fn _hexed_draw_toolbar() {
-    let wx = HEXED_WIN_X;
-    let wy = HEXED_WIN_Y + 20;
-    let bg  = ui_theme_panel_color();
-    let bdr = ui_theme_border_color();
+    let mut wx = HEXED_WIN_X;
+    let mut wy = HEXED_WIN_Y + 20;
+    let mut bg = ui_theme_panel_color();
+    let mut bdr = ui_theme_border_color();
     vesa_fill_rect(wx, wy, HEXED_WIN_W, HEXED_TOOLBAR_H, bg);
     vesa_rect(wx, wy, HEXED_WIN_W, HEXED_TOOLBAR_H, bdr);
 
@@ -151,12 +151,12 @@ fn _hexed_draw_toolbar() {
 
 fn _hexed_draw_status() {
     if hexed_open_flag == 0 { return 0; }
-    let wx = HEXED_WIN_X;
-    let wy = HEXED_WIN_Y + 20 + HEXED_TOOLBAR_H;
+    let mut wx = HEXED_WIN_X;
+    let mut wy = HEXED_WIN_Y + 20 + HEXED_TOOLBAR_H;
     vesa_fill_rect(wx, wy, HEXED_WIN_W, HEXED_STATUS_H, ui_theme_panel_color());
-    let abs_off = hexed_page_off + hexed_cursor;
-    let cur_byte = mem_read_u8(HEXED_BUF + hexed_cursor);
-    let info = "Offset: 0x" + _hexed_byte_hex(abs_off / 256) + _hexed_byte_hex(abs_off % 256)
+    let mut abs_off = hexed_page_off + hexed_cursor;
+    let mut cur_byte = mem_read_u8(HEXED_BUF + hexed_cursor);
+    let mut info = "Offset: 0x" + _hexed_byte_hex(abs_off / 256) + _hexed_byte_hex(abs_off % 256)
         + "  Byte: 0x" + _hexed_byte_hex(cur_byte)
         + " '" + _hexed_byte_ascii(cur_byte) + "'"
         + "  " + hexed_status_msg;
@@ -165,10 +165,10 @@ fn _hexed_draw_status() {
 }
 
 fn _hexed_draw_content() {
-    let vx = HEXED_WIN_X;
-    let vy = HEXED_WIN_Y + 20 + HEXED_TOOLBAR_H + HEXED_STATUS_H;
-    let vw = HEXED_WIN_W;
-    let vh = HEXED_ROWS * HEXED_ROW_H;
+    let mut vx = HEXED_WIN_X;
+    let mut vy = HEXED_WIN_Y + 20 + HEXED_TOOLBAR_H + HEXED_STATUS_H;
+    let mut vw = HEXED_WIN_W;
+    let mut vh = HEXED_ROWS * HEXED_ROW_H;
     vesa_fill_rect(vx, vy, vw, vh, ui_theme_surface_color());
 
     if hexed_file_size == 0 {
@@ -177,20 +177,20 @@ fn _hexed_draw_content() {
         return 0;
     }
 
-    let tc = ui_theme_text_color();
-    let hl = ui_theme_accent_color();
-    let dm = ui_theme_dim_color();
+    let mut tc = ui_theme_text_color();
+    let mut hl = ui_theme_accent_color();
+    let mut dm = ui_theme_dim_color();
 
     let mut row = 0;
     while row < HEXED_ROWS {
-        let row_off = row * HEXED_COLS;
+        let mut row_off = row * HEXED_COLS;
         let mut y = vy + row * HEXED_ROW_H;
-        let abs_off = hexed_page_off + row_off;
+        let mut abs_off = hexed_page_off + row_off;
 
         // Offset column (8 hex digits)
-        let off_hi = abs_off / 65536;
-        let off_lo = abs_off % 65536;
-        let off_str = _hexed_byte_hex(off_hi / 256) + _hexed_byte_hex(off_hi % 256)
+        let mut off_hi = abs_off / 65536;
+        let mut off_lo = abs_off % 65536;
+        let mut off_str = _hexed_byte_hex(off_hi / 256) + _hexed_byte_hex(off_hi % 256)
                     + _hexed_byte_hex(off_lo / 256) + _hexed_byte_hex(off_lo % 256);
         ui_draw_text(vx + HEXED_OFF_X, y, off_str, dm, 0);
 
@@ -198,12 +198,12 @@ fn _hexed_draw_content() {
         let mut col = 0;
         let mut asc = "";
         while col < HEXED_COLS {
-            let boff = row_off + col;
-            let bx = vx + HEXED_HEX_X + col * 22;
+            let mut boff = row_off + col;
+            let mut bx = vx + HEXED_HEX_X + col * 22;
             if boff < hexed_file_size {
-                let bv = mem_read_u8(HEXED_BUF + boff);
-                let hex_s = _hexed_byte_hex(bv);
-                let is_cur = 0;
+                let mut bv = mem_read_u8(HEXED_BUF + boff);
+                let mut hex_s = _hexed_byte_hex(bv);
+                let mut is_cur = 0;
                 if boff == hexed_cursor { is_cur = 1; }
                 if is_cur == 1 {
                     vesa_fill_rect(bx - 1, y, 20, HEXED_ROW_H, hl);
@@ -226,9 +226,9 @@ fn _hexed_draw_content() {
 
 fn hexed_draw() {
     if hexed_open_flag == 0 { return 0; }
-    let wx = HEXED_WIN_X;
-    let wy = HEXED_WIN_Y;
-    let bdr = ui_theme_border_color();
+    let mut wx = HEXED_WIN_X;
+    let mut wy = HEXED_WIN_Y;
+    let mut bdr = ui_theme_border_color();
     vesa_fill_rect(wx, wy, HEXED_WIN_W, 20, ui_theme_panel_color());
     ui_draw_text(wx + 8, wy + 2, "Hex Editor  " + hexed_path, ui_theme_text_color(), 0);
     vesa_rect(wx, wy, HEXED_WIN_W, HEXED_WIN_H, bdr);
@@ -250,12 +250,12 @@ fn _hexed_clamp_cursor() {
 }
 
 fn _hexed_nibble_input(k) {
-    let nv = 0 - 1;
+    let mut nv = 0 - 1;
     if k >= 48 { if k <= 57 { let nv = k - 48; } }       // '0'-'9'
     if k >= 65 { if k <= 70 { let nv = k - 55; } }        // 'A'-'F'
     if k >= 97 { if k <= 102 { let nv = k - 87; } }       // 'a'-'f'
     if nv < 0 { return 0; }
-    let bv = mem_read_u8(HEXED_BUF + hexed_cursor);
+    let mut bv = mem_read_u8(HEXED_BUF + hexed_cursor);
     let mut new_bv = bv;
     if hexed_nibble == 0 { new_bv = nv * 16 + bv % 16; }
     else { new_bv = (bv / 16) * 16 + nv; }
@@ -303,8 +303,8 @@ fn hexed_key(k) {
 
 fn hexed_click(mx, my) {
     if hexed_open_flag == 0 { return 0; }
-    let wx  = HEXED_WIN_X;
-    let wy  = HEXED_WIN_Y + 20;
+    let mut wx = HEXED_WIN_X;
+    let mut wy = HEXED_WIN_Y + 20;
 
     // Toolbar hits
     if ui_button_hit(wx + 4,   wy + 4, 56, 24, mx, my) == 1 {
@@ -329,12 +329,12 @@ fn hexed_click(mx, my) {
     }
 
     // Click in content area → move cursor
-    let cy = HEXED_WIN_Y + 20 + HEXED_TOOLBAR_H + HEXED_STATUS_H;
+    let mut cy = HEXED_WIN_Y + 20 + HEXED_TOOLBAR_H + HEXED_STATUS_H;
     if my >= cy {
         let mut row = (my - cy) / HEXED_ROW_H;
         if row < HEXED_ROWS {
             // Approximate column from x
-            let hx = mx - (HEXED_WIN_X + HEXED_HEX_X);
+            let mut hx = mx - (HEXED_WIN_X + HEXED_HEX_X);
             if hx >= 0 {
                 let mut col = hx / 22;
                 if col < HEXED_COLS {

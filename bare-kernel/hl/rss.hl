@@ -51,23 +51,23 @@ fn rss_clear() {
 }
 
 fn _rss_find_tag(xml, tag, start_pos) {
-    let open_tag = "<" + tag + ">";
-    let close_tag = "</" + tag + ">";
+    let mut open_tag = "<" + tag + ">";
+    let mut close_tag = "</" + tag + ">";
 
-    let open_pos = str_index_of(str_sub(xml, start_pos, len(xml)), open_tag);
+    let mut open_pos = str_index_of(str_sub(xml, start_pos, len(xml)), open_tag);
     if open_pos == 0 - 1 {
         return ["", start_pos];
     }
 
-    let content_start = start_pos + open_pos + len(open_tag);
-    let close_pos = str_index_of(str_sub(xml, content_start, len(xml)), close_tag);
+    let mut content_start = start_pos + open_pos + len(open_tag);
+    let mut close_pos = str_index_of(str_sub(xml, content_start, len(xml)), close_tag);
 
     if close_pos == 0 - 1 {
         return ["", start_pos];
     }
 
-    let content = str_sub(xml, content_start, content_start + close_pos);
-    let next_pos = content_start + close_pos + len(close_tag);
+    let mut content = str_sub(xml, content_start, content_start + close_pos);
+    let mut next_pos = content_start + close_pos + len(close_tag);
 
     return [content, next_pos];
 }
@@ -86,16 +86,16 @@ fn _rss_decode_entities(text) {
 }
 
 fn _rss_strip_cdata(text) {
-    let cdata_start = "<![CDATA[";
-    let cdata_end = "]]>";
+    let mut cdata_start = "<![CDATA[";
+    let mut cdata_end = "]]>";
 
-    let start_pos = str_index_of(text, cdata_start);
+    let mut start_pos = str_index_of(text, cdata_start);
     if start_pos == 0 - 1 {
         return text;
     }
 
-    let content_start = start_pos + len(cdata_start);
-    let end_pos = str_index_of(str_sub(text, content_start, len(text)), cdata_end);
+    let mut content_start = start_pos + len(cdata_start);
+    let mut end_pos = str_index_of(str_sub(text, content_start, len(text)), cdata_end);
 
     if end_pos == 0 - 1 {
         return text;
@@ -111,7 +111,7 @@ fn _rss_trim(text) {
     while go1 == 1 {
         if len(result) <= 0 { go1 = 0; }
         if go1 == 1 {
-            let first = str_char_code(result, 0);
+            let mut first = str_char_code(result, 0);
             if first == 32 { result = str_sub(result, 1, len(result)); }
             else { if first == 9  { result = str_sub(result, 1, len(result)); }
             else { if first == 10 { result = str_sub(result, 1, len(result)); }
@@ -124,7 +124,7 @@ fn _rss_trim(text) {
     while go2 == 1 {
         if len(result) <= 0 { go2 = 0; }
         if go2 == 1 {
-            let last = str_char_code(result, len(result) - 1);
+            let mut last = str_char_code(result, len(result) - 1);
             if last == 32 { result = str_sub(result, 0, len(result) - 1); }
             else { if last == 9  { result = str_sub(result, 0, len(result) - 1); }
             else { if last == 10 { result = str_sub(result, 0, len(result) - 1); }
@@ -139,18 +139,18 @@ fn _rss_trim(text) {
 fn rss_parse(xml) {
     rss_clear();
 
-    let channel_start = str_index_of(xml, "<channel>");
+    let mut channel_start = str_index_of(xml, "<channel>");
     if channel_start == 0 - 1 {
         return 0 - 1;
     }
 
-    let title_result = _rss_find_tag(xml, "title", channel_start);
+    let mut title_result = _rss_find_tag(xml, "title", channel_start);
     rss_channel_title = _rss_trim(_rss_decode_entities(title_result[0]));
 
-    let link_result = _rss_find_tag(xml, "link", channel_start);
+    let mut link_result = _rss_find_tag(xml, "link", channel_start);
     rss_channel_link = _rss_trim(_rss_decode_entities(link_result[0]));
 
-    let desc_result = _rss_find_tag(xml, "description", channel_start);
+    let mut desc_result = _rss_find_tag(xml, "description", channel_start);
     rss_channel_desc = _rss_trim(_rss_decode_entities(_rss_strip_cdata(desc_result[0])));
 
     let mut pos = channel_start;
@@ -158,17 +158,17 @@ fn rss_parse(xml) {
     while go3 == 1 {
         if rss_item_count >= RSS_MAX_ITEMS { go3 = 0; }
         if go3 == 1 {
-            let item_start = str_index_of(str_sub(xml, pos, len(xml)), "<item>");
+            let mut item_start = str_index_of(str_sub(xml, pos, len(xml)), "<item>");
             if item_start == 0 - 1 { go3 = 0; }
             if go3 == 1 {
                 pos = pos + item_start + 6;
-                let item_title = _rss_find_tag(xml, "title", pos);
+                let mut item_title = _rss_find_tag(xml, "title", pos);
                 set_at(rss_item_titles, rss_item_count, _rss_trim(_rss_decode_entities(item_title[0])));
-                let item_link = _rss_find_tag(xml, "link", pos);
+                let mut item_link = _rss_find_tag(xml, "link", pos);
                 set_at(rss_item_links, rss_item_count, _rss_trim(_rss_decode_entities(item_link[0])));
-                let item_desc = _rss_find_tag(xml, "description", pos);
+                let mut item_desc = _rss_find_tag(xml, "description", pos);
                 set_at(rss_item_descs, rss_item_count, _rss_trim(_rss_decode_entities(_rss_strip_cdata(item_desc[0]))));
-                let item_date = _rss_find_tag(xml, "pubDate", pos);
+                let mut item_date = _rss_find_tag(xml, "pubDate", pos);
                 set_at(rss_item_dates, rss_item_count, _rss_trim(_rss_decode_entities(item_date[0])));
                 rss_item_count = rss_item_count + 1;
             }
@@ -237,9 +237,9 @@ fn rss_get_item_date(index) {
 fn rss_test() {
     print("rss: running self-test");
 
-    let test_feed = "<?xml version=\"1.0\"?><rss version=\"2.0\"><channel><title>Test Feed</title><link>http://example.com</link><description>A test RSS feed</description><item><title>First Item</title><link>http://example.com/1</link><description>First item description</description><pubDate>Mon, 01 Jan 2024 00:00:00 GMT</pubDate></item><item><title>Second Item</title><link>http://example.com/2</link><description>Second item description</description></item></channel></rss>";
+    let mut test_feed = "<?xml version=\"1.0\"?><rss version=\"2.0\"><channel><title>Test Feed</title><link>http://example.com</link><description>A test RSS feed</description><item><title>First Item</title><link>http://example.com/1</link><description>First item description</description><pubDate>Mon, 01 Jan 2024 00:00:00 GMT</pubDate></item><item><title>Second Item</title><link>http://example.com/2</link><description>Second item description</description></item></channel></rss>";
 
-    let item_count = rss_parse(test_feed);
+    let mut item_count = rss_parse(test_feed);
     if item_count == 2 {
         print("  [ok] RSS parse: found 2 items");
     } else {

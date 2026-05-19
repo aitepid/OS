@@ -55,8 +55,8 @@ fn sa_load(data, n) {
 // Returns negative / zero / positive
 fn _sa_cmp(a, b, gap) {
     if sa_rank[a] != sa_rank[b] { return sa_rank[a] - sa_rank[b]; }
-    let ra = -1; if a + gap < sa_n { ra = sa_tmp[a + gap]; }
-    let rb = -1; if b + gap < sa_n { rb = sa_tmp[b + gap]; }
+    let mut ra = -1; if a + gap < sa_n { ra = sa_tmp[a + gap]; }
+    let mut rb = -1; if b + gap < sa_n { rb = sa_tmp[b + gap]; }
     return ra - rb;
 }
 
@@ -64,7 +64,7 @@ fn _sa_cmp(a, b, gap) {
 fn _sa_isort(gap) {
     let mut i = 1;
     while i < sa_n {
-        let key = sa_sa[i];
+        let mut key = sa_sa[i];
         let mut j = i - 1;
         while j >= 0 {
             if _sa_cmp(sa_sa[j], key, gap) > 0 {
@@ -84,7 +84,7 @@ fn sa_build() {
     let mut n = sa_n;
     let mut i = 0;
     while i < n { set_at(sa_sa, i, i); set_at(sa_rank, i, sa_str[i]); i = i + 1; }
-    let gap = 1;
+    let mut gap = 1;
     while gap < n {
         // Save current ranks for gap-shifted comparisons
         i = 0;
@@ -96,11 +96,11 @@ fn sa_build() {
         i = 1;
         while i < n {
             let mut prev = sa_sa[i - 1];
-            let cur  = sa_sa[i];
-            let same = 0;
+            let mut cur = sa_sa[i];
+            let mut same = 0;
             if sa_tmp[prev] == sa_tmp[cur] {
-                let rp2 = -1; if prev + gap < n { rp2 = sa_tmp[prev + gap]; }
-                let rc2 = -1; if cur  + gap < n { rc2 = sa_tmp[cur  + gap]; }
+                let mut rp2 = -1; if prev + gap < n { rp2 = sa_tmp[prev + gap]; }
+                let mut rc2 = -1; if cur  + gap < n { rc2 = sa_tmp[cur  + gap]; }
                 if rp2 == rc2 { same = 1; }
             }
             if same == 1 { set_at(sa_rank, cur, sa_rank[prev]); }
@@ -116,7 +116,7 @@ fn sa_build() {
 fn sa_build_lcp() {
     let mut n = sa_n;
     // Build inverse SA: inv[sa_sa[i]] = i
-    let inv = [];
+    let mut inv = [];
     let mut i = 0;
     while i < n { set_at(inv, sa_sa[i], i); i = i + 1; }
     let mut h = 0;
@@ -125,7 +125,7 @@ fn sa_build_lcp() {
         set_at(sa_lcp, inv[i], 0);
         if inv[i] > 0 {
             let mut j = sa_sa[inv[i] - 1];
-            let going = 1;
+            let mut going = 1;
             while going == 1 {
                 if i + h >= n { going = 0; }
                 if going == 1 { if j + h >= n { going = 0; } }
@@ -147,8 +147,8 @@ fn sa_build_lcp() {
 fn _sa_cmp_pat(pat, plen, si) {
     let mut i = 0;
     while i < plen {
-        let pc = pat[i];
-        let sc = 0; if si + i < sa_n { sc = sa_str[si + i]; }
+        let mut pc = pat[i];
+        let mut sc = 0; if si + i < sa_n { sc = sa_str[si + i]; }
         if pc < sc { return 0 - 1; }
         if pc > sc { return 1; }
         i = i + 1;
@@ -160,7 +160,7 @@ fn _sa_cmp_pat(pat, plen, si) {
 fn sa_lower_bound(pat, plen) {
     let mut lo = 0; let mut hi = sa_n;
     while lo < hi {
-        let mid = (lo + hi) / 2;
+        let mut mid = (lo + hi) / 2;
         if _sa_cmp_pat(pat, plen, sa_sa[mid]) > 0 { lo = mid + 1; }
         else { hi = mid; }
     }
@@ -171,7 +171,7 @@ fn sa_lower_bound(pat, plen) {
 fn sa_upper_bound(pat, plen) {
     let mut lo = 0; let mut hi = sa_n;
     while lo < hi {
-        let mid = (lo + hi) / 2;
+        let mut mid = (lo + hi) / 2;
         if _sa_cmp_pat(pat, plen, sa_sa[mid]) >= 0 { lo = mid + 1; }
         else { hi = mid; }
     }
@@ -185,7 +185,7 @@ fn sa_search_count(pat, plen) {
 
 // Longest Repeated Substring length = max(LCP)
 fn sa_lrs() {
-    let best = 0;
+    let mut best = 0;
     let mut i = 1;
     while i < sa_n { if sa_lcp[i] > best { best = sa_lcp[i]; } i = i + 1; }
     return best;
@@ -194,7 +194,7 @@ fn sa_lrs() {
 // Count distinct substrings = n*(n+1)/2 - sum(LCP[1..n-1])
 fn sa_distinct_substrings() {
     let mut total = (sa_n * (sa_n + 1)) / 2;
-    let lcp_sum = 0;
+    let mut lcp_sum = 0;
     let mut i = 1;
     while i < sa_n { lcp_sum = lcp_sum + sa_lcp[i]; i = i + 1; }
     return total - lcp_sum;
@@ -211,23 +211,23 @@ fn suffix_array_test() {
     // "banana" = [98, 97, 110, 97, 110, 97]
     // Expected SA = [5, 3, 1, 0, 4, 2]  (a, ana, anana, banana, na, nana)
     // Expected LCP = [0, 1, 3, 0, 0, 2]  -> LRS=3 ("ana"), distinct=15
-    let banana = [98, 97, 110, 97, 110, 97];
+    let mut banana = [98, 97, 110, 97, 110, 97];
     sa_load(banana, 6);
     sa_build();
     sa_build_lcp();
-    let sa0 = sa_sa[0];   // 5 ("a")
-    let sa1 = sa_sa[1];   // 3 ("ana")
-    let sa2 = sa_sa[2];   // 1 ("anana")
-    let sa3 = sa_sa[3];   // 0 ("banana")
-    let lcp2 = sa_lcp[2]; // 3 (lcp("ana","anana"))
-    let lrs  = sa_lrs();  // 3
+    let mut sa0 = sa_sa[0];   // 5 ("a")
+    let mut sa1 = sa_sa[1];   // 3 ("ana")
+    let mut sa2 = sa_sa[2];   // 1 ("anana")
+    let mut sa3 = sa_sa[3];   // 0 ("banana")
+    let mut lcp2 = sa_lcp[2]; // 3 (lcp("ana","anana"))
+    let mut lrs = sa_lrs();  // 3
     let mut dist = sa_distinct_substrings(); // 15
     // Pattern search: "ana" = [97, 110, 97]
-    let ana = [97, 110, 97];
-    let cnt = sa_search_count(ana, 3);   // 2 occurrences
+    let mut ana = [97, 110, 97];
+    let mut cnt = sa_search_count(ana, 3);   // 2 occurrences
     // Pattern "na" = [110, 97]
-    let na = [110, 97];
-    let cnt2 = sa_search_count(na, 2);   // 2 occurrences
+    let mut na = [110, 97];
+    let mut cnt2 = sa_search_count(na, 2);   // 2 occurrences
     print("sa test: " + sa_status());
     print("sa test: sa=[" + to_string(sa0) + "," + to_string(sa1) + ","
         + to_string(sa2) + "," + to_string(sa3) + "...]"

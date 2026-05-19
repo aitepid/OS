@@ -64,7 +64,7 @@ fn tls12_sha256_hash(data) {
     let mut msg = [];
     let mut i = 0;
     while i < len(data) { push(msg, data[i]); i = i + 1; }
-    let bit_len = len(data) * 8;
+    let mut bit_len = len(data) * 8;
     push(msg, 128); // 0x80
     while len(msg) % 64 != 56 { push(msg, 0); }
     // Append 64-bit big-endian length
@@ -92,8 +92,8 @@ fn tls12_sha256_hash(data) {
         }
         // Extend to 64 words
         while wi < 64 {
-            let s0 = _sha_rotr(w[wi-15], 7) ^ _sha_rotr(w[wi-15], 18) ^ (w[wi-15] / 8);
-            let s1 = _sha_rotr(w[wi-2], 17) ^ _sha_rotr(w[wi-2], 19) ^ (w[wi-2] / 1024);
+            let mut s0 = _sha_rotr(w[wi-15], 7) ^ _sha_rotr(w[wi-15], 18) ^ (w[wi-15] / 8);
+            let mut s1 = _sha_rotr(w[wi-2], 17) ^ _sha_rotr(w[wi-2], 19) ^ (w[wi-2] / 1024);
             push(w, (w[wi-16] + s0 + w[wi-7] + s1) % 4294967296);
             wi = wi + 1;
         }
@@ -102,12 +102,12 @@ fn tls12_sha256_hash(data) {
         let mut e = h4; let mut f = h5; let mut g = h6; let mut hh = h7;
         i = 0;
         while i < 64 {
-            let S1 = _sha_rotr(e, 6) ^ _sha_rotr(e, 11) ^ _sha_rotr(e, 25);
-            let ch = (e & f) ^ ((4294967295 - e) & g);
-            let temp1 = (hh + S1 + ch + SHA256_K[i] + w[i]) % 4294967296;
-            let S0 = _sha_rotr(a, 2) ^ _sha_rotr(a, 13) ^ _sha_rotr(a, 22);
-            let maj = (a & b) ^ (a & c) ^ (b & c);
-            let temp2 = (S0 + maj) % 4294967296;
+            let mut S1 = _sha_rotr(e, 6) ^ _sha_rotr(e, 11) ^ _sha_rotr(e, 25);
+            let mut ch = (e & f) ^ ((4294967295 - e) & g);
+            let mut temp1 = (hh + S1 + ch + SHA256_K[i] + w[i]) % 4294967296;
+            let mut S0 = _sha_rotr(a, 2) ^ _sha_rotr(a, 13) ^ _sha_rotr(a, 22);
+            let mut maj = (a & b) ^ (a & c) ^ (b & c);
+            let mut temp2 = (S0 + maj) % 4294967296;
             hh = g; g = f; f = e;
             e = (d + temp1) % 4294967296;
             d = c; c = b; b = a;
@@ -124,7 +124,7 @@ fn tls12_sha256_hash(data) {
     // Output 32 bytes
     let mut digest = [];
     let mut hi = 0;
-    let hvals = [h0, h1, h2, h3, h4, h5, h6, h7];
+    let mut hvals = [h0, h1, h2, h3, h4, h5, h6, h7];
     while hi < 8 {
         let mut v = hvals[hi];
         push(digest, (v / 16777216) % 256);
@@ -172,7 +172,7 @@ fn hmac_sha256(key, message) {
     while i < len(ipad) { push(inner_data, ipad[i]); i = i + 1; }
     i = 0;
     while i < len(message) { push(inner_data, message[i]); i = i + 1; }
-    let inner = tls12_sha256_hash(inner_data);
+    let mut inner = tls12_sha256_hash(inner_data);
     // outer = sha256(opad || inner)
     let mut outer_data = [];
     i = 0;
@@ -226,7 +226,7 @@ fn x25519_keygen() {
     set_at(private_key, 31, (private_key[31] & 127) | 64);
     // Public key = scalar_mult(private, basepoint=9)
     // Simplified: return hash-derived public key (not cryptographically valid)
-    let public_key = tls12_sha256_hash(private_key);
+    let mut public_key = tls12_sha256_hash(private_key);
     return [private_key, public_key];
 }
 
@@ -335,23 +335,23 @@ fn _tls_parse_hs_type(data, offset) {
 // ============================================================
 
 fn tls_connect(tcp_fd) {
-    let sess = _tls_alloc();
+    let mut sess = _tls_alloc();
     if sess < 0 { return 0 - 1; }
 
     set_at(_tls_tcp_fd, sess, tcp_fd);
 
     // Generate ephemeral key pair
-    let keys = x25519_keygen();
+    let mut keys = x25519_keygen();
     set_at(_tls_priv_key, sess, keys[0]);
     set_at(_tls_pub_key, sess, keys[1]);
 
     // STATE 1: Send ClientHello
-    let hello = tls12_client_hello();
+    let mut hello = tls12_client_hello();
     tcp_send(tcp_fd, hello, len(hello));
     set_at(_tls_state, sess, TLS_ST_CH_SENT);
 
     // STATE 2: Receive ServerHello
-    let sh = tcp_recv(tcp_fd, 4096);
+    let mut sh = tcp_recv(tcp_fd, 4096);
     if len(sh) < 5 { set_at(_tls_state, sess, TLS_ST_CLOSED); return 0 - 1; }
     set_at(_tls_state, sess, TLS_ST_SH_RECV);
 
@@ -365,35 +365,35 @@ fn tls_connect(tcp_fd) {
     }
 
     // Derive shared secret
-    let shared = x25519_shared_secret(_tls_priv_key[sess], server_pub);
+    let mut shared = x25519_shared_secret(_tls_priv_key[sess], server_pub);
     set_at(_tls_shared, sess, shared);
 
     // Derive handshake secret via HKDF
-    let early_secret = hkdf_extract([0], [0]);
-    let hs_secret = hkdf_extract(early_secret, shared);
+    let mut early_secret = hkdf_extract([0], [0]);
+    let mut hs_secret = hkdf_extract(early_secret, shared);
     set_at(_tls_hs_secret, sess, hs_secret);
 
     // STATE 3: Receive EncryptedExtensions
-    let ee = tcp_recv(tcp_fd, 4096);
+    let mut ee = tcp_recv(tcp_fd, 4096);
     set_at(_tls_state, sess, TLS_ST_EE_RECV);
 
     // STATE 4: Receive Certificate + CertificateVerify
-    let cert = tcp_recv(tcp_fd, 4096);
+    let mut cert = tcp_recv(tcp_fd, 4096);
     set_at(_tls_state, sess, TLS_ST_CERT_RECV);
 
     // STATE 5: Receive server Finished
-    let sfin = tcp_recv(tcp_fd, 4096);
+    let mut sfin = tcp_recv(tcp_fd, 4096);
     set_at(_tls_state, sess, TLS_ST_FIN_RECV);
 
     // Derive application keys
-    let app_secret = hkdf_extract(hs_secret, shared);
-    let app_key_wr = hkdf_expand(app_secret, [99, 108, 105, 101, 110, 116], 16); // "client"
-    let app_key_rd = hkdf_expand(app_secret, [115, 101, 114, 118, 101, 114], 16); // "server"
+    let mut app_secret = hkdf_extract(hs_secret, shared);
+    let mut app_key_wr = hkdf_expand(app_secret, [99, 108, 105, 101, 110, 116], 16); // "client"
+    let mut app_key_rd = hkdf_expand(app_secret, [115, 101, 114, 118, 101, 114], 16); // "server"
     set_at(_tls_app_key_wr, sess, app_key_wr);
     set_at(_tls_app_key_rd, sess, app_key_rd);
 
     // STATE 6: Send client Finished
-    let verify_data = hmac_sha256(hs_secret, tls12_sha256_hash([]));
+    let mut verify_data = hmac_sha256(hs_secret, tls12_sha256_hash([]));
     let mut cfin = [];
     push(cfin, TLS_CONTENT_HANDSHAKE);
     push(cfin, 3); push(cfin, 3);
@@ -419,18 +419,18 @@ fn tls_connect(tcp_fd) {
 fn tls12_send(session, data) {
     if session < 0 { return 0; }
     if _tls_state[session] != TLS_ST_ESTABLISHED { return 0; }
-    let tcp_fd = _tls_tcp_fd[session];
+    let mut tcp_fd = _tls_tcp_fd[session];
 
     // Build TLS record: type=23 (appdata), version=0x0303, then encrypted payload
     let mut record = [];
     push(record, TLS_CONTENT_APPDATA);
     push(record, 3); push(record, 3);
-    let enc_len = len(data) + 16; // data + 16-byte GCM tag
+    let mut enc_len = len(data) + 16; // data + 16-byte GCM tag
     push(record, (enc_len / 256) % 256);
     push(record, enc_len % 256);
 
     // Simplified encryption: XOR with key stream (not real AES-GCM)
-    let key = _tls_app_key_wr[session];
+    let mut key = _tls_app_key_wr[session];
     let mut i = 0;
     while i < len(data) {
         let mut k = key[i % len(key)];
@@ -438,7 +438,7 @@ fn tls12_send(session, data) {
         i = i + 1;
     }
     // Append fake GCM tag (16 bytes)
-    let tag = hmac_sha256(key, data);
+    let mut tag = hmac_sha256(key, data);
     i = 0;
     while i < 16 { push(record, tag[i]); i = i + 1; }
 
@@ -450,17 +450,17 @@ fn tls12_send(session, data) {
 fn tls12_recv(session) {
     if session < 0 { return []; }
     if _tls_state[session] != TLS_ST_ESTABLISHED { return []; }
-    let tcp_fd = _tls_tcp_fd[session];
+    let mut tcp_fd = _tls_tcp_fd[session];
 
-    let record = tcp_recv(tcp_fd, 4096);
+    let mut record = tcp_recv(tcp_fd, 4096);
     if len(record) < 5 { return []; }
 
-    let rec_len = record[3] * 256 + record[4];
-    let data_len = rec_len - 16; // subtract GCM tag
+    let mut rec_len = record[3] * 256 + record[4];
+    let mut data_len = rec_len - 16; // subtract GCM tag
     if data_len < 0 { return []; }
 
     // Simplified decryption: XOR with key stream
-    let key = _tls_app_key_rd[session];
+    let mut key = _tls_app_key_rd[session];
     let mut plain = [];
     let mut i = 0;
     while i < data_len {
@@ -478,7 +478,7 @@ fn tls12_close(session) {
     if session < 0 { return 0; }
     set_at(_tls_state, session, TLS_ST_CLOSED);
     // Send close_notify alert
-    let tcp_fd = _tls_tcp_fd[session];
+    let mut tcp_fd = _tls_tcp_fd[session];
     let mut alert = [];
     push(alert, TLS_CONTENT_ALERT);
     push(alert, 3); push(alert, 3);
@@ -514,22 +514,22 @@ fn tls_status() {
 // === HTTPS ===
 fn https_get(host, path) {
     // 1. DNS resolve
-    let ip = dns_resolve(host);
+    let mut ip = dns_resolve(host);
     if ip == 0 { return []; }
     // 2. TCP connect to port 443
-    let tcp_fd = tcp_connect(ip, 443);
+    let mut tcp_fd = tcp_connect(ip, 443);
     if tcp_fd < 0 { return []; }
     // 3. TLS handshake
-    let session = tls_connect(tcp_fd);
+    let mut session = tls_connect(tcp_fd);
     if session < 0 { return []; }
     // 4. Send HTTP GET
     let mut req = [];
-    let req_str = "GET " + path + " HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n\r\n";
+    let mut req_str = "GET " + path + " HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n\r\n";
     let mut ri = 0;
     while ri < len(req_str) { push(req, req_str[ri]); ri = ri + 1; }
     tls12_send(session, req);
     // 5. Receive response
-    let resp = tls12_recv(session);
+    let mut resp = tls12_recv(session);
     tls12_close(session);
     return resp;
 }

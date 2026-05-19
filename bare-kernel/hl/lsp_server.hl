@@ -120,7 +120,7 @@ fn ls_close(doc_id) {
 fn ls_add_diag(doc_id, diag_code) {
     let mut idx = ls_find(doc_id);
     if idx < 0 { return 0 - 1; }
-    let dc = ls_doc_diag_count[idx];
+    let mut dc = ls_doc_diag_count[idx];
     if dc >= LS_MAX_DIAGS { return 0 - 1; }
     set_at(ls_diags, idx * LS_MAX_DIAGS + dc, diag_code);
     set_at(ls_doc_diag_count, idx, dc + 1);
@@ -190,7 +190,7 @@ fn lsp_handle_request(method_id, doc_id, line, col) {
     }
     if method_id == LSP_M_HOVER {
         // Hover: encode position as doc_id*1000+line
-        let idx2 = ls_find(doc_id);
+        let mut idx2 = ls_find(doc_id);
         if idx2 >= 0 {
             result = doc_id * 1000 + line;
         }
@@ -200,7 +200,7 @@ fn lsp_handle_request(method_id, doc_id, line, col) {
     }
     if method_id == LSP_M_DEFINITION {
         // Definition: encode as line*1000+col (uses same doc)
-        let idx3 = ls_find(doc_id);
+        let mut idx3 = ls_find(doc_id);
         if idx3 >= 0 {
             result = line * 1000 + col;
         }
@@ -231,12 +231,12 @@ fn ls_test() {
     ls_add_diag(1, 200);
     ls_add_diag(2, 300);
 
-    let nd  = ls_ndocs();
-    let dc1 = ls_get_diag_count(1);
-    let dc2 = ls_get_diag_count(2);
-    let d10 = ls_get_diag(1, 0);
-    let d11 = ls_get_diag(1, 1);
-    let d20 = ls_get_diag(2, 0);
+    let mut nd = ls_ndocs();
+    let mut dc1 = ls_get_diag_count(1);
+    let mut dc2 = ls_get_diag_count(2);
+    let mut d10 = ls_get_diag(1, 0);
+    let mut d11 = ls_get_diag(1, 1);
+    let mut d20 = ls_get_diag(2, 0);
 
     if nd  != 2   { pass = 0; }
     if dc1 != 2   { pass = 0; }
@@ -247,31 +247,31 @@ fn ls_test() {
 
     // Test lsp_handle_request dispatch
     // COMPLETION for doc=1, line=5, col=12 → 1*1000+12 = 1012
-    let comp = lsp_handle_request(LSP_M_COMPLETION, 1, 5, 12);
+    let mut comp = lsp_handle_request(LSP_M_COMPLETION, 1, 5, 12);
     if comp != 1012 { pass = 0; }
 
     // HOVER for doc=2, line=10, col=3 → 2*1000+10 = 2010
-    let hover = lsp_handle_request(LSP_M_HOVER, 2, 10, 3);
+    let mut hover = lsp_handle_request(LSP_M_HOVER, 2, 10, 3);
     if hover != 2010 { pass = 0; }
 
     // DIAGNOSTICS for doc=1 → 2
-    let diags = lsp_handle_request(LSP_M_DIAGNOSTICS, 1, 0, 0);
+    let mut diags = lsp_handle_request(LSP_M_DIAGNOSTICS, 1, 0, 0);
     if diags != 2 { pass = 0; }
 
     // DEFINITION for doc=1, line=7, col=4 → 7*1000+4 = 7004
-    let defn = lsp_handle_request(LSP_M_DEFINITION, 1, 7, 4);
+    let mut defn = lsp_handle_request(LSP_M_DEFINITION, 1, 7, 4);
     if defn != 7004 { pass = 0; }
 
     // REFERENCES for doc=2 twice → ref_count = 2
     lsp_handle_request(LSP_M_REFERENCES, 2, 0, 0);
-    let refs = lsp_handle_request(LSP_M_REFERENCES, 2, 0, 0);
+    let mut refs = lsp_handle_request(LSP_M_REFERENCES, 2, 0, 0);
     if refs != 2 { pass = 0; }
 
     // CLOSE doc=1
-    let closed = lsp_handle_request(LSP_M_CLOSE, 1, 0, 0);
+    let mut closed = lsp_handle_request(LSP_M_CLOSE, 1, 0, 0);
     if closed < 0 { pass = 0; }
 
-    let req_cnt = lsp_get_req_count();   // 6 requests dispatched
+    let mut req_cnt = lsp_get_req_count();   // 6 requests dispatched
 
     if req_cnt != 6 { pass = 0; }
 

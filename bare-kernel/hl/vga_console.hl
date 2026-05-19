@@ -65,14 +65,14 @@ fn vga_console_scroll() {
     // Copy rows 1..24 to rows 0..23
     let mut i = 0;
     while i < VGA_COLS * (VGA_ROWS - 1) {
-        let src = VGA_TEXT_BASE + (i + VGA_COLS) * 2;
-        let dst = VGA_TEXT_BASE + i * 2;
+        let mut src = VGA_TEXT_BASE + (i + VGA_COLS) * 2;
+        let mut dst = VGA_TEXT_BASE + i * 2;
         mem_write_u8(dst, mem_read_u8(src));
         mem_write_u8(dst + 1, mem_read_u8(src + 1));
         i = i + 1;
     }
     // Clear last row
-    let last_row_off = VGA_COLS * (VGA_ROWS - 1);
+    let mut last_row_off = VGA_COLS * (VGA_ROWS - 1);
     let mut j = 0;
     while j < VGA_COLS {
         mem_write_u8(VGA_TEXT_BASE + (last_row_off + j) * 2, 32);
@@ -100,7 +100,7 @@ fn vga_update_cursor() {
 fn vga_putchar(ch) {
     let mut row = mem_read_u64(VGA_ROW_ADDR);
     let mut col = mem_read_u64(VGA_COL_ADDR);
-    let attr = mem_read_u64(VGA_ATTR_ADDR);
+    let mut attr = mem_read_u64(VGA_ATTR_ADDR);
 
     if ch == 10 {
         // Newline: move to start of next row
@@ -134,7 +134,7 @@ fn vga_putchar(ch) {
     }
     if ch == 9 {
         // Tab: advance to next 8-column boundary
-        let target = ((col / 8) + 1) * 8;
+        let mut target = ((col / 8) + 1) * 8;
         if target >= VGA_COLS { target = VGA_COLS - 1; }
         mem_write_u64(VGA_COL_ADDR, target);
         vga_update_cursor();
@@ -186,7 +186,7 @@ fn vga_set_attr(attr) {
 
 // Print with specific attribute, then restore default
 fn vga_print_colored(text, attr) {
-    let saved = mem_read_u64(VGA_ATTR_ADDR);
+    let mut saved = mem_read_u64(VGA_ATTR_ADDR);
     vga_set_attr(attr);
     vga_print(text);
     vga_set_attr(saved);

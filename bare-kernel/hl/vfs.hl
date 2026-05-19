@@ -68,7 +68,7 @@ fn _trie_add_child(parent, label) {
 }
 
 fn _trie_find_child(parent, label) {
-    let kids = _trie_children[parent];
+    let mut kids = _trie_children[parent];
     let mut i = 0;
     while i < len(kids) {
         if _trie_label[kids[i]] == label { return kids[i]; }
@@ -79,11 +79,11 @@ fn _trie_find_child(parent, label) {
 
 // Insert a mount path into the Trie, return the leaf node
 fn _trie_insert_path(path, mount_idx) {
-    let parts = _vfs_split_path(path);
+    let mut parts = _vfs_split_path(path);
     let mut node = 0; // root
     let mut i = 0;
     while i < len(parts) {
-        let child = _trie_find_child(node, parts[i]);
+        let mut child = _trie_find_child(node, parts[i]);
         if child >= 0 {
             node = child;
         } else {
@@ -123,7 +123,7 @@ fn _vfs_split_path(path) {
 // ============================================================
 
 fn vfs_resolve(path) {
-    let parts = _vfs_split_path(path);
+    let mut parts = _vfs_split_path(path);
     let mut node = 0; // root
     let mut best_mount = 0 - 1;
     // Check if root itself is a mount point
@@ -131,7 +131,7 @@ fn vfs_resolve(path) {
 
     let mut i = 0;
     while i < len(parts) {
-        let child = _trie_find_child(node, parts[i]);
+        let mut child = _trie_find_child(node, parts[i]);
         if child >= 0 {
             node = child;
             if _trie_mount[node] >= 0 {
@@ -161,7 +161,7 @@ fn vfs_init() {
 
 // Mount an ext4 filesystem (fs_type = 3) at path_prefix using AHCI port
 fn vfs_mount_ext4(mount_path, ahci_port) {
-    let ok = ext4_init(ahci_port);
+    let mut ok = ext4_init(ahci_port);
     if ok == 1 {
         vfs_mount(mount_path, 3, ahci_port);
         print("Mounted ext4 at " + mount_path + " (port " + to_string(ahci_port) + ")");
@@ -192,7 +192,7 @@ fn vfs_mount_procfs(mount_path) {
 }
 
 fn vfs_mount_fat16(mount_path, device_id) {
-    let boot_buf = page_alloc();
+    let mut boot_buf = page_alloc();
     virtio_blk_read(0, 1, boot_buf);
     let mut boot_sector = [];
     let mut i = 0;
@@ -216,9 +216,9 @@ fn vfs_mount_fat16(mount_path, device_id) {
 // ============================================================
 
 fn vfs_open(path, flags) {
-    let mount_info = vfs_resolve(path);
-    let mount_idx = mount_info[0];
-    let fs_type = mem_read_u64(MOUNT_TABLE + mount_idx * 64 + 16);
+    let mut mount_info = vfs_resolve(path);
+    let mut mount_idx = mount_info[0];
+    let mut fs_type = mem_read_u64(MOUNT_TABLE + mount_idx * 64 + 16);
 
     let mut fd = 0;
     while fd < MAX_OPEN_FILES {
@@ -231,11 +231,11 @@ fn vfs_open(path, flags) {
             mem_write_u64(addr + 40, 1);
             if fs_type == 3 {
                 // ext4: resolve inode and store in fd table
-                let ino = ext4_resolve(path);
+                let mut ino = ext4_resolve(path);
                 mem_write_u64(addr + 16, ino);
                 // get file size from inode
-                let iaddr = ext4_read_inode(ino);
-                let fsz = 0;
+                let mut iaddr = ext4_read_inode(ino);
+                let mut fsz = 0;
                 if iaddr != 0 { mem_write_u64(addr + 32, mem_read_u32(iaddr + 4)); }
             } else if fs_type == 4 {
                 // procfs: store path string hash as inode; size unknown until read
@@ -258,10 +258,10 @@ fn vfs_read(fd, buf, count) {
     if fd < 0 { return 0; }
     if fd >= MAX_OPEN_FILES { return 0; }
     let mut addr = VFS_TABLE + fd * VFS_ENTRY_SIZE;
-    let fs_type = mem_read_u64(addr + 8);
-    let inode = mem_read_u64(addr + 16);
+    let mut fs_type = mem_read_u64(addr + 8);
+    let mut inode = mem_read_u64(addr + 16);
     let mut pos = mem_read_u64(addr + 24);
-    let size = mem_read_u64(addr + 32);
+    let mut size = mem_read_u64(addr + 32);
     let mut bytes_read = 0;
     if fs_type == 0 {
         bytes_read = ramfs_read(inode, buf, pos, count);
@@ -273,7 +273,7 @@ fn vfs_read(fd, buf, count) {
         // ext4: read file into EXT4_BLOCK_BUF, then return substring
         let mut total = ext4_read_file(inode, 0);
         if total > 0 {
-            let want = count;
+            let mut want = count;
             if pos + want > total { bytes_read = total - pos; }
             else { bytes_read = want; }
             // Caller expects a string; return string from EXT4_BLOCK_BUF
@@ -282,8 +282,8 @@ fn vfs_read(fd, buf, count) {
     }
     if fs_type == 4 {
         // procfs: generate content by calling procfs_read with stored path
-        let proc_path = mem_read_string(addr + 48, 128);
-        let content = procfs_read(proc_path);
+        let mut proc_path = mem_read_string(addr + 48, 128);
+        let mut content = procfs_read(proc_path);
         bytes_read = len(content);
         // Write content to caller's buffer if it's a real address
         if buf != 0 {
@@ -302,8 +302,8 @@ fn vfs_write(fd, data, count) {
     if fd < 0 { return 0; }
     if fd >= MAX_OPEN_FILES { return 0; }
     let mut addr = VFS_TABLE + fd * VFS_ENTRY_SIZE;
-    let fs_type = mem_read_u64(addr + 8);
-    let inode = mem_read_u64(addr + 16);
+    let mut fs_type = mem_read_u64(addr + 8);
+    let mut inode = mem_read_u64(addr + 16);
     let mut pos = mem_read_u64(addr + 24);
     let mut bytes_written = 0;
     if fs_type == 0 {
@@ -313,13 +313,13 @@ fn vfs_write(fd, data, count) {
         bytes_written = 0;
     }
     mem_write_u64(addr + 24, pos + bytes_written);
-    let old_size = mem_read_u64(addr + 32);
+    let mut old_size = mem_read_u64(addr + 32);
     if pos + bytes_written > old_size {
         mem_write_u64(addr + 32, pos + bytes_written);
     }
     // Emit inotify IN_MODIFY for all active writes
     if bytes_written > 0 {
-        let path_hint = mem_read_string(addr + 48, 128);
+        let mut path_hint = mem_read_string(addr + 48, 128);
         inotify_emit(path_hint, 2, path_hint);
     }
     return bytes_written;
@@ -336,7 +336,7 @@ fn vfs_seek(fd, offset, whence) {
     if fd < 0 { return 0; }
     let mut addr = VFS_TABLE + fd * VFS_ENTRY_SIZE;
     let mut cur = mem_read_u64(addr + 24);
-    let size = mem_read_u64(addr + 32);
+    let mut size = mem_read_u64(addr + 32);
     let mut new_pos = cur;
     if whence == 0 { new_pos = offset; }
     if whence == 1 { new_pos = cur + offset; }
@@ -347,11 +347,11 @@ fn vfs_seek(fd, offset, whence) {
 }
 
 fn vfs_stat(path) {
-    let mount_info = vfs_resolve(path);
-    let fs_type = mem_read_u64(MOUNT_TABLE + mount_info[0] * 64 + 16);
+    let mut mount_info = vfs_resolve(path);
+    let mut fs_type = mem_read_u64(MOUNT_TABLE + mount_info[0] * 64 + 16);
     if fs_type == 0 { return ramfs_stat(path); }
     if fs_type == 1 {
-        let files = fat16_list_root();
+        let mut files = fat16_list_root();
         let mut i = 0;
         while i < len(files) {
             if files[i][0] == path {
@@ -368,13 +368,13 @@ fn vfs_stat(path) {
         }
     }
     if fs_type == 3 {
-        let ino = ext4_resolve(path);
+        let mut ino = ext4_resolve(path);
         if ino > 0 {
-            let iaddr = ext4_read_inode(ino);
+            let mut iaddr = ext4_read_inode(ino);
             if iaddr != 0 {
-                let fsize = mem_read_u32(iaddr + 4);
-                let mode  = mem_read_u16(iaddr + 0);
-                let ftype = 1;
+                let mut fsize = mem_read_u32(iaddr + 4);
+                let mut mode = mem_read_u16(iaddr + 0);
+                let mut ftype = 1;
                 // mode bit 14 = directory (0x4000)
                 if (mode / 16384) % 2 == 1 { return [fsize, 2, ino, 0]; }
                 return [fsize, 1, ino, 0];
@@ -383,21 +383,21 @@ fn vfs_stat(path) {
     }
     if fs_type == 4 {
         // procfs: directories are /proc and /proc/net; files have known sizes
-        let parts = _vfs_split_path(path);
+        let mut parts = _vfs_split_path(path);
         if len(parts) <= 1 { return [0, 2, 0, 0]; }  // /proc itself is a dir
         if parts[1] == "net" { return [0, 2, 0, 0]; }  // /proc/net is a dir
-        let content = procfs_read(path);
+        let mut content = procfs_read(path);
         return [len(content), 1, 0, 0];
     }
     return [0, 0, 0, 0];
 }
 
 fn vfs_readdir(path) {
-    let mount_info = vfs_resolve(path);
-    let fs_type = mem_read_u64(MOUNT_TABLE + mount_info[0] * 64 + 16);
+    let mut mount_info = vfs_resolve(path);
+    let mut fs_type = mem_read_u64(MOUNT_TABLE + mount_info[0] * 64 + 16);
     if fs_type == 0 { return ramfs_readdir(path); }
     if fs_type == 1 {
-        let files = fat16_list_root();
+        let mut files = fat16_list_root();
         let mut names = [];
         let mut i = 0;
         while i < len(files) {
@@ -408,13 +408,13 @@ fn vfs_readdir(path) {
     }
     if fs_type == 3 {
         // ext4: resolve directory inode and list
-        let ino = ext4_resolve(path);
+        let mut ino = ext4_resolve(path);
         if ino > 0 {
-            let entries = ext4_list_dir(ino);
+            let mut entries = ext4_list_dir(ino);
             let mut names = [];
             let mut i = 0;
             while i < len(entries) {
-                let name = entries[i][0];
+                let mut name = entries[i][0];
                 if name != "." {
                     if name != ".." {
                         push(names, name);
@@ -427,7 +427,7 @@ fn vfs_readdir(path) {
     }
     if fs_type == 4 {
         // procfs: return static list of /proc entries
-        let parts = _vfs_split_path(path);
+        let mut parts = _vfs_split_path(path);
         if len(parts) <= 1 {
             // listing /proc
             return ["version", "uptime", "meminfo", "cpuinfo", "mounts", "stat", "net", "self"];
@@ -440,17 +440,17 @@ fn vfs_readdir(path) {
     }
     if fs_type == 5 {
         // overlay_fs: get overlay instance from device_id, merge lower+upper
-        let ov_id = mem_read_u64(MOUNT_TABLE + mount_info[0] * 64 + 24);
+        let mut ov_id = mem_read_u64(MOUNT_TABLE + mount_info[0] * 64 + 24);
         if ov_id < 0 { return []; }
-        let rel = overlay_rel_path(ov_id, path);
+        let mut rel = overlay_rel_path(ov_id, path);
         return overlay_readdir(ov_id, rel);
     }
     return [];
 }
 
 fn vfs_mkdir(path) {
-    let mount_info = vfs_resolve(path);
-    let fs_type = mem_read_u64(MOUNT_TABLE + mount_info[0] * 64 + 16);
+    let mut mount_info = vfs_resolve(path);
+    let mut fs_type = mem_read_u64(MOUNT_TABLE + mount_info[0] * 64 + 16);
     let mut result = 0 - 1;
     if fs_type == 0 { result = ramfs_mkdir(path); }
     if fs_type == 1 { result = fat16_create_file(path, 1); }
@@ -458,10 +458,10 @@ fn vfs_mkdir(path) {
     if fs_type == 4 { return 0 - 1; }  // procfs is read-only
     if fs_type == 5 {
         // overlay: mkdir in upper layer
-        let ov_id = mem_read_u64(MOUNT_TABLE + mount_info[0] * 64 + 24);
+        let mut ov_id = mem_read_u64(MOUNT_TABLE + mount_info[0] * 64 + 24);
         if ov_id >= 0 {
-            let rel = overlay_rel_path(ov_id, path);
-            let upath = overlay_upper_path(ov_id, rel);
+            let mut rel = overlay_rel_path(ov_id, path);
+            let mut upath = overlay_upper_path(ov_id, rel);
             result = ramfs_mkdir(upath);
         }
     }
@@ -470,12 +470,12 @@ fn vfs_mkdir(path) {
 }
 
 fn vfs_unlink(path) {
-    let mount_info = vfs_resolve(path);
-    let fs_type = mem_read_u64(MOUNT_TABLE + mount_info[0] * 64 + 16);
+    let mut mount_info = vfs_resolve(path);
+    let mut fs_type = mem_read_u64(MOUNT_TABLE + mount_info[0] * 64 + 16);
     let mut result = 0 - 1;
     if fs_type == 0 { result = ramfs_unlink(path); }
     if fs_type == 1 {
-        let files = fat16_list_root();
+        let mut files = fat16_list_root();
         let mut i = 0;
         while i < len(files) {
             if files[i][0] == path { result = fat16_delete_file(i); }
@@ -486,12 +486,12 @@ fn vfs_unlink(path) {
     if fs_type == 4 { return 0 - 1; }  // procfs is read-only
     if fs_type == 5 {
         // overlay: create whiteout in upper to shadow lower file
-        let ov_id = mem_read_u64(MOUNT_TABLE + mount_info[0] * 64 + 24);
+        let mut ov_id = mem_read_u64(MOUNT_TABLE + mount_info[0] * 64 + 24);
         if ov_id >= 0 {
-            let rel = overlay_rel_path(ov_id, path);
+            let mut rel = overlay_rel_path(ov_id, path);
             // If file is in upper, delete it directly
-            let upath = overlay_upper_path(ov_id, rel);
-            let ust = vfs_stat(upath);
+            let mut upath = overlay_upper_path(ov_id, rel);
+            let mut ust = vfs_stat(upath);
             if ust[0] > 0 { result = ramfs_unlink(upath); }
             else { result = overlay_whiteout(ov_id, rel); }
         }
@@ -502,15 +502,15 @@ fn vfs_unlink(path) {
 
 // Copy file: read src then write dst (works across same FS or ramfs)
 fn vfs_copy(src_path, dst_path) {
-    let src_fd = vfs_open(src_path, O_RDONLY);
+    let mut src_fd = vfs_open(src_path, O_RDONLY);
     if src_fd < 0 { return 0 - 1; }
 
-    let dst_fd = vfs_open(dst_path, O_CREAT + O_WRONLY + O_TRUNC);
+    let mut dst_fd = vfs_open(dst_path, O_CREAT + O_WRONLY + O_TRUNC);
     if dst_fd < 0 { vfs_close(src_fd); return 0 - 2; }
 
     // Read in 512-byte chunks and write
-    let CHUNK = 512;
-    let buf_addr = 9437184;  // 0x900000 scratch buffer
+    let mut CHUNK = 512;
+    let mut buf_addr = 9437184;  // 0x900000 scratch buffer
     let mut total = 0;
     let mut n = vfs_read(src_fd, buf_addr, CHUNK);
     while n > 0 {
@@ -527,7 +527,7 @@ fn vfs_copy(src_path, dst_path) {
 
 // Rename / move: copy then delete src (VFS layer; works cross-directory)
 fn vfs_rename(src_path, dst_path) {
-    let bytes = vfs_copy(src_path, dst_path);
+    let mut bytes = vfs_copy(src_path, dst_path);
     if bytes < 0 { return 0 - 1; }
     return vfs_unlink(src_path);
 }

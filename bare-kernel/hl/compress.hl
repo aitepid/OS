@@ -40,7 +40,7 @@ let COMP_BUF_SZ  = 65536;      // 64 KB
 // ============================================================
 
 fn _comp_read_file(path) {
-    let fd = vfs_open(path, O_RDONLY);
+    let mut fd = vfs_open(path, O_RDONLY);
     if fd < 0 { return 0; }
     let mut n = vfs_read(fd, COMP_IN_BUF, COMP_BUF_SZ);
     vfs_close(fd);
@@ -48,7 +48,7 @@ fn _comp_read_file(path) {
 }
 
 fn _comp_write_file(path, sz) {
-    let fd = vfs_open(path, O_WRONLY);
+    let mut fd = vfs_open(path, O_WRONLY);
     if fd < 0 { return 0 - 1; }
     vfs_write(fd, COMP_OUT_BUF, sz);
     vfs_close(fd);
@@ -63,7 +63,7 @@ fn _comp_wb(off, v) { mem_write_u8(COMP_OUT_BUF + off, v); return 0; }
 // ============================================================
 
 fn compress_rle(src, dst) {
-    let in_sz = _comp_read_file(src);
+    let mut in_sz = _comp_read_file(src);
     if in_sz <= 0 { return 0 - 1; }
 
     let mut out = 0;
@@ -120,7 +120,7 @@ fn compress_rle(src, dst) {
 // ============================================================
 
 fn decompress_rle(src, dst) {
-    let in_sz = _comp_read_file(src);
+    let mut in_sz = _comp_read_file(src);
     if in_sz <= 0 { return 0 - 1; }
 
     let mut out = 0;
@@ -168,9 +168,9 @@ fn decompress_rle(src, dst) {
 // Find best match in sliding window [0 .. win_end-1] for text starting at pos.
 // Returns [offset, length] or [0, 0] if no match >= 3.
 fn _lzss_find_match(pos, in_sz) {
-    let min_len = 3;
-    let max_len = 16;   // keep small for speed
-    let win_start = pos - 256;
+    let mut min_len = 3;
+    let mut max_len = 16;   // keep small for speed
+    let mut win_start = pos - 256;
     let mut ws = win_start;
     if ws < 0 { ws = 0; }
 
@@ -209,7 +209,7 @@ fn _lzss_find_match(pos, in_sz) {
 }
 
 fn compress_lzss(src, dst) {
-    let in_sz = _comp_read_file(src);
+    let mut in_sz = _comp_read_file(src);
     if in_sz <= 0 { return 0 - 1; }
 
     let mut out   = 0;
@@ -217,7 +217,7 @@ fn compress_lzss(src, dst) {
 
     while i < in_sz {
         // Process 8 tokens per flag byte
-        let flag_pos = out;
+        let mut flag_pos = out;
         _comp_wb(out, 0); out = out + 1;   // flag byte written back at flag_pos
         let mut flag = 0;
         let mut tok  = 0;
@@ -227,7 +227,7 @@ fn compress_lzss(src, dst) {
                 tok = 8;   // done
             } else {
                 let mut m = _lzss_find_match(i, in_sz);
-                let mlen = m[1];
+                let mut mlen = m[1];
                 if mlen >= 3 {
                     // Back-reference token
                     flag = flag + (1 * (1 + tok + tok + tok + tok + tok + tok + tok));  // 2^tok
@@ -257,7 +257,7 @@ fn compress_lzss(src, dst) {
 // ============================================================
 
 fn decompress_lzss(src, dst) {
-    let in_sz = _comp_read_file(src);
+    let mut in_sz = _comp_read_file(src);
     if in_sz <= 0 { return 0 - 1; }
 
     let mut out = 0;
@@ -269,16 +269,16 @@ fn decompress_lzss(src, dst) {
         while tok < 8 {
             if i >= in_sz { tok = 8; }
             else {
-                let bit = (flag / (1 + tok + tok + tok + tok + tok + tok + tok)) % 2;
+                let mut bit = (flag / (1 + tok + tok + tok + tok + tok + tok + tok)) % 2;
                 if bit == 1 {
                     // Back-reference
                     if i + 1 < in_sz {
                         let mut off = _comp_rb(i); i = i + 1;
-                        let mlen = _comp_rb(i); i = i + 1;
-                        let src_pos = out - off - 1;
+                        let mut mlen = _comp_rb(i); i = i + 1;
+                        let mut src_pos = out - off - 1;
                         let mut k = 0;
                         while k < mlen {
-                            let bv = mem_read_u8(COMP_OUT_BUF + src_pos + k);
+                            let mut bv = mem_read_u8(COMP_OUT_BUF + src_pos + k);
                             _comp_wb(out, bv); out = out + 1;
                             k = k + 1;
                         }
@@ -305,7 +305,7 @@ fn decompress_lzss(src, dst) {
 // ============================================================
 
 fn compress_stat(path) {
-    let fd = vfs_open(path, O_RDONLY);
+    let mut fd = vfs_open(path, O_RDONLY);
     if fd < 0 { return "Error: cannot open " + path; }
     let mut n = vfs_read(fd, COMP_IN_BUF, COMP_BUF_SZ);
     vfs_close(fd);
@@ -331,7 +331,7 @@ fn compress_stat(path) {
         else { singletons = singletons + real_run; }
         i = i + real_run;
     }
-    let rle_est = runs * 3 + singletons;
+    let mut rle_est = runs * 3 + singletons;
 
     return path + ": " + to_string(n) + " bytes"
         + "  RLE_est=" + to_string(rle_est) + " bytes"

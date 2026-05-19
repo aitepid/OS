@@ -31,7 +31,7 @@ fn ipc_pipe_create(reader_pid, writer_pid) {
     let mut i = 0;
     while i < MAX_PIPES {
         let mut addr = PIPE_TABLE + i * PIPE_ENTRY_SIZE;
-        let flags = mem_read_u64(addr + 40);
+        let mut flags = mem_read_u64(addr + 40);
         if flags == PIPE_CLOSED {
             mem_write_u64(addr + 0, 0);
             mem_write_u64(addr + 8, 0);
@@ -49,12 +49,12 @@ fn ipc_pipe_create(reader_pid, writer_pid) {
 // Write to IPC pipe (returns bytes written)
 fn ipc_pipe_write(pipe_idx, data, data_len) {
     let mut addr = PIPE_TABLE + pipe_idx * PIPE_ENTRY_SIZE;
-    let buf_addr = addr + PIPE_META_SIZE;
+    let mut buf_addr = addr + PIPE_META_SIZE;
     let mut write_pos = mem_read_u64(addr + 8);
-    let read_pos = mem_read_u64(addr + 0);
+    let mut read_pos = mem_read_u64(addr + 0);
     let mut written = 0;
     while written < data_len {
-        let next_pos = (write_pos + 1) % PIPE_BUF_SIZE;
+        let mut next_pos = (write_pos + 1) % PIPE_BUF_SIZE;
         if next_pos == read_pos { return written; } // buffer full
         mem_write_u8(buf_addr + write_pos, data[written]);
         write_pos = next_pos;
@@ -67,9 +67,9 @@ fn ipc_pipe_write(pipe_idx, data, data_len) {
 // Read from IPC pipe (returns bytes read)
 fn ipc_pipe_read(pipe_idx, buf, max_len) {
     let mut addr = PIPE_TABLE + pipe_idx * PIPE_ENTRY_SIZE;
-    let buf_addr = addr + PIPE_META_SIZE;
+    let mut buf_addr = addr + PIPE_META_SIZE;
     let mut read_pos = mem_read_u64(addr + 0);
-    let write_pos = mem_read_u64(addr + 8);
+    let mut write_pos = mem_read_u64(addr + 8);
     let mut bytes_read = 0;
     while bytes_read < max_len {
         if read_pos == write_pos { mem_write_u64(addr + 0, read_pos); return bytes_read; }
@@ -95,7 +95,7 @@ fn mq_create() {
     let mut i = 0;
     while i < MAX_MQ {
         let mut addr = MQ_TABLE + i * MQ_ENTRY_SIZE;
-        let flags = mem_read_u64(addr);
+        let mut flags = mem_read_u64(addr);
         if flags == 0 {
             mem_write_u64(addr, 1);
             mem_write_u64(addr + 8, 0);
@@ -113,8 +113,8 @@ fn mq_send(queue_idx, msg_data) {
     let mut addr = MQ_TABLE + queue_idx * MQ_ENTRY_SIZE;
     let mut count = mem_read_u64(addr + 24);
     if count >= MQ_CAPACITY { return 0; }
-    let tail = mem_read_u64(addr + 16);
-    let msg_addr = addr + 64 + tail * MQ_MSG_SIZE;
+    let mut tail = mem_read_u64(addr + 16);
+    let mut msg_addr = addr + 64 + tail * MQ_MSG_SIZE;
     // Copy msg_data to msg_addr (up to 64 bytes)
     let mut j = 0;
     while j < MQ_MSG_SIZE {
@@ -135,8 +135,8 @@ fn mq_recv(queue_idx) {
     let mut addr = MQ_TABLE + queue_idx * MQ_ENTRY_SIZE;
     let mut count = mem_read_u64(addr + 24);
     if count == 0 { return nil; }
-    let head = mem_read_u64(addr + 8);
-    let msg_addr = addr + 64 + head * MQ_MSG_SIZE;
+    let mut head = mem_read_u64(addr + 8);
+    let mut msg_addr = addr + 64 + head * MQ_MSG_SIZE;
     let mut msg = [];
     let mut j = 0;
     while j < MQ_MSG_SIZE {
@@ -150,27 +150,27 @@ fn mq_recv(queue_idx) {
 
 // Hilbert-addressed IPC: use spatial locality for message routing
 fn hilbert_send(x, y, z, msg_data) {
-    let key = hilbert_encode(x, y, z);
-    let queue_idx = key % MAX_MQ;
+    let mut key = hilbert_encode(x, y, z);
+    let mut queue_idx = key % MAX_MQ;
     return mq_send(queue_idx, msg_data);
 }
 
 fn hilbert_recv(x, y, z) {
-    let key = hilbert_encode(x, y, z);
-    let queue_idx = key % MAX_MQ;
+    let mut key = hilbert_encode(x, y, z);
+    let mut queue_idx = key % MAX_MQ;
     return mq_recv(queue_idx);
 }
 
 // Syscall-level IPC aliases
 fn ipc_send(dest_pid, buf_addr, length) {
     // Use message queue indexed by destination PID
-    let qi = dest_pid % MAX_MQ;
+    let mut qi = dest_pid % MAX_MQ;
     return mq_send(qi, buf_addr);
 }
 
 fn ipc_recv(src_pid, buf_addr, max_len) {
     // Receive from message queue indexed by current task
-    let qi = src_pid % MAX_MQ;
+    let mut qi = src_pid % MAX_MQ;
     return mq_recv(qi);
 }
 

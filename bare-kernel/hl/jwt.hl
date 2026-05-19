@@ -51,21 +51,21 @@ fn _jwt_base64url_decode(data) {
     while i < len(data) {
         if i + 4 > len(data) { i = len(data); }
 
-        let c1 = _jwt_base64url_decode_char(str_char_code(data, i));
-        let c2 = _jwt_base64url_decode_char(str_char_code(data, i + 1));
-        let c3 = _jwt_base64url_decode_char(str_char_code(data, i + 2));
-        let c4 = _jwt_base64url_decode_char(str_char_code(data, i + 3));
+        let mut c1 = _jwt_base64url_decode_char(str_char_code(data, i));
+        let mut c2 = _jwt_base64url_decode_char(str_char_code(data, i + 1));
+        let mut c3 = _jwt_base64url_decode_char(str_char_code(data, i + 2));
+        let mut c4 = _jwt_base64url_decode_char(str_char_code(data, i + 3));
 
         if c1 >= 0 { if c2 >= 0 {
-            let b1 = c1 * 4 + (c2 / 16);
+            let mut b1 = c1 * 4 + (c2 / 16);
             result = result + str_from_code(b1);
 
             if c3 >= 0 {
-                let b2 = (c2 % 16) * 16 + (c3 / 4);
+                let mut b2 = (c2 % 16) * 16 + (c3 / 4);
                 result = result + str_from_code(b2);
 
                 if c4 >= 0 {
-                    let b3 = (c3 % 4) * 64 + c4;
+                    let mut b3 = (c3 % 4) * 64 + c4;
                     result = result + str_from_code(b3);
                 }
             }
@@ -80,16 +80,16 @@ fn _jwt_base64url_decode(data) {
 fn jwt_parse(token) {
     jwt_clear();
 
-    let dot1 = str_index_of(token, ".");
+    let mut dot1 = str_index_of(token, ".");
     if dot1 < 0 { return 0 - 1; }
 
-    let dot2 = str_index_of(str_sub(token, dot1 + 1, len(token)), ".");
+    let mut dot2 = str_index_of(str_sub(token, dot1 + 1, len(token)), ".");
     if dot2 < 0 { return 0 - 2; }
     dot2 = dot1 + 1 + dot2;
 
-    let header_part = str_sub(token, 0, dot1);
-    let payload_part = str_sub(token, dot1 + 1, dot2);
-    let signature_part = str_sub(token, dot2 + 1, len(token));
+    let mut header_part = str_sub(token, 0, dot1);
+    let mut payload_part = str_sub(token, dot1 + 1, dot2);
+    let mut signature_part = str_sub(token, dot2 + 1, len(token));
 
     jwt_header = _jwt_base64url_decode(header_part);
     jwt_payload = _jwt_base64url_decode(payload_part);
@@ -111,11 +111,11 @@ fn jwt_get_signature() {
 }
 
 fn _jwt_extract_claim(payload, claim_name) {
-    let pattern = "\"" + claim_name + "\":";
+    let mut pattern = "\"" + claim_name + "\":";
     let mut pos = str_index_of(payload, pattern);
     if pos < 0 { return ""; }
 
-    let value_start = pos + len(pattern);
+    let mut value_start = pos + len(pattern);
     while value_start < len(payload) {
         let mut c = str_char_code(payload, value_start);
         if c == 32 { value_start = value_start + 1; }
@@ -125,8 +125,8 @@ fn _jwt_extract_claim(payload, claim_name) {
     if value_start >= len(payload) { return ""; }
 
     let mut value_end = value_start;
-    let is_string = 0;
-    let first_char = str_char_code(payload, value_start);
+    let mut is_string = 0;
+    let mut first_char = str_char_code(payload, value_start);
     if first_char == 34 {
         is_string = 1;
         value_start = value_start + 1;
@@ -167,22 +167,22 @@ fn jwt_get_aud() {
 }
 
 fn jwt_get_exp() {
-    let exp_str = jwt_get_claim("exp");
+    let mut exp_str = jwt_get_claim("exp");
     if exp_str == "" { return 0; }
     return parse_int(exp_str);
 }
 
 fn jwt_get_iat() {
-    let iat_str = jwt_get_claim("iat");
+    let mut iat_str = jwt_get_claim("iat");
     if iat_str == "" { return 0; }
     return parse_int(iat_str);
 }
 
 fn jwt_is_expired() {
-    let exp = jwt_get_exp();
+    let mut exp = jwt_get_exp();
     if exp == 0 { return 0; }
 
-    let now = rtc_read_timestamp();
+    let mut now = rtc_read_timestamp();
     if now > exp { return 1; }
     return 0;
 }
@@ -193,16 +193,16 @@ fn jwt_display() {
     out = out + "Payload: " + jwt_payload + "\n";
     out = out + "\nClaims:\n";
 
-    let sub = jwt_get_sub();
+    let mut sub = jwt_get_sub();
     if sub != "" { out = out + "  sub: " + sub + "\n"; }
 
-    let iss = jwt_get_iss();
+    let mut iss = jwt_get_iss();
     if iss != "" { out = out + "  iss: " + iss + "\n"; }
 
-    let aud = jwt_get_aud();
+    let mut aud = jwt_get_aud();
     if aud != "" { out = out + "  aud: " + aud + "\n"; }
 
-    let exp = jwt_get_exp();
+    let mut exp = jwt_get_exp();
     if exp > 0 { out = out + "  exp: " + to_string(exp); }
     if jwt_is_expired() == 1 {
         out = out + " (EXPIRED)\n";
@@ -210,25 +210,25 @@ fn jwt_display() {
         if exp > 0 { out = out + " (valid)\n"; }
     }
 
-    let iat = jwt_get_iat();
+    let mut iat = jwt_get_iat();
     if iat > 0 { out = out + "  iat: " + to_string(iat) + "\n"; }
 
     return out;
 }
 
 fn jwt_selftest() {
-    let test_jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
+    let mut test_jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
 
-    let res = jwt_parse(test_jwt);
+    let mut res = jwt_parse(test_jwt);
     if res < 0 { return "jwt selftest: parse failed"; }
 
-    let sub = jwt_get_sub();
+    let mut sub = jwt_get_sub();
     if sub != "1234567890" { return "jwt selftest: sub mismatch (got=" + sub + ")"; }
 
-    let name = jwt_get_claim("name");
+    let mut name = jwt_get_claim("name");
     if name != "John Doe" { return "jwt selftest: name mismatch (got=" + name + ")"; }
 
-    let iat = jwt_get_iat();
+    let mut iat = jwt_get_iat();
     if iat != 1516239022 { return "jwt selftest: iat mismatch (got=" + to_string(iat) + ")"; }
 
     return "jwt selftest: pass";

@@ -109,7 +109,7 @@ fn _snmp_write_int(off, val) {
 fn _snmp_write_octstr(off, s) {
     let mut n = len(s);
     mem_write_u8(SNMP_BUF + off, 4);   // OctetString tag
-    let lbytes = _snmp_write_len(off + 1, n);
+    let mut lbytes = _snmp_write_len(off + 1, n);
     let mut i = 0;
     while i < n {
         mem_write_u8(SNMP_BUF + off + 1 + lbytes + i, str_char_code(s, i));
@@ -154,16 +154,16 @@ fn _snmp_encode_oid(off, oid_str) {
     push(arcs, parse_int(cur));
     if len(arcs) < 2 { return 0; }
     // BER OID encoding
-    let data_off = off + 2;
+    let mut data_off = off + 2;
     let mut pos = data_off;
     // First two arcs compressed
-    let first = arcs[0] * 40 + arcs[1];
+    let mut first = arcs[0] * 40 + arcs[1];
     mem_write_u8(SNMP_BUF + pos, first);
     pos = pos + 1;
     // Remaining arcs: 7-bit groups, MSB continuation
     let mut ai = 2;
     while ai < len(arcs) {
-        let arc = arcs[ai];
+        let mut arc = arcs[ai];
         if arc < 128 {
             mem_write_u8(SNMP_BUF + pos, arc);
             pos = pos + 1;
@@ -181,7 +181,7 @@ fn _snmp_encode_oid(off, oid_str) {
         }
         ai = ai + 1;
     }
-    let oid_len = pos - data_off;
+    let mut oid_len = pos - data_off;
     mem_write_u8(SNMP_BUF + off, 6);         // OID tag
     mem_write_u8(SNMP_BUF + off + 1, oid_len);
     return 2 + oid_len;
@@ -226,7 +226,7 @@ fn snmp_on_recv(data) {
 
 fn snmp_agent_tick() {
     if snmp_agent_on == 0 { return 0; }
-    let data = udp_recv(SNMP_PORT, SNMP_BUF, SNMP_BUF_SZ);
+    let mut data = udp_recv(SNMP_PORT, SNMP_BUF, SNMP_BUF_SZ);
     if len(data) > 0 { snmp_on_recv(data); }
     return 0;
 }
@@ -236,7 +236,7 @@ fn snmp_agent_tick() {
 // ============================================================
 
 fn snmp_get(host, community, oid) {
-    let ip = dns_resolve(host);
+    let mut ip = dns_resolve(host);
     // Build GetRequest PDU (simplified: send OID, wait for response string)
     // For simulation: query local MIB if host is loopback
     if host == "127.0.0.1" {
@@ -246,21 +246,21 @@ fn snmp_get(host, community, oid) {
     }
     // Remote: build minimal SNMP GetRequest via UDP and return raw
     mem_zero(SNMP_BUF, 64);
-    let request = "SNMP-GET " + community + " " + oid;
+    let mut request = "SNMP-GET " + community + " " + oid;
     udp_send(ip, SNMP_PORT, SNMP_LPORT, request);
-    let deadline = get_ticks() + SNMP_TIMEOUT;
+    let mut deadline = get_ticks() + SNMP_TIMEOUT;
     while get_ticks() < deadline {
-        let resp = udp_recv(SNMP_LPORT, SNMP_BUF, SNMP_BUF_SZ);
+        let mut resp = udp_recv(SNMP_LPORT, SNMP_BUF, SNMP_BUF_SZ);
         if len(resp) > 0 { return resp; }
     }
     return "timeout";
 }
 
 fn snmp_walk(host, community) {
-    let oids = ["1.3.6.1.2.1.1.1.0", "1.3.6.1.2.1.1.3.0",
+    let mut oids = ["1.3.6.1.2.1.1.1.0", "1.3.6.1.2.1.1.3.0",
                 "1.3.6.1.2.1.1.5.0", "1.3.6.1.2.1.1.6.0",
                 "1.3.6.1.2.1.2.1.0"];
-    let labels = ["sysDescr", "sysUpTime", "sysName", "sysLocation", "ifNumber"];
+    let mut labels = ["sysDescr", "sysUpTime", "sysName", "sysLocation", "ifNumber"];
     let mut out = "SNMP walk " + host + " community=" + community + ":\n";
     let mut i = 0;
     while i < len(oids) {

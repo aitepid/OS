@@ -96,14 +96,14 @@ fn self_image_read_sector(lba, buf_addr) {
         return 1;
     }
 
-    let kernel_bytes = self_image_kernel_bytes();
-    let kernel_off = (lba - 2) * 512;
+    let mut kernel_bytes = self_image_kernel_bytes();
+    let mut kernel_off = (lba - 2) * 512;
     if kernel_off >= kernel_bytes {
         return 1;
     }
 
     while i < 512 {
-        let src_off = kernel_off + i;
+        let mut src_off = kernel_off + i;
         if src_off < kernel_bytes {
             mem_write_u8(buf_addr + i, mem_read_u8(SELF_KERNEL_ADDR + src_off));
         }
@@ -117,7 +117,7 @@ fn self_image_read_sector(lba, buf_addr) {
 // src_backend: source disk backend (where we booted from)
 // Returns number of sectors written, or 0 on failure.
 fn self_install_to_disk() {
-    let total_sectors = self_image_sectors();
+    let mut total_sectors = self_image_sectors();
     if total_sectors == 0 {
         print("self_install: no image metadata available");
         return 0;
@@ -130,18 +130,18 @@ fn self_install_to_disk() {
 
     print("Self-install: writing " + to_string(total_sectors) + " sectors to target disk...");
 
-    let buf = page_alloc();
+    let mut buf = page_alloc();
     let mut written = 0;
     let mut sec = 0;
 
     while sec < total_sectors {
-        let ok = self_image_read_sector(sec, buf);
+        let mut ok = self_image_read_sector(sec, buf);
         if ok == 0 {
             print("self_install: reconstruct failed at sector " + to_string(sec));
             page_free(buf);
             return written;
         }
-        let wok = installer_disk_write(sec, 1, buf);
+        let mut wok = installer_disk_write(sec, 1, buf);
         if wok == 0 {
             print("self_install: write failed at sector " + to_string(sec));
             page_free(buf);
@@ -163,8 +163,8 @@ fn self_install_to_disk() {
 // Print self-image info
 fn self_image_info() {
     let mut base = self_image_base();
-    let bytes = self_image_bytes();
-    let sectors = self_image_sectors();
+    let mut bytes = self_image_bytes();
+    let mut sectors = self_image_sectors();
     print("Self-image:");
     print("  Kernel base: 0x" + format_hex(base, 8));
     print("  Image size:  " + to_string(bytes) + " bytes (" + to_string(sectors) + " sectors)");

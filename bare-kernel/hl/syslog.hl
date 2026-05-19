@@ -44,7 +44,7 @@ fn syslog_entry_addr(idx) {
 fn klog(level, subsystem, msg) {
     if level > syslog_min_level { return 0; }
     let mut addr = syslog_entry_addr(syslog_write_idx);
-    let ticks = get_ticks();
+    let mut ticks = get_ticks();
     mem_write_u64(addr, ticks);
     mem_write_u32(addr + 8, level);
     mem_write_u32(addr + 12, subsystem);
@@ -73,15 +73,15 @@ fn syslog_level_name(level) {
 }
 
 fn dmesg(max_lines) {
-    let start = 0;
+    let mut start = 0;
     if syslog_count > max_lines { start = syslog_count - max_lines; }
     let mut result = "";
     let mut i = start;
     while i < syslog_count {
         let mut addr = syslog_entry_addr(i % SYSLOG_MAX_ENTRIES);
-        let ts    = mem_read_u64(addr);
+        let mut ts = mem_read_u64(addr);
         let mut level = mem_read_u32(addr + 8);
-        let msg   = mem_read_string(addr + 16, SYSLOG_MSG_LEN);
+        let mut msg = mem_read_string(addr + 16, SYSLOG_MSG_LEN);
         result = result + "[" + to_string(ts / 100) + "s] [" + syslog_level_name(level) + "] " + msg + "\n";
         i = i + 1;
     }

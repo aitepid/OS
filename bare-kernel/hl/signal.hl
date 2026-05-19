@@ -55,13 +55,13 @@ fn signal_send(target_pid, signum) {
     let mut i = 0;
     while i < 64 {
         let mut addr = task_addr(i);
-        let task_pid = mem_read_u64(addr + 8);
+        let mut task_pid = mem_read_u64(addr + 8);
         if task_pid == target_pid {
             let mut state = mem_read_u64(addr);
             if state == 0 { i = i + 1; } // STATE_FREE, skip
             else {
-                let pending = mem_read_u64(addr + 200);
-                let bit = _sig_bit(signum);
+                let mut pending = mem_read_u64(addr + 200);
+                let mut bit = _sig_bit(signum);
                 // Set pending bit (if not already set)
                 if (pending / bit) % 2 == 0 {
                     mem_write_u64(addr + 200, pending + bit);
@@ -86,7 +86,7 @@ fn signal_handler(signum, handler_addr) {
     // Handler table stored at task_addr(current_task) + 216 (pointer)
     // For simplicity: use fixed memory region per task
     // Handler table base = 0x340000 + task_idx * 512
-    let htable = 3407872 + current_task * HANDLER_TABLE_SIZE;
+    let mut htable = 3407872 + current_task * HANDLER_TABLE_SIZE;
     mem_write_u64(htable + signum * 8, handler_addr);
     return 1;
 }
@@ -95,7 +95,7 @@ fn signal_handler(signum, handler_addr) {
 fn signal_block(signum) {
     let mut addr = task_addr(current_task);
     let mut mask = mem_read_u64(addr + 208);
-    let bit = _sig_bit(signum);
+    let mut bit = _sig_bit(signum);
     if (mask / bit) % 2 == 0 {
         mem_write_u64(addr + 208, mask + bit);
     }
@@ -106,7 +106,7 @@ fn signal_block(signum) {
 fn signal_unblock(signum) {
     let mut addr = task_addr(current_task);
     let mut mask = mem_read_u64(addr + 208);
-    let bit = _sig_bit(signum);
+    let mut bit = _sig_bit(signum);
     if (mask / bit) % 2 == 1 {
         mem_write_u64(addr + 208, mask - bit);
     }
@@ -116,18 +116,18 @@ fn signal_unblock(signum) {
 // Check and deliver pending signals (called on kernel exit path)
 fn signal_deliver() {
     let mut addr = task_addr(current_task);
-    let pending = mem_read_u64(addr + 200);
-    let blocked = mem_read_u64(addr + 208);
-    let htable = 3407872 + current_task * HANDLER_TABLE_SIZE;
+    let mut pending = mem_read_u64(addr + 200);
+    let mut blocked = mem_read_u64(addr + 208);
+    let mut htable = 3407872 + current_task * HANDLER_TABLE_SIZE;
     let mut sig = 1;
     while sig < MAX_SIGNALS {
-        let sig_mask = _sig_bit(sig);
-        let is_pending = (pending / sig_mask) % 2;
-        let is_blocked = (blocked / sig_mask) % 2;
+        let mut sig_mask = _sig_bit(sig);
+        let mut is_pending = (pending / sig_mask) % 2;
+        let mut is_blocked = (blocked / sig_mask) % 2;
         if is_pending == 1 && is_blocked == 0 {
             // Clear pending bit
             mem_write_u64(addr + 200, pending - sig_mask);
-            let handler = mem_read_u64(htable + sig * 8);
+            let mut handler = mem_read_u64(htable + sig * 8);
             if handler != 0 {
                 return sig;
             }
@@ -144,7 +144,7 @@ fn signal_deliver() {
 
 // Initialize signal subsystem (zero all handler tables)
 fn signal_init_subsystem() {
-    let htable_base = 3407872;  // 0x340000
+    let mut htable_base = 3407872;  // 0x340000
     let mut total = 64 * HANDLER_TABLE_SIZE;
     mem_zero(htable_base, total);
     return 0;
@@ -155,21 +155,21 @@ fn signal_check_task(task_idx) {
     let mut addr = task_addr(task_idx);
     let mut state = mem_read_u64(addr);
     if state == 0 { return 0; }  // STATE_FREE
-    let pending = mem_read_u64(addr + 200);
+    let mut pending = mem_read_u64(addr + 200);
     if pending == 0 { return 0; }
-    let blocked = mem_read_u64(addr + 208);
-    let deliverable = pending;  // simplified: check if any pending & ~blocked
+    let mut blocked = mem_read_u64(addr + 208);
+    let mut deliverable = pending;  // simplified: check if any pending & ~blocked
     // If SIGKILL pending, forcibly kill task
-    let sigkill_bit = _sig_bit(SIGKILL);
+    let mut sigkill_bit = _sig_bit(SIGKILL);
     if (pending / sigkill_bit) % 2 == 1 {
         mem_write_u64(addr, 4);  // STATE_DEAD
         rq_remove(task_idx);
     }
     // If SIGTERM pending and no handler, kill
-    let sigterm_bit = _sig_bit(SIGTERM);
+    let mut sigterm_bit = _sig_bit(SIGTERM);
     if (pending / sigterm_bit) % 2 == 1 {
-        let htable = 3407872 + task_idx * HANDLER_TABLE_SIZE;
-        let handler = mem_read_u64(htable + SIGTERM * 8);
+        let mut htable = 3407872 + task_idx * HANDLER_TABLE_SIZE;
+        let mut handler = mem_read_u64(htable + SIGTERM * 8);
         if handler == 0 {
             mem_write_u64(addr, 4);  // STATE_DEAD
             rq_remove(task_idx);

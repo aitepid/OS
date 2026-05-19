@@ -100,10 +100,10 @@ fn uefi_get_memory_map_desc_size() {
 
 fn uefi_get_framebuffer() {
     let mut addr = mem_read_u64(UEFI_BOOT_INFO_ADDR + 32);
-    let width = mem_read_u32(UEFI_BOOT_INFO_ADDR + 40);
-    let height = mem_read_u32(UEFI_BOOT_INFO_ADDR + 44);
-    let pitch = mem_read_u32(UEFI_BOOT_INFO_ADDR + 48);
-    let bpp = mem_read_u32(UEFI_BOOT_INFO_ADDR + 52);
+    let mut width = mem_read_u32(UEFI_BOOT_INFO_ADDR + 40);
+    let mut height = mem_read_u32(UEFI_BOOT_INFO_ADDR + 44);
+    let mut pitch = mem_read_u32(UEFI_BOOT_INFO_ADDR + 48);
+    let mut bpp = mem_read_u32(UEFI_BOOT_INFO_ADDR + 52);
     return [addr, width, height, pitch, bpp];
 }
 
@@ -119,17 +119,17 @@ fn uefi_get_rsdp() {
 //   +24: NumberOfPages (8)
 //   +32: Attribute (8)
 fn uefi_parse_memory_map() {
-    let map_addr = uefi_get_memory_map_addr();
-    let entries = uefi_get_memory_map_entries();
-    let desc_size = uefi_get_memory_map_desc_size();
+    let mut map_addr = uefi_get_memory_map_addr();
+    let mut entries = uefi_get_memory_map_entries();
+    let mut desc_size = uefi_get_memory_map_desc_size();
     let mut total_pages = 0;
     let mut usable_pages = 0;
     let mut i = 0;
     while i < entries {
-        let desc = map_addr + i * desc_size;
-        let mtype = mem_read_u32(desc);
-        let phys_start = mem_read_u64(desc + 8);
-        let num_pages = mem_read_u64(desc + 24);
+        let mut desc = map_addr + i * desc_size;
+        let mut mtype = mem_read_u32(desc);
+        let mut phys_start = mem_read_u64(desc + 8);
+        let mut num_pages = mem_read_u64(desc + 24);
         total_pages = total_pages + num_pages;
         // Usable types: LOADER_CODE, LOADER_DATA, BOOT_SERVICES_*, CONVENTIONAL
         if mtype == EFI_LOADER_CODE || mtype == EFI_LOADER_DATA {
@@ -149,15 +149,15 @@ fn uefi_parse_memory_map() {
 
 // Feed EFI memory map into kernel page allocator
 fn uefi_init_page_alloc() {
-    let map_addr = uefi_get_memory_map_addr();
-    let entries = uefi_get_memory_map_entries();
-    let desc_size = uefi_get_memory_map_desc_size();
+    let mut map_addr = uefi_get_memory_map_addr();
+    let mut entries = uefi_get_memory_map_entries();
+    let mut desc_size = uefi_get_memory_map_desc_size();
     let mut i = 0;
     while i < entries {
-        let desc = map_addr + i * desc_size;
-        let mtype = mem_read_u32(desc);
-        let phys_start = mem_read_u64(desc + 8);
-        let num_pages = mem_read_u64(desc + 24);
+        let mut desc = map_addr + i * desc_size;
+        let mut mtype = mem_read_u32(desc);
+        let mut phys_start = mem_read_u64(desc + 8);
+        let mut num_pages = mem_read_u64(desc + 24);
         // Mark usable regions as free
         if mtype == EFI_CONVENTIONAL || mtype == EFI_BOOT_SERVICES_CODE || mtype == EFI_BOOT_SERVICES_DATA {
             // Don't free pages below 2MB (kernel + page tables)
@@ -177,12 +177,12 @@ fn uefi_init_page_alloc() {
 
 // Initialize framebuffer from UEFI GOP info
 fn uefi_init_framebuffer() {
-    let fb = uefi_get_framebuffer();
-    let fb_addr = fb[0];
-    let width = fb[1];
-    let height = fb[2];
-    let pitch = fb[3];
-    let bpp = fb[4];
+    let mut fb = uefi_get_framebuffer();
+    let mut fb_addr = fb[0];
+    let mut width = fb[1];
+    let mut height = fb[2];
+    let mut pitch = fb[3];
+    let mut bpp = fb[4];
     if fb_addr != 0 && width > 0 {
         // Configure VESA module with UEFI-provided framebuffer
         vesa_set_mode_direct(fb_addr, width, height, pitch, bpp);
@@ -206,7 +206,7 @@ fn uefi_boot_init() {
     uefi_init_framebuffer();
 
     // Get ACPI RSDP from EFI config table (replaces BIOS memory search)
-    let rsdp = uefi_get_rsdp();
+    let mut rsdp = uefi_get_rsdp();
     if rsdp != 0 {
         print("UEFI RSDP at: 0x" + format_hex(rsdp, 16));
     }
@@ -283,7 +283,7 @@ fn pe_build_header(code_size, entry_rva) {
     i = 0;
     while i < 16 { push(hdr, 0); i = i + 1; }
     // SizeOfImage (aligned)
-    let image_size = 8192 + code_size;
+    let mut image_size = 8192 + code_size;
     push(hdr, image_size % 256); push(hdr, (image_size / 256) % 256);
     push(hdr, (image_size / 65536) % 256); push(hdr, (image_size / 16777216) % 256);
     // SizeOfHeaders

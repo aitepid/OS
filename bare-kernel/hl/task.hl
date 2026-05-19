@@ -83,7 +83,7 @@ fn task_create(entry_point, stack_top) {
         let mut addr = task_addr(i);
         let mut state = mem_read_u64(addr + 0);
         if state == STATE_FREE || state == STATE_DEAD {
-            let pid = next_pid;
+            let mut pid = next_pid;
             next_pid = next_pid + 1;
 
             // Initialize task context
@@ -112,7 +112,7 @@ fn task_kill(pid) {
     let mut i = 0;
     while i < MAX_TASKS {
         let mut addr = task_addr(i);
-        let task_pid = mem_read_u64(addr + 8);
+        let mut task_pid = mem_read_u64(addr + 8);
         if task_pid == pid {
             mem_write_u64(addr + 0, STATE_FREE);
             rq_remove(i);  // remove from run queue
@@ -149,7 +149,7 @@ fn _rq_swap(a, b) {
 fn _rq_sift_up(idx) {
     let mut i = idx;
     while i > 0 {
-        let parent = (i - 1) / 2;
+        let mut parent = (i - 1) / 2;
         if _rq_heap[i][1] < _rq_heap[parent][1] {
             _rq_swap(i, parent);
             i = parent;
@@ -163,8 +163,8 @@ fn _rq_sift_up(idx) {
 fn _rq_sift_down(idx) {
     let mut i = idx;
     while i * 2 + 1 < _rq_size {
-        let left = i * 2 + 1;
-        let right = i * 2 + 2;
+        let mut left = i * 2 + 1;
+        let mut right = i * 2 + 2;
         let mut smallest = i;
         if left < _rq_size {
             if _rq_heap[left][1] < _rq_heap[smallest][1] {
@@ -201,7 +201,7 @@ fn rq_insert(task_idx, vruntime) {
 // Remove and return the task index with lowest vruntime
 fn rq_pop_min() {
     if _rq_size == 0 { return 0 - 1; }
-    let min_entry = _rq_heap[0];
+    let mut min_entry = _rq_heap[0];
     _rq_size = _rq_size - 1;
     if _rq_size > 0 {
         set_at(_rq_heap, 0, _rq_heap[_rq_size]);
@@ -249,9 +249,9 @@ fn task_pick_next() {
     if _rq_size == 0 { return current_task; }
 
     // Peek: if min vruntime >= current task's vruntime, no preempt needed
-    let cur_addr = task_addr(current_task);
-    let cur_vrt = mem_read_u64(cur_addr + 168);
-    let min_vrt = rq_peek_vruntime();
+    let mut cur_addr = task_addr(current_task);
+    let mut cur_vrt = mem_read_u64(cur_addr + 168);
+    let mut min_vrt = rq_peek_vruntime();
 
     if min_vrt >= cur_vrt {
         return current_task;
@@ -267,15 +267,15 @@ fn task_pick_next() {
 fn context_switch(next_idx) {
     if next_idx == current_task { return 0; }
 
-    let cur_addr = task_addr(current_task);
-    let nxt_addr = task_addr(next_idx);
+    let mut cur_addr = task_addr(current_task);
+    let mut nxt_addr = task_addr(next_idx);
 
     // --- Save current task ---
     // Mark as READY (was RUNNING) and re-insert into run queue
-    let cur_state = mem_read_u64(cur_addr + 0);
+    let mut cur_state = mem_read_u64(cur_addr + 0);
     if cur_state == STATE_RUNNING {
         mem_write_u64(cur_addr + 0, STATE_READY);
-        let cur_vrt = mem_read_u64(cur_addr + 168);
+        let mut cur_vrt = mem_read_u64(cur_addr + 168);
         rq_insert(current_task, cur_vrt);
     }
     // In native kernel, the ISR entry shim saves all GPRs to the task struct:
@@ -290,8 +290,8 @@ fn context_switch(next_idx) {
     mem_write_u64(nxt_addr + 0, STATE_RUNNING);
 
     // CR3 switch (address space isolation)
-    let cur_cr3 = mem_read_u64(cur_addr + 160);
-    let nxt_cr3 = mem_read_u64(nxt_addr + 160);
+    let mut cur_cr3 = mem_read_u64(cur_addr + 160);
+    let mut nxt_cr3 = mem_read_u64(nxt_addr + 160);
     if cur_cr3 != nxt_cr3 {
         // Native: mov rax, [nxt_addr+160]; mov cr3, rax
         // This flushes the TLB for the old address space
@@ -322,7 +322,7 @@ fn schedule() {
 // Yield: current task voluntarily gives up CPU
 fn task_yield() {
     let mut addr = task_addr(current_task);
-    let vrt = mem_read_u64(addr + 168);
+    let mut vrt = mem_read_u64(addr + 168);
     // Bump vruntime slightly so other tasks get a chance
     mem_write_u64(addr + 168, vrt + 1);
     schedule();
@@ -345,9 +345,9 @@ fn task_unblock(task_idx) {
     let mut state = mem_read_u64(addr + 0);
     if state == STATE_BLOCKED {
         mem_write_u64(addr + 0, STATE_READY);
-        let vrt = mem_read_u64(addr + 168);
+        let mut vrt = mem_read_u64(addr + 168);
         // Give it a slight vruntime bonus so it runs soon
-        let min_vrt = rq_peek_vruntime();
+        let mut min_vrt = rq_peek_vruntime();
         if vrt > min_vrt { vrt = min_vrt; }
         rq_insert(task_idx, vrt);
     }
@@ -363,8 +363,8 @@ fn task_exit(exit_code) {
     // Reparent orphan children to task 0 (init)
     let mut ci = 0;
     while ci < MAX_TASKS {
-        let caddr = task_addr(ci);
-        let cstate = mem_read_u64(caddr);
+        let mut caddr = task_addr(ci);
+        let mut cstate = mem_read_u64(caddr);
         if cstate != STATE_FREE && mem_read_u64(caddr + 240) == current_task {
             mem_write_u64(caddr + 240, 0);  // reparent to init
             // If child is already ZOMBIE, let init reap it
@@ -376,16 +376,16 @@ fn task_exit(exit_code) {
     }
 
     // Enter ZOMBIE: parent must call wait() to collect exit_code
-    let parent_idx = mem_read_u64(addr + 240);
+    let mut parent_idx = mem_read_u64(addr + 240);
     mem_write_u64(addr, STATE_ZOMBIE);
 
     // Send SIGCHLD to parent
     if parent_idx >= 0 && parent_idx < MAX_TASKS {
-        let parent_addr = task_addr(parent_idx);
-        let parent_pid = mem_read_u64(parent_addr + 8);
+        let mut parent_addr = task_addr(parent_idx);
+        let mut parent_pid = mem_read_u64(parent_addr + 8);
         signal_send(parent_pid, SIGCHLD);
         // If parent is blocked in wait(), unblock it
-        let parent_state = mem_read_u64(parent_addr);
+        let mut parent_state = mem_read_u64(parent_addr);
         if parent_state == STATE_BLOCKED {
             task_unblock(parent_idx);
         }
@@ -415,7 +415,7 @@ fn task_reap(task_idx) {
     let mut addr = task_addr(task_idx);
     let mut state = mem_read_u64(addr);
     if state != STATE_ZOMBIE { return 0 - 1; }
-    let exit_code = mem_read_u64(addr + 232);
+    let mut exit_code = mem_read_u64(addr + 232);
     mem_write_u64(addr, STATE_FREE);
     _tc = _tc - 1;
     return exit_code;
@@ -425,10 +425,10 @@ fn task_reap(task_idx) {
 fn task_info(task_idx) {
     let mut addr = task_addr(task_idx);
     let mut state = mem_read_u64(addr + 0);
-    let pid = mem_read_u64(addr + 8);
-    let vrt = mem_read_u64(addr + 168);
-    let ticks = mem_read_u64(addr + 192);
-    let state_names = ["FREE", "READY", "RUNNING", "BLOCKED", "DEAD", "ZOMBIE"];
+    let mut pid = mem_read_u64(addr + 8);
+    let mut vrt = mem_read_u64(addr + 168);
+    let mut ticks = mem_read_u64(addr + 192);
+    let mut state_names = ["FREE", "READY", "RUNNING", "BLOCKED", "DEAD", "ZOMBIE"];
     let mut sname = "UNKNOWN";
     if state >= 0 && state <= 5 { sname = state_names[state]; }
     return "[" + to_string(task_idx) + "] pid=" + to_string(pid) + " " + sname + " vrt=" + to_string(vrt) + " ticks=" + to_string(ticks);
@@ -457,10 +457,10 @@ fn task_list() {
 // Increments vruntime of current task, checks if preemption needed
 fn task_timer_tick() {
     let mut addr = task_addr(current_task);
-    let vrt = mem_read_u64(addr + 168);
-    let nice = mem_read_u64(addr + 176);
-    let weight = nice_to_weight(nice);
-    let delta = 1024 / weight;
+    let mut vrt = mem_read_u64(addr + 168);
+    let mut nice = mem_read_u64(addr + 176);
+    let mut weight = nice_to_weight(nice);
+    let mut delta = 1024 / weight;
     mem_write_u64(addr + 168, vrt + delta);
     mem_write_u64(addr + 192, mem_read_u64(addr + 192) + 1);  // ticks++
 
@@ -491,7 +491,7 @@ fn task_name(idx) {
     if state == STATE_FREE { return ""; }
     // Name stored inline at offset 32 (16 bytes of GPR context before real name)
     // Use a fallback: read from addr+184 if non-zero, else return "task<N>"
-    let name_ptr = mem_read_u64(addr + 184);
+    let mut name_ptr = mem_read_u64(addr + 184);
     if name_ptr != 0 {
         return mem_read_string(name_ptr, 32);
     }
@@ -503,14 +503,14 @@ fn task_name(idx) {
 // Return list of all tasks as [[pid, state, name], ...]
 fn task_list_all() {
     let mut list = [];
-    let state_names = ["free", "ready", "running", "blocked", "dead", "zombie"];
+    let mut state_names = ["free", "ready", "running", "blocked", "dead", "zombie"];
     let mut i = 0;
     while i < MAX_TASKS {
         let mut addr = task_addr(i);
         let mut state = mem_read_u64(addr);
         if state != STATE_FREE {
-            let pid = mem_read_u64(addr + 8);
-            let sname = "unknown";
+            let mut pid = mem_read_u64(addr + 8);
+            let mut sname = "unknown";
             if state >= 0 {
                 if state <= 5 { sname = state_names[state]; }
             }

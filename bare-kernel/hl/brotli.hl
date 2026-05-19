@@ -37,7 +37,7 @@ fn brotli_compress(data, data_len) {
     let mut pos = 0;
 
     // Brotli stream header (simplified): WBITS in upper 4 bits
-    let header = BROTLI_WBITS * 16;
+    let mut header = BROTLI_WBITS * 16;
     set_at(brotli_out_buf, pos, header);
     pos = pos + 1;
 
@@ -45,7 +45,7 @@ fn brotli_compress(data, data_len) {
     _brotli_init_hash();
 
     // Compress block (LZ77 + simplified Huffman)
-    let comp_len = _brotli_compress_block(data, data_len);
+    let mut comp_len = _brotli_compress_block(data, data_len);
 
     // Copy compressed block data into output buffer
     let mut i = 0;
@@ -70,9 +70,9 @@ fn _brotli_compress_block(data, data_len) {
     let mut i = 0;
 
     while pos < data_len {
-        let match = _brotli_find_match(data, pos, data_len);
-        let match_len = match[0];
-        let match_dist = match[1];
+        let mut match = _brotli_find_match(data, pos, data_len);
+        let mut match_len = match[0];
+        let mut match_dist = match[1];
 
         if match_len >= BROTLI_MIN_MATCH {
             // Emit INSERT_COPY command: cmd + dist_lo + dist_hi + length
@@ -98,13 +98,13 @@ fn _brotli_compress_block(data, data_len) {
 
         if match_len < BROTLI_MIN_MATCH {
             // Accumulate literals until a match is found or limit hit
-            let literal_start = pos;
+            let mut literal_start = pos;
             let mut literal_len = 1;
             pos = pos + 1;
 
             let mut lit_done = 0;
             while pos < data_len && literal_len < 16 && lit_done == 0 {
-                let next_match = _brotli_find_match(data, pos, data_len);
+                let mut next_match = _brotli_find_match(data, pos, data_len);
                 if next_match[0] >= BROTLI_MIN_MATCH {
                     lit_done = 1;
                 }
@@ -145,16 +145,16 @@ fn _brotli_find_match(data, pos, data_len) {
     }
 
     let mut hash = _brotli_hash(data, pos, data_len);
-    let candidate = brotli_hash_tbl[hash];
+    let mut candidate = brotli_hash_tbl[hash];
 
     if candidate > 0 && candidate < pos {
-        let distance = pos - candidate;
+        let mut distance = pos - candidate;
         if distance <= BROTLI_MAX_DISTANCE {
             let mut match_len = 0;
             let mut match_done = 0;
             while pos + match_len < data_len && candidate + match_len < pos && match_done == 0 {
-                let cur_a = data[pos + match_len];
-                let cur_b = data[candidate + match_len];
+                let mut cur_a = data[pos + match_len];
+                let mut cur_b = data[candidate + match_len];
                 if cur_a == cur_b {
                     match_len = match_len + 1;
                     if match_len >= BROTLI_MAX_MATCH {
@@ -182,9 +182,9 @@ fn _brotli_hash(data, pos, data_len) {
     if pos + 2 >= data_len {
         return 0;
     }
-    let b0 = data[pos];
-    let b1 = data[pos + 1];
-    let b2 = data[pos + 2];
+    let mut b0 = data[pos];
+    let mut b1 = data[pos + 1];
+    let mut b2 = data[pos + 2];
     let mut hash = (b0 * 256 + b1 * 16 + b2) % 2048;
     return hash;
 }
@@ -217,7 +217,7 @@ fn brotli_decompress(data, data_len) {
 
     let mut decomp_done = 0;
     while pos < data_len && decomp_done == 0 {
-        let cmd = data[pos];
+        let mut cmd = data[pos];
         pos = pos + 1;
 
         if cmd == 0 {
@@ -228,7 +228,7 @@ fn brotli_decompress(data, data_len) {
         if decomp_done == 0 {
             if cmd == BROTLI_INSERT_ONLY {
                 // Literal run
-                let lit_len = data[pos];
+                let mut lit_len = data[pos];
                 pos = pos + 1;
                 let mut i = 0;
                 while i < lit_len && pos < data_len {
@@ -241,17 +241,17 @@ fn brotli_decompress(data, data_len) {
 
             if cmd == BROTLI_INSERT_COPY {
                 // Back-reference copy
-                let distance_low = data[pos];
+                let mut distance_low = data[pos];
                 pos = pos + 1;
-                let distance_high = data[pos];
+                let mut distance_high = data[pos];
                 pos = pos + 1;
-                let distance = distance_low + distance_high * 256;
-                let copy_len = data[pos];
+                let mut distance = distance_low + distance_high * 256;
+                let mut copy_len = data[pos];
                 pos = pos + 1;
 
                 let mut i = 0;
                 while i < copy_len {
-                    let src_pos = out_pos - distance;
+                    let mut src_pos = out_pos - distance;
                     if src_pos >= 0 && src_pos < out_pos {
                         set_at(brotli_out_buf, out_pos, brotli_out_buf[src_pos]);
                         out_pos = out_pos + 1;
@@ -295,8 +295,8 @@ fn brotli_get_ratio(original_len) {
 
 // Self-test: compress a string and verify the decompressed length matches
 fn brotli_test() {
-    let test_str = "Brotli compression by Google, optimized for HTTP: repeat repeat repeat";
-    let str_len = len(test_str);
+    let mut test_str = "Brotli compression by Google, optimized for HTTP: repeat repeat repeat";
+    let mut str_len = len(test_str);
 
     // Copy string bytes into a byte array for the compressor
     let mut i = 0;
@@ -307,13 +307,13 @@ fn brotli_test() {
 
     brotli_init();
 
-    let comp_len = brotli_compress(brotli_test_buf, str_len);
+    let mut comp_len = brotli_compress(brotli_test_buf, str_len);
     if comp_len < 0 {
         print("Brotli test: compression failed");
         return 0 - 1;
     }
 
-    let decomp_len = brotli_decompress(brotli_out_buf, comp_len);
+    let mut decomp_len = brotli_decompress(brotli_out_buf, comp_len);
     if decomp_len != str_len {
         print("Brotli test: decompression length mismatch");
         return 0 - 2;

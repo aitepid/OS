@@ -36,28 +36,28 @@ fn ior_init() {
 }
 
 fn ior_sq_avail() {
-    let used = ior_sq_tail - ior_sq_head;
+    let mut used = ior_sq_tail - ior_sq_head;
     return IOR_SQ_SIZE - used;
 }
 
 fn ior_cq_avail() {
-    let used = ior_cq_tail - ior_cq_head;
+    let mut used = ior_cq_tail - ior_cq_head;
     return IOR_CQ_SIZE - used;
 }
 
 fn ior_submit(op, fd, buf, ilen) {
-    let avail = ior_sq_avail();
+    let mut avail = ior_sq_avail();
     if avail <= 0 {
         ior_dropped += 1;
         return 0 - 1;
     }
-    let tail = ior_sq_tail;
+    let mut tail = ior_sq_tail;
     let mut idx = tail - (tail / IOR_SQ_SIZE) * IOR_SQ_SIZE;
     set_at(ior_sq_ops, idx, op);
     set_at(ior_sq_fd,  idx, fd);
     set_at(ior_sq_buf, idx, buf);
     set_at(ior_sq_len, idx, ilen);
-    let rid = ior_next_id;
+    let mut rid = ior_next_id;
     set_at(ior_sq_id, idx, rid);
     ior_next_id += 1;
     ior_sq_tail += 1;
@@ -66,17 +66,17 @@ fn ior_submit(op, fd, buf, ilen) {
 
 fn ior_process() {
     let mut count = 0;
-    let done  = 0;
+    let mut done = 0;
     while done == 0 {
         if ior_sq_head >= ior_sq_tail {
             done = 1;
         } else {
-            let cavail = ior_cq_avail();
+            let mut cavail = ior_cq_avail();
             if cavail <= 0 {
                 done = 1;
             } else {
-                let sidx = ior_sq_head - (ior_sq_head / IOR_SQ_SIZE) * IOR_SQ_SIZE;
-                let cidx = ior_cq_tail - (ior_cq_tail / IOR_CQ_SIZE) * IOR_CQ_SIZE;
+                let mut sidx = ior_sq_head - (ior_sq_head / IOR_SQ_SIZE) * IOR_SQ_SIZE;
+                let mut cidx = ior_cq_tail - (ior_cq_tail / IOR_CQ_SIZE) * IOR_CQ_SIZE;
                 set_at(ior_cq_id,  cidx, ior_sq_id[sidx]);
                 set_at(ior_cq_res, cidx, ior_sq_len[sidx]);
                 ior_sq_head += 1;
@@ -89,9 +89,9 @@ fn ior_process() {
 }
 
 fn ior_consume() {
-    let cq = 0;
+    let mut cq = 0;
     if ior_cq_head < ior_cq_tail {
-        let cidx = ior_cq_head - (ior_cq_head / IOR_CQ_SIZE) * IOR_CQ_SIZE;
+        let mut cidx = ior_cq_head - (ior_cq_head / IOR_CQ_SIZE) * IOR_CQ_SIZE;
         cq = ior_cq_id[cidx];
         ior_cq_head += 1;
     }
@@ -107,8 +107,8 @@ fn ior_test() {
     ior_submit(IOR_WRITE, 3, 0x1000, 512);
     ior_submit(IOR_WRITE, 4, 0x2000, 256);
     ior_submit(IOR_READ,  5, 0x3000, 128);
-    let n  = ior_process();
-    let cq = ior_cq_pending();
+    let mut n = ior_process();
+    let mut cq = ior_cq_pending();
     print("ior_test: processed=" + to_string(n) + " cq=" + to_string(cq));
     if cq == 3 {
         print("ior_test: PASS");

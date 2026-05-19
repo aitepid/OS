@@ -64,7 +64,7 @@ fn lapic_eoi() {
 
 // Get LAPIC ID of current CPU
 fn lapic_id() {
-    let id_reg = lapic_read(LAPIC_ID);
+    let mut id_reg = lapic_read(LAPIC_ID);
     return (id_reg / 16777216) % 256; // bits 31:24
 }
 
@@ -105,16 +105,16 @@ fn lapic_calibrate() {
     // Poll until PIT output goes high (bit 5 of port 0x61)
     let mut pit_done = 0;
     while pit_done == 0 {
-        let status = port_in_u8(97);
+        let mut status = port_in_u8(97);
         if (status / 32) % 2 == 1 { pit_done = 1; }
     }
 
     // 3. Read remaining APIC timer count
-    let remaining = lapic_read(LAPIC_TIMER_CUR);
-    let elapsed = 4294967295 - remaining;
+    let mut remaining = lapic_read(LAPIC_TIMER_CUR);
+    let mut elapsed = 4294967295 - remaining;
 
     // 4. Set periodic with calibrated count for ~100 Hz
-    let ticks_per_hz = elapsed / 10; // elapsed was 10ms worth
+    let mut ticks_per_hz = elapsed / 10; // elapsed was 10ms worth
     lapic_write(LAPIC_LVT_TIMER, TIMER_PERIODIC + 32);
     lapic_write(LAPIC_TIMER_INIT, ticks_per_hz);
     return ticks_per_hz;

@@ -93,15 +93,15 @@ fn smtp_b64_encode(s) {
     let mut out = "";
     let mut i = 0;
     while i < n {
-        let b0 = char_code(char_at(s, i));
-        let b1 = 0;
-        let b2 = 0;
+        let mut b0 = char_code(char_at(s, i));
+        let mut b1 = 0;
+        let mut b2 = 0;
         if i + 1 < n { let b1 = char_code(char_at(s, i + 1)); }
         if i + 2 < n { let b2 = char_code(char_at(s, i + 2)); }
-        let v0 = b0 / 4;
-        let v1 = (b0 % 4) * 16 + b1 / 16;
-        let v2 = (b1 % 16) * 4 + b2 / 64;
-        let v3 = b2 % 64;
+        let mut v0 = b0 / 4;
+        let mut v1 = (b0 % 4) * 16 + b1 / 16;
+        let mut v2 = (b1 % 16) * 4 + b2 / 64;
+        let mut v3 = b2 % 64;
         out = out + _smtp_b64_char(v0) + _smtp_b64_char(v1);
         if i + 1 < n { out = out + _smtp_b64_char(v2); } else { out = out + "="; }
         if i + 2 < n { out = out + _smtp_b64_char(v3); } else { out = out + "="; }
@@ -117,7 +117,7 @@ fn smtp_b64_encode(s) {
 // Read one line from TCB RX buffer; return response code (first 3 digits)
 fn _smtp_read_code(tcb) {
     let mut addr = TCP_TABLE + tcb * TCB_SIZE;
-    let rx_buf = mem_read_u64(addr + 64);
+    let mut rx_buf = mem_read_u64(addr + 64);
     if rx_buf == 0 { return 0; }
     let mut s = "";
     let mut j = 0;
@@ -136,10 +136,10 @@ fn _smtp_read_code(tcb) {
 // ============================================================
 
 fn smtp_connect(host, port) {
-    let id = _smtp_alloc();
+    let mut id = _smtp_alloc();
     if id < 0 { print("smtp: no free slots"); return 0 - 1; }
-    let ip = dns_resolve(host);
-    let tcb = tcp_connect(ip, port);
+    let mut ip = dns_resolve(host);
+    let mut tcb = tcp_connect(ip, port);
     if tcb < 0 { print("smtp: tcp_connect failed to " + host); return 0 - 1; }
     set_at(smtp_active, id, 1);
     set_at(smtp_tcb,    id, tcb);
@@ -157,7 +157,7 @@ fn smtp_connect(host, port) {
 fn smtp_auth(id, user, pass) {
     if id < 0 { return 0 - 1; }
     if smtp_active[id] == 0 { return 0 - 1; }
-    let tcb = smtp_tcb[id];
+    let mut tcb = smtp_tcb[id];
     tcp_send(tcb, "AUTH LOGIN\r\n");
     tcp_send(tcb, smtp_b64_encode(user) + "\r\n");
     tcp_send(tcb, smtp_b64_encode(pass) + "\r\n");
@@ -168,7 +168,7 @@ fn smtp_auth(id, user, pass) {
 fn smtp_send_email(id, from, to, subject, body) {
     if id < 0 { return 0 - 1; }
     if smtp_active[id] == 0 { return 0 - 1; }
-    let tcb = smtp_tcb[id];
+    let mut tcb = smtp_tcb[id];
 
     // MAIL FROM
     tcp_send(tcb, "MAIL FROM:<" + from + ">\r\n");
@@ -183,7 +183,7 @@ fn smtp_send_email(id, from, to, subject, body) {
     set_at(smtp_state, id, SMTP_ST_DATA);
 
     // Headers + body
-    let msg = "From: <" + from + ">\r\n"
+    let mut msg = "From: <" + from + ">\r\n"
         + "To: <" + to + ">\r\n"
         + "Subject: " + subject + "\r\n"
         + "MIME-Version: 1.0\r\n"
@@ -216,7 +216,7 @@ fn smtp_tick() {
     let mut i = 0;
     while i < SMTP_MAX {
         if smtp_active[i] == 1 {
-            let code = _smtp_read_code(smtp_tcb[i]);
+            let mut code = _smtp_read_code(smtp_tcb[i]);
             if code >= 500 {
                 klog(2, "smtp", "server error " + to_string(code) + " on session " + to_string(i));
                 set_at(smtp_state, i, SMTP_ST_ERR);
@@ -235,9 +235,9 @@ fn smtp_status(id) {
     if id < 0 { return "smtp: invalid"; }
     if id >= SMTP_MAX { return "smtp: invalid"; }
     if smtp_active[id] == 0 { return "smtp[" + to_string(id) + "] free"; }
-    let st_names = ["free", "connecting", "ready", "auth", "mail", "rcpt", "data", "done", "error"];
-    let st = smtp_state[id];
-    let st_s = "?";
+    let mut st_names = ["free", "connecting", "ready", "auth", "mail", "rcpt", "data", "done", "error"];
+    let mut st = smtp_state[id];
+    let mut st_s = "?";
     if st >= 0 { if st <= 8 { st_s = st_names[st]; } }
     return "smtp[" + to_string(id) + "] " + st_s + " host=" + smtp_host[id];
 }

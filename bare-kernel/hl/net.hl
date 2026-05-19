@@ -72,7 +72,7 @@ fn build_udp_packet(dst_mac, dst_ip, src_port, dst_port, payload) {
     push(pkt, 8); push(pkt, 0); // Ethertype = 0x0800 (IPv4)
 
     // IPv4 header (20 bytes)
-    let ip_total_len = 20 + 8 + len(payload);
+    let mut ip_total_len = 20 + 8 + len(payload);
     push(pkt, 69);  // ver=4, ihl=5 (0x45)
     push(pkt, 0);   // TOS
     push(pkt, (ip_total_len / 256) % 256);
@@ -94,13 +94,13 @@ fn build_udp_packet(dst_mac, dst_ip, src_port, dst_port, payload) {
     let mut ip_hdr = [];
     i = 14;
     while i < 34 { push(ip_hdr, pkt[i]); i = i + 1; }
-    let cksum = ip_checksum(ip_hdr);
+    let mut cksum = ip_checksum(ip_hdr);
     // Patch checksum at pkt[24], pkt[25]
     set_at(pkt, 24, (cksum / 256) % 256);
     set_at(pkt, 25, cksum % 256);
 
     // UDP header (8 bytes)
-    let udp_len = 8 + len(payload);
+    let mut udp_len = 8 + len(payload);
     push(pkt, (src_port / 256) % 256);
     push(pkt, src_port % 256);
     push(pkt, (dst_port / 256) % 256);
@@ -151,7 +151,7 @@ fn build_arp_request(target_ip) {
 // Parse received Ethernet frame
 fn parse_eth_frame(data) {
     if len(data) < 14 { return nil; }
-    let ethertype = data[12] * 256 + data[13];
+    let mut ethertype = data[12] * 256 + data[13];
     return [ethertype, 14]; // [type, payload_offset]
 }
 
@@ -195,7 +195,7 @@ fn arp_init() {
 }
 
 fn arp_lookup(ip_packed) {
-    let bucket = _net_arp_hash(ip_packed);
+    let mut bucket = _net_arp_hash(ip_packed);
     let mut cur = _net_arp_ht[bucket];
     while cur >= 0 {
         if _net_arp_valid[cur] == 1 {
@@ -208,7 +208,7 @@ fn arp_lookup(ip_packed) {
 
 fn arp_update(ip_packed, mac) {
     // Check existing
-    let bucket = _net_arp_hash(ip_packed);
+    let mut bucket = _net_arp_hash(ip_packed);
     let mut cur = _net_arp_ht[bucket];
     while cur >= 0 {
         if _net_arp_valid[cur] == 1 {
@@ -241,15 +241,15 @@ fn arp_update(ip_packed, mac) {
 // Parse ARP reply and update table
 fn arp_input(data, offset) {
     if len(data) < offset + 28 { return 0; }
-    let op = data[offset + 6] * 256 + data[offset + 7];
+    let mut op = data[offset + 6] * 256 + data[offset + 7];
     // Sender MAC
-    let smac = [data[offset+8], data[offset+9], data[offset+10], data[offset+11], data[offset+12], data[offset+13]];
+    let mut smac = [data[offset+8], data[offset+9], data[offset+10], data[offset+11], data[offset+12], data[offset+13]];
     // Sender IP
-    let sip = ip_pack(data[offset+14], data[offset+15], data[offset+16], data[offset+17]);
+    let mut sip = ip_pack(data[offset+14], data[offset+15], data[offset+16], data[offset+17]);
     arp_update(sip, smac);
     if op == 2 {
         // ARP reply: update gateway MAC if this is our gateway
-        let gw_packed = ip_pack(gw_ip[0], gw_ip[1], gw_ip[2], gw_ip[3]);
+        let mut gw_packed = ip_pack(gw_ip[0], gw_ip[1], gw_ip[2], gw_ip[3]);
         if sip == gw_packed {
             gw_mac = smac;
         }
@@ -259,10 +259,10 @@ fn arp_input(data, offset) {
 
 // Main network input handler: dispatch by protocol
 fn net_input(pkt) {
-    let eth = parse_eth_frame(pkt);
+    let mut eth = parse_eth_frame(pkt);
     if eth == nil { return 0; }
-    let ethertype = eth[0];
-    let offset = eth[1];
+    let mut ethertype = eth[0];
+    let mut offset = eth[1];
 
     if ethertype == ETH_ARP {
         return arp_input(pkt, offset);
@@ -270,11 +270,11 @@ fn net_input(pkt) {
     if ethertype == ETH_IP {
         // Parse IPv4 header
         if len(pkt) < offset + 20 { return 0; }
-        let ihl = (pkt[offset] % 16) * 4;
-        let proto = pkt[offset + 9];
-        let src_ip = ip_pack(pkt[offset+12], pkt[offset+13], pkt[offset+14], pkt[offset+15]);
-        let dst_ip = ip_pack(pkt[offset+16], pkt[offset+17], pkt[offset+18], pkt[offset+19]);
-        let ip_payload_off = offset + ihl;
+        let mut ihl = (pkt[offset] % 16) * 4;
+        let mut proto = pkt[offset + 9];
+        let mut src_ip = ip_pack(pkt[offset+12], pkt[offset+13], pkt[offset+14], pkt[offset+15]);
+        let mut dst_ip = ip_pack(pkt[offset+16], pkt[offset+17], pkt[offset+18], pkt[offset+19]);
+        let mut ip_payload_off = offset + ihl;
         let mut src_port = 0;
         let mut dst_port = 0;
         if proto == IP_TCP || proto == IP_UDP {
@@ -285,7 +285,7 @@ fn net_input(pkt) {
         }
 
         // Netfilter INPUT hook
-        let nf_result = nf_match(NF_CHAIN_INPUT, proto, src_ip, dst_ip, src_port, dst_port, len(pkt));
+        let mut nf_result = nf_match(NF_CHAIN_INPUT, proto, src_ip, dst_ip, src_port, dst_port, len(pkt));
         if nf_result == NF_DROP { return 0; }
         if nf_result == NF_REJECT { return 0; }
 
@@ -316,7 +316,7 @@ fn net_input(pkt) {
 
 // Poll network: receive packets and process them
 fn net_poll() {
-    let pkt = virtio_net_recv_pkt();
+    let mut pkt = virtio_net_recv_pkt();
     if len(pkt) > 0 {
         net_input(pkt);
         return 1;
@@ -327,11 +327,11 @@ fn net_poll() {
 // Network initialization
 fn net_init() {
     arp_init();
-    let pci_info = virtio_net_detect();
+    let mut pci_info = virtio_net_detect();
     if len(pci_info) > 0 {
         virtio_net_init(pci_info[0], pci_info[1], pci_info[2]);
         // Send ARP for gateway
-        let arp = build_arp_request(gw_ip);
+        let mut arp = build_arp_request(gw_ip);
         virtio_net_send_pkt(arp);
         return 1;
     }

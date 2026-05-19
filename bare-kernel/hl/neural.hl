@@ -99,12 +99,12 @@ fn nn_add_layer(size, activation) {
 // Simplified: use deterministic pseudo-random seeded by layer index
 fn nn_xavier_init(layer) {
     if layer == 0 { return 0; }
-    let fan_in  = nn_layer_sizes[layer - 1];
-    let fan_out = nn_layer_sizes[layer];
+    let mut fan_in = nn_layer_sizes[layer - 1];
+    let mut fan_out = nn_layer_sizes[layer];
     // limit = sqrt(6 / (fan_in + fan_out)) × NEURAL_SCALE
     // Integer sqrt approximation
-    let ratio = 6000 / (fan_in + fan_out);
-    let limit = ratio;
+    let mut ratio = 6000 / (fan_in + fan_out);
+    let mut limit = ratio;
     let mut i = 0; while i < 10 { let mut n = (limit + ratio * 1000 / limit) / 2; limit = n; i = i + 1; }
     limit = 30;  // simplified: ~0.3 × SCALE for typical sizes
     // Fill weights with pseudo-random values in [-limit, +limit]
@@ -112,7 +112,7 @@ fn nn_xavier_init(layer) {
     while r < fan_out {
         let mut c = 0;
         while c < fan_in {
-            let seed = layer * 1000 + r * fan_in + c;
+            let mut seed = layer * 1000 + r * fan_in + c;
             let mut w = (seed * 2971 + 7919) - (((seed * 2971 + 7919) / (limit * 2)) * (limit * 2));
             w = w - limit;
             set_at(nn_weights, layer * NN_WEIGHT_SLAB + r * fan_in + c, w);
@@ -121,7 +121,7 @@ fn nn_xavier_init(layer) {
         r = r + 1;
     }
     // Initialize biases to zero
-    let i2 = 0;
+    let mut i2 = 0;
     while i2 < fan_out {
         set_at(nn_biases, layer * NN_MAX_NEURONS + i2, 0);
         i2 = i2 + 1;
@@ -132,14 +132,14 @@ fn nn_xavier_init(layer) {
 // He initialization (for ReLU): W ~ N(0, sqrt(2/fan_in))
 fn nn_he_init(layer) {
     if layer == 0 { return 0; }
-    let fan_in = nn_layer_sizes[layer - 1];
-    let fan_out = nn_layer_sizes[layer];
-    let scale = 40;  // simplified: ~0.4 × SCALE for He
+    let mut fan_in = nn_layer_sizes[layer - 1];
+    let mut fan_out = nn_layer_sizes[layer];
+    let mut scale = 40;  // simplified: ~0.4 × SCALE for He
     let mut r = 0;
     while r < fan_out {
         let mut c = 0;
         while c < fan_in {
-            let seed = layer * 7919 + r * 1031 + c;
+            let mut seed = layer * 7919 + r * 1031 + c;
             let mut w = (seed * 3571 + 4999) - (((seed * 3571 + 4999) / (scale * 2)) * (scale * 2));
             w = w - scale;
             set_at(nn_weights, layer * NN_WEIGHT_SLAB + r * fan_in + c, w);
@@ -197,17 +197,17 @@ fn _nn_apply_activation(act_type, x) {
 // Softmax over output array (in-place normalization)
 fn _nn_softmax(values, count) {
     // Compute max for numerical stability
-    let max_v = values[0];
+    let mut max_v = values[0];
     let mut i = 1;
     while i < count { if values[i] > max_v { max_v = values[i]; } i = i + 1; }
     // exp approximation: e^x ≈ (1 + x/256)^256 (simplified: linear for range)
     let mut sum = 0;
-    let exps = [];
+    let mut exps = [];
     i = 0;
     while i < count {
         let mut e = values[i] - max_v;
         // Clamp and approximate exp: use 1024 + e (shifted) for positive, scaled
-        let expv = NEURAL_SCALE;
+        let mut expv = NEURAL_SCALE;
         if e < 0 { expv = NEURAL_SCALE * NEURAL_SCALE / (NEURAL_SCALE - e / 4); }
         set_at(exps, i, expv);
         sum = sum + expv;
@@ -227,7 +227,7 @@ fn _nn_softmax(values, count) {
 fn nn_forward(input) {
     if nn_layer_count < 2 { return []; }
     // Layer 0: input layer (copy input to cache)
-    let in_size = nn_layer_sizes[0];
+    let mut in_size = nn_layer_sizes[0];
     let mut i = 0;
     while i < in_size {
         let mut v = 0;
@@ -236,11 +236,11 @@ fn nn_forward(input) {
         i = i + 1;
     }
     // Layers 1..N-1: compute weighted sum + bias, apply activation
-    let layer = 1;
+    let mut layer = 1;
     while layer < nn_layer_count {
-        let fan_in  = nn_layer_sizes[layer - 1];
-        let fan_out = nn_layer_sizes[layer];
-        let act_type = nn_activations[layer];
+        let mut fan_in = nn_layer_sizes[layer - 1];
+        let mut fan_out = nn_layer_sizes[layer];
+        let mut act_type = nn_activations[layer];
         let mut j = 0;
         while j < fan_out {
             let mut sum = nn_biases[layer * NN_MAX_NEURONS + j];
@@ -252,20 +252,20 @@ fn nn_forward(input) {
                 k = k + 1;
             }
             // Apply activation (defer softmax to after all neurons computed)
-            let activated = sum;
+            let mut activated = sum;
             if act_type != ACT_SOFTMAX { activated = _nn_apply_activation(act_type, sum); }
             set_at(nn_activations_cache, layer * NN_MAX_NEURONS + j, activated);
             j = j + 1;
         }
         // Softmax post-processing
         if act_type == ACT_SOFTMAX {
-            let logits = [];
+            let mut logits = [];
             j = 0;
             while j < fan_out {
                 set_at(logits, j, nn_activations_cache[layer * NN_MAX_NEURONS + j]);
                 j = j + 1;
             }
-            let probs = _nn_softmax(logits, fan_out);
+            let mut probs = _nn_softmax(logits, fan_out);
             j = 0;
             while j < fan_out {
                 set_at(nn_activations_cache, layer * NN_MAX_NEURONS + j, probs[j]);
@@ -275,9 +275,9 @@ fn nn_forward(input) {
         layer = layer + 1;
     }
     // Return output layer activations
-    let out_layer = nn_layer_count - 1;
-    let out_size  = nn_layer_sizes[out_layer];
-    let output = [];
+    let mut out_layer = nn_layer_count - 1;
+    let mut out_size = nn_layer_sizes[out_layer];
+    let mut output = [];
     i = 0;
     while i < out_size {
         set_at(output, i, nn_activations_cache[out_layer * NN_MAX_NEURONS + i]);
@@ -291,7 +291,7 @@ fn nn_loss_mse(pred, target, n) {
     let mut sum = 0;
     let mut i = 0;
     while i < n {
-        let diff = pred[i] - target[i];
+        let mut diff = pred[i] - target[i];
         sum = sum + (diff * diff) / NEURAL_SCALE;
         i = i + 1;
     }
@@ -307,7 +307,7 @@ fn nn_loss_cross_entropy(pred, target, n) {
             // log approximation: ln(x) ≈ (x - SCALE) * 1 for x near SCALE
             let mut p = pred[i];
             if p < 1 { p = 1; }
-            let ln_p = (p - NEURAL_SCALE);  // simplified ln
+            let mut ln_p = (p - NEURAL_SCALE);  // simplified ln
             sum = sum + (target[i] * ln_p) / NEURAL_SCALE;
         }
         i = i + 1;
@@ -318,8 +318,8 @@ fn nn_loss_cross_entropy(pred, target, n) {
 
 // Argmax of output (for classification)
 fn nn_argmax(output, n) {
-    let max_idx = 0;
-    let max_val = output[0];
+    let mut max_idx = 0;
+    let mut max_val = output[0];
     let mut i = 1;
     while i < n {
         if output[i] > max_val { max_val = output[i]; max_idx = i; }
@@ -330,31 +330,31 @@ fn nn_argmax(output, n) {
 
 // Simple backpropagation for output layer (gradient of MSE)
 fn nn_backward_output(target, output_size) {
-    let out_layer = nn_layer_count - 1;
+    let mut out_layer = nn_layer_count - 1;
     let mut i = 0;
     while i < output_size {
-        let pred = nn_activations_cache[out_layer * NN_MAX_NEURONS + i];
-        let tgt  = target[i];
-        let delta = pred - tgt;  // dL/dz for MSE + linear output
+        let mut pred = nn_activations_cache[out_layer * NN_MAX_NEURONS + i];
+        let mut tgt = target[i];
+        let mut delta = pred - tgt;  // dL/dz for MSE + linear output
         set_at(nn_deltas, out_layer * NN_MAX_NEURONS + i, delta);
         i = i + 1;
     }
     // Update output layer weights
-    let fan_in = nn_layer_sizes[out_layer - 1];
+    let mut fan_in = nn_layer_sizes[out_layer - 1];
     i = 0;
     while i < output_size {
-        let delta = nn_deltas[out_layer * NN_MAX_NEURONS + i];
+        let mut delta = nn_deltas[out_layer * NN_MAX_NEURONS + i];
         // Update bias
-        let new_bias = nn_biases[out_layer * NN_MAX_NEURONS + i]
+        let mut new_bias = nn_biases[out_layer * NN_MAX_NEURONS + i]
                      - (nn_learning_rate * delta) / NEURAL_SCALE;
         set_at(nn_biases, out_layer * NN_MAX_NEURONS + i, new_bias);
         // Update weights
         let mut k = 0;
         while k < fan_in {
             let mut a = nn_activations_cache[(out_layer - 1) * NN_MAX_NEURONS + k];
-            let grad = (delta * a) / NEURAL_SCALE;
-            let w_idx = out_layer * NN_WEIGHT_SLAB + i * fan_in + k;
-            let new_w = nn_weights[w_idx] - (nn_learning_rate * grad) / NEURAL_SCALE;
+            let mut grad = (delta * a) / NEURAL_SCALE;
+            let mut w_idx = out_layer * NN_WEIGHT_SLAB + i * fan_in + k;
+            let mut new_w = nn_weights[w_idx] - (nn_learning_rate * grad) / NEURAL_SCALE;
             set_at(nn_weights, w_idx, new_w);
             k = k + 1;
         }
@@ -364,7 +364,7 @@ fn nn_backward_output(target, output_size) {
 }
 
 fn nn_info() {
-    let info = "neural: layers=" + to_string(nn_layer_count) + " [";
+    let mut info = "neural: layers=" + to_string(nn_layer_count) + " [";
     let mut i = 0;
     while i < nn_layer_count {
         info = info + to_string(nn_layer_sizes[i]);
@@ -384,16 +384,16 @@ fn neural_test() {
     nn_he_init(1);
     nn_xavier_init(2);
     // Forward pass with sample input [0.5, 0.2, 0.8, 0.1] × SCALE
-    let input = [500, 200, 800, 100];
-    let output = nn_forward(input);
+    let mut input = [500, 200, 800, 100];
+    let mut output = nn_forward(input);
     // Output should be 3 probabilities that sum to ~1000
-    let sum_probs = 0;
+    let mut sum_probs = 0;
     let mut i = 0;
     while i < 3 { sum_probs = sum_probs + output[i]; i = i + 1; }
-    let predicted_class = nn_argmax(output, 3);
+    let mut predicted_class = nn_argmax(output, 3);
     // MSE loss with target [0, 1, 0] (class 1)
-    let target = [0, NEURAL_SCALE, 0];
-    let loss = nn_loss_mse(output, target, 3);
+    let mut target = [0, NEURAL_SCALE, 0];
+    let mut loss = nn_loss_mse(output, target, 3);
     // One backward pass
     nn_backward_output(target, 3);
     print("neural test: " + nn_info());

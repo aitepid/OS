@@ -58,8 +58,8 @@ fn term_clear() {
     term_cursor_x = 0;
     term_cursor_y = 0;
     // Fill window content with bg color
-    let win_x = wm_win_x(term_wm_window);
-    let win_y = wm_win_y(term_wm_window) + 24;  // skip titlebar (24px)
+    let mut win_x = wm_win_x(term_wm_window);
+    let mut win_y = wm_win_y(term_wm_window) + 24;  // skip titlebar (24px)
     let mut w = TERM_COLS * TERM_CELL_W;
     let mut h = TERM_ROWS * TERM_CELL_H;
     vesa_fill_rect_fast(win_x, win_y, w, h, TERM_COLORS[term_bg_color]);
@@ -68,25 +68,25 @@ fn term_clear() {
 
 fn term_scroll_up() {
     // Blit rows 1..TERM_ROWS-1 up by one row using direct framebuffer copy
-    let win_x = wm_win_x(term_wm_window);
-    let win_y = wm_win_y(term_wm_window) + 24;
-    let row_bytes = TERM_COLS * TERM_CELL_W * 4;  // 4 bytes per pixel (BGRA)
-    let row_px_h = TERM_CELL_H;
+    let mut win_x = wm_win_x(term_wm_window);
+    let mut win_y = wm_win_y(term_wm_window) + 24;
+    let mut row_bytes = TERM_COLS * TERM_CELL_W * 4;  // 4 bytes per pixel (BGRA)
+    let mut row_px_h = TERM_CELL_H;
     let mut src_row = 1;
     while src_row < TERM_ROWS {
-        let src_y = win_y + src_row * row_px_h;
-        let dst_y = win_y + (src_row - 1) * row_px_h;
+        let mut src_y = win_y + src_row * row_px_h;
+        let mut dst_y = win_y + (src_row - 1) * row_px_h;
         let mut py = 0;
         while py < row_px_h {
-            let src_addr = vesa_line_addr(src_y + py) + win_x * 4;
-            let dst_addr = vesa_line_addr(dst_y + py) + win_x * 4;
+            let mut src_addr = vesa_line_addr(src_y + py) + win_x * 4;
+            let mut dst_addr = vesa_line_addr(dst_y + py) + win_x * 4;
             mem_copy(src_addr, dst_addr, row_bytes);
             py = py + 1;
         }
         src_row = src_row + 1;
     }
     // Clear last row
-    let last_y = win_y + (TERM_ROWS - 1) * row_px_h;
+    let mut last_y = win_y + (TERM_ROWS - 1) * row_px_h;
     vesa_fill_rect_fast(win_x, last_y, TERM_COLS * TERM_CELL_W, row_px_h, TERM_COLORS[term_bg_color]);
     term_cursor_y = TERM_ROWS - 1;
     return 0;
@@ -106,9 +106,9 @@ fn term_putchar(ch) {
     if ch == 8 { // backspace
         if term_cursor_x > 0 {
             term_cursor_x = term_cursor_x - 1;
-            let win_x = wm_win_x(term_wm_window);
-            let win_y = wm_win_y(term_wm_window) + 24;
-            let px = win_x + term_cursor_x * TERM_CELL_W;
+            let mut win_x = wm_win_x(term_wm_window);
+            let mut win_y = wm_win_y(term_wm_window) + 24;
+            let mut px = win_x + term_cursor_x * TERM_CELL_W;
             let mut py = win_y + term_cursor_y * TERM_CELL_H;
             vesa_fill_rect_fast(px, py, TERM_CELL_W, TERM_CELL_H, TERM_COLORS[term_bg_color]);
         }
@@ -121,9 +121,9 @@ fn term_putchar(ch) {
     }
 
     // Draw character at cursor position using font renderer
-    let win_x = wm_win_x(term_wm_window);
-    let win_y = wm_win_y(term_wm_window) + 24;
-    let px = win_x + term_cursor_x * TERM_CELL_W;
+    let mut win_x = wm_win_x(term_wm_window);
+    let mut win_y = wm_win_y(term_wm_window) + 24;
+    let mut px = win_x + term_cursor_x * TERM_CELL_W;
     let mut py = win_y + term_cursor_y * TERM_CELL_H;
     font_putchar(ch, px, py, TERM_COLORS[term_fg_color], TERM_COLORS[term_bg_color]);
 
@@ -139,7 +139,7 @@ fn term_putchar(ch) {
 fn term_write(text) {
     let mut i = 0;
     while i < len(text) {
-        let ch = text[i];
+        let mut ch = text[i];
         if ch == 27 { // ESC
             // Parse ANSI sequence
             i = term_parse_ansi(text, i + 1);
@@ -162,7 +162,7 @@ fn term_parse_ansi(text, pos) {
     while go == 1 {
         if pos >= len(text) { go = 0; }
         if go == 1 {
-            let ch = text[pos];
+            let mut ch = text[pos];
             if ch >= 48 {
                 if ch <= 57 {
                     param = param * 10 + (ch - 48);
@@ -173,7 +173,7 @@ fn term_parse_ansi(text, pos) {
     }
 
     if pos >= len(text) { return pos; }
-    let cmd = text[pos];
+    let mut cmd = text[pos];
     pos = pos + 1;
 
     if cmd == 72 { // 'H' cursor home

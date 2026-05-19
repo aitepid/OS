@@ -49,8 +49,8 @@ let mut heap_initialized = 0;
 // ============================================================
 
 fn _slab_fl_push(cls, addr) {
-    let top = slab_fl_top[cls];
-    let list = slab_fl[cls];
+    let mut top = slab_fl_top[cls];
+    let mut list = slab_fl[cls];
     if top < len(list) {
         set_at(list, top, addr);
     } else {
@@ -61,9 +61,9 @@ fn _slab_fl_push(cls, addr) {
 }
 
 fn _slab_fl_pop(cls) {
-    let top = slab_fl_top[cls];
+    let mut top = slab_fl_top[cls];
     if top <= 0 { return 0; }
-    let new_top = top - 1;
+    let mut new_top = top - 1;
     let mut addr = slab_fl[cls][new_top];
     set_at(slab_fl_top, cls, new_top);
     return addr;
@@ -90,8 +90,8 @@ fn _slab_find_class(payload_size) {
 
 // Refill a size class by allocating one 4KB page and carving it
 fn _slab_refill(cls) {
-    let block_size = slab_sizes[cls];
-    let page = page_alloc();
+    let mut block_size = slab_sizes[cls];
+    let mut page = page_alloc();
     if page == 0 { return 0; }
     let mut count = 4096 / block_size;
     let mut i = 0;
@@ -141,11 +141,11 @@ fn kmalloc(size) {
     if heap_initialized == 0 { kmalloc_init(); }
     if size <= 0 { return 0; }
 
-    let cls = _slab_find_class(size);
+    let mut cls = _slab_find_class(size);
 
     if cls == SLAB_CLASS_LARGE {
         // Large allocation: whole pages via buddy allocator
-        let pages = (size + HEADER_SIZE + 4095) / 4096;
+        let mut pages = (size + HEADER_SIZE + 4095) / 4096;
         let mut addr = page_alloc_contiguous(pages);
         if addr == 0 { return 0; }
         mem_write_u64(addr, pages * 4096);
@@ -172,13 +172,13 @@ fn kmalloc(size) {
 fn kfree(ptr) {
     if ptr == 0 { return 0; }
     let mut addr = ptr - HEADER_SIZE;
-    let total_size = mem_read_u64(addr);
-    let flags = mem_read_u64(addr + 8);
-    let cls = flags / 2;
+    let mut total_size = mem_read_u64(addr);
+    let mut flags = mem_read_u64(addr + 8);
+    let mut cls = flags / 2;
 
     if cls == SLAB_CLASS_LARGE {
         // Free whole pages back to buddy allocator
-        let pages = total_size / 4096;
+        let mut pages = total_size / 4096;
         let mut i = 0;
         while i < pages {
             page_free(addr + i * 4096);
@@ -201,15 +201,15 @@ fn kfree(ptr) {
 // Reallocate: grow or shrink
 fn krealloc(ptr, new_size) {
     if ptr == 0 { return kmalloc(new_size); }
-    let old_addr = ptr - HEADER_SIZE;
-    let old_total = mem_read_u64(old_addr);
-    let old_payload = old_total - HEADER_SIZE;
+    let mut old_addr = ptr - HEADER_SIZE;
+    let mut old_total = mem_read_u64(old_addr);
+    let mut old_payload = old_total - HEADER_SIZE;
 
     // If new size fits in current block, keep it
     if new_size <= old_payload { return ptr; }
 
     // Allocate new, copy, free old
-    let new_ptr = kmalloc(new_size);
+    let mut new_ptr = kmalloc(new_size);
     if new_ptr == 0 { return 0; }
     let mut copy_size = old_payload;
     if new_size < copy_size { copy_size = new_size; }

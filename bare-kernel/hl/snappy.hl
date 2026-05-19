@@ -31,7 +31,7 @@ fn snappy_compress(data, data_len) {
     pos = _snappy_write_varint(snappy_output_buf, pos, data_len);
 
     // Compress fragment — result written to snappy_frag_buf, length returned
-    let comp_len = _snappy_compress_fragment(data, data_len);
+    let mut comp_len = _snappy_compress_fragment(data, data_len);
 
     // Append fragment into main output buffer
     let mut i = 0;
@@ -54,8 +54,8 @@ fn _snappy_compress_fragment(data, data_len) {
     let mut pos = 0;
     while pos < data_len {
         _snappy_find_match(data, pos, data_len);
-        let match_len    = snappy_match_result[0];
-        let match_offset = snappy_match_result[1];
+        let mut match_len = snappy_match_result[0];
+        let mut match_offset = snappy_match_result[1];
 
         if match_len >= 4 {
             out_pos = _snappy_emit_copy(snappy_frag_buf, out_pos, match_offset, match_len);
@@ -71,7 +71,7 @@ fn _snappy_compress_fragment(data, data_len) {
             pos = pos + match_len;
         } else {
             // Accumulate literals until a match of length >= 4 is found
-            let literal_start = pos;
+            let mut literal_start = pos;
             let mut literal_len = 1;
             pos = pos + 1;
 
@@ -116,12 +116,12 @@ fn _snappy_find_match(data, pos, data_len) {
         return 0;
     }
 
-    let hash      = _snappy_hash_bytes(data, pos);
-    let candidate = snappy_hash_table[hash];
+    let mut hash = _snappy_hash_bytes(data, pos);
+    let mut candidate = snappy_hash_table[hash];
 
     if candidate > 0 {
         if candidate < pos {
-            let offset = pos - candidate;
+            let mut offset = pos - candidate;
             if offset <= 32768 {
                 let mut match_len = 0;
 
@@ -136,8 +136,8 @@ fn _snappy_find_match(data, pos, data_len) {
                         }
                     }
                     if mfound == 0 {
-                        let ca = data[pos + match_len];
-                        let cb = data[candidate + match_len];
+                        let mut ca = data[pos + match_len];
+                        let mut cb = data[candidate + match_len];
                         if ca == cb {
                             match_len = match_len + 1;
                             if match_len >= 64 {
@@ -169,10 +169,10 @@ fn _snappy_hash_bytes(data, pos) {
         return 0;
     }
 
-    let b0 = data[pos];
-    let b1 = data[pos + 1];
-    let b2 = data[pos + 2];
-    let b3 = data[pos + 3];
+    let mut b0 = data[pos];
+    let mut b1 = data[pos + 1];
+    let mut b2 = data[pos + 2];
+    let mut b3 = data[pos + 3];
 
     let mut hash = (b0 + b1 * 256 + b2 * 65536 + b3 * 16777216) % 4096;
     return hash;
@@ -218,7 +218,7 @@ fn _snappy_emit_literal(output, pos, data, start, emit_len) {
 // Emit a copy (back-reference) sequence
 fn _snappy_emit_copy(output, pos, offset, copy_len) {
     // 2-byte copy encoding: tag | offset_low | offset_high
-    let tag = SNAPPY_COPY_1 + ((copy_len - 4) * 4);
+    let mut tag = SNAPPY_COPY_1 + ((copy_len - 4) * 4);
     set_at(output, pos, tag);
     pos = pos + 1;
     set_at(output, pos, offset % 256);
@@ -236,18 +236,18 @@ fn snappy_decompress(data, data_len) {
 
     // Read uncompressed length varint
     _snappy_read_varint(data, pos);
-    let varint_len = snappy_varint_result[1];
+    let mut varint_len = snappy_varint_result[1];
     pos = pos + varint_len;
 
     while pos < data_len {
-        let tag       = data[pos];
+        let mut tag = data[pos];
         pos = pos + 1;
 
-        let elem_type = tag % 4;
-        let length    = tag / 4;
+        let mut elem_type = tag % 4;
+        let mut length = tag / 4;
 
         if elem_type == SNAPPY_LITERAL {
-            let lit_len = length + 1;
+            let mut lit_len = length + 1;
             let mut i   = 0;
             while i < lit_len {
                 set_at(snappy_output_buf, out_pos, data[pos]);
@@ -258,16 +258,16 @@ fn snappy_decompress(data, data_len) {
         }
 
         if elem_type == SNAPPY_COPY_1 {
-            let copy_len   = length + 4;
-            let offset_low  = data[pos];
+            let mut copy_len = length + 4;
+            let mut offset_low = data[pos];
             pos = pos + 1;
-            let offset_high = data[pos];
+            let mut offset_high = data[pos];
             pos = pos + 1;
-            let offset = offset_low + offset_high * 256;
+            let mut offset = offset_low + offset_high * 256;
 
             let mut i = 0;
             while i < copy_len {
-                let src_pos = out_pos - offset;
+                let mut src_pos = out_pos - offset;
                 set_at(snappy_output_buf, out_pos, snappy_output_buf[src_pos]);
                 out_pos = out_pos + 1;
                 i       = i + 1;
@@ -301,7 +301,7 @@ fn _snappy_read_varint(buf, start_pos) {
 
     let mut vdone = 0;
     while vdone == 0 {
-        let cur_byte = buf[pos];
+        let mut cur_byte = buf[pos];
         pos   = pos + 1;
         value = value + ((cur_byte % 128) * _snappy_pow2(shift));
         shift = shift + 7;
@@ -338,16 +338,16 @@ fn snappy_get_output_len() {
 
 // Self-test
 fn snappy_test() {
-    let test_data = "Snappy compression test with repeating data: aaaa bbbb cccc";
-    let tlen      = len(test_data);
+    let mut test_data = "Snappy compression test with repeating data: aaaa bbbb cccc";
+    let mut tlen = len(test_data);
 
-    let comp_len = snappy_compress(test_data, tlen);
+    let mut comp_len = snappy_compress(test_data, tlen);
     if comp_len < 1 {
         print("Snappy test: compression failed");
         return 0 - 1;
     }
 
-    let decomp_len = snappy_decompress(snappy_output_buf, comp_len);
+    let mut decomp_len = snappy_decompress(snappy_output_buf, comp_len);
     if decomp_len != tlen {
         print("Snappy test: decompression length mismatch");
         return 0 - 2;
