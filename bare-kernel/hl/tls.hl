@@ -305,7 +305,7 @@ fn tls12_client_hello() {
     let mut hello = [];
     push(hello, TLS_CONTENT_HANDSHAKE);
     push(hello, 3); push(hello, 3);
-    push(hello, 0); push(hello, 0);
+    push(hello, 0); push(hello, 0);  // length placeholder (bytes 3-4), filled below
     push(hello, 1);
     push(hello, 0); push(hello, 0); push(hello, 0);
     push(hello, 3); push(hello, 3);
@@ -315,6 +315,10 @@ fn tls12_client_hello() {
     push(hello, 0); push(hello, 2);
     push(hello, 19); push(hello, 1);
     push(hello, 1); push(hello, 0);
+    // Back-fill record length field (bytes 3-4 = payload after 5-byte header)
+    let mut payload_len = len(hello) - 5;
+    set_at(hello, 3, (payload_len / 256) % 256);
+    set_at(hello, 4, payload_len % 256);
     return hello;
 }
 
@@ -464,17 +468,25 @@ fn tls12_recv(session) {
     let mut data_len = rec_len - 16; // subtract GCM tag
     if data_len < 0 { return []; }
 
-    // Simplified decryption: XOR with key stream
+    // AES-GCM decryption (symmetric with tls12_send)
     let mut key = _tls_app_key_rd[session];
-    let mut plain = [];
+    let mut seq = _tls_seq_rd[session];
+    let mut nonce = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    set_at(nonce, 8,  (seq / 16777216) % 256);
+    set_at(nonce, 9,  (seq / 65536) % 256);
+    set_at(nonce, 10, (seq / 256) % 256);
+    set_at(nonce, 11, seq % 256);
+    // Extract ciphertext (record[5 .. 5+data_len])
+    let mut cipher = [];
     let mut i = 0;
     while i < data_len {
-        if 5 + i < len(record) {
-            let mut k = key[i % len(key)];
-            push(plain, record[5 + i] ^ k);
-        }
+        if 5 + i < len(record) { push(cipher, record[5 + i]); }
         i = i + 1;
     }
+    aes_gcm_init();
+    aes_gcm_set_key(key);
+    aes_gcm_set_nonce(nonce);
+    let mut plain = aes_gcm_decrypt(cipher);
     set_at(_tls_seq_rd, session, _tls_seq_rd[session] + 1);
     return plain;
 }

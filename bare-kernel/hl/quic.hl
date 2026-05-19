@@ -355,13 +355,37 @@ fn quic_process_server_initial(conn, data) {
 }
 
 fn quic_process_handshake(conn, data) {
-    // Handshake complete — derive application keys (simplified)
+    // Derive application keys via HKDF (RFC 9001 §5.1 simplified)
     let mut addr = quic_conn_addr(conn);
-    let mut local_cid = mem_read_u64(addr + 8);
+    let mut local_cid  = mem_read_u64(addr + 8);
     let mut remote_cid = mem_read_u64(addr + 16);
-    // Derive key material by mixing CIDs (simplified HKDF equivalent)
-    let mut key_tx = local_cid ^ remote_cid ^ 2862933555777941757;
-    let mut key_rx = remote_cid ^ local_cid ^ 1442695040888963407;
+    // Build 8-byte salt/IKM arrays from connection IDs (little-endian)
+    let mut salt = [0, 0, 0, 0, 0, 0, 0, 0];
+    let mut ikm  = [0, 0, 0, 0, 0, 0, 0, 0];
+    let mut shift = 1;
+    let mut i = 0;
+    while i < 8 {
+        set_at(salt, i, (local_cid  / shift) % 256);
+        set_at(ikm,  i, (remote_cid / shift) % 256);
+        shift = shift * 256;
+        i = i + 1;
+    }
+    let mut prk    = hkdf_extract(salt, ikm);
+    let mut label_tx = [107, 101, 121, 95, 116, 120]; // "key_tx"
+    let mut label_rx = [107, 101, 121, 95, 114, 120]; // "key_rx"
+    let mut key_tx_bytes = hkdf_expand(prk, label_tx, 32);
+    let mut key_rx_bytes = hkdf_expand(prk, label_rx, 32);
+    // Fold first 8 bytes into u64 key handle stored in connection record
+    let mut key_tx = 0;
+    let mut key_rx = 0;
+    shift = 1;
+    i = 0;
+    while i < 8 {
+        key_tx = key_tx + key_tx_bytes[i] * shift;
+        key_rx = key_rx + key_rx_bytes[i] * shift;
+        shift = shift * 256;
+        i = i + 1;
+    }
     mem_write_u64(addr + 56, key_tx);
     mem_write_u64(addr + 64, key_rx);
     return 0;
