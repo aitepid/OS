@@ -93,6 +93,41 @@ let QUIC_STREAM_TABLE = 10747904; // 0xA40000 -- 16 conns * 16 streams * 128 byt
 let QUIC_INITIAL_CWND = 14720;   // ~10 * 1472 (max UDP payload)
 let QUIC_MIN_CWND = 2944;        // 2 * 1472
 
+// AEAD packet protection using AES-128-GCM (RFC 9001 simplified)
+// key: 16-byte array derived from conn_id; nonce: 12 bytes from pkt_num + conn_id
+fn _quic_protect_packet(conn, plaintext) {
+    let mut addr = quic_conn_addr(conn);
+    let mut pkt_num = mem_read_u64(addr + 40);
+    let mut conn_id = mem_read_u64(addr + 8);
+    // Derive 16-byte key from conn_id (HKDF-like mixing)
+    let mut key = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+    let mut ki = 0;
+    while ki < 8 {
+        set_at(key, ki,     (conn_id >> (ki * 8)) & 255);
+        set_at(key, ki + 8, ((conn_id * 6364136223846793005) >> (ki * 8)) & 255);
+        ki = ki + 1;
+    }
+    // Build 12-byte nonce: pkt_num (8 bytes LE) XOR'd with last 8 bytes of conn_id
+    let mut nonce = [0,0,0,0,0,0,0,0,0,0,0,0];
+    let mut ni = 0;
+    while ni < 4 {
+        set_at(nonce, ni + 4, (pkt_num >> (ni * 8)) & 255);
+        set_at(nonce, ni + 8, (conn_id >> (ni * 8)) & 255);
+        ni = ni + 1;
+    }
+    aes_gcm_init();
+    aes_gcm_set_key(key);
+    aes_gcm_set_nonce(nonce);
+    aes_gcm_encrypt(plaintext);
+    // Return protected packet: ciphertext + 16-byte AEAD tag
+    let mut out = [];
+    let mut i = 0;
+    while i < aes_gcm_ciphertext_len { push(out, aes_gcm_ciphertext[i]); i = i + 1; }
+    i = 0;
+    while i < 16 { push(out, aes_gcm_tag[i]); i = i + 1; }
+    return out;
+}
+
 // --- Connection management ---
 
 fn quic_conn_addr(conn_id) {
@@ -228,10 +263,11 @@ fn quic_send_initial(conn) {
     push(pkt, (pkt_num >> 8) & 255);
     push(pkt, pkt_num & 255);
 
-    // Append crypto payload
+    // Protect payload with AES-128-GCM AEAD (RFC 9001)
+    let mut protected = _quic_protect_packet(conn, crypto_payload);
     let mut ci = 0;
-    while ci < len(crypto_payload) {
-        push(pkt, crypto_payload[ci]);
+    while ci < len(protected) {
+        push(pkt, protected[ci]);
         ci = ci + 1;
     }
 

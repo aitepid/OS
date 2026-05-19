@@ -34,7 +34,10 @@ let JIT_RET      = 195;   // 0xC3
 let JIT_MOV_RBP  = 137;   // 0x89 (MOV r/m, r)
 let JIT_MOV_RM   = 141;   // 0x8D LEA
 let JIT_ADD_RAX  = 5;     // 0x05 ADD eax,imm32
+let JIT_SUB_RAX  = 45;    // 0x2D SUB eax,imm32
+let JIT_IMUL_RM  = 105;   // 0x69 IMUL r,r/m,imm32
 let JIT_XOR_RAX  = 49;    // 0x31 XOR r/m,r (zero rax)
+let JIT_NEG_RAX  = 216;   // 0xD8 placeholder (not standard — use 0xF7 /3)
 let JIT_NOP      = 144;   // 0x90
 
 fn jit_init() {
@@ -122,6 +125,29 @@ fn _jit_emit_add_rax_imm32(imm) {
     return 0;
 }
 
+fn _jit_emit_sub_rax_imm32(imm) {
+    // REX.W + SUB rax, imm32 (0x48 0x2D imm32le)
+    _jit_emit(JIT_REX_W);
+    _jit_emit(JIT_SUB_RAX);
+    _jit_emit(imm - (imm / 256) * 256);
+    _jit_emit((imm / 256) - (imm / 256 / 256) * 256);
+    _jit_emit((imm / 65536) - (imm / 65536 / 256) * 256);
+    _jit_emit((imm / 16777216) - (imm / 16777216 / 256) * 256);
+    return 0;
+}
+
+fn _jit_emit_mul_rax_imm32(imm) {
+    // REX.W + IMUL rax, rax, imm32 (0x48 0x69 0xC0 imm32le)
+    _jit_emit(JIT_REX_W);
+    _jit_emit(JIT_IMUL_RM);         // 0x69
+    _jit_emit(192);                 // ModRM: 11 000 000 = rax,rax
+    _jit_emit(imm - (imm / 256) * 256);
+    _jit_emit((imm / 256) - (imm / 256 / 256) * 256);
+    _jit_emit((imm / 65536) - (imm / 65536 / 256) * 256);
+    _jit_emit((imm / 16777216) - (imm / 16777216 / 256) * 256);
+    return 0;
+}
+
 fn jit_compile_const(slot, retval) {
     // Emit stub: prologue + mov eax,retval + epilogue (constant-returning function)
     if jit_code_n + 16 > JIT_MAXCODE { return 0; }
@@ -143,6 +169,32 @@ fn jit_compile_add(slot, base_val, add_val) {
     _jit_emit_prologue();
     _jit_emit_mov_rax_imm32(base_val);
     _jit_emit_add_rax_imm32(add_val);
+    _jit_emit_epilogue();
+    set_at(jit_compiled, slot, 1);
+    jit_total_compiled += 1;
+    return jit_code_n - start;
+}
+
+fn jit_compile_sub(slot, base_val, sub_val) {
+    if jit_code_n + 24 > JIT_MAXCODE { return 0; }
+    let mut start = jit_code_n;
+    set_at(jit_stub_off, slot, start);
+    _jit_emit_prologue();
+    _jit_emit_mov_rax_imm32(base_val);
+    _jit_emit_sub_rax_imm32(sub_val);
+    _jit_emit_epilogue();
+    set_at(jit_compiled, slot, 1);
+    jit_total_compiled += 1;
+    return jit_code_n - start;
+}
+
+fn jit_compile_mul(slot, a_val, b_val) {
+    if jit_code_n + 28 > JIT_MAXCODE { return 0; }
+    let mut start = jit_code_n;
+    set_at(jit_stub_off, slot, start);
+    _jit_emit_prologue();
+    _jit_emit_mov_rax_imm32(a_val);
+    _jit_emit_mul_rax_imm32(b_val);
     _jit_emit_epilogue();
     set_at(jit_compiled, slot, 1);
     jit_total_compiled += 1;

@@ -303,6 +303,19 @@ fn sh_scan_token(pos) {
         return ilen * 10 + tok_type;
     }
 
+    // Multi-char operators: == != <= >= && || ->
+    // Check before single-char fallthrough so they tokenize as one unit (len=2).
+    if pos + 1 < sh_line_len {
+        let mut ch2 = sh_line_buf[pos + 1];
+        if ch == 61  { if ch2 == 61  { return 20 + SH_TYPE_SYMBOL; } }  // ==
+        if ch == 33  { if ch2 == 61  { return 20 + SH_TYPE_SYMBOL; } }  // !=
+        if ch == 60  { if ch2 == 61  { return 20 + SH_TYPE_SYMBOL; } }  // <=
+        if ch == 62  { if ch2 == 61  { return 20 + SH_TYPE_SYMBOL; } }  // >=
+        if ch == 38  { if ch2 == 38  { return 20 + SH_TYPE_SYMBOL; } }  // &&
+        if ch == 124 { if ch2 == 124 { return 20 + SH_TYPE_SYMBOL; } }  // ||
+        if ch == 45  { if ch2 == 62  { return 20 + SH_TYPE_SYMBOL; } }  // ->
+    }
+
     // Single-char symbol (operators, braces, etc.)
     return 10 + SH_TYPE_SYMBOL;
 }
@@ -398,10 +411,28 @@ fn sh_test() {
     if col1 != SH_COLOR_KEYWORD { pass = 0; }
     if col2 != SH_COLOR_KEYWORD { pass = 0; }
 
+    // Lexer test 4: "==" → symbol, len=2 (2*10+5=25)
+    // '='=61, '='=61
+    sh_set_line_char(0, 61);
+    sh_set_line_char(1, 61);
+    sh_set_line_len(2);
+    let mut tok_eq = sh_scan_token(0);   // expect 2*10+5 = 25 (symbol, len=2)
+    if tok_eq != 25 { pass = 0; }
+
+    // Lexer test 5: "->" → symbol, len=2 (2*10+5=25)
+    // '-'=45, '>'=62
+    sh_set_line_char(0, 45);
+    sh_set_line_char(1, 62);
+    sh_set_line_len(2);
+    let mut tok_arrow = sh_scan_token(0);  // expect 25 (symbol, len=2)
+    if tok_arrow != 25 { pass = 0; }
+
     print("sh_test: cnt=" + to_string(cnt)
           + " tok0=" + to_string(tok0)
           + " tok_num=" + to_string(tok_num)
           + " tok_cmt=" + to_string(tok_cmt)
+          + " tok_eq=" + to_string(tok_eq)
+          + " tok_arrow=" + to_string(tok_arrow)
           + " col0=" + to_string(col0));
 
     if pass == 1 { print("sh_test: PASS"); }

@@ -36,15 +36,25 @@ let mut ms_file_count  = 0;
 
 fn ms_malloc(size) {
     if size <= 0 { return 0; }
-    if ms_alloc_count >= MS_MAX_ALLOCS { return 0; }
-    let mut idx = ms_alloc_count;
-    let mut addr = MS_SLAB_BASE + idx * MS_SLAB_STRIDE;
-    set_at(ms_alloc_addr, idx, addr);
+    // Reuse freed slots before appending to avoid exhausting the fixed arena
+    let mut idx = 0 - 1;
+    let mut i = 0;
+    while i < ms_alloc_count {
+        if ms_alloc_used[i] == 0 {
+            if ms_alloc_size[i] >= size { idx = i; i = ms_alloc_count; }
+        }
+        i = i + 1;
+    }
+    if idx < 0 {
+        if ms_alloc_count >= MS_MAX_ALLOCS { return 0; }
+        idx = ms_alloc_count;
+        set_at(ms_alloc_addr, idx, MS_SLAB_BASE + idx * MS_SLAB_STRIDE);
+        ms_alloc_count = ms_alloc_count + 1;
+    }
     set_at(ms_alloc_size, idx, size);
     set_at(ms_alloc_used, idx, 1);
-    ms_alloc_count = ms_alloc_count + 1;
     ms_total_alloc = ms_total_alloc + size;
-    return addr;
+    return ms_alloc_addr[idx];
 }
 
 fn ms_free(addr) {

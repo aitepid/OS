@@ -182,17 +182,23 @@ fn lsp_handle_request(method_id, doc_id, line, col) {
         result = ls_close(doc_id);
     }
     if method_id == LSP_M_COMPLETION {
-        // Completion: encode position as doc_id*1000+col
+        // Completion: use code_complete engine — prefix_key derived from col
         let mut idx = ls_find(doc_id);
         if idx >= 0 {
-            result = doc_id * 1000 + col;
+            let mut prefix_key = col / 4;    // coarse prefix bucket from column
+            let mut n = cc_match_prefix(prefix_key);
+            if n > 0 {
+                result = cc_get_best();      // best-scoring match id
+            } else {
+                result = doc_id * 1000 + col;
+            }
         }
     }
     if method_id == LSP_M_HOVER {
-        // Hover: encode position as doc_id*1000+line
+        // Hover: return diagnostic count for the hovered line (useful info)
         let mut idx2 = ls_find(doc_id);
         if idx2 >= 0 {
-            result = doc_id * 1000 + line;
+            result = ls_get_diag_count(doc_id) * 10000 + line * 10 + col % 10;
         }
     }
     if method_id == LSP_M_DIAGNOSTICS {

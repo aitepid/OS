@@ -12,6 +12,8 @@
 //   dns_cache_status (new) / dns_cache_flush (new)
 
 let DNS_PORT = 53;
+let DNS_LOCAL_PORT = 1053;
+let DNS_TIMEOUT = 500;         // 5 seconds at 100Hz
 let DNS_TYPE_A = 1;
 let DNS_CLASS_IN = 1;
 let DNS_CACHE_SIZE = 64;
@@ -19,6 +21,9 @@ let DNS_CACHE_BUCKETS = 32;
 let DNS_DEFAULT_TTL = 30000;   // 300 seconds at 100Hz tick
 
 let mut dns_id = 1;
+let mut dns_server_ip = [8, 8, 8, 8];   // default: Google DNS
+let mut dns_resp_ready = 0;
+let mut dns_resp_data  = [];
 
 // Cache parallel arrays
 let mut _dns_c_valid = [];      // 1 = occupied
@@ -297,15 +302,27 @@ fn dns_resolve(name_parts) {
         }
     }
 
-    // Cache miss: build and send DNS query
+    // Cache miss: send DNS query via UDP and await response
     let mut query = dns_build_query(name_parts);
-    // TODO: send via UDP to dns_server:53, receive response
-    // let resp = udp_send_recv(dns_server, DNS_PORT, query);
-    // let ip = dns_parse_response(resp);
-    // if ip[0] != 0 { _dns_cache_insert(name_parts, ip, ttl_ticks); }
-    // return ip;
+    dns_resp_ready = 0;
+    dns_resp_data  = [];
+    let mut sock = udp_bind(DNS_LOCAL_PORT);
+    udp_send(dns_server_ip, DNS_PORT, DNS_LOCAL_PORT, query);
+    let mut deadline = get_ticks() + DNS_TIMEOUT;
+    while dns_resp_ready == 0 {
+        if get_ticks() >= deadline { udp_close(sock); return [0, 0, 0, 0]; }
+    }
+    udp_close(sock);
+    let mut ip = dns_parse_response(dns_resp_data);
+    if ip[0] != 0 { _dns_cache_insert(name_parts, ip, DNS_DEFAULT_TTL); }
+    return ip;
+}
 
-    return [0, 0, 0, 0];
+// UDP receive callback — called by udp_handle when a packet arrives on DNS_LOCAL_PORT
+fn dns_on_recv(data) {
+    dns_resp_data  = data;
+    dns_resp_ready = 1;
+    return 0;
 }
 
 // Cache with explicit TTL (for use after parsing response externally)

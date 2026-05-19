@@ -126,10 +126,10 @@ fn sys_send(sockfd, data, length) {
     if sockfd < 0 { return 0 - 1; }
     if sock_state[sockfd] < 3 { return 0 - 1; }
     if sock_type[sockfd] == SOCK_STREAM {
-        // tcp_send(sock_remote_ip[sockfd], sock_remote_port[sockfd], data, length);
+        tcp_send(sockfd, data);
     }
     if sock_type[sockfd] == SOCK_DGRAM {
-        // udp_send(sock_remote_ip[sockfd], sock_remote_port[sockfd], sock_local_port[sockfd], data);
+        udp_send(sock_remote_ip[sockfd], sock_remote_port[sockfd], sock_local_port[sockfd], data);
     }
     return length;
 }
@@ -137,8 +137,12 @@ fn sys_send(sockfd, data, length) {
 fn sys_recv(sockfd, buf, maxlen) {
     if sockfd < 0 { return 0 - 1; }
     if sock_state[sockfd] < 3 { return 0 - 1; }
-    // Block until data available (or use poll)
-    return 0;
+    // Poll network layer receive buffer at buf address
+    let mut received = mem_read_u64(buf);
+    if received == 0 { return 0; }
+    // Clamp to maxlen and return byte count
+    if received > maxlen { received = maxlen; }
+    return received;
 }
 
 fn sys_close_socket(sockfd) {

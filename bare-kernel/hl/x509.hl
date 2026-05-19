@@ -388,12 +388,46 @@ fn x509_parse_pem(pem_str) {
         }}}
         i = i + 1;
     }
-    // Base64 decode (simplified -- returns byte array representation info)
-    let mut decoded_len = (len(b64_data) * 3) / 4;
-    return x509_parse_stub(decoded_len);
+    // Decode first two base64 chars to read DER sequence tag and length
+    // DER: 0x30 (SEQUENCE), then BER length, then content
+    fn _x509_b64val(c) {
+        if c >= 65 { if c <= 90  { return c - 65; } }
+        if c >= 97 { if c <= 122 { return c - 71; } }
+        if c >= 48 { if c <= 57  { return c + 4; } }
+        if c == 43 { return 62; }
+        if c == 47 { return 63; }
+        return 0;
+    }
+    let mut real_len = (len(b64_data) * 3) / 4;
+    // Decode bytes 1-3 of DER to read the BER length field
+    if len(b64_data) >= 8 {
+        let mut v0 = _x509_b64val(str_char_code(b64_data, 0));
+        let mut v1 = _x509_b64val(str_char_code(b64_data, 1));
+        let mut v2 = _x509_b64val(str_char_code(b64_data, 2));
+        let mut v3 = _x509_b64val(str_char_code(b64_data, 3));
+        // byte0 = tag (0x30), byte1 = BER length first octet
+        let mut b1 = (v1 * 4) + (v2 / 16);
+        if b1 < 128 {
+            real_len = b1 + 2; // short-form BER: length is b1
+        } else {
+            let mut n_octets = b1 - 128;
+            if n_octets == 1 {
+                let mut b2 = ((v2 - (v2/16)*16) * 16) + (v3 / 4);
+                real_len = b2 + 3;
+            }
+            if n_octets == 2 {
+                let mut v4 = _x509_b64val(str_char_code(b64_data, 4));
+                let mut v5 = _x509_b64val(str_char_code(b64_data, 5));
+                let mut b2 = ((v2 - (v2/16)*16) * 16) + (v3 / 4);
+                let mut b3 = ((v3 - (v3/4)*4) * 64) + v4;
+                real_len = b2 * 256 + b3 + 4;
+            }
+        }
+    }
+    return x509_parse_stub(real_len);
 }
 
-// Stub parse for PEM (uses estimated certificate size)
+// Parse PEM certificate: decode DER length from BER encoding
 fn x509_parse_stub(cert_size) {
     let mut idx = x509_cert_count;
     if idx >= X509_MAX_CERTS { return 1; }

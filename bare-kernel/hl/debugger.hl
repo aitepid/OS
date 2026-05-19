@@ -14,7 +14,7 @@
 // Register IDs: 0=RAX 1=RCX 2=RDX 3=RBX 4=RSP 5=RBP 6=RSI 7=RDI
 //               8=R8  9=R9  10=R10 11=R11 12=R12 13=R13 14=R14 15=R15
 //
-// Shell: dbg init/test/attach/step/cont/rip/steps/reg/wreg (9 commands)
+// Shell: dbg init/test/attach/step/cont/rip/steps/reg/wreg/arch (10 commands)
 
 let mut DBG_MAX_SESSIONS = 4;
 let mut DBG_MAX_REGS     = 16;
@@ -41,6 +41,7 @@ let mut DBG_STEP         = 2;
 //   0xE0-0xEF: LOOP/CALL/JMP  → 2  (class 14)
 //   0xF0-0xFF: LOCK/HLT/misc  → 1  (class 15)
 let dbg_opcode_lens = array(16, 0);
+let mut dbg_arch = 0;    // 0 = x86_64 (default), 1 = ARM64 (fixed 4-byte insns)
 
 let dbg_session_id    = array(4, 0);
 let dbg_session_state = array(4, 0);
@@ -51,8 +52,41 @@ let dbg_step_size     = array(4, 1);   // per-session next-step byte count (defa
 let dbg_reg_file      = array(64, 0);  // 4 sessions × 16 regs, flat: session*16+reg_id
 let mut dbg_n_sessions    = 0;
 
+// Set target architecture. arch=0 → x86_64, arch=1 → ARM64 (all insns 4 bytes).
+// Rebuilds dbg_opcode_lens to match the new arch.
+fn dbg_set_arch(arch) {
+    dbg_arch = arch;
+    if arch == 1 {
+        // ARM64: fixed 4-byte instructions
+        let mut i = 0;
+        while i < 16 {
+            set_at(dbg_opcode_lens, i, 4);
+            i += 1;
+        }
+    } else {
+        // x86_64: restore representative lengths
+        set_at(dbg_opcode_lens,  0, 2);
+        set_at(dbg_opcode_lens,  1, 2);
+        set_at(dbg_opcode_lens,  2, 2);
+        set_at(dbg_opcode_lens,  3, 2);
+        set_at(dbg_opcode_lens,  4, 1);
+        set_at(dbg_opcode_lens,  5, 1);
+        set_at(dbg_opcode_lens,  6, 1);
+        set_at(dbg_opcode_lens,  7, 2);
+        set_at(dbg_opcode_lens,  8, 3);
+        set_at(dbg_opcode_lens,  9, 1);
+        set_at(dbg_opcode_lens, 10, 3);
+        set_at(dbg_opcode_lens, 11, 3);
+        set_at(dbg_opcode_lens, 12, 1);
+        set_at(dbg_opcode_lens, 13, 2);
+        set_at(dbg_opcode_lens, 14, 2);
+        set_at(dbg_opcode_lens, 15, 1);
+    }
+    return arch;
+}
+
 fn dbg_init() {
-    // Populate opcode-length table
+    // Populate opcode-length table (x86_64 by default)
     set_at(dbg_opcode_lens,  0, 2);
     set_at(dbg_opcode_lens,  1, 2);
     set_at(dbg_opcode_lens,  2, 2);
@@ -69,6 +103,7 @@ fn dbg_init() {
     set_at(dbg_opcode_lens, 13, 2);
     set_at(dbg_opcode_lens, 14, 2);
     set_at(dbg_opcode_lens, 15, 1);
+    if dbg_arch == 1 { dbg_set_arch(1); }
 
     let mut i = 0;
     while i < DBG_MAX_SESSIONS {

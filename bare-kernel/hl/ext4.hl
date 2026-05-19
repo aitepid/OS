@@ -149,6 +149,36 @@ fn ext4_read_inode(inode_num) {
     return EXT4_INODE_BUF + inode_sec_off;
 }
 
+// Parse one extent tree node at block_addr, appending leaf extents to result.
+// depth: current node depth (0 = leaf, >0 = index)
+fn _ext4_parse_extent_node(block_addr, depth, extents) {
+    let mut eh_magic = mem_read_u16(block_addr);
+    if eh_magic != EXT4_EXTENT_MAGIC { return extents; }
+    let mut eh_entries = mem_read_u16(block_addr + 2);
+    let mut i = 0;
+    if depth == 0 {
+        // Leaf node: read ext4_extent entries (12 bytes each, after 12-byte header)
+        while i < eh_entries {
+            let mut off = block_addr + 12 + i * 12;
+            let mut file_block = mem_read_u32(off);
+            let mut blk_count  = mem_read_u16(off + 4);
+            let mut start_lo   = mem_read_u32(off + 8);
+            push(extents, [file_block, blk_count, start_lo]);
+            i = i + 1;
+        }
+    } else {
+        // Index node: each entry points to a child extent block
+        while i < eh_entries {
+            let mut off = block_addr + 12 + i * 12;
+            let mut child_block_lo = mem_read_u32(off + 4);  // ei_leaf_lo
+            let mut child_phys = child_block_lo * EXT4_BLOCK_SIZE;
+            extents = _ext4_parse_extent_node(child_phys, depth - 1, extents);
+            i = i + 1;
+        }
+    }
+    return extents;
+}
+
 // Parse leaf extent tree from inode address.
 // Returns array of [file_block, blk_count, disk_block] triples.
 fn ext4_parse_extents(inode_addr) {
@@ -162,24 +192,27 @@ fn ext4_parse_extents(inode_addr) {
     let mut eh_entries = mem_read_u16(inode_addr + 42);
     let mut eh_depth = mem_read_u16(inode_addr + 46);
 
-    if eh_depth != 0 {
-        // Index-node extents (depth > 0) — not yet supported
-        print("ext4: depth=" + to_string(eh_depth) + " index extents unsupported");
-        return extents;
-    }
-
-    // Leaf extents follow the 12-byte header at offset 40
-    let mut i = 0;
-    while i < eh_entries {
-        let mut off = inode_addr + 52 + i * 12;  // 40+12 header + i*12
-        let mut file_block = mem_read_u32(off);
-        let mut blk_count = mem_read_u16(off + 4);
-        let mut start_hi = mem_read_u16(off + 6);
-        let mut start_lo = mem_read_u32(off + 8);
-        // Use start_lo only (covers < 2 TB; start_hi is 0 on typical VMs)
-        let mut disk_block = start_lo;
-        push(extents, [file_block, blk_count, disk_block]);
-        i = i + 1;
+    if eh_depth == 0 {
+        // Leaf extents follow the 12-byte header at offset 40
+        let mut i = 0;
+        while i < eh_entries {
+            let mut off = inode_addr + 52 + i * 12;  // 40+12 header + i*12
+            let mut file_block = mem_read_u32(off);
+            let mut blk_count = mem_read_u16(off + 4);
+            let mut start_lo = mem_read_u32(off + 8);
+            push(extents, [file_block, blk_count, start_lo]);
+            i = i + 1;
+        }
+    } else {
+        // Index extents: each points to a child extent tree block
+        let mut i = 0;
+        while i < eh_entries {
+            let mut off = inode_addr + 52 + i * 12;
+            let mut child_lo = mem_read_u32(off + 4);   // ei_leaf_lo
+            let mut child_phys = child_lo * EXT4_BLOCK_SIZE;
+            extents = _ext4_parse_extent_node(child_phys, eh_depth - 1, extents);
+            i = i + 1;
+        }
     }
     return extents;
 }

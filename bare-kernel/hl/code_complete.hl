@@ -21,7 +21,7 @@
 //
 // CC_MAX_ITEMS=32, CC_MAX_MATCHES=16
 // CC_TYPE_FN=0, CC_TYPE_VAR=1, CC_TYPE_KEYWORD=2
-// Shell: cc init/test/add/best/score/find/count/reg/match/context (10 cmds)
+// Shell: cc init/test/add/best/score/find/count/reg/match/context/str/builtins (12 cmds)
 
 let mut CC_MAX_ITEMS   = 32;
 let mut CC_MAX_MATCHES = 16;
@@ -172,6 +172,42 @@ fn cc_get_match(i) {
 
 fn cc_get_matches_count() { return cc_n_matches; }
 
+// Match by string prefix: name_chars is an array of ASCII codes, name_len is
+// its length.  Derives the 2-char prefix_key and delegates to cc_match_prefix.
+fn cc_match_string(name_chars, name_len) {
+    if name_len < 1 { return 0; }
+    let mut c0 = name_chars[0];
+    let mut c1 = 0;
+    if name_len >= 2 { c1 = name_chars[1]; }
+    let mut pk = c0 * 256 + c1;
+    return cc_match_prefix(pk);
+}
+
+// Pre-populate the symbol table with H-L built-in keywords.
+// Item IDs 1001-1009 reserved for builtins.
+fn cc_load_hl_builtins() {
+    // 2-char prefix keys: ch1*256 + ch2
+    let mut pk_fn     = 102 * 256 + 110;  // "fn"
+    let mut pk_let    = 108 * 256 + 101;  // "le(t)"
+    let mut pk_if     = 105 * 256 + 102;  // "if"
+    let mut pk_wh     = 119 * 256 + 104;  // "wh(ile)"
+    let mut pk_re     = 114 * 256 + 101;  // "re(turn)"
+    let mut pk_ar     = 97  * 256 + 114;  // "ar(ray)"
+    let mut pk_se     = 115 * 256 + 101;  // "se(t_at)"
+    let mut pk_mu     = 109 * 256 + 117;  // "mu(t)"
+    let mut pk_pr     = 112 * 256 + 114;  // "pr(int)"
+    cc_register_symbol(1001, CC_TYPE_KEYWORD, pk_fn,  100);
+    cc_register_symbol(1002, CC_TYPE_KEYWORD, pk_let, 100);
+    cc_register_symbol(1003, CC_TYPE_KEYWORD, pk_if,  100);
+    cc_register_symbol(1004, CC_TYPE_KEYWORD, pk_wh,  100);
+    cc_register_symbol(1005, CC_TYPE_KEYWORD, pk_re,  100);
+    cc_register_symbol(1006, CC_TYPE_KEYWORD, pk_ar,   90);
+    cc_register_symbol(1007, CC_TYPE_KEYWORD, pk_se,   90);
+    cc_register_symbol(1008, CC_TYPE_KEYWORD, pk_mu,   95);
+    cc_register_symbol(1009, CC_TYPE_FN,      pk_pr,   95);
+    return 9;
+}
+
 // Estimate completion type from cursor column position.
 fn cc_get_context_kind(col) {
     if col < 4  { return CC_TYPE_KEYWORD; }
@@ -236,13 +272,27 @@ fn cc_test() {
     if k5  != CC_TYPE_FN      { pass = 0; }
     if k15 != CC_TYPE_VAR     { pass = 0; }
 
+    // cc_match_string + cc_load_hl_builtins test
+    code_cmp_init();
+    cc_load_hl_builtins();
+    // Match "fn" prefix: name_chars=['f'=102, 'n'=110]
+    let mut fn_pfx = [102, 110];
+    let mut mc_str = cc_match_string(fn_pfx, 2);
+    if mc_str != 1 { pass = 0; }
+    // Match "re" prefix (return): name_chars=['r'=114, 'e'=101]
+    let mut re_pfx = [114, 101];
+    let mut mc_re = cc_match_string(re_pfx, 2);
+    if mc_re != 1 { pass = 0; }
+
     print("cc_test: cnt=" + to_string(cnt)
           + " best=" + to_string(best)
           + " mc=" + to_string(mc)
           + " m0=" + to_string(m0)
           + " m1=" + to_string(m1)
           + " k0=" + to_string(k0)
-          + " k15=" + to_string(k15));
+          + " k15=" + to_string(k15)
+          + " mc_str=" + to_string(mc_str)
+          + " mc_re=" + to_string(mc_re));
 
     if pass == 1 { print("cc_test: PASS"); }
     if pass == 0 { print("cc_test: FAIL"); }
