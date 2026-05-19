@@ -1,309 +1,333 @@
-# bzip2.hl - bzip2 Compression (simplified)
-# Implements simplified bzip2 compression using Burrows-Wheeler Transform
+// bzip2.hl - bzip2 Compression (simplified)
+// Implements simplified bzip2 compression using Burrows-Wheeler Transform
 
-# Memory layout
-global BZIP2_BUF = 0x1220000
-global BZIP2_BLOCK_SIZE = 900000  # 900KB blocks (bzip2 default)
-global BZIP2_MAGIC = 0x425A  # "BZ" magic header
+// Work area: rotation indices [0..255], sorted BWT column [65536..65791],
+// general scratch [131072+]
+let bzip2_work = array(196608, 0);
 
-# State
-global bzip2_output = 0
-global bzip2_output_len = 0
-global bzip2_block_crc = 0
+// Compressed / decompressed output buffer
+let bzip2_out = array(524288, 0);
+
+// Test data staging buffer
+let bzip2_tbuf = array(256, 0);
+
+// Constants
+let BZIP2_BLOCK_SIZE = 900000;
+let BZIP2_MAGIC = 17242;   // 0x425A  "BZ"
+
+// Mutable state
+let mut bzip2_output_len = 0;
+let mut bzip2_block_crc = 0;
 
 fn bzip2_init() {
-    bzip2_output = BZIP2_BUF + 262144
-    bzip2_output_len = 0
-    bzip2_block_crc = 0
-    serial_print("bzip2 compression ready")
+    bzip2_output_len = 0;
+    bzip2_block_crc = 0;
+    serial_print("bzip2 compression ready");
+    return 0;
 }
 
-# Compress data (simplified bzip2)
-fn bzip2_compress(data, len) {
-    var output = bzip2_output
-    var pos = 0
+// Compress data using simplified bzip2 (BWT + RLE)
+// Returns total compressed byte count written to bzip2_out
+fn bzip2_compress(data, dlen) {
+    let mut pos = 0;
 
-    # bzip2 header (10 bytes)
-    # Magic "BZ" (2 bytes)
-    set_at(output, pos, 66)  # 'B'
-    set_at(output, pos + 1, 90)  # 'Z'
-    pos = pos + 2
+    // Stream header
+    // Magic "BZ" (2 bytes)
+    set_at(bzip2_out, pos, 66);       // 'B'
+    set_at(bzip2_out, pos + 1, 90);   // 'Z'
+    pos = pos + 2;
 
-    # Version 'h' for bzip2
-    set_at(output, pos, 104)  # 'h'
-    pos = pos + 1
+    // Version 'h' for bzip2
+    set_at(bzip2_out, pos, 104);      // 'h'
+    pos = pos + 1;
 
-    # Block size '9' (900k)
-    set_at(output, pos, 57)  # '9'
-    pos = pos + 1
+    // Block size indicator '9' (900 KB)
+    set_at(bzip2_out, pos, 57);       // '9'
+    pos = pos + 1;
 
-    # Stream header (6 bytes): 0x314159265359 (π as magic)
-    set_at(output, pos, 0x31)
-    set_at(output, pos + 1, 0x41)
-    set_at(output, pos + 2, 0x59)
-    set_at(output, pos + 3, 0x26)
-    set_at(output, pos + 4, 0x53)
-    set_at(output, pos + 5, 0x59)
-    pos = pos + 6
+    // Block-start magic 6 bytes: 0x314159265359  (pi constant)
+    set_at(bzip2_out, pos, 49);
+    set_at(bzip2_out, pos + 1, 65);
+    set_at(bzip2_out, pos + 2, 89);
+    set_at(bzip2_out, pos + 3, 38);
+    set_at(bzip2_out, pos + 4, 83);
+    set_at(bzip2_out, pos + 5, 89);
+    pos = pos + 6;
 
-    # Compress data using simplified BWT + RLE
-    var compressed_len = _bzip2_compress_block(data, len, output, pos)
-    pos = pos + compressed_len
+    // Compress block with BWT + RLE
+    let compressed_len = _bzip2_compress_block(data, dlen, pos);
+    pos = pos + compressed_len;
 
-    # End-of-stream marker (6 bytes): 0x177245385090
-    set_at(output, pos, 0x17)
-    set_at(output, pos + 1, 0x72)
-    set_at(output, pos + 2, 0x45)
-    set_at(output, pos + 3, 0x38)
-    set_at(output, pos + 4, 0x50)
-    set_at(output, pos + 5, 0x90)
-    pos = pos + 6
+    // End-of-stream marker 6 bytes: 0x177245385090
+    set_at(bzip2_out, pos, 23);
+    set_at(bzip2_out, pos + 1, 114);
+    set_at(bzip2_out, pos + 2, 69);
+    set_at(bzip2_out, pos + 3, 56);
+    set_at(bzip2_out, pos + 4, 80);
+    set_at(bzip2_out, pos + 5, 144);
+    pos = pos + 6;
 
-    # Stream CRC (4 bytes)
-    var crc = _bzip2_crc32(data, len)
-    set_at(output, pos, (crc / 16777216) % 256)
-    set_at(output, pos + 1, (crc / 65536) % 256)
-    set_at(output, pos + 2, (crc / 256) % 256)
-    set_at(output, pos + 3, crc % 256)
-    pos = pos + 4
+    // Stream CRC (4 bytes, big-endian)
+    let crc = _bzip2_crc32(data, dlen);
+    set_at(bzip2_out, pos, (crc / 16777216) % 256);
+    set_at(bzip2_out, pos + 1, (crc / 65536) % 256);
+    set_at(bzip2_out, pos + 2, (crc / 256) % 256);
+    set_at(bzip2_out, pos + 3, crc % 256);
+    pos = pos + 4;
 
-    bzip2_output_len = pos
-    return pos
+    bzip2_output_len = pos;
+    return pos;
 }
 
-# Compress single block (simplified BWT + RLE)
-fn _bzip2_compress_block(data, len, output, start_pos) {
-    var pos = start_pos
+// Compress a single block (BWT then RLE) into bzip2_out starting at start_pos
+// Returns number of bytes written
+fn _bzip2_compress_block(data, dlen, start_pos) {
+    let mut pos = start_pos;
 
-    # Apply Burrows-Wheeler Transform (simplified)
-    var bwt_result = _bzip2_bwt(data, len)
-    var bwt_data = get_at(bwt_result, 0)
-    var bwt_index = get_at(bwt_result, 1)
+    // Burrows-Wheeler Transform; sorted column lands in bzip2_work[65536..]
+    let bwt_index = _bzip2_bwt(data, dlen);
 
-    # Store BWT index (original position)
-    set_at(output, pos, (bwt_index / 16777216) % 256)
-    set_at(output, pos + 1, (bwt_index / 65536) % 256)
-    set_at(output, pos + 2, (bwt_index / 256) % 256)
-    set_at(output, pos + 3, bwt_index % 256)
-    pos = pos + 4
+    // Store BWT original-position index (4 bytes, big-endian)
+    set_at(bzip2_out, pos, (bwt_index / 16777216) % 256);
+    set_at(bzip2_out, pos + 1, (bwt_index / 65536) % 256);
+    set_at(bzip2_out, pos + 2, (bwt_index / 256) % 256);
+    set_at(bzip2_out, pos + 3, bwt_index % 256);
+    pos = pos + 4;
 
-    # Apply Run-Length Encoding
-    var i = 0
-    while (i < len) {
-        var byte = get_at(bwt_data, i)
-        var run_len = 1
+    // Run-Length Encoding over the BWT sorted output
+    let mut i = 0;
+    while i < dlen {
+        let byte = bzip2_work[65536 + i];
+        let mut run_len = 1;
 
-        # Count consecutive identical bytes
-        while (i + run_len < len && get_at(bwt_data, i + run_len) == byte) {
-            run_len = run_len + 1
-            if (run_len >= 255) {
-                break
+        // Count identical consecutive bytes; cap at 255 (done-flag pattern)
+        let mut done = 0;
+        while done == 0 {
+            if i + run_len >= dlen {
+                done = 1;
+            }
+            if done == 0 {
+                if bzip2_work[65536 + i + run_len] != byte {
+                    done = 1;
+                }
+            }
+            if done == 0 {
+                run_len = run_len + 1;
+                if run_len >= 255 {
+                    done = 1;
+                }
             }
         }
 
-        if (run_len >= 4) {
-            # Encode as run
-            set_at(output, pos, byte)
-            pos = pos + 1
-            set_at(output, pos, byte)
-            pos = pos + 1
-            set_at(output, pos, byte)
-            pos = pos + 1
-            set_at(output, pos, byte)
-            pos = pos + 1
-            set_at(output, pos, run_len - 4)
-            pos = pos + 1
+        if run_len >= 4 {
+            // bzip2 run encoding: 4 identical bytes + (count - 4) extra byte
+            set_at(bzip2_out, pos, byte);  pos = pos + 1;
+            set_at(bzip2_out, pos, byte);  pos = pos + 1;
+            set_at(bzip2_out, pos, byte);  pos = pos + 1;
+            set_at(bzip2_out, pos, byte);  pos = pos + 1;
+            set_at(bzip2_out, pos, run_len - 4);
+            pos = pos + 1;
         } else {
-            # Encode as literals
-            var j = 0
-            while (j < run_len) {
-                set_at(output, pos, byte)
-                pos = pos + 1
-                j = j + 1
+            // Literal bytes
+            let mut j = 0;
+            while j < run_len {
+                set_at(bzip2_out, pos, byte);
+                pos = pos + 1;
+                j = j + 1;
             }
         }
 
-        i = i + run_len
+        i = i + run_len;
     }
 
-    return pos - start_pos
+    return pos - start_pos;
 }
 
-# Burrows-Wheeler Transform (simplified)
-fn _bzip2_bwt(data, len) {
-    var rotations = BZIP2_BUF
-    var sorted = BZIP2_BUF + 65536
-    var result = BZIP2_BUF + 131072
-    var original_index = 0
-
-    # Limit to reasonable size
-    if (len > 256) {
-        len = 256
+// Burrows-Wheeler Transform (simplified, capped at 256 bytes)
+// Writes sorted last column to bzip2_work[65536 .. 65536+blen-1]
+// Returns original_index (row of original string in sorted rotation matrix)
+fn _bzip2_bwt(data, dlen) {
+    let mut original_index = 0;
+    let mut blen = dlen;
+    if blen > 256 {
+        blen = 256;
     }
 
-    # Generate all rotations (simplified - store indices)
-    var i = 0
-    while (i < len) {
-        set_at(rotations, i, i)
-        i = i + 1
+    // Initialise rotation index array at bzip2_work[0 .. blen-1]
+    let mut i = 0;
+    while i < blen {
+        set_at(bzip2_work, i, i);
+        i = i + 1;
     }
 
-    # Sort rotations lexicographically (bubble sort for simplicity)
-    i = 0
-    while (i < len - 1) {
-        var j = 0
-        while (j < len - i - 1) {
-            var rot1 = get_at(rotations, j)
-            var rot2 = get_at(rotations, j + 1)
-
-            if (_bzip2_compare_rotation(data, len, rot1, rot2) > 0) {
-                # Swap
-                set_at(rotations, j, rot2)
-                set_at(rotations, j + 1, rot1)
+    // Sort rotations lexicographically (bubble sort)
+    i = 0;
+    while i < blen - 1 {
+        let mut j = 0;
+        while j < blen - i - 1 {
+            let rot1 = bzip2_work[j];
+            let rot2 = bzip2_work[j + 1];
+            if _bzip2_compare_rotation(data, blen, rot1, rot2) > 0 {
+                set_at(bzip2_work, j, rot2);
+                set_at(bzip2_work, j + 1, rot1);
             }
-            j = j + 1
+            j = j + 1;
         }
-        i = i + 1
+        i = i + 1;
     }
 
-    # Extract last column and find original
-    i = 0
-    while (i < len) {
-        var rot = get_at(rotations, i)
-        var last_pos = (rot + len - 1) % len
-        var last_char = get_at(data, last_pos)
-        set_at(sorted, i, last_char)
-
-        if (rot == 0) {
-            original_index = i
+    // Extract last column of each rotation into bzip2_work[65536..]
+    i = 0;
+    while i < blen {
+        let rot = bzip2_work[i];
+        let last_pos = (rot + blen - 1) % blen;
+        let last_char = data[last_pos];
+        set_at(bzip2_work, 65536 + i, last_char);
+        if rot == 0 {
+            original_index = i;
         }
-        i = i + 1
+        i = i + 1;
     }
 
-    set_at(result, 0, sorted)
-    set_at(result, 1, original_index)
-    return result
+    return original_index;
 }
 
-# Compare two rotations
-fn _bzip2_compare_rotation(data, len, rot1, rot2) {
-    var i = 0
-    while (i < len) {
-        var pos1 = (rot1 + i) % len
-        var pos2 = (rot2 + i) % len
-        var c1 = get_at(data, pos1)
-        var c2 = get_at(data, pos2)
-
-        if (c1 < c2) {
-            return -1
+// Lexicographic comparison of two cyclic rotations of data
+// Returns negative if rot1 < rot2, positive if rot1 > rot2, 0 if equal
+fn _bzip2_compare_rotation(data, dlen, rot1, rot2) {
+    let mut i = 0;
+    let mut result = 0;
+    let mut done = 0;
+    while done == 0 {
+        if i >= dlen {
+            done = 1;
         }
-        if (c1 > c2) {
-            return 1
+        if done == 0 {
+            let pos1 = (rot1 + i) % dlen;
+            let pos2 = (rot2 + i) % dlen;
+            let c1 = data[pos1];
+            let c2 = data[pos2];
+            if c1 < c2 {
+                result = 0 - 1;
+                done = 1;
+            }
+            if done == 0 {
+                if c1 > c2 {
+                    result = 1;
+                    done = 1;
+                }
+            }
+            if done == 0 {
+                i = i + 1;
+            }
         }
-        i = i + 1
     }
-    return 0
+    return result;
 }
 
-# Simple CRC32 calculation
-fn _bzip2_crc32(data, len) {
-    var crc = 4294967295  # 0xFFFFFFFF
-    var i = 0
-
-    while (i < len) {
-        var byte = get_at(data, i)
-        crc = (crc * 31 + byte) % 4294967296
-        i = i + 1
+// Simple polynomial CRC32 approximation
+fn _bzip2_crc32(data, dlen) {
+    let mut crc = 4294967295;
+    let mut i = 0;
+    while i < dlen {
+        let byte = data[i];
+        crc = (crc * 31 + byte) % 4294967296;
+        i = i + 1;
     }
-
-    return crc
+    return crc;
 }
 
-# Decompress bzip2 data (simplified)
-fn bzip2_decompress(data, len) {
-    if (len < 14) {
-        serial_print("bzip2: data too short")
-        return -1
+// Decompress bzip2 data (simplified reverse-RLE; full BWT inversion omitted)
+// Returns decompressed byte count, or negative on error
+fn bzip2_decompress(data, dlen) {
+    if dlen < 14 {
+        serial_print("bzip2: data too short");
+        return 0 - 1;
     }
 
-    # Verify magic header
-    if (get_at(data, 0) != 66 || get_at(data, 1) != 90) {  # "BZ"
-        serial_print("bzip2: invalid magic")
-        return -2
+    // Verify magic "BZ"
+    if data[0] != 66 || data[1] != 90 {
+        serial_print("bzip2: invalid magic");
+        return 0 - 2;
     }
 
-    # Version check
-    if (get_at(data, 2) != 104) {  # 'h'
-        serial_print("bzip2: unsupported version")
-        return -3
+    // Version must be 'h'
+    if data[2] != 104 {
+        serial_print("bzip2: unsupported version");
+        return 0 - 3;
     }
 
-    # Skip header and decompress
-    var pos = 10  # After header
-    var output = bzip2_output
-    var out_pos = 0
+    // Skip 10-byte stream header
+    let mut pos = 10;
+    let mut out_pos = 0;
 
-    # Read BWT index
-    var bwt_index = get_at(data, pos) * 16777216 + get_at(data, pos + 1) * 65536 + get_at(data, pos + 2) * 256 + get_at(data, pos + 3)
-    pos = pos + 4
+    // Read BWT original index (consumed but not used for simplified decompressor)
+    let bwt_index = data[pos] * 16777216 + data[pos + 1] * 65536 + data[pos + 2] * 256 + data[pos + 3];
+    pos = pos + 4;
 
-    # Simplified decompression (reverse RLE)
-    while (pos < len - 10) {
-        var byte = get_at(data, pos)
-        pos = pos + 1
+    // Reverse RLE into bzip2_out
+    while pos < dlen - 10 {
+        let byte = data[pos];
+        pos = pos + 1;
 
-        # Check for run
-        if (pos + 3 < len && get_at(data, pos) == byte && get_at(data, pos + 1) == byte && get_at(data, pos + 2) == byte) {
-            pos = pos + 3
-            var run_extra = get_at(data, pos)
-            pos = pos + 1
-            var total_run = 4 + run_extra
+        // Detect a 4-byte run: check guard before array accesses
+        let mut is_run = 0;
+        if pos + 3 < dlen {
+            if data[pos] == byte && data[pos + 1] == byte && data[pos + 2] == byte {
+                is_run = 1;
+            }
+        }
 
-            var i = 0
-            while (i < total_run) {
-                set_at(output, out_pos, byte)
-                out_pos = out_pos + 1
-                i = i + 1
+        if is_run == 1 {
+            pos = pos + 3;
+            let run_extra = data[pos];
+            pos = pos + 1;
+            let total_run = 4 + run_extra;
+            let mut k = 0;
+            while k < total_run {
+                set_at(bzip2_out, out_pos, byte);
+                out_pos = out_pos + 1;
+                k = k + 1;
             }
         } else {
-            set_at(output, out_pos, byte)
-            out_pos = out_pos + 1
+            set_at(bzip2_out, out_pos, byte);
+            out_pos = out_pos + 1;
         }
     }
 
-    bzip2_output_len = out_pos
-    return out_pos
+    bzip2_output_len = out_pos;
+    return out_pos;
 }
 
-# Get output
+// Return the output buffer
 fn bzip2_get_output() {
-    return bzip2_output
+    return bzip2_out;
 }
 
-# Get output length
+// Return current output length
 fn bzip2_get_output_len() {
-    return bzip2_output_len
+    return bzip2_output_len;
 }
 
-# Test bzip2
-fn bzip2_test() {
-    var test_data = BZIP2_BUF + 196608
-    var test_str = "bzip2 test data with repeating patterns: aaaa bbbb cccc"
-    var len = strlen(test_str)
-    var i = 0
-
-    while (i < len) {
-        set_at(test_data, i, get_at(test_str, i))
-        i = i + 1
+// Self-test: copy test string into staging buffer, compress, check result
+fn _test() {
+    let test_str = "bzip2 test data with repeating patterns: aaaa bbbb cccc";
+    let slen = len(test_str);
+    let mut i = 0;
+    while i < slen {
+        set_at(bzip2_tbuf, i, test_str[i]);
+        i = i + 1;
     }
 
-    # Compress
-    var comp_len = bzip2_compress(test_data, len)
-    if (comp_len < 0) {
-        serial_print("bzip2 test: compression failed")
-        return -1
+    let comp_len = bzip2_compress(bzip2_tbuf, slen);
+    if comp_len < 0 {
+        serial_print("bzip2 test: compression failed");
+        return 0 - 1;
     }
 
-    serial_print("bzip2 test: passed")
-    return 0
+    serial_print("bzip2 test: passed");
+    return 0;
 }
+
+_test();
+print("bzip2.hl loaded");

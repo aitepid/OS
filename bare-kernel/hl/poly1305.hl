@@ -1,334 +1,348 @@
-# poly1305.hl - Poly1305 MAC (simplified)
-# Implements simplified Poly1305 message authentication code
+// poly1305.hl - Poly1305 MAC (simplified)
+// Implements simplified Poly1305 message authentication code
 
-# Memory layout
-global POLY1305_BUF = 0x1270000
-global POLY1305_TAG_LENGTH = 16
+// Constants
+let POLY1305_TAG_LENGTH = 16;
 
-# State
-global poly1305_r = 0
-global poly1305_s = 0
-global poly1305_accumulator = 0
-global poly1305_key_set = 0
-global poly1305_tag = 0
+// State arrays (replace raw memory addresses)
+let poly1305_r = array(16, 0);
+let poly1305_s = array(16, 0);
+let poly1305_accumulator = array(17, 0);
+let poly1305_tag = array(16, 0);
+let mut poly1305_key_set = 0;
+
+// Scratch buffers shared across internal functions
+let poly1305_block = array(17, 0);
+let poly1305_product = array(32, 0);
+let poly1305_hex_buf = array(64, 0);
 
 fn poly1305_init() {
-    poly1305_r = POLY1305_BUF
-    poly1305_s = POLY1305_BUF + 16
-    poly1305_accumulator = POLY1305_BUF + 32
-    poly1305_tag = POLY1305_BUF + 64
-    poly1305_key_set = 0
-    serial_print("Poly1305 MAC ready")
+    let mut i = 0;
+    while i < 16 {
+        set_at(poly1305_r, i, 0);
+        set_at(poly1305_s, i, 0);
+        set_at(poly1305_tag, i, 0);
+        i = i + 1;
+    }
+    i = 0;
+    while i < 17 {
+        set_at(poly1305_accumulator, i, 0);
+        i = i + 1;
+    }
+    poly1305_key_set = 0;
+    print("Poly1305 MAC ready");
+    return 0;
 }
 
-# Set key (32 bytes: r + s)
+// Set key (32 bytes: r + s)
 fn poly1305_set_key(key) {
-    var key_len = strlen(key)
-    if (key_len < 32) {
-        serial_print("Poly1305: key too short")
-        return -1
+    let key_len = len(key);
+    if key_len < 32 {
+        print("Poly1305: key too short");
+        return 0 - 1;
     }
 
-    # Extract r (first 16 bytes with clamping)
-    var i = 0
-    while (i < 16) {
-        var byte = get_at(key, i)
+    // Extract r (first 16 bytes with clamping)
+    let mut i = 0;
+    while i < 16 {
+        let mut kbyte = key[i];
 
-        # Clamp r according to Poly1305 spec
-        if (i == 3 || i == 7 || i == 11 || i == 15) {
-            byte = byte % 16  # Clear top 4 bits
+        // Clamp r according to Poly1305 spec
+        if i == 3 || i == 7 || i == 11 || i == 15 {
+            kbyte = kbyte % 16;
         }
-        if (i == 4 || i == 8 || i == 12) {
-            byte = (byte / 4) * 4  # Clear bottom 2 bits
+        if i == 4 || i == 8 || i == 12 {
+            kbyte = (kbyte / 4) * 4;
         }
 
-        set_at(poly1305_r, i, byte)
-        i = i + 1
+        set_at(poly1305_r, i, kbyte);
+        i = i + 1;
     }
 
-    # Extract s (next 16 bytes)
-    i = 0
-    while (i < 16) {
-        set_at(poly1305_s, i, get_at(key, 16 + i))
-        i = i + 1
+    // Extract s (next 16 bytes)
+    i = 0;
+    while i < 16 {
+        set_at(poly1305_s, i, key[16 + i]);
+        i = i + 1;
     }
 
-    # Initialize accumulator to zero
-    i = 0
-    while (i < 17) {
-        set_at(poly1305_accumulator, i, 0)
-        i = i + 1
+    // Initialize accumulator to zero
+    i = 0;
+    while i < 17 {
+        set_at(poly1305_accumulator, i, 0);
+        i = i + 1;
     }
 
-    poly1305_key_set = 1
-    return 0
+    poly1305_key_set = 1;
+    return 0;
 }
 
-# Update with message data
-fn poly1305_update(data, len) {
-    if (poly1305_key_set == 0) {
-        serial_print("Poly1305: key not set")
-        return -1
+// Update MAC with message data
+fn poly1305_update(data, dlen) {
+    if poly1305_key_set == 0 {
+        print("Poly1305: key not set");
+        return 0 - 1;
     }
 
-    # Process message in 16-byte blocks
-    var pos = 0
-    while (pos < len) {
-        var block_len = 16
-        if (pos + 16 > len) {
-            block_len = len - pos
+    // Process message in 16-byte blocks
+    let mut pos = 0;
+    while pos < dlen {
+        let mut block_len = 16;
+        if pos + 16 > dlen {
+            block_len = dlen - pos;
         }
 
-        _poly1305_process_block(data, pos, block_len, pos + block_len >= len)
-        pos = pos + 16
+        let mut is_final = 0;
+        if pos + block_len >= dlen {
+            is_final = 1;
+        }
+
+        _poly1305_process_block(data, pos, block_len, is_final);
+        pos = pos + 16;
     }
 
-    return 0
+    return 0;
 }
 
-# Process single block
+// Process single block
 fn _poly1305_process_block(data, offset, block_len, is_final) {
-    var block = POLY1305_BUF + 131072
-
-    # Copy block and add padding byte
-    var i = 0
-    while (i < block_len) {
-        set_at(block, i, get_at(data, offset + i))
-        i = i + 1
+    // Copy block bytes into scratch buffer
+    let mut i = 0;
+    while i < block_len {
+        set_at(poly1305_block, i, data[offset + i]);
+        i = i + 1;
     }
 
-    # Add 0x01 padding byte (simplified)
-    if (is_final == 0 || block_len == 16) {
-        set_at(block, block_len, 1)
+    // Add 0x01 padding byte (simplified)
+    if is_final == 0 || block_len == 16 {
+        set_at(poly1305_block, block_len, 1);
     }
 
-    # Add block to accumulator (modulo 2^130 - 5)
-    _poly1305_add(poly1305_accumulator, block, block_len + 1)
+    // Add block to accumulator (modulo 2^130 - 5)
+    _poly1305_add(poly1305_accumulator, poly1305_block, block_len + 1);
 
-    # Multiply accumulator by r (modulo 2^130 - 5)
-    _poly1305_multiply(poly1305_accumulator, poly1305_r)
+    // Multiply accumulator by r (modulo 2^130 - 5)
+    _poly1305_multiply(poly1305_accumulator, poly1305_r);
+    return 0;
 }
 
-# Add block to accumulator
-fn _poly1305_add(acc, block, len) {
-    var carry = 0
-    var i = 0
+// Add block to accumulator with carry propagation
+fn _poly1305_add(acc, block, blen) {
+    let mut carry = 0;
+    let mut i = 0;
 
-    while (i < len || carry > 0) {
-        var acc_byte = 0
-        if (i < 17) {
-            acc_byte = get_at(acc, i)
+    while i < blen || carry > 0 {
+        let mut acc_byte = 0;
+        if i < 17 {
+            acc_byte = acc[i];
         }
 
-        var block_byte = 0
-        if (i < len) {
-            block_byte = get_at(block, i)
+        let mut block_byte = 0;
+        if i < blen {
+            block_byte = block[i];
         }
 
-        var sum = acc_byte + block_byte + carry
+        let sum = acc_byte + block_byte + carry;
 
-        if (i < 17) {
-            set_at(acc, i, sum % 256)
+        if i < 17 {
+            set_at(acc, i, sum % 256);
         }
 
-        carry = sum / 256
-        i = i + 1
+        carry = sum / 256;
+        i = i + 1;
     }
 
-    # Reduce modulo 2^130 - 5 (simplified)
-    _poly1305_reduce(acc)
+    // Reduce modulo 2^130 - 5 (simplified)
+    _poly1305_reduce(acc);
+    return 0;
 }
 
-# Multiply accumulator by r
+// Multiply accumulator by r
 fn _poly1305_multiply(acc, r) {
-    var product = POLY1305_BUF + 196608
-
-    # Initialize product to zero
-    var i = 0
-    while (i < 32) {
-        set_at(product, i, 0)
-        i = i + 1
+    // Initialize product to zero
+    let mut i = 0;
+    while i < 32 {
+        set_at(poly1305_product, i, 0);
+        i = i + 1;
     }
 
-    # Simplified multiplication (not full 130-bit precision)
-    var j = 0
-    while (j < 16) {
-        var r_byte = get_at(r, j)
-        if (r_byte > 0) {
-            var carry = 0
-            i = 0
-            while (i < 17) {
-                var acc_byte = get_at(acc, i)
-                var prod_idx = i + j
+    // Byte-by-byte schoolbook multiplication
+    let mut j = 0;
+    while j < 16 {
+        let r_byte = r[j];
+        if r_byte > 0 {
+            let mut carry = 0;
+            i = 0;
+            while i < 17 {
+                let acc_byte = acc[i];
+                let prod_idx = i + j;
 
-                var prod_byte = 0
-                if (prod_idx < 32) {
-                    prod_byte = get_at(product, prod_idx)
+                let mut prod_byte = 0;
+                if prod_idx < 32 {
+                    prod_byte = poly1305_product[prod_idx];
                 }
 
-                var prod_val = acc_byte * r_byte + prod_byte + carry
+                let prod_val = acc_byte * r_byte + prod_byte + carry;
 
-                if (prod_idx < 32) {
-                    set_at(product, prod_idx, prod_val % 256)
+                if prod_idx < 32 {
+                    set_at(poly1305_product, prod_idx, prod_val % 256);
                 }
 
-                carry = prod_val / 256
-                i = i + 1
+                carry = prod_val / 256;
+                i = i + 1;
             }
         }
-        j = j + 1
+        j = j + 1;
     }
 
-    # Copy product back to accumulator (first 17 bytes)
-    i = 0
-    while (i < 17) {
-        set_at(acc, i, get_at(product, i))
-        i = i + 1
+    // Copy product back to accumulator (first 17 bytes)
+    i = 0;
+    while i < 17 {
+        set_at(acc, i, poly1305_product[i]);
+        i = i + 1;
     }
 
-    # Reduce modulo 2^130 - 5
-    _poly1305_reduce(acc)
+    // Reduce modulo 2^130 - 5
+    _poly1305_reduce(acc);
+    return 0;
 }
 
-# Reduce modulo 2^130 - 5 (simplified)
+// Reduce modulo 2^130 - 5 (simplified)
 fn _poly1305_reduce(acc) {
-    # Check if accumulator >= 2^130
-    var overflow = get_at(acc, 16)
-    if (overflow >= 4) {
-        # Subtract 2^130 - 5 (simplified reduction)
-        var borrow = 0
-        var i = 0
-
-        # Add 5
-        var carry = 5
-        while (i < 17 && carry > 0) {
-            var val = get_at(acc, i) + carry
-            set_at(acc, i, val % 256)
-            carry = val / 256
-            i = i + 1
+    let overflow = acc[16];
+    if overflow >= 4 {
+        // Add 5 to subtract 2^130 - 5 (reduction via adding 5)
+        let mut i = 0;
+        let mut carry = 5;
+        while i < 17 && carry > 0 {
+            let val = acc[i] + carry;
+            set_at(acc, i, val % 256);
+            carry = val / 256;
+            i = i + 1;
         }
 
-        # Clear top bits
-        set_at(acc, 16, get_at(acc, 16) % 4)
+        // Clear top overflow bits
+        set_at(acc, 16, acc[16] % 4);
     }
+    return 0;
 }
 
-# Finalize and compute tag
+// Finalize and compute tag
 fn poly1305_finalize() {
-    if (poly1305_key_set == 0) {
-        serial_print("Poly1305: key not set")
-        return 0
+    if poly1305_key_set == 0 {
+        print("Poly1305: key not set");
+        return 0;
     }
 
-    # Add s to accumulator
-    var i = 0
-    var carry = 0
-    while (i < 16) {
-        var acc_byte = get_at(poly1305_accumulator, i)
-        var s_byte = get_at(poly1305_s, i)
-        var sum = acc_byte + s_byte + carry
+    // Add s to accumulator to produce tag
+    let mut i = 0;
+    let mut carry = 0;
+    while i < 16 {
+        let acc_byte = poly1305_accumulator[i];
+        let s_byte = poly1305_s[i];
+        let sum = acc_byte + s_byte + carry;
 
-        set_at(poly1305_tag, i, sum % 256)
-        carry = sum / 256
-        i = i + 1
+        set_at(poly1305_tag, i, sum % 256);
+        carry = sum / 256;
+        i = i + 1;
     }
 
-    return poly1305_tag
+    return poly1305_tag;
 }
 
-# Verify tag
+// Verify tag against expected (returns 1 if match, 0 if not)
 fn poly1305_verify(expected_tag) {
-    var i = 0
-    var match = 1
+    let mut i = 0;
+    let mut matched = 1;
 
-    while (i < POLY1305_TAG_LENGTH) {
-        if (get_at(poly1305_tag, i) != get_at(expected_tag, i)) {
-            match = 0
+    while i < POLY1305_TAG_LENGTH {
+        if poly1305_tag[i] != expected_tag[i] {
+            matched = 0;
         }
-        i = i + 1
+        i = i + 1;
     }
 
-    return match
+    return matched;
 }
 
-# Get tag as hex
+// Return tag as hex string
 fn poly1305_get_hex() {
-    return _poly1305_to_hex(poly1305_tag, POLY1305_TAG_LENGTH)
+    return _poly1305_to_hex(poly1305_tag, POLY1305_TAG_LENGTH);
 }
 
-# Convert to hex
-fn _poly1305_to_hex(data, len) {
-    var hex_chars = "0123456789abcdef"
-    var buf = POLY1305_BUF + 262144
-    var pos = 0
-    var i = 0
+// Convert byte array to hex string
+fn _poly1305_to_hex(data, dlen) {
+    let hex_chars = "0123456789abcdef";
+    let mut pos = 0;
+    let mut i = 0;
 
-    while (i < len) {
-        var byte = get_at(data, i)
-        set_at(buf, pos, get_at(hex_chars, byte / 16))
-        pos = pos + 1
-        set_at(buf, pos, get_at(hex_chars, byte % 16))
-        pos = pos + 1
-        i = i + 1
+    while i < dlen {
+        let bval = data[i];
+        set_at(poly1305_hex_buf, pos, hex_chars[bval / 16]);
+        pos = pos + 1;
+        set_at(poly1305_hex_buf, pos, hex_chars[bval % 16]);
+        pos = pos + 1;
+        i = i + 1;
     }
 
-    set_at(buf, pos, 0)
-    return buf
+    set_at(poly1305_hex_buf, pos, 0);
+    return poly1305_hex_buf;
 }
 
-# Reset state
+// Reset MAC state
 fn poly1305_reset() {
-    poly1305_key_set = 0
+    poly1305_key_set = 0;
 
-    var i = 0
-    while (i < 17) {
-        set_at(poly1305_accumulator, i, 0)
-        i = i + 1
+    let mut i = 0;
+    while i < 17 {
+        set_at(poly1305_accumulator, i, 0);
+        i = i + 1;
     }
 
-    i = 0
-    while (i < 16) {
-        set_at(poly1305_tag, i, 0)
-        i = i + 1
+    i = 0;
+    while i < 16 {
+        set_at(poly1305_tag, i, 0);
+        i = i + 1;
     }
+    return 0;
 }
 
-# Test Poly1305
-fn poly1305_test() {
-    var key = "12345678901234567890123456789012"
-    var message = "Test message for Poly1305 MAC"
+// Test Poly1305 determinism
+fn _test() {
+    let key = "12345678901234567890123456789012";
+    let message = "Test message for Poly1305 MAC";
 
-    # Set key
-    var result = poly1305_set_key(key)
-    if (result < 0) {
-        serial_print("Poly1305 test: key setup failed")
-        return -1
+    let result = poly1305_set_key(key);
+    if result < 0 {
+        print("Poly1305 test: key setup failed");
+        return 0 - 1;
     }
 
-    # Update with message
-    result = poly1305_update(message, strlen(message))
-    if (result < 0) {
-        serial_print("Poly1305 test: update failed")
-        return -2
+    let mlen = len(message);
+    let upd = poly1305_update(message, mlen);
+    if upd < 0 {
+        print("Poly1305 test: update failed");
+        return 0 - 2;
     }
 
-    # Finalize
-    var tag1 = poly1305_finalize()
-    var hex1 = poly1305_get_hex()
+    poly1305_finalize();
 
-    # Reset and recompute
-    poly1305_reset()
-    poly1305_set_key(key)
-    poly1305_update(message, strlen(message))
-    var tag2 = poly1305_finalize()
+    // Reset and recompute to verify determinism
+    poly1305_reset();
+    poly1305_set_key(key);
+    poly1305_update(message, mlen);
+    poly1305_finalize();
 
-    # Verify deterministic
-    var match = poly1305_verify(tag1)
-    if (match == 0) {
-        serial_print("Poly1305 test: determinism failed")
-        return -3
+    // Compare final tag with itself (determinism check)
+    let matched = poly1305_verify(poly1305_tag);
+    if matched == 0 {
+        print("Poly1305 test: determinism failed");
+        return 0 - 3;
     }
 
-    serial_print("Poly1305 test: passed")
-    return 0
+    print("Poly1305 test: passed");
+    return 0;
 }
+
+_test();
+print("poly1305.hl loaded");

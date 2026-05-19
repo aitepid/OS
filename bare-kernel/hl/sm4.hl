@@ -1,299 +1,321 @@
-# sm4.hl - SM4 Block Cipher (simplified)
-# Implements simplified SM4 encryption (Chinese national standard GB/T 32907-2016)
+// sm4.hl -- SM4 Block Cipher (simplified)
+//
+// Implements simplified SM4 encryption/decryption (Chinese national standard
+// GB/T 32907-2016). Block size 128 bits, key size 128 bits, 32 rounds.
+// Uses arithmetic approximations in place of true bitwise ops.
 
-# Memory layout
-global SM4_BUF = 0x12D0000
-global SM4_BLOCK_SIZE = 16  # 128 bits
-global SM4_KEY_SIZE = 16    # 128 bits
-global SM4_ROUNDS = 32
+// --- Constants ---
+let SM4_BLOCK_SIZE = 16;    // 128-bit block
+let SM4_KEY_SIZE   = 16;    // 128-bit key
+let SM4_ROUNDS     = 32;
 
-# SM4 S-Box (simplified, using a generated substitution)
-global sm4_sbox = 0
+// --- S-box (256 entries, filled by _sm4_init_sbox) ---
+let sm4_sbox = array(256, 0);
 
-# State
-global sm4_round_keys = 0
-global sm4_key_set = 0
+// --- Round key schedule (32 keys x 4 bytes = 128 bytes) ---
+let sm4_round_keys = array(128, 0);
 
+// --- Mutable flags / working buffers ---
+let mut sm4_key_set = 0;
+let sm4_k_buf   = array(16, 0);   // key expansion working buffer (4 words)
+let sm4_out_buf = array(16, 0);   // shared encrypt/decrypt output block
+let sm4_x_buf   = array(16, 0);   // working state (4 words) during rounds
+
+// --- Hex output buffer ---
+let sm4_hex_buf = array(33, 0);   // 32 hex chars + null
+
+// ---------------------------------------------------------------------------
+// sm4_init -- initialise S-box and reset flags
+// ---------------------------------------------------------------------------
 fn sm4_init() {
-    sm4_round_keys = SM4_BUF
-    sm4_sbox = SM4_BUF + 512
-    sm4_key_set = 0
-
-    # Initialize simplified S-box
-    _sm4_init_sbox()
-
-    serial_print("SM4 block cipher ready")
+    sm4_key_set = 0;
+    _sm4_init_sbox();
+    print("sm4: SM4 block cipher ready");
+    return 0;
 }
 
-# Initialize simplified S-box
+// ---------------------------------------------------------------------------
+// _sm4_init_sbox -- fill S-box with simplified affine transformation
+// ---------------------------------------------------------------------------
 fn _sm4_init_sbox() {
-    var i = 0
-    while (i < 256) {
-        # Simplified S-box: affine transformation
-        var x = i
-        var s = (x * 7 + 99) % 256
-        set_at(sm4_sbox, i, s)
-        i = i + 1
+    let mut i = 0;
+    while i < 256 {
+        let s = (i * 7 + 99) % 256;
+        set_at(sm4_sbox, i, s);
+        i = i + 1;
     }
+    return 0;
 }
 
-# Set encryption key
-fn sm4_set_key(key) {
-    var key_len = strlen(key)
-    if (key_len < SM4_KEY_SIZE) {
-        serial_print("SM4: key too short (need 16 bytes)")
-        return -1
-    }
-
-    # Key expansion (simplified)
-    # Real SM4 uses complex key schedule with FK and CK constants
-    _sm4_key_expansion(key)
-    sm4_key_set = 1
-
-    return 0
-}
-
-# Key expansion (simplified)
-fn _sm4_key_expansion(key) {
-    var k = SM4_BUF + 65536  # Working key buffer
-
-    # Load key as 4 words
-    var i = 0
-    while (i < 4) {
-        var word = _sm4_read32(key, i * 4)
-        _sm4_write32(k, i * 4, word)
-        i = i + 1
-    }
-
-    # Generate 32 round keys (simplified)
-    i = 0
-    while (i < SM4_ROUNDS) {
-        # Simplified key schedule: rotate and transform
-        var k0 = _sm4_read32(k, 0)
-        var k1 = _sm4_read32(k, 4)
-        var k2 = _sm4_read32(k, 8)
-        var k3 = _sm4_read32(k, 12)
-
-        # Round key = transformation of previous keys
-        var rk = (k0 + k1 + k2 + k3 + i * 12345) % 4294967296
-        rk = _sm4_tau(rk)  # Apply S-box transformation
-
-        _sm4_write32(sm4_round_keys, i * 4, rk)
-
-        # Shift keys
-        _sm4_write32(k, 0, k1)
-        _sm4_write32(k, 4, k2)
-        _sm4_write32(k, 8, k3)
-        _sm4_write32(k, 12, rk)
-
-        i = i + 1
-    }
-}
-
-# Encrypt single block (16 bytes)
-fn sm4_encrypt_block(plaintext) {
-    if (sm4_key_set == 0) {
-        serial_print("SM4: key not set")
-        return 0
-    }
-
-    var ciphertext = SM4_BUF + 131072
-    var x = SM4_BUF + 196608  # Working state (4 words)
-
-    # Load plaintext as 4 words
-    var i = 0
-    while (i < 4) {
-        var word = _sm4_read32(plaintext, i * 4)
-        _sm4_write32(x, i * 4, word)
-        i = i + 1
-    }
-
-    # 32 rounds
-    i = 0
-    while (i < SM4_ROUNDS) {
-        var x0 = _sm4_read32(x, 0)
-        var x1 = _sm4_read32(x, 4)
-        var x2 = _sm4_read32(x, 8)
-        var x3 = _sm4_read32(x, 12)
-        var rk = _sm4_read32(sm4_round_keys, i * 4)
-
-        # Round function (simplified)
-        var temp = (x1 + x2 + x3 + rk) % 4294967296
-        temp = _sm4_tau(temp)
-        temp = _sm4_l(temp)  # Linear transformation
-
-        var x4 = (x0 + temp) % 4294967296  # XOR simplified to addition
-
-        # Shift state
-        _sm4_write32(x, 0, x1)
-        _sm4_write32(x, 4, x2)
-        _sm4_write32(x, 8, x3)
-        _sm4_write32(x, 12, x4)
-
-        i = i + 1
-    }
-
-    # Reverse byte order (final transformation)
-    _sm4_write32(ciphertext, 0, _sm4_read32(x, 12))
-    _sm4_write32(ciphertext, 4, _sm4_read32(x, 8))
-    _sm4_write32(ciphertext, 8, _sm4_read32(x, 4))
-    _sm4_write32(ciphertext, 12, _sm4_read32(x, 0))
-
-    return ciphertext
-}
-
-# Decrypt single block (16 bytes)
-fn sm4_decrypt_block(ciphertext) {
-    if (sm4_key_set == 0) {
-        serial_print("SM4: key not set")
-        return 0
-    }
-
-    var plaintext = SM4_BUF + 131072
-    var x = SM4_BUF + 196608
-
-    # Load ciphertext
-    var i = 0
-    while (i < 4) {
-        var word = _sm4_read32(ciphertext, i * 4)
-        _sm4_write32(x, i * 4, word)
-        i = i + 1
-    }
-
-    # 32 rounds with reversed key schedule
-    i = SM4_ROUNDS - 1
-    while (i >= 0) {
-        var x0 = _sm4_read32(x, 0)
-        var x1 = _sm4_read32(x, 4)
-        var x2 = _sm4_read32(x, 8)
-        var x3 = _sm4_read32(x, 12)
-        var rk = _sm4_read32(sm4_round_keys, i * 4)
-
-        var temp = (x1 + x2 + x3 + rk) % 4294967296
-        temp = _sm4_tau(temp)
-        temp = _sm4_l(temp)
-
-        var x4 = (x0 + temp) % 4294967296
-
-        _sm4_write32(x, 0, x1)
-        _sm4_write32(x, 4, x2)
-        _sm4_write32(x, 8, x3)
-        _sm4_write32(x, 12, x4)
-
-        i = i - 1
-    }
-
-    # Reverse byte order
-    _sm4_write32(plaintext, 0, _sm4_read32(x, 12))
-    _sm4_write32(plaintext, 4, _sm4_read32(x, 8))
-    _sm4_write32(plaintext, 8, _sm4_read32(x, 4))
-    _sm4_write32(plaintext, 12, _sm4_read32(x, 0))
-
-    return plaintext
-}
-
-# Tau transformation (S-box substitution on each byte)
-fn _sm4_tau(word) {
-    var b0 = get_at(sm4_sbox, word % 256)
-    var b1 = get_at(sm4_sbox, (word / 256) % 256)
-    var b2 = get_at(sm4_sbox, (word / 65536) % 256)
-    var b3 = get_at(sm4_sbox, (word / 16777216) % 256)
-
-    return b0 + b1 * 256 + b2 * 65536 + b3 * 16777216
-}
-
-# L transformation (linear transformation, simplified)
-fn _sm4_l(word) {
-    # Simplified: rotate and mix
-    var rotated = _sm4_rotl(word, 13)
-    return (word + rotated) % 4294967296
-}
-
-# Rotate left
-fn _sm4_rotl(value, bits) {
-    var left = (value * _sm4_pow2(bits)) % 4294967296
-    var right = value / _sm4_pow2(32 - bits)
-    return (left + right) % 4294967296
-}
-
-# Power of 2
+// ---------------------------------------------------------------------------
+// _sm4_pow2 -- compute 2^exp (32-bit safe)
+// ---------------------------------------------------------------------------
 fn _sm4_pow2(exp) {
-    if (exp <= 0) { return 1 }
-    if (exp >= 32) { return 0 }
-
-    var result = 1
-    var i = 0
-    while (i < exp) {
-        result = result * 2
-        i = i + 1
+    if exp <= 0 { return 1; }
+    if exp >= 32 { return 0; }
+    let mut result = 1;
+    let mut i = 0;
+    while i < exp {
+        result = result * 2;
+        i = i + 1;
     }
-    return result
+    return result;
 }
 
-# Read 32-bit word
-fn _sm4_read32(buf, offset) {
-    var b0 = get_at(buf, offset)
-    var b1 = get_at(buf, offset + 1)
-    var b2 = get_at(buf, offset + 2)
-    var b3 = get_at(buf, offset + 3)
-    return b0 + b1 * 256 + b2 * 65536 + b3 * 16777216
+// ---------------------------------------------------------------------------
+// _sm4_rotl -- rotate-left (32-bit simulation)
+// ---------------------------------------------------------------------------
+fn _sm4_rotl(value, bits) {
+    let left  = (value * _sm4_pow2(bits)) % 4294967296;
+    let right = value / _sm4_pow2(32 - bits);
+    return (left + right) % 4294967296;
 }
 
-# Write 32-bit word
-fn _sm4_write32(buf, offset, value) {
-    set_at(buf, offset, value % 256)
-    set_at(buf, offset + 1, (value / 256) % 256)
-    set_at(buf, offset + 2, (value / 65536) % 256)
-    set_at(buf, offset + 3, (value / 16777216) % 256)
+// ---------------------------------------------------------------------------
+// _sm4_read32 -- read 4-byte little-endian word from an array
+// ---------------------------------------------------------------------------
+fn _sm4_read32(arr, offset) {
+    let b0 = arr[offset];
+    let b1 = arr[offset + 1];
+    let b2 = arr[offset + 2];
+    let b3 = arr[offset + 3];
+    return b0 + b1 * 256 + b2 * 65536 + b3 * 16777216;
 }
 
-# Get encrypted/decrypted output as hex
+// ---------------------------------------------------------------------------
+// _sm4_read32_str -- read 4-byte little-endian word from a string
+// ---------------------------------------------------------------------------
+fn _sm4_read32_str(str, pos) {
+    let b0 = str_char_code(str, pos);
+    let b1 = str_char_code(str, pos + 1);
+    let b2 = str_char_code(str, pos + 2);
+    let b3 = str_char_code(str, pos + 3);
+    return b0 + b1 * 256 + b2 * 65536 + b3 * 16777216;
+}
+
+// ---------------------------------------------------------------------------
+// _sm4_write32 -- write 32-bit value as little-endian bytes into array
+// ---------------------------------------------------------------------------
+fn _sm4_write32(arr, offset, value) {
+    set_at(arr, offset,     value % 256);
+    set_at(arr, offset + 1, (value / 256) % 256);
+    set_at(arr, offset + 2, (value / 65536) % 256);
+    set_at(arr, offset + 3, (value / 16777216) % 256);
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// _sm4_tau -- S-box substitution on each byte of a 32-bit word
+// ---------------------------------------------------------------------------
+fn _sm4_tau(word) {
+    let b0 = sm4_sbox[word % 256];
+    let b1 = sm4_sbox[(word / 256) % 256];
+    let b2 = sm4_sbox[(word / 65536) % 256];
+    let b3 = sm4_sbox[(word / 16777216) % 256];
+    return b0 + b1 * 256 + b2 * 65536 + b3 * 16777216;
+}
+
+// ---------------------------------------------------------------------------
+// _sm4_l -- linear transformation (simplified rotate-and-mix)
+// ---------------------------------------------------------------------------
+fn _sm4_l(word) {
+    let rotated = _sm4_rotl(word, 13);
+    return (word + rotated) % 4294967296;
+}
+
+// ---------------------------------------------------------------------------
+// _sm4_key_expansion -- derive 32 round keys from a 16-byte string key
+// ---------------------------------------------------------------------------
+fn _sm4_key_expansion(key) {
+    // Load key string as 4 words into sm4_k_buf
+    let mut i = 0;
+    while i < 4 {
+        let word = _sm4_read32_str(key, i * 4);
+        _sm4_write32(sm4_k_buf, i * 4, word);
+        i = i + 1;
+    }
+
+    // Generate SM4_ROUNDS round keys
+    i = 0;
+    while i < SM4_ROUNDS {
+        let k0 = _sm4_read32(sm4_k_buf,  0);
+        let k1 = _sm4_read32(sm4_k_buf,  4);
+        let k2 = _sm4_read32(sm4_k_buf,  8);
+        let k3 = _sm4_read32(sm4_k_buf, 12);
+
+        let mut rk = (k0 + k1 + k2 + k3 + i * 12345) % 4294967296;
+        rk = _sm4_tau(rk);
+
+        _sm4_write32(sm4_round_keys, i * 4, rk);
+
+        // Rotate key words
+        _sm4_write32(sm4_k_buf,  0, k1);
+        _sm4_write32(sm4_k_buf,  4, k2);
+        _sm4_write32(sm4_k_buf,  8, k3);
+        _sm4_write32(sm4_k_buf, 12, rk);
+
+        i = i + 1;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// sm4_set_key -- load a 16-byte string key and expand round keys
+// ---------------------------------------------------------------------------
+fn sm4_set_key(key) {
+    let key_len = len(key);
+    if key_len < SM4_KEY_SIZE {
+        print("sm4: key too short (need 16 bytes)");
+        return 0 - 1;
+    }
+    _sm4_key_expansion(key);
+    sm4_key_set = 1;
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// sm4_encrypt_block -- encrypt a 16-byte plaintext string; returns sm4_out_buf
+// ---------------------------------------------------------------------------
+fn sm4_encrypt_block(plaintext) {
+    if sm4_key_set == 0 {
+        print("sm4: key not set");
+        return 0;
+    }
+
+    // Load plaintext string into working state
+    let mut i = 0;
+    while i < 4 {
+        let word = _sm4_read32_str(plaintext, i * 4);
+        _sm4_write32(sm4_x_buf, i * 4, word);
+        i = i + 1;
+    }
+
+    // 32 rounds
+    i = 0;
+    while i < SM4_ROUNDS {
+        let x0 = _sm4_read32(sm4_x_buf,  0);
+        let x1 = _sm4_read32(sm4_x_buf,  4);
+        let x2 = _sm4_read32(sm4_x_buf,  8);
+        let x3 = _sm4_read32(sm4_x_buf, 12);
+        let rk = _sm4_read32(sm4_round_keys, i * 4);
+
+        let mut temp = (x1 + x2 + x3 + rk) % 4294967296;
+        temp = _sm4_tau(temp);
+        temp = _sm4_l(temp);
+        let x4 = (x0 + temp) % 4294967296;
+
+        _sm4_write32(sm4_x_buf,  0, x1);
+        _sm4_write32(sm4_x_buf,  4, x2);
+        _sm4_write32(sm4_x_buf,  8, x3);
+        _sm4_write32(sm4_x_buf, 12, x4);
+
+        i = i + 1;
+    }
+
+    // Reverse-order output
+    _sm4_write32(sm4_out_buf,  0, _sm4_read32(sm4_x_buf, 12));
+    _sm4_write32(sm4_out_buf,  4, _sm4_read32(sm4_x_buf,  8));
+    _sm4_write32(sm4_out_buf,  8, _sm4_read32(sm4_x_buf,  4));
+    _sm4_write32(sm4_out_buf, 12, _sm4_read32(sm4_x_buf,  0));
+
+    return sm4_out_buf;
+}
+
+// ---------------------------------------------------------------------------
+// sm4_decrypt_block -- decrypt a 16-byte ciphertext array; returns sm4_out_buf
+// ---------------------------------------------------------------------------
+fn sm4_decrypt_block(ciphertext) {
+    if sm4_key_set == 0 {
+        print("sm4: key not set");
+        return 0;
+    }
+
+    // Load ciphertext array into working state
+    let mut i = 0;
+    while i < 4 {
+        let word = _sm4_read32(ciphertext, i * 4);
+        _sm4_write32(sm4_x_buf, i * 4, word);
+        i = i + 1;
+    }
+
+    // 32 rounds with reversed key order
+    let mut ri = SM4_ROUNDS - 1;
+    while ri >= 0 {
+        let x0 = _sm4_read32(sm4_x_buf,  0);
+        let x1 = _sm4_read32(sm4_x_buf,  4);
+        let x2 = _sm4_read32(sm4_x_buf,  8);
+        let x3 = _sm4_read32(sm4_x_buf, 12);
+        let rk = _sm4_read32(sm4_round_keys, ri * 4);
+
+        let mut temp = (x1 + x2 + x3 + rk) % 4294967296;
+        temp = _sm4_tau(temp);
+        temp = _sm4_l(temp);
+        let x4 = (x0 + temp) % 4294967296;
+
+        _sm4_write32(sm4_x_buf,  0, x1);
+        _sm4_write32(sm4_x_buf,  4, x2);
+        _sm4_write32(sm4_x_buf,  8, x3);
+        _sm4_write32(sm4_x_buf, 12, x4);
+
+        ri = ri - 1;
+    }
+
+    // Reverse-order output
+    _sm4_write32(sm4_out_buf,  0, _sm4_read32(sm4_x_buf, 12));
+    _sm4_write32(sm4_out_buf,  4, _sm4_read32(sm4_x_buf,  8));
+    _sm4_write32(sm4_out_buf,  8, _sm4_read32(sm4_x_buf,  4));
+    _sm4_write32(sm4_out_buf, 12, _sm4_read32(sm4_x_buf,  0));
+
+    return sm4_out_buf;
+}
+
+// ---------------------------------------------------------------------------
+// sm4_get_hex -- encode a 16-byte array block as 32-char hex into sm4_hex_buf
+// ---------------------------------------------------------------------------
 fn sm4_get_hex(data) {
-    var hex_chars = "0123456789abcdef"
-    var buf = SM4_BUF + 262144
-    var pos = 0
-
-    var i = 0
-    while (i < SM4_BLOCK_SIZE) {
-        var byte = get_at(data, i)
-        set_at(buf, pos, get_at(hex_chars, byte / 16))
-        pos = pos + 1
-        set_at(buf, pos, get_at(hex_chars, byte % 16))
-        pos = pos + 1
-        i = i + 1
+    let hex_chars = "0123456789abcdef";
+    let mut pos = 0;
+    let mut i = 0;
+    while i < SM4_BLOCK_SIZE {
+        let bval = data[i];
+        set_at(sm4_hex_buf, pos, str_char_code(hex_chars, bval / 16));
+        pos = pos + 1;
+        set_at(sm4_hex_buf, pos, str_char_code(hex_chars, bval % 16));
+        pos = pos + 1;
+        i = i + 1;
     }
-
-    set_at(buf, pos, 0)
-    return buf
+    set_at(sm4_hex_buf, pos, 0);
+    return sm4_hex_buf;
 }
 
-# Test SM4
+// ---------------------------------------------------------------------------
+// sm4_test -- basic self-test: encrypt then verify result is non-zero
+// ---------------------------------------------------------------------------
 fn sm4_test() {
-    var key = "0123456789abcdef"
-    var plaintext = "Hello SM4 cipher"
+    let key       = "0123456789abcdef";
+    let plaintext = "Hello SM4 cipher";
 
-    # Set key
-    var result = sm4_set_key(key)
-    if (result < 0) {
-        serial_print("SM4 test: key setup failed")
-        return -1
+    let r = sm4_set_key(key);
+    if r < 0 {
+        print("sm4_test: key setup failed");
+        return 0 - 1;
     }
 
-    # Encrypt
-    var ciphertext = sm4_encrypt_block(plaintext)
-    if (ciphertext == 0) {
-        serial_print("SM4 test: encryption failed")
-        return -2
+    let ciphertext = sm4_encrypt_block(plaintext);
+    if ciphertext == 0 {
+        print("sm4_test: encryption failed");
+        return 0 - 2;
     }
 
-    # Decrypt
-    var decrypted = sm4_decrypt_block(ciphertext)
-    if (decrypted == 0) {
-        serial_print("SM4 test: decryption failed")
-        return -3
+    let decrypted = sm4_decrypt_block(ciphertext);
+    if decrypted == 0 {
+        print("sm4_test: decryption failed");
+        return 0 - 3;
     }
 
-    # Verify (simplified: just check it didn't crash)
-    serial_print("SM4 test: passed")
-    return 0
+    print("sm4_test: passed");
+    return 0;
 }
+
+sm4_test();
+print("sm4.hl loaded");

@@ -1,359 +1,357 @@
-# protobuf.hl - Protocol Buffers Wire Format
-# Implements Google Protocol Buffers binary serialization format (simplified)
+// protobuf.hl - Protocol Buffers Wire Format
+// Implements Google Protocol Buffers binary serialization format (simplified)
 
-# Memory layout
-global PROTOBUF_BUF = 0x11D0000
+// Buffers (replace fixed-address memory regions)
+let protobuf_output       = array(65536, 0);  // Encoded message output
+let protobuf_decode_result = array(4, 0);     // Varint decode scratch: [value, bytes_consumed]
+let protobuf_field_result  = array(4, 0);     // Field decode result: [field_num, wire_type, value, extra]
+let protobuf_str_buf       = array(256, 0);   // String extraction buffer
+let protobuf_fmt_buf       = array(256, 0);   // Field format output
+let protobuf_num_digits    = array(32, 0);    // Number formatting scratch
 
-# Wire types
-global PROTOBUF_VARINT = 0      # int32, int64, uint32, uint64, bool, enum
-global PROTOBUF_64BIT = 1       # fixed64, sfixed64, double
-global PROTOBUF_LENGTH = 2      # string, bytes, embedded messages
-global PROTOBUF_32BIT = 5       # fixed32, sfixed32, float
+// Wire type constants
+let PROTOBUF_VARINT = 0;   // int32, int64, uint32, uint64, bool, enum
+let PROTOBUF_64BIT  = 1;   // fixed64, sfixed64, double
+let PROTOBUF_LENGTH = 2;   // string, bytes, embedded messages
+let PROTOBUF_32BIT  = 5;   // fixed32, sfixed32, float
 
-# Encoding state
-global protobuf_output = 0
-global protobuf_output_len = 0
-global protobuf_decode_pos = 0
+// Mutable encoding / decoding state
+let mut protobuf_output_len = 0;
+let mut protobuf_decode_pos = 0;
 
 fn protobuf_init() {
-    protobuf_output = PROTOBUF_BUF
-    protobuf_output_len = 0
-    protobuf_decode_pos = 0
-    serial_print("Protocol Buffers ready")
+    protobuf_output_len = 0;
+    protobuf_decode_pos = 0;
+    serial_print("Protocol Buffers ready");
+    return 0;
 }
 
-# Start new message
+// Reset output position and return the output buffer
 fn protobuf_start() {
-    protobuf_output_len = 0
-    return protobuf_output
+    protobuf_output_len = 0;
+    return protobuf_output;
 }
 
-# Encode varint field (field_number, value)
+// Encode a varint field: tag = (field_num << 3) | VARINT, then value
 fn protobuf_add_varint(field_num, value) {
-    # Encode tag: (field_number << 3) | wire_type
-    var tag = field_num * 8 + PROTOBUF_VARINT
-    protobuf_output_len = _protobuf_encode_varint(protobuf_output, protobuf_output_len, tag)
-    protobuf_output_len = _protobuf_encode_varint(protobuf_output, protobuf_output_len, value)
-    return protobuf_output_len
+    let tag = field_num * 8 + PROTOBUF_VARINT;
+    protobuf_output_len = _protobuf_encode_varint(protobuf_output, protobuf_output_len, tag);
+    protobuf_output_len = _protobuf_encode_varint(protobuf_output, protobuf_output_len, value);
+    return protobuf_output_len;
 }
 
-# Encode string field (field_number, string)
+// Encode a string field: tag, length varint, then raw bytes
 fn protobuf_add_string(field_num, str) {
-    # Encode tag
-    var tag = field_num * 8 + PROTOBUF_LENGTH
-    protobuf_output_len = _protobuf_encode_varint(protobuf_output, protobuf_output_len, tag)
+    let tag = field_num * 8 + PROTOBUF_LENGTH;
+    protobuf_output_len = _protobuf_encode_varint(protobuf_output, protobuf_output_len, tag);
 
-    # Encode length
-    var len = strlen(str)
-    protobuf_output_len = _protobuf_encode_varint(protobuf_output, protobuf_output_len, len)
+    let slen = len(str);
+    protobuf_output_len = _protobuf_encode_varint(protobuf_output, protobuf_output_len, slen);
 
-    # Copy string bytes
-    var i = 0
-    while (i < len) {
-        set_at(protobuf_output, protobuf_output_len, get_at(str, i))
-        protobuf_output_len = protobuf_output_len + 1
-        i = i + 1
+    let mut i = 0;
+    while i < slen {
+        set_at(protobuf_output, protobuf_output_len, str[i]);
+        protobuf_output_len = protobuf_output_len + 1;
+        i = i + 1;
     }
 
-    return protobuf_output_len
+    return protobuf_output_len;
 }
 
-# Encode bytes field (field_number, data, len)
-fn protobuf_add_bytes(field_num, data, len) {
-    # Encode tag
-    var tag = field_num * 8 + PROTOBUF_LENGTH
-    protobuf_output_len = _protobuf_encode_varint(protobuf_output, protobuf_output_len, tag)
+// Encode a bytes field: tag, length varint, then raw bytes
+fn protobuf_add_bytes(field_num, data, dlen) {
+    let tag = field_num * 8 + PROTOBUF_LENGTH;
+    protobuf_output_len = _protobuf_encode_varint(protobuf_output, protobuf_output_len, tag);
+    protobuf_output_len = _protobuf_encode_varint(protobuf_output, protobuf_output_len, dlen);
 
-    # Encode length
-    protobuf_output_len = _protobuf_encode_varint(protobuf_output, protobuf_output_len, len)
-
-    # Copy bytes
-    var i = 0
-    while (i < len) {
-        set_at(protobuf_output, protobuf_output_len, get_at(data, i))
-        protobuf_output_len = protobuf_output_len + 1
-        i = i + 1
+    let mut i = 0;
+    while i < dlen {
+        set_at(protobuf_output, protobuf_output_len, data[i]);
+        protobuf_output_len = protobuf_output_len + 1;
+        i = i + 1;
     }
 
-    return protobuf_output_len
+    return protobuf_output_len;
 }
 
-# Encode 32-bit fixed field
+// Encode a 32-bit fixed field (little-endian)
 fn protobuf_add_fixed32(field_num, value) {
-    # Encode tag
-    var tag = field_num * 8 + PROTOBUF_32BIT
-    protobuf_output_len = _protobuf_encode_varint(protobuf_output, protobuf_output_len, tag)
+    let tag = field_num * 8 + PROTOBUF_32BIT;
+    protobuf_output_len = _protobuf_encode_varint(protobuf_output, protobuf_output_len, tag);
 
-    # Encode value (little-endian)
-    set_at(protobuf_output, protobuf_output_len + 0, value % 256)
-    set_at(protobuf_output, protobuf_output_len + 1, (value / 256) % 256)
-    set_at(protobuf_output, protobuf_output_len + 2, (value / 65536) % 256)
-    set_at(protobuf_output, protobuf_output_len + 3, (value / 16777216) % 256)
-    protobuf_output_len = protobuf_output_len + 4
+    set_at(protobuf_output, protobuf_output_len + 0, value % 256);
+    set_at(protobuf_output, protobuf_output_len + 1, (value / 256) % 256);
+    set_at(protobuf_output, protobuf_output_len + 2, (value / 65536) % 256);
+    set_at(protobuf_output, protobuf_output_len + 3, (value / 16777216) % 256);
+    protobuf_output_len = protobuf_output_len + 4;
 
-    return protobuf_output_len
+    return protobuf_output_len;
 }
 
-# Encode 64-bit fixed field (simplified - only lower 32 bits)
+// Encode a 64-bit fixed field (little-endian; upper 32 bits forced to zero)
 fn protobuf_add_fixed64(field_num, value) {
-    # Encode tag
-    var tag = field_num * 8 + PROTOBUF_64BIT
-    protobuf_output_len = _protobuf_encode_varint(protobuf_output, protobuf_output_len, tag)
+    let tag = field_num * 8 + PROTOBUF_64BIT;
+    protobuf_output_len = _protobuf_encode_varint(protobuf_output, protobuf_output_len, tag);
 
-    # Encode value (little-endian, upper 32 bits = 0)
-    set_at(protobuf_output, protobuf_output_len + 0, value % 256)
-    set_at(protobuf_output, protobuf_output_len + 1, (value / 256) % 256)
-    set_at(protobuf_output, protobuf_output_len + 2, (value / 65536) % 256)
-    set_at(protobuf_output, protobuf_output_len + 3, (value / 16777216) % 256)
-    set_at(protobuf_output, protobuf_output_len + 4, 0)
-    set_at(protobuf_output, protobuf_output_len + 5, 0)
-    set_at(protobuf_output, protobuf_output_len + 6, 0)
-    set_at(protobuf_output, protobuf_output_len + 7, 0)
-    protobuf_output_len = protobuf_output_len + 8
+    set_at(protobuf_output, protobuf_output_len + 0, value % 256);
+    set_at(protobuf_output, protobuf_output_len + 1, (value / 256) % 256);
+    set_at(protobuf_output, protobuf_output_len + 2, (value / 65536) % 256);
+    set_at(protobuf_output, protobuf_output_len + 3, (value / 16777216) % 256);
+    set_at(protobuf_output, protobuf_output_len + 4, 0);
+    set_at(protobuf_output, protobuf_output_len + 5, 0);
+    set_at(protobuf_output, protobuf_output_len + 6, 0);
+    set_at(protobuf_output, protobuf_output_len + 7, 0);
+    protobuf_output_len = protobuf_output_len + 8;
 
-    return protobuf_output_len
+    return protobuf_output_len;
 }
 
-# Encode varint (base-128 encoding)
+// Write a varint into buf at pos using base-128 encoding; return updated pos
 fn _protobuf_encode_varint(buf, pos, value) {
-    while (value >= 128) {
-        set_at(buf, pos, (value % 128) + 128)  # Set MSB
-        pos = pos + 1
-        value = value / 128
+    let mut p = pos;
+    let mut v = value;
+    while v >= 128 {
+        set_at(buf, p, (v % 128) + 128);   // continuation bit in MSB
+        p = p + 1;
+        v = v / 128;
     }
-    set_at(buf, pos, value)
-    pos = pos + 1
-    return pos
+    set_at(buf, p, v);
+    p = p + 1;
+    return p;
 }
 
-# Decode varint from buffer
+// Decode one varint from buf starting at start_pos
+// Stores [value, bytes_consumed] in protobuf_decode_result and returns it
 fn _protobuf_decode_varint(buf, start_pos) {
-    var result = PROTOBUF_BUF + 65536
-    var value = 0
-    var shift = 0
-    var pos = start_pos
-
-    while (1 == 1) {
-        var byte = get_at(buf, pos)
-        pos = pos + 1
-
-        value = value + ((byte % 128) * _protobuf_pow2(shift))
-        shift = shift + 7
-
-        if (byte < 128) {
-            break
+    let mut value = 0;
+    let mut shift = 0;
+    let mut pos = start_pos;
+    let mut done = 0;
+    while done == 0 {
+        let byte = buf[pos];
+        pos = pos + 1;
+        value = value + ((byte % 128) * _protobuf_pow2(shift));
+        shift = shift + 7;
+        if byte < 128 {
+            done = 1;
         }
     }
-
-    set_at(result, 0, value)
-    set_at(result, 1, pos - start_pos)  # Bytes consumed
-    return result
+    set_at(protobuf_decode_result, 0, value);
+    set_at(protobuf_decode_result, 1, pos - start_pos);
+    return protobuf_decode_result;
 }
 
-# Power of 2 (for varint decoding)
+// Return 2^exp (integer power of two used in varint decoding)
 fn _protobuf_pow2(exp) {
-    var result = 1
-    var i = 0
-    while (i < exp) {
-        result = result * 2
-        i = i + 1
+    let mut result = 1;
+    let mut i = 0;
+    while i < exp {
+        result = result * 2;
+        i = i + 1;
     }
-    return result
+    return result;
 }
 
-# Start decoding message
+// Reset decode cursor to the start of a message
 fn protobuf_decode_start(data) {
-    protobuf_decode_pos = 0
-    return 0
+    protobuf_decode_pos = 0;
+    return 0;
 }
 
-# Decode next field (returns field_num, wire_type, value)
+// Decode the next field from data[0..data_len-1]
+// Returns protobuf_field_result: [field_num, wire_type, value_or_offset, extra_len]
+// Returns 0 when no more fields remain
 fn protobuf_decode_field(data, data_len) {
-    if (protobuf_decode_pos >= data_len) {
-        return 0  # No more fields
+    if protobuf_decode_pos >= data_len {
+        return 0;
     }
 
-    var result = PROTOBUF_BUF + 131072
+    // Decode tag varint; extract scalars before the next varint call
+    let tag_res = _protobuf_decode_varint(data, protobuf_decode_pos);
+    let tag     = tag_res[0];
+    let tag_len = tag_res[1];
+    protobuf_decode_pos = protobuf_decode_pos + tag_len;
 
-    # Decode tag
-    var tag_result = _protobuf_decode_varint(data, protobuf_decode_pos)
-    var tag = get_at(tag_result, 0)
-    var tag_len = get_at(tag_result, 1)
-    protobuf_decode_pos = protobuf_decode_pos + tag_len
+    let field_num = tag / 8;
+    let wire_type = tag % 8;
 
-    var field_num = tag / 8
-    var wire_type = tag % 8
+    set_at(protobuf_field_result, 0, field_num);
+    set_at(protobuf_field_result, 1, wire_type);
 
-    # Store field number and wire type
-    set_at(result, 0, field_num)
-    set_at(result, 1, wire_type)
+    let mut fval   = 0;
+    let mut fextra = 0;
 
-    # Decode value based on wire type
-    if (wire_type == PROTOBUF_VARINT) {
-        var value_result = _protobuf_decode_varint(data, protobuf_decode_pos)
-        var value = get_at(value_result, 0)
-        var value_len = get_at(value_result, 1)
-        protobuf_decode_pos = protobuf_decode_pos + value_len
-        set_at(result, 2, value)
-        set_at(result, 3, 0)  # No additional data
-    } else if (wire_type == PROTOBUF_LENGTH) {
-        var len_result = _protobuf_decode_varint(data, protobuf_decode_pos)
-        var len = get_at(len_result, 0)
-        var len_bytes = get_at(len_result, 1)
-        protobuf_decode_pos = protobuf_decode_pos + len_bytes
-        set_at(result, 2, protobuf_decode_pos)  # Data offset
-        set_at(result, 3, len)                  # Data length
-        protobuf_decode_pos = protobuf_decode_pos + len
-    } else if (wire_type == PROTOBUF_32BIT) {
-        var value = _protobuf_read_u32_le(data, protobuf_decode_pos)
-        protobuf_decode_pos = protobuf_decode_pos + 4
-        set_at(result, 2, value)
-        set_at(result, 3, 0)
-    } else if (wire_type == PROTOBUF_64BIT) {
-        var value = _protobuf_read_u32_le(data, protobuf_decode_pos)
-        protobuf_decode_pos = protobuf_decode_pos + 8
-        set_at(result, 2, value)
-        set_at(result, 3, 0)
+    if wire_type == PROTOBUF_VARINT {
+        let vr     = _protobuf_decode_varint(data, protobuf_decode_pos);
+        fval       = vr[0];
+        let vbytes = vr[1];
+        protobuf_decode_pos = protobuf_decode_pos + vbytes;
+        fextra = 0;
+    } else if wire_type == PROTOBUF_LENGTH {
+        let lr      = _protobuf_decode_varint(data, protobuf_decode_pos);
+        let dlen2   = lr[0];
+        let lbytes  = lr[1];
+        protobuf_decode_pos = protobuf_decode_pos + lbytes;
+        fval   = protobuf_decode_pos;   // data starts at current position
+        fextra = dlen2;                 // data byte count
+        protobuf_decode_pos = protobuf_decode_pos + dlen2;
+    } else if wire_type == PROTOBUF_32BIT {
+        fval = _protobuf_read_u32_le(data, protobuf_decode_pos);
+        protobuf_decode_pos = protobuf_decode_pos + 4;
+        fextra = 0;
+    } else if wire_type == PROTOBUF_64BIT {
+        fval = _protobuf_read_u32_le(data, protobuf_decode_pos);   // lower 32 bits only
+        protobuf_decode_pos = protobuf_decode_pos + 8;
+        fextra = 0;
     }
 
-    return result
+    set_at(protobuf_field_result, 2, fval);
+    set_at(protobuf_field_result, 3, fextra);
+    return protobuf_field_result;
 }
 
-# Read 32-bit little-endian
+// Read a 32-bit little-endian integer from buf at offset
 fn _protobuf_read_u32_le(buf, offset) {
-    var b0 = get_at(buf, offset + 0)
-    var b1 = get_at(buf, offset + 1)
-    var b2 = get_at(buf, offset + 2)
-    var b3 = get_at(buf, offset + 3)
-    return b0 + b1 * 256 + b2 * 65536 + b3 * 16777216
+    let b0 = buf[offset + 0];
+    let b1 = buf[offset + 1];
+    let b2 = buf[offset + 2];
+    let b3 = buf[offset + 3];
+    return b0 + b1 * 256 + b2 * 65536 + b3 * 16777216;
 }
 
-# Get encoded message
+// Return the encoded message buffer
 fn protobuf_get_message() {
-    return protobuf_output
+    return protobuf_output;
 }
 
-# Get message length
+// Return encoded message byte count
 fn protobuf_get_length() {
-    return protobuf_output_len
+    return protobuf_output_len;
 }
 
-# Extract string from decoded field
+// Copy a LENGTH-type field payload from data into protobuf_str_buf, null-terminate
 fn protobuf_extract_string(data, field_info) {
-    var offset = get_at(field_info, 2)
-    var len = get_at(field_info, 3)
-
-    var buf = PROTOBUF_BUF + 196608
-    var i = 0
-    while (i < len) {
-        set_at(buf, i, get_at(data, offset + i))
-        i = i + 1
+    let offset = field_info[2];
+    let slen   = field_info[3];
+    let mut i = 0;
+    while i < slen {
+        set_at(protobuf_str_buf, i, data[offset + i]);
+        i = i + 1;
     }
-    set_at(buf, len, 0)  # Null terminator
-
-    return buf
+    set_at(protobuf_str_buf, slen, 0);
+    return protobuf_str_buf;
 }
 
-# Format field info as string
+// Format field_info as a human-readable string in protobuf_fmt_buf
 fn protobuf_format_field(field_info) {
-    var buf = PROTOBUF_BUF + 262144
-    var pos = 0
+    let mut pos   = 0;
+    let field_num = field_info[0];
+    let wire_type = field_info[1];
+    let fval      = field_info[2];
 
-    var field_num = get_at(field_info, 0)
-    var wire_type = get_at(field_info, 1)
-    var value = get_at(field_info, 2)
+    pos = _protobuf_append_str(protobuf_fmt_buf, pos, "Field ");
+    pos = _protobuf_append_num(protobuf_fmt_buf, pos, field_num);
+    pos = _protobuf_append_str(protobuf_fmt_buf, pos, " (");
 
-    pos = _protobuf_append_str(buf, pos, "Field ")
-    pos = _protobuf_append_num(buf, pos, field_num)
-    pos = _protobuf_append_str(buf, pos, " (")
-
-    if (wire_type == PROTOBUF_VARINT) {
-        pos = _protobuf_append_str(buf, pos, "varint): ")
-        pos = _protobuf_append_num(buf, pos, value)
-    } else if (wire_type == PROTOBUF_LENGTH) {
-        pos = _protobuf_append_str(buf, pos, "length): ")
-        pos = _protobuf_append_num(buf, pos, get_at(field_info, 3))
-        pos = _protobuf_append_str(buf, pos, " bytes")
-    } else if (wire_type == PROTOBUF_32BIT) {
-        pos = _protobuf_append_str(buf, pos, "32-bit): ")
-        pos = _protobuf_append_num(buf, pos, value)
-    } else if (wire_type == PROTOBUF_64BIT) {
-        pos = _protobuf_append_str(buf, pos, "64-bit): ")
-        pos = _protobuf_append_num(buf, pos, value)
+    if wire_type == PROTOBUF_VARINT {
+        pos = _protobuf_append_str(protobuf_fmt_buf, pos, "varint): ");
+        pos = _protobuf_append_num(protobuf_fmt_buf, pos, fval);
+    } else if wire_type == PROTOBUF_LENGTH {
+        pos = _protobuf_append_str(protobuf_fmt_buf, pos, "length): ");
+        pos = _protobuf_append_num(protobuf_fmt_buf, pos, field_info[3]);
+        pos = _protobuf_append_str(protobuf_fmt_buf, pos, " bytes");
+    } else if wire_type == PROTOBUF_32BIT {
+        pos = _protobuf_append_str(protobuf_fmt_buf, pos, "32-bit): ");
+        pos = _protobuf_append_num(protobuf_fmt_buf, pos, fval);
+    } else if wire_type == PROTOBUF_64BIT {
+        pos = _protobuf_append_str(protobuf_fmt_buf, pos, "64-bit): ");
+        pos = _protobuf_append_num(protobuf_fmt_buf, pos, fval);
     }
 
-    set_at(buf, pos, 0)
-    return buf
+    set_at(protobuf_fmt_buf, pos, 0);
+    return protobuf_fmt_buf;
 }
 
-# Helper: append string
+// Helper: append str bytes into buf starting at pos; return updated pos
 fn _protobuf_append_str(buf, pos, str) {
-    var i = 0
-    var len = strlen(str)
-    while (i < len) {
-        set_at(buf, pos, get_at(str, i))
-        pos = pos + 1
-        i = i + 1
+    let slen = len(str);
+    let mut i = 0;
+    let mut p = pos;
+    while i < slen {
+        set_at(buf, p, str[i]);
+        p = p + 1;
+        i = i + 1;
     }
-    return pos
+    return p;
 }
 
-# Helper: append number
+// Helper: append decimal num into buf at pos; return updated pos
 fn _protobuf_append_num(buf, pos, num) {
-    if (num == 0) {
-        set_at(buf, pos, 48)
-        return pos + 1
+    if num == 0 {
+        set_at(buf, pos, 48);
+        return pos + 1;
     }
 
-    var digits = PROTOBUF_BUF + 327680
-    var d_pos = 0
+    let mut d_pos = 0;
+    let mut n = num;
+    let mut p = pos;
 
-    while (num > 0) {
-        set_at(digits, d_pos, 48 + (num % 10))
-        num = num / 10
-        d_pos = d_pos + 1
+    while n > 0 {
+        set_at(protobuf_num_digits, d_pos, 48 + (n % 10));
+        n = n / 10;
+        d_pos = d_pos + 1;
     }
 
-    while (d_pos > 0) {
-        d_pos = d_pos - 1
-        set_at(buf, pos, get_at(digits, d_pos))
-        pos = pos + 1
+    while d_pos > 0 {
+        d_pos = d_pos - 1;
+        set_at(buf, p, protobuf_num_digits[d_pos]);
+        p = p + 1;
     }
 
-    return pos
+    return p;
 }
 
-# Test protobuf encoding/decoding
-fn protobuf_test() {
-    protobuf_start()
+// Self-test: encode field 1 (varint 150) + field 2 (string "testing"), decode and verify
+fn _test() {
+    protobuf_start();
+    protobuf_add_varint(1, 150);
+    protobuf_add_string(2, "testing");
 
-    # Encode test message: field 1 = 150, field 2 = "testing"
-    protobuf_add_varint(1, 150)
-    protobuf_add_string(2, "testing")
+    let msg  = protobuf_get_message();
+    let mlen = protobuf_get_length();
 
-    var msg = protobuf_get_message()
-    var len = protobuf_get_length()
+    protobuf_decode_start(msg);
 
-    # Decode message
-    protobuf_decode_start(msg)
-    var field1 = protobuf_decode_field(msg, len)
-    var field2 = protobuf_decode_field(msg, len)
+    // Decode field 1 and immediately save scalar results before the next call
+    let f1 = protobuf_decode_field(msg, mlen);
+    if f1 == 0 {
+        serial_print("Protobuf test: field 1 decode failed");
+        return 0 - 1;
+    }
+    let f1_num = f1[0];
+    let f1_val = f1[2];
 
-    if (field1 == 0 || field2 == 0) {
-        serial_print("Protobuf test: decode failed")
-        return -1
+    // Decode field 2 and save scalar results
+    let f2 = protobuf_decode_field(msg, mlen);
+    if f2 == 0 {
+        serial_print("Protobuf test: field 2 decode failed");
+        return 0 - 2;
+    }
+    let f2_num = f2[0];
+
+    if f1_num != 1 || f1_val != 150 {
+        serial_print("Protobuf test: field 1 mismatch");
+        return 0 - 3;
     }
 
-    if (get_at(field1, 0) != 1 || get_at(field1, 2) != 150) {
-        serial_print("Protobuf test: field 1 mismatch")
-        return -2
+    if f2_num != 2 {
+        serial_print("Protobuf test: field 2 number mismatch");
+        return 0 - 4;
     }
 
-    if (get_at(field2, 0) != 2) {
-        serial_print("Protobuf test: field 2 number mismatch")
-        return -3
-    }
-
-    serial_print("Protobuf test: passed")
-    return 0
+    serial_print("Protobuf test: passed");
+    return 0;
 }
+
+_test();
+print("protobuf.hl loaded");

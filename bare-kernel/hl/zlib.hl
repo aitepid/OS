@@ -1,354 +1,336 @@
-# zlib.hl - DEFLATE Compression (simplified)
-# Implements basic DEFLATE compression algorithm (RFC 1951) with zlib wrapper (RFC 1950)
+// zlib.hl - DEFLATE Compression (simplified)
+// Implements basic DEFLATE compression algorithm (RFC 1951) with zlib wrapper (RFC 1950)
 
-# Memory layout
-global ZLIB_BUF = 0x11B0000
-global ZLIB_WINDOW_SIZE = 32768
-global ZLIB_MIN_MATCH = 3
-global ZLIB_MAX_MATCH = 258
-global ZLIB_HASH_BITS = 15
+// Constants
+let ZLIB_WINDOW_SIZE = 32768;
+let ZLIB_MIN_MATCH   = 3;
+let ZLIB_MAX_MATCH   = 258;
+let ZLIB_HASH_BITS   = 15;
 
-# Compression level constants
-global ZLIB_LEVEL_FAST = 1
-global ZLIB_LEVEL_DEFAULT = 6
-global ZLIB_LEVEL_BEST = 9
+let ZLIB_LEVEL_FAST    = 1;
+let ZLIB_LEVEL_DEFAULT = 6;
+let ZLIB_LEVEL_BEST    = 9;
 
-# Compression state
-global zlib_compression_level = 0
-global zlib_output_buf = 0
-global zlib_output_len = 0
-global zlib_adler32 = 0
+// Buffers replacing raw address layout
+let zlib_output_buf = array(131072, 0);  // compressed output
+let zlib_info_buf   = array(256,    0);  // format_info string scratch
+let zlib_digit_buf  = array(32,     0);  // number digit scratch
+
+// State
+let mut zlib_compression_level = ZLIB_LEVEL_DEFAULT;
+let mut zlib_output_len        = 0;
+let mut zlib_adler32_val       = 1;
 
 fn zlib_init() {
-    zlib_compression_level = ZLIB_LEVEL_DEFAULT
-    zlib_output_buf = ZLIB_BUF + ZLIB_WINDOW_SIZE
-    zlib_output_len = 0
-    zlib_adler32 = 1
-    serial_print("ZLIB DEFLATE ready")
+    zlib_compression_level = ZLIB_LEVEL_DEFAULT;
+    zlib_output_len        = 0;
+    zlib_adler32_val       = 1;
+    serial_print("ZLIB DEFLATE ready");
 }
 
-# Set compression level (1-9)
+// Set compression level 1-9; returns 0 on success, 0-1 on error
 fn zlib_set_level(level) {
-    if (level >= 1 && level <= 9) {
-        zlib_compression_level = level
-        return 0
+    if level >= 1 {
+        if level <= 9 {
+            zlib_compression_level = level;
+            return 0;
+        }
     }
-    return -1
+    return 0 - 1;
 }
 
-# Compress data with zlib wrapper
-fn zlib_compress(data, len) {
-    # Zlib header (2 bytes)
-    var output = zlib_output_buf
-    var pos = 0
+// Compress data with zlib wrapper — returns total byte count
+fn zlib_compress(data, data_len) {
+    let mut pos = 0;
 
-    # CMF (Compression Method and Flags)
-    # CM=8 (DEFLATE), CINFO=7 (32K window)
-    set_at(output, pos, 120)  # 0x78
-    pos = pos + 1
+    // Zlib header: CMF = 0x78 (DEFLATE, 32K window), FLG = 0x9C
+    set_at(zlib_output_buf, pos, 120);
+    pos = pos + 1;
+    set_at(zlib_output_buf, pos, 156);
+    pos = pos + 1;
 
-    # FLG (Flags)
-    # FLEVEL=2 (default), FDICT=0, FCHECK calculated
-    var flg = 156  # 0x9C (makes header checksum valid)
-    set_at(output, pos, flg)
-    pos = pos + 1
-
-    # Compress data with DEFLATE
-    var compressed_len = _zlib_deflate(data, len, output, pos)
-    if (compressed_len < 0) {
-        return -1
+    // DEFLATE compressed payload
+    let compressed_len = _zlib_deflate(data, data_len, zlib_output_buf, pos);
+    if compressed_len < 0 {
+        return 0 - 1;
     }
-    pos = pos + compressed_len
+    pos = pos + compressed_len;
 
-    # Adler-32 checksum (4 bytes, big-endian)
-    var adler = _zlib_adler32(data, len)
-    set_at(output, pos + 0, (adler / 16777216) % 256)
-    set_at(output, pos + 1, (adler / 65536) % 256)
-    set_at(output, pos + 2, (adler / 256) % 256)
-    set_at(output, pos + 3, adler % 256)
-    pos = pos + 4
+    // Adler-32 checksum (4 bytes, big-endian)
+    let adler = _zlib_adler32(data, data_len);
+    set_at(zlib_output_buf, pos,     (adler / 16777216) % 256);
+    set_at(zlib_output_buf, pos + 1, (adler / 65536)    % 256);
+    set_at(zlib_output_buf, pos + 2, (adler / 256)      % 256);
+    set_at(zlib_output_buf, pos + 3,  adler              % 256);
+    pos = pos + 4;
 
-    zlib_output_len = pos
-    return pos
+    zlib_output_len = pos;
+    return pos;
 }
 
-# Decompress zlib data
-fn zlib_decompress(data, len) {
-    if (len < 6) {
-        serial_print("ZLIB: data too short")
-        return -1
+// Decompress zlib data — returns decompressed byte count
+fn zlib_decompress(data, data_len) {
+    if data_len < 6 {
+        serial_print("ZLIB: data too short");
+        return 0 - 1;
     }
 
-    # Verify zlib header
-    var cmf = get_at(data, 0)
-    var flg = get_at(data, 1)
+    let cmf = data[0];
+    let flg = data[1];
 
-    var cm = cmf % 16
-    if (cm != 8) {
-        serial_print("ZLIB: unsupported compression method")
-        return -2
+    let cm = cmf % 16;
+    if cm != 8 {
+        serial_print("ZLIB: unsupported compression method");
+        return 0 - 2;
     }
 
-    # Check header checksum
-    var check = (cmf * 256 + flg) % 31
-    if (check != 0) {
-        serial_print("ZLIB: invalid header")
-        return -3
+    let check = (cmf * 256 + flg) % 31;
+    if check != 0 {
+        serial_print("ZLIB: invalid header");
+        return 0 - 3;
     }
 
-    # Decompress DEFLATE data
-    var decompressed_len = _zlib_inflate(data, 2, len - 6, zlib_output_buf)
-    if (decompressed_len < 0) {
-        return -4
+    let decompressed_len = _zlib_inflate(data, 2, data_len - 6, zlib_output_buf);
+    if decompressed_len < 0 {
+        return 0 - 4;
     }
 
-    # Verify Adler-32 checksum
-    var stored_adler = _zlib_read_u32_be(data, len - 4)
-    var computed_adler = _zlib_adler32(zlib_output_buf, decompressed_len)
+    let stored_adler   = _zlib_read_u32_be(data, data_len - 4);
+    let computed_adler = _zlib_adler32(zlib_output_buf, decompressed_len);
 
-    if (stored_adler != computed_adler) {
-        serial_print("ZLIB: checksum mismatch")
-        return -5
+    if stored_adler != computed_adler {
+        serial_print("ZLIB: checksum mismatch");
+        return 0 - 5;
     }
 
-    zlib_output_len = decompressed_len
-    return decompressed_len
+    zlib_output_len = decompressed_len;
+    return decompressed_len;
 }
 
-# Simplified DEFLATE compression (no LZ77, just store blocks)
-fn _zlib_deflate(data, len, output, start_pos) {
-    var pos = start_pos
-    var data_pos = 0
-    var remaining = len
+// Simplified DEFLATE using uncompressed store blocks
+fn _zlib_deflate(data, data_len, output, start_pos) {
+    let mut pos      = start_pos;
+    let mut data_pos = 0;
+    let mut remaining = data_len;
 
-    # For simplicity, use uncompressed blocks
-    while (remaining > 0) {
-        var block_size = remaining
-        var is_final = 0
+    while remaining > 0 {
+        let mut block_size = remaining;
+        let mut is_final   = 0;
 
-        if (block_size > 65535) {
-            block_size = 65535
+        if block_size > 65535 {
+            block_size = 65535;
         } else {
-            is_final = 1
+            is_final = 1;
         }
 
-        # Block header (3 bits: BFINAL + BTYPE)
-        # BTYPE=00 (no compression)
-        var header = 0
-        if (is_final == 1) {
-            header = 1
+        // Block header byte: bit0 = BFINAL, bits1-2 = BTYPE=00 (no compression)
+        let mut header = 0;
+        if is_final == 1 {
+            header = 1;
         }
-        set_at(output, pos, header)
-        pos = pos + 1
+        set_at(output, pos, header);
+        pos = pos + 1;
 
-        # LEN (2 bytes, little-endian)
-        set_at(output, pos, block_size % 256)
-        set_at(output, pos + 1, block_size / 256)
-        pos = pos + 2
+        // LEN (little-endian)
+        set_at(output, pos,     block_size % 256);
+        set_at(output, pos + 1, block_size / 256);
+        pos = pos + 2;
 
-        # NLEN (1's complement of LEN)
-        var nlen = 65535 - block_size
-        set_at(output, pos, nlen % 256)
-        set_at(output, pos + 1, nlen / 256)
-        pos = pos + 2
+        // NLEN = one's complement of LEN
+        let nlen = 65535 - block_size;
+        set_at(output, pos,     nlen % 256);
+        set_at(output, pos + 1, nlen / 256);
+        pos = pos + 2;
 
-        # Copy literal data
-        var i = 0
-        while (i < block_size) {
-            set_at(output, pos, get_at(data, data_pos))
-            pos = pos + 1
-            data_pos = data_pos + 1
-            i = i + 1
+        // Literal data
+        let mut i = 0;
+        while i < block_size {
+            set_at(output, pos, data[data_pos]);
+            pos      = pos      + 1;
+            data_pos = data_pos + 1;
+            i        = i        + 1;
         }
 
-        remaining = remaining - block_size
+        remaining = remaining - block_size;
     }
 
-    return pos - start_pos
+    return pos - start_pos;
 }
 
-# Simplified DEFLATE decompression (uncompressed blocks only)
+// Simplified DEFLATE inflate (uncompressed blocks only)
 fn _zlib_inflate(data, start_pos, compressed_len, output) {
-    var pos = start_pos
-    var out_pos = 0
-    var is_final = 0
+    let mut pos      = start_pos;
+    let mut out_pos  = 0;
+    let mut is_final = 0;
 
-    while (is_final == 0) {
-        if (pos >= start_pos + compressed_len) {
-            break
+    while is_final == 0 {
+        if pos >= start_pos + compressed_len {
+            is_final = 1;
         }
+        if is_final == 0 {
+            let header   = data[pos];
+            pos      = pos + 1;
 
-        # Read block header
-        var header = get_at(data, pos)
-        pos = pos + 1
+            is_final = header % 2;
+            let btype    = (header / 2) % 4;
 
-        is_final = header % 2
-        var btype = (header / 2) % 4
+            if btype == 0 {
+                let block_len = data[pos] + data[pos + 1] * 256;
+                pos = pos + 2;
+                let nlen      = data[pos] + data[pos + 1] * 256;
+                pos = pos + 2;
 
-        if (btype == 0) {
-            # Uncompressed block
-            var len = get_at(data, pos) + get_at(data, pos + 1) * 256
-            pos = pos + 2
-            var nlen = get_at(data, pos) + get_at(data, pos + 1) * 256
-            pos = pos + 2
+                if block_len + nlen != 65535 {
+                    serial_print("ZLIB: invalid block length");
+                    return 0 - 1;
+                }
 
-            # Verify NLEN
-            if (len + nlen != 65535) {
-                serial_print("ZLIB: invalid block length")
-                return -1
+                let mut i = 0;
+                while i < block_len {
+                    set_at(output, out_pos, data[pos]);
+                    out_pos = out_pos + 1;
+                    pos     = pos     + 1;
+                    i       = i       + 1;
+                }
+            } else {
+                serial_print("ZLIB: compressed blocks not supported");
+                return 0 - 2;
             }
-
-            # Copy literal data
-            var i = 0
-            while (i < len) {
-                set_at(output, out_pos, get_at(data, pos))
-                out_pos = out_pos + 1
-                pos = pos + 1
-                i = i + 1
-            }
-        } else {
-            # Compressed blocks not implemented in simplified version
-            serial_print("ZLIB: compressed blocks not supported")
-            return -2
         }
     }
 
-    return out_pos
+    return out_pos;
 }
 
-# Calculate Adler-32 checksum
-fn _zlib_adler32(data, len) {
-    var s1 = 1
-    var s2 = 0
-    var i = 0
-    var MOD_ADLER = 65521
+// Adler-32 checksum
+fn _zlib_adler32(data, data_len) {
+    let mut s1 = 1;
+    let mut s2 = 0;
+    let mut i  = 0;
+    let MOD_ADLER = 65521;
 
-    while (i < len) {
-        s1 = (s1 + get_at(data, i)) % MOD_ADLER
-        s2 = (s2 + s1) % MOD_ADLER
-        i = i + 1
+    while i < data_len {
+        s1 = (s1 + data[i]) % MOD_ADLER;
+        s2 = (s2 + s1)      % MOD_ADLER;
+        i  = i + 1;
     }
 
-    return (s2 * 65536 + s1) % 4294967296
+    return (s2 * 65536 + s1) % 4294967296;
 }
 
-# Read 32-bit big-endian value
+// Read a 32-bit big-endian value
 fn _zlib_read_u32_be(buf, offset) {
-    var b0 = get_at(buf, offset + 0)
-    var b1 = get_at(buf, offset + 1)
-    var b2 = get_at(buf, offset + 2)
-    var b3 = get_at(buf, offset + 3)
-    return b0 * 16777216 + b1 * 65536 + b2 * 256 + b3
+    let b0 = buf[offset];
+    let b1 = buf[offset + 1];
+    let b2 = buf[offset + 2];
+    let b3 = buf[offset + 3];
+    return b0 * 16777216 + b1 * 65536 + b2 * 256 + b3;
 }
 
-# Get compressed data buffer
+// Return the output buffer
 fn zlib_get_output() {
-    return zlib_output_buf
+    return zlib_output_buf;
 }
 
-# Get output length
+// Return the byte length of the last operation's output
 fn zlib_get_output_len() {
-    return zlib_output_len
+    return zlib_output_len;
 }
 
-# Calculate compression ratio
+// Compression ratio as percentage (100 = no gain, lower = better)
 fn zlib_get_ratio(original_len) {
-    if (original_len == 0) {
-        return 0
+    if original_len == 0 {
+        return 0;
     }
-    # Return percentage (100 = no compression, 0 = perfect compression)
-    return (zlib_output_len * 100) / original_len
+    return (zlib_output_len * 100) / original_len;
 }
 
-# Format compression info
+// Build a human-readable compression summary into zlib_info_buf
 fn zlib_format_info(original_len, compressed_len) {
-    var buf = ZLIB_BUF + 131072
-    var pos = 0
+    let mut pos = 0;
 
-    pos = _zlib_append_str(buf, pos, "Original: ")
-    pos = _zlib_append_num(buf, pos, original_len)
-    pos = _zlib_append_str(buf, pos, " bytes, Compressed: ")
-    pos = _zlib_append_num(buf, pos, compressed_len)
-    pos = _zlib_append_str(buf, pos, " bytes (")
+    pos = _zlib_append_str(zlib_info_buf, pos, "Original: ");
+    pos = _zlib_append_num(zlib_info_buf, pos, original_len);
+    pos = _zlib_append_str(zlib_info_buf, pos, " bytes, Compressed: ");
+    pos = _zlib_append_num(zlib_info_buf, pos, compressed_len);
+    pos = _zlib_append_str(zlib_info_buf, pos, " bytes (");
 
-    var ratio = 100
-    if (original_len > 0) {
-        ratio = (compressed_len * 100) / original_len
+    let mut ratio = 100;
+    if original_len > 0 {
+        ratio = (compressed_len * 100) / original_len;
     }
-    pos = _zlib_append_num(buf, pos, ratio)
-    pos = _zlib_append_str(buf, pos, "%)")
+    pos = _zlib_append_num(zlib_info_buf, pos, ratio);
+    pos = _zlib_append_str(zlib_info_buf, pos, "%)");
 
-    set_at(buf, pos, 0)
-    return buf
+    set_at(zlib_info_buf, pos, 0);
+    return zlib_info_buf;
 }
 
-# Helper: append string
+// Append a string into buf at pos — returns updated pos
 fn _zlib_append_str(buf, pos, str) {
-    var i = 0
-    var len = strlen(str)
-    while (i < len) {
-        set_at(buf, pos, get_at(str, i))
-        pos = pos + 1
-        i = i + 1
+    let mut i    = 0;
+    let str_len  = len(str);
+    while i < str_len {
+        set_at(buf, pos, str[i]);
+        pos = pos + 1;
+        i   = i   + 1;
     }
-    return pos
+    return pos;
 }
 
-# Helper: append number
+// Append a decimal integer into buf at pos — returns updated pos
 fn _zlib_append_num(buf, pos, num) {
-    if (num == 0) {
-        set_at(buf, pos, 48)
-        return pos + 1
+    if num == 0 {
+        set_at(buf, pos, 48);
+        return pos + 1;
     }
 
-    var digits = ZLIB_BUF + 196608
-    var d_pos = 0
-
-    while (num > 0) {
-        set_at(digits, d_pos, 48 + (num % 10))
-        num = num / 10
-        d_pos = d_pos + 1
+    let mut n     = num;
+    let mut d_pos = 0;
+    while n > 0 {
+        set_at(zlib_digit_buf, d_pos, 48 + (n % 10));
+        n     = n     / 10;
+        d_pos = d_pos + 1;
     }
 
-    while (d_pos > 0) {
-        d_pos = d_pos - 1
-        set_at(buf, pos, get_at(digits, d_pos))
-        pos = pos + 1
+    let mut p = pos;
+    while d_pos > 0 {
+        d_pos = d_pos - 1;
+        set_at(buf, p, zlib_digit_buf[d_pos]);
+        p = p + 1;
     }
 
-    return pos
+    return p;
 }
 
-# Test compression with sample data
+// Self-test
 fn zlib_test() {
-    var test_data = ZLIB_BUF + 262144
-    var test_str = "Hello, ZLIB! This is a test string for compression."
-    var len = strlen(test_str)
-    var i = 0
+    let test_str = "Hello, ZLIB! This is a test string for compression.";
+    let tlen     = len(test_str);
 
-    while (i < len) {
-        set_at(test_data, i, get_at(test_str, i))
-        i = i + 1
+    let comp_len = zlib_compress(test_str, tlen);
+    if comp_len < 1 {
+        serial_print("ZLIB test: compression failed");
+        return 0 - 1;
     }
 
-    # Compress
-    var comp_len = zlib_compress(test_data, len)
-    if (comp_len < 0) {
-        return -1
+    serial_print("ZLIB test: compression succeeded");
+
+    let decomp_len = zlib_decompress(zlib_output_buf, comp_len);
+    if decomp_len < 1 {
+        serial_print("ZLIB test: decompression failed");
+        return 0 - 2;
     }
 
-    serial_print("ZLIB test: compression succeeded")
-
-    # Decompress
-    var decomp_len = zlib_decompress(zlib_output_buf, comp_len)
-    if (decomp_len < 0) {
-        return -2
+    if decomp_len != tlen {
+        serial_print("ZLIB test: length mismatch");
+        return 0 - 3;
     }
 
-    if (decomp_len != len) {
-        return -3
-    }
-
-    serial_print("ZLIB test: decompression succeeded")
-    return 0
+    serial_print("ZLIB test: decompression succeeded");
+    return 0;
 }
+
+zlib_init();
+zlib_test();
+print("zlib.hl loaded");

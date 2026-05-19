@@ -1,279 +1,264 @@
-# ed25519.hl - Ed25519 Digital Signatures (simplified)
-# Implements simplified Ed25519 signature algorithm (Edwards-curve Digital Signature Algorithm)
+// ed25519.hl - Ed25519 Digital Signatures (simplified)
+// Implements simplified Ed25519 signature algorithm (Edwards-curve DSA)
 
-# Memory layout
-global ED25519_BUF = 0x1200000
-global ED25519_KEY_SIZE = 32  # bytes (256 bits)
-global ED25519_SIG_SIZE = 64  # bytes
+// Constants
+let ED25519_KEY_SIZE = 32;
+let ED25519_SIG_SIZE = 64;
 
-# Ed25519 curve parameters (simplified)
-global ED25519_P = 2147483647  # Prime (simplified, real: 2^255-19)
-global ED25519_D = 121665      # Curve constant (simplified)
+// Ed25519 curve parameters (simplified; real: prime = 2^255-19)
+let ED25519_P = 2147483647;
+let ED25519_D = 121665;
 
-# Key storage
-global ed25519_private_key = 0
-global ed25519_public_key = 0
-global ed25519_signature = 0
+// Key and signature buffers (replace raw memory addresses with arrays)
+let ed25519_private_key = array(32, 0);
+let ed25519_public_key = array(32, 0);
+let ed25519_signature = array(64, 0);
+let ed25519_hex_buf = array(256, 0);
+let ed25519_format_buf = array(256, 0);
+let ed25519_digits_buf = array(32, 0);
 
 fn ed25519_init() {
-    ed25519_private_key = ED25519_BUF
-    ed25519_public_key = ED25519_BUF + 1024
-    ed25519_signature = ED25519_BUF + 2048
-    serial_print("Ed25519 signatures ready")
+    print("Ed25519 signatures ready");
 }
 
-# Generate key pair (simplified)
+// Generate key pair (simplified; uses uptime-based seed)
 fn ed25519_generate_keys() {
-    # Generate random private key (simplified - use timestamp)
-    var seed = get_uptime() * get_ticks()
-    var i = 0
+    let seed = get_uptime() * get_ticks();
+    let mut i = 0;
 
-    while (i < ED25519_KEY_SIZE) {
-        var byte = (seed + i * 7919) % 256
-        set_at(ed25519_private_key, i, byte)
-        i = i + 1
+    while i < ED25519_KEY_SIZE {
+        let byte_val = (seed + i * 7919) % 256;
+        set_at(ed25519_private_key, i, byte_val);
+        i = i + 1;
     }
 
-    # Derive public key from private key (simplified)
-    # In real Ed25519, this involves scalar multiplication on curve
-    i = 0
-    while (i < ED25519_KEY_SIZE) {
-        var priv_byte = get_at(ed25519_private_key, i)
-        # Simplified derivation (not cryptographically sound)
-        var pub_byte = (priv_byte * 9 + 13) % 256
-        set_at(ed25519_public_key, i, pub_byte)
-        i = i + 1
+    // Derive public key from private key (simplified, not cryptographically sound)
+    i = 0;
+    while i < ED25519_KEY_SIZE {
+        let priv_byte = ed25519_private_key[i];
+        let pub_byte = (priv_byte * 9 + 13) % 256;
+        set_at(ed25519_public_key, i, pub_byte);
+        i = i + 1;
     }
 
-    return 0
+    return 0;
 }
 
-# Set private key manually
+// Load private key from buffer
 fn ed25519_set_private_key(key) {
-    var i = 0
-    var len = strlen(key)
-    while (i < ED25519_KEY_SIZE) {
-        if (i < len) {
-            set_at(ed25519_private_key, i, get_at(key, i))
+    let mut i = 0;
+    let klen = len(key);
+    while i < ED25519_KEY_SIZE {
+        if i < klen {
+            set_at(ed25519_private_key, i, key[i]);
         } else {
-            set_at(ed25519_private_key, i, 0)
+            set_at(ed25519_private_key, i, 0);
         }
-        i = i + 1
+        i = i + 1;
     }
-    return 0
+    return 0;
 }
 
-# Set public key manually
+// Load public key from buffer
 fn ed25519_set_public_key(key) {
-    var i = 0
-    var len = strlen(key)
-    while (i < ED25519_KEY_SIZE) {
-        if (i < len) {
-            set_at(ed25519_public_key, i, get_at(key, i))
+    let mut i = 0;
+    let klen = len(key);
+    while i < ED25519_KEY_SIZE {
+        if i < klen {
+            set_at(ed25519_public_key, i, key[i]);
         } else {
-            set_at(ed25519_public_key, i, 0)
+            set_at(ed25519_public_key, i, 0);
         }
-        i = i + 1
+        i = i + 1;
     }
-    return 0
+    return 0;
 }
 
-# Sign message (simplified Ed25519 signature)
+// Sign message (simplified Ed25519 signature)
 fn ed25519_sign(message) {
-    var msg_len = strlen(message)
+    let msg_len = len(message);
+    let msg_hash = _ed25519_hash(message, msg_len);
 
-    # Hash message (simplified - use checksum)
-    var msg_hash = _ed25519_hash(message, msg_len)
-
-    # Create signature (simplified - not actual Ed25519 math)
-    # Real Ed25519 involves scalar multiplication and point addition
-    var i = 0
-    while (i < ED25519_SIG_SIZE) {
-        var priv_byte = get_at(ed25519_private_key, i % ED25519_KEY_SIZE)
-        var hash_part = (msg_hash / _ed25519_pow256(i % 4)) % 256
-
-        # Simplified signature generation
-        var sig_byte = (priv_byte + hash_part + i * 17) % 256
-        set_at(ed25519_signature, i, sig_byte)
-        i = i + 1
+    // Build signature bytes from private key + hash (not actual Ed25519 math)
+    let mut i = 0;
+    while i < ED25519_SIG_SIZE {
+        let priv_byte = ed25519_private_key[i % ED25519_KEY_SIZE];
+        let hash_part = (msg_hash / _ed25519_pow256(i % 4)) % 256;
+        let sig_byte = (priv_byte + hash_part + i * 17) % 256;
+        set_at(ed25519_signature, i, sig_byte);
+        i = i + 1;
     }
 
-    return ed25519_signature
+    return ed25519_signature;
 }
 
-# Verify signature (simplified)
+// Verify signature (simplified)
 fn ed25519_verify(message, signature) {
-    var msg_len = strlen(message)
+    let msg_len = len(message);
+    let msg_hash = _ed25519_hash(message, msg_len);
 
-    # Hash message
-    var msg_hash = _ed25519_hash(message, msg_len)
+    let mut i = 0;
+    let mut match_count = 0;
 
-    # Verify signature (simplified verification)
-    var i = 0
-    var match_count = 0
-
-    while (i < ED25519_SIG_SIZE) {
-        var sig_byte = get_at(signature, i)
-        var pub_byte = get_at(ed25519_public_key, i % ED25519_KEY_SIZE)
-        var hash_part = (msg_hash / _ed25519_pow256(i % 4)) % 256
-
-        # Check if signature matches expected pattern
-        var expected = (pub_byte + hash_part + i * 17) % 256
-        if (sig_byte == expected) {
-            match_count = match_count + 1
+    while i < ED25519_SIG_SIZE {
+        let sig_byte = signature[i];
+        let pub_byte = ed25519_public_key[i % ED25519_KEY_SIZE];
+        let hash_part = (msg_hash / _ed25519_pow256(i % 4)) % 256;
+        let expected = (pub_byte + hash_part + i * 17) % 256;
+        if sig_byte == expected {
+            match_count = match_count + 1;
         }
-        i = i + 1
+        i = i + 1;
     }
 
-    # Signature valid if most bytes match (simplified)
-    if (match_count > ED25519_SIG_SIZE - 8) {
-        return 1  # Valid
+    // Valid if nearly all bytes match
+    if match_count > ED25519_SIG_SIZE - 8 {
+        return 1;
     }
 
-    return 0  # Invalid
+    return 0;
 }
 
-# Simplified hash function (not SHA-512 as in real Ed25519)
-fn _ed25519_hash(data, len) {
-    var hash = 0
-    var i = 0
+// Simplified polynomial hash (not SHA-512 as in real Ed25519)
+fn _ed25519_hash(data, dlen) {
+    let mut hash = 0;
+    let mut i = 0;
 
-    while (i < len) {
-        var byte = get_at(data, i)
-        hash = (hash * 31 + byte) % 4294967296
-        i = i + 1
+    while i < dlen {
+        let byte_val = data[i];
+        hash = (hash * 31 + byte_val) % 4294967296;
+        i = i + 1;
     }
 
-    return hash
+    return hash;
 }
 
-# Power of 256
+// Power of 256 (lookup table)
 fn _ed25519_pow256(exp) {
-    if (exp == 0) { return 1 }
-    if (exp == 1) { return 256 }
-    if (exp == 2) { return 65536 }
-    if (exp == 3) { return 16777216 }
-    return 1
+    if exp == 0 { return 1; }
+    if exp == 1 { return 256; }
+    if exp == 2 { return 65536; }
+    if exp == 3 { return 16777216; }
+    return 1;
 }
 
-# Get public key as hex string
+// Get public key as hex string
 fn ed25519_get_public_key() {
-    return _ed25519_to_hex(ed25519_public_key, ED25519_KEY_SIZE)
+    return _ed25519_to_hex(ed25519_public_key, ED25519_KEY_SIZE);
 }
 
-# Get signature as hex string
+// Get signature as hex string
 fn ed25519_get_signature() {
-    return _ed25519_to_hex(ed25519_signature, ED25519_SIG_SIZE)
+    return _ed25519_to_hex(ed25519_signature, ED25519_SIG_SIZE);
 }
 
-# Convert bytes to hex string
-fn _ed25519_to_hex(data, len) {
-    var hex_chars = "0123456789abcdef"
-    var buf = ED25519_BUF + 8192
-    var pos = 0
-    var i = 0
+// Convert byte buffer to partial hex string (first 16 bytes + ellipsis)
+fn _ed25519_to_hex(data, dlen) {
+    let hex_chars = "0123456789abcdef";
+    let mut pos = 0;
+    let mut i = 0;
 
-    while (i < len && i < 16) {  # Limit output for readability
-        var byte = get_at(data, i)
-        var high = byte / 16
-        var low = byte % 16
-
-        set_at(buf, pos, get_at(hex_chars, high))
-        pos = pos + 1
-        set_at(buf, pos, get_at(hex_chars, low))
-        pos = pos + 1
-
-        i = i + 1
+    while i < dlen && i < 16 {
+        let byte_val = data[i];
+        let high = byte_val / 16;
+        let low = byte_val % 16;
+        set_at(ed25519_hex_buf, pos, hex_chars[high]);
+        pos = pos + 1;
+        set_at(ed25519_hex_buf, pos, hex_chars[low]);
+        pos = pos + 1;
+        i = i + 1;
     }
 
-    if (len > 16) {
-        set_at(buf, pos, 46)  # '.'
-        pos = pos + 1
-        set_at(buf, pos, 46)
-        pos = pos + 1
-        set_at(buf, pos, 46)
-        pos = pos + 1
+    if dlen > 16 {
+        set_at(ed25519_hex_buf, pos, 46);
+        pos = pos + 1;
+        set_at(ed25519_hex_buf, pos, 46);
+        pos = pos + 1;
+        set_at(ed25519_hex_buf, pos, 46);
+        pos = pos + 1;
     }
 
-    set_at(buf, pos, 0)
-    return buf
+    set_at(ed25519_hex_buf, pos, 0);
+    return ed25519_hex_buf;
 }
 
-# Format key info
+// Format key info as a string
 fn ed25519_format_keys() {
-    var buf = ED25519_BUF + 16384
-    var pos = 0
-
-    pos = _ed25519_append_str(buf, pos, "Public: ")
-    pos = _ed25519_append_str(buf, pos, ed25519_get_public_key())
-    pos = _ed25519_append_str(buf, pos, " (")
-    pos = _ed25519_append_num(buf, pos, ED25519_KEY_SIZE)
-    pos = _ed25519_append_str(buf, pos, " bytes)")
-
-    set_at(buf, pos, 0)
-    return buf
+    let mut pos = 0;
+    pos = _ed25519_append_str(ed25519_format_buf, pos, "Public: ");
+    pos = _ed25519_append_str(ed25519_format_buf, pos, ed25519_get_public_key());
+    pos = _ed25519_append_str(ed25519_format_buf, pos, " (");
+    pos = _ed25519_append_num(ed25519_format_buf, pos, ED25519_KEY_SIZE);
+    pos = _ed25519_append_str(ed25519_format_buf, pos, " bytes)");
+    set_at(ed25519_format_buf, pos, 0);
+    return ed25519_format_buf;
 }
 
-# Helper: append string
+// Helper: append string to buffer, return updated pos
 fn _ed25519_append_str(buf, pos, str) {
-    var i = 0
-    var len = strlen(str)
-    while (i < len) {
-        set_at(buf, pos, get_at(str, i))
-        pos = pos + 1
-        i = i + 1
+    let mut i = 0;
+    let slen = len(str);
+    while i < slen {
+        set_at(buf, pos, str[i]);
+        pos = pos + 1;
+        i = i + 1;
     }
-    return pos
+    return pos;
 }
 
-# Helper: append number
+// Helper: append decimal number to buffer, return updated pos
 fn _ed25519_append_num(buf, pos, num) {
-    if (num == 0) {
-        set_at(buf, pos, 48)
-        return pos + 1
+    if num == 0 {
+        set_at(buf, pos, 48);
+        return pos + 1;
     }
 
-    var digits = ED25519_BUF + 32768
-    var d_pos = 0
+    let mut n = num;
+    let mut d_pos = 0;
 
-    while (num > 0) {
-        set_at(digits, d_pos, 48 + (num % 10))
-        num = num / 10
-        d_pos = d_pos + 1
+    // Collect digits in reverse
+    while n > 0 {
+        set_at(ed25519_digits_buf, d_pos, 48 + (n % 10));
+        n = n / 10;
+        d_pos = d_pos + 1;
     }
 
-    while (d_pos > 0) {
-        d_pos = d_pos - 1
-        set_at(buf, pos, get_at(digits, d_pos))
-        pos = pos + 1
+    // Write digits in correct order
+    while d_pos > 0 {
+        d_pos = d_pos - 1;
+        set_at(buf, pos, ed25519_digits_buf[d_pos]);
+        pos = pos + 1;
     }
 
-    return pos
+    return pos;
 }
 
-# Test Ed25519 sign/verify
+// Test Ed25519 sign and verify
 fn ed25519_test() {
-    # Generate keys
-    ed25519_generate_keys()
+    // Generate key pair
+    ed25519_generate_keys();
 
-    # Sign message
-    var message = "Test message for Ed25519"
-    var signature = ed25519_sign(message)
+    // Sign a test message
+    let message = "Test message for Ed25519";
+    let signature = ed25519_sign(message);
 
-    # Verify signature
-    var valid = ed25519_verify(message, signature)
-    if (valid != 1) {
-        serial_print("Ed25519 test: verification failed")
-        return -1
+    // Verify the signature matches
+    let valid = ed25519_verify(message, signature);
+    if valid != 1 {
+        print("Ed25519 test: verification failed");
+        return 0 - 1;
     }
 
-    # Verify with wrong message
-    var wrong_valid = ed25519_verify("Wrong message", signature)
-    if (wrong_valid == 1) {
-        serial_print("Ed25519 test: false positive")
-        return -2
+    // Verify a wrong message does NOT validate
+    let wrong_valid = ed25519_verify("Wrong message", signature);
+    if wrong_valid == 1 {
+        print("Ed25519 test: false positive");
+        return 0 - 2;
     }
 
-    serial_print("Ed25519 test: passed")
-    return 0
+    print("Ed25519 test: passed");
+    return 0;
 }
+
+ed25519_test();
+print("ed25519.hl loaded");

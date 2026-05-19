@@ -1,348 +1,255 @@
-# zstd.hl - Zstandard Compression (simplified)
-# Implements simplified Zstandard compression algorithm (Facebook/Meta)
+// zstd.hl -- Zstandard Compression (simplified)
 
-# Memory layout
-global ZSTD_BUF = 0x12A0000
-global ZSTD_WINDOW_SIZE = 8192
-global ZSTD_MAX_BLOCK = 65536
+let ZSTD_WINDOW_SIZE = 8192;
+let ZSTD_MAX_BLOCK   = 8192;
 
-# Zstandard frame constants
-global ZSTD_MAGIC = 0xFD2FB528  # Frame magic number (simplified to 32-bit)
-global ZSTD_BLOCK_RAW = 0       # Raw (uncompressed) block
-global ZSTD_BLOCK_RLE = 1       # Run-length encoding block
-global ZSTD_BLOCK_COMPRESSED = 2  # Compressed block
+// Block types
+let ZSTD_BLOCK_RAW        = 0;
+let ZSTD_BLOCK_RLE        = 1;
+let ZSTD_BLOCK_COMPRESSED = 2;
 
-# State
-global zstd_output = 0
-global zstd_output_len = 0
-global zstd_dict = 0
-global zstd_compression_level = 3
+// Buffers
+let zstd_output_buf  = array(8192, 0);
+let zstd_lz77_buf    = array(8192, 0);
+let zstd_match_res   = array(4, 0);
+
+let mut zstd_output_len       = 0;
+let mut zstd_compression_level = 3;
 
 fn zstd_init() {
-    zstd_output = ZSTD_BUF + 65536
-    zstd_output_len = 0
-    zstd_dict = ZSTD_BUF
-    zstd_compression_level = 3
-    serial_print("Zstandard compression ready")
+    zstd_output_len        = 0;
+    zstd_compression_level = 3;
+    print("Zstandard compression ready");
+    return 0;
 }
 
-# Compress data with Zstandard
-fn zstd_compress(data, len) {
-    var output = zstd_output
-    var pos = 0
-
-    # Write frame header (simplified)
-    # Magic number (4 bytes, little-endian approximation)
-    set_at(output, pos, 40)   # 0x28
-    pos = pos + 1
-    set_at(output, pos, 181)  # 0xB5
-    pos = pos + 1
-    set_at(output, pos, 47)   # 0x2F
-    pos = pos + 1
-    set_at(output, pos, 253)  # 0xFD
-    pos = pos + 1
-
-    # Frame descriptor (simplified: single byte)
-    # Bit 0-1: Frame_Content_Size_Flag = 0 (not included)
-    # Bit 2: Single_Segment_Flag = 0
-    # Bit 3: Unused
-    # Bit 4: Reserved
-    # Bit 5: Content_Checksum_Flag = 0
-    # Bit 6-7: Dictionary_ID_Flag = 0
-    set_at(output, pos, 0)
-    pos = pos + 1
-
-    # Compress blocks
-    var data_pos = 0
-    while (data_pos < len) {
-        var block_size = len - data_pos
-        if (block_size > ZSTD_MAX_BLOCK) {
-            block_size = ZSTD_MAX_BLOCK
+fn _zstd_find_match(data, base_offset, pos, data_len) {
+    set_at(zstd_match_res, 0, 0);
+    set_at(zstd_match_res, 1, 0);
+    if pos < 3 { return 0; }
+    let mut window_start = 0;
+    if pos > ZSTD_WINDOW_SIZE { window_start = pos - ZSTD_WINDOW_SIZE; }
+    let mut best_len    = 0;
+    let mut best_offset = 0;
+    let mut search_pos  = window_start;
+    while search_pos < pos {
+        let mut match_len = 0;
+        let mut go2 = 1;
+        while go2 == 1 {
+            if pos + match_len >= data_len  { go2 = 0; }
+            if go2 == 1 {
+                if search_pos + match_len >= pos { go2 = 0; }
+            }
+            if go2 == 1 {
+                if data[base_offset + pos + match_len] == data[base_offset + search_pos + match_len] {
+                    match_len = match_len + 1;
+                    if match_len >= 64 { go2 = 0; }
+                } else {
+                    go2 = 0;
+                }
+            }
         }
-
-        var is_last = 0
-        if (data_pos + block_size >= len) {
-            is_last = 1
+        if match_len > best_len {
+            best_len    = match_len;
+            best_offset = pos - search_pos;
         }
-
-        pos = _zstd_compress_block(output, pos, data, data_pos, block_size, is_last)
-        data_pos = data_pos + block_size
+        search_pos = search_pos + 1;
     }
-
-    zstd_output_len = pos
-    return pos
+    set_at(zstd_match_res, 0, best_len);
+    set_at(zstd_match_res, 1, best_offset);
+    return 0;
 }
 
-# Compress single block
-fn _zstd_compress_block(output, pos, data, data_offset, block_size, is_last) {
-    # Try to compress, fall back to raw if not effective
-
-    # Check for RLE (all bytes same)
-    var is_rle = 1
-    var first_byte = get_at(data, data_offset)
-    var i = 1
-    while (i < block_size) {
-        if (get_at(data, data_offset + i) != first_byte) {
-            is_rle = 0
-            break
+fn _zstd_lz77_compress(data, offset, data_len) {
+    let mut out_pos = 0;
+    let mut pos = 0;
+    while pos < data_len {
+        _zstd_find_match(data, offset, pos, data_len);
+        let mut match_len    = zstd_match_res[0];
+        let mut match_offset = zstd_match_res[1];
+        if match_len >= 3 {
+            set_at(zstd_lz77_buf, out_pos, (match_len - 3) + 128);
+            out_pos = out_pos + 1;
+            set_at(zstd_lz77_buf, out_pos, match_offset % 256);
+            out_pos = out_pos + 1;
+            set_at(zstd_lz77_buf, out_pos, match_offset / 256);
+            out_pos = out_pos + 1;
+            pos = pos + match_len;
+        } else {
+            set_at(zstd_lz77_buf, out_pos, data[offset + pos]);
+            out_pos = out_pos + 1;
+            pos = pos + 1;
         }
-        i = i + 1
     }
+    return out_pos;
+}
 
-    if (is_rle == 1 && block_size > 4) {
-        # RLE block
-        var block_header = (ZSTD_BLOCK_RLE * 2097152) + block_size
-        if (is_last == 1) {
-            block_header = block_header + 16777216  # Set Last_Block bit
+fn _zstd_compress_block(out_pos, data, data_offset, block_size, is_last) {
+    // Check for RLE (all bytes same)
+    let mut first_byte = data[data_offset];
+    let mut is_rle = 1;
+    let mut i = 1;
+    let mut go = 1;
+    while go == 1 {
+        if i >= block_size { go = 0; }
+        if go == 1 {
+            if data[data_offset + i] != first_byte {
+                is_rle = 0;
+                go = 0;
+            }
+            if go == 1 { i = i + 1; }
         }
-
-        # Write block header (3 bytes, little-endian)
-        set_at(output, pos, block_header % 256)
-        pos = pos + 1
-        set_at(output, pos, (block_header / 256) % 256)
-        pos = pos + 1
-        set_at(output, pos, (block_header / 65536) % 256)
-        pos = pos + 1
-
-        # Write single repeated byte
-        set_at(output, pos, first_byte)
-        pos = pos + 1
-
-        return pos
     }
-
-    # Try LZ77 compression
-    var compressed_buf = ZSTD_BUF + 131072
-    var comp_len = _zstd_lz77_compress(data, data_offset, block_size, compressed_buf)
-
-    # Check if compression is beneficial
-    if (comp_len < block_size - 3) {
-        # Compressed block
-        var block_header = (ZSTD_BLOCK_COMPRESSED * 2097152) + comp_len
-        if (is_last == 1) {
-            block_header = block_header + 16777216
+    if is_rle == 1 {
+        if block_size > 4 {
+            let mut bh = ZSTD_BLOCK_RLE * 2097152 + block_size;
+            if is_last == 1 { bh = bh + 16777216; }
+            set_at(zstd_output_buf, out_pos,     bh % 256);
+            set_at(zstd_output_buf, out_pos + 1, (bh / 256) % 256);
+            set_at(zstd_output_buf, out_pos + 2, (bh / 65536) % 256);
+            out_pos = out_pos + 3;
+            set_at(zstd_output_buf, out_pos, first_byte);
+            out_pos = out_pos + 1;
+            return out_pos;
         }
-
-        set_at(output, pos, block_header % 256)
-        pos = pos + 1
-        set_at(output, pos, (block_header / 256) % 256)
-        pos = pos + 1
-        set_at(output, pos, (block_header / 65536) % 256)
-        pos = pos + 1
-
-        # Copy compressed data
-        i = 0
-        while (i < comp_len) {
-            set_at(output, pos, get_at(compressed_buf, i))
-            pos = pos + 1
-            i = i + 1
+    }
+    // Try LZ77
+    let mut comp_len = _zstd_lz77_compress(data, data_offset, block_size);
+    if comp_len < block_size - 3 {
+        let mut bh = ZSTD_BLOCK_COMPRESSED * 2097152 + comp_len;
+        if is_last == 1 { bh = bh + 16777216; }
+        set_at(zstd_output_buf, out_pos,     bh % 256);
+        set_at(zstd_output_buf, out_pos + 1, (bh / 256) % 256);
+        set_at(zstd_output_buf, out_pos + 2, (bh / 65536) % 256);
+        out_pos = out_pos + 3;
+        i = 0;
+        while i < comp_len {
+            set_at(zstd_output_buf, out_pos, zstd_lz77_buf[i]);
+            out_pos = out_pos + 1;
+            i = i + 1;
         }
     } else {
-        # Raw (uncompressed) block
-        var block_header = (ZSTD_BLOCK_RAW * 2097152) + block_size
-        if (is_last == 1) {
-            block_header = block_header + 16777216
-        }
-
-        set_at(output, pos, block_header % 256)
-        pos = pos + 1
-        set_at(output, pos, (block_header / 256) % 256)
-        pos = pos + 1
-        set_at(output, pos, (block_header / 65536) % 256)
-        pos = pos + 1
-
-        # Copy raw data
-        i = 0
-        while (i < block_size) {
-            set_at(output, pos, get_at(data, data_offset + i))
-            pos = pos + 1
-            i = i + 1
+        // Raw block
+        let mut bh = ZSTD_BLOCK_RAW * 2097152 + block_size;
+        if is_last == 1 { bh = bh + 16777216; }
+        set_at(zstd_output_buf, out_pos,     bh % 256);
+        set_at(zstd_output_buf, out_pos + 1, (bh / 256) % 256);
+        set_at(zstd_output_buf, out_pos + 2, (bh / 65536) % 256);
+        out_pos = out_pos + 3;
+        i = 0;
+        while i < block_size {
+            set_at(zstd_output_buf, out_pos, data[data_offset + i]);
+            out_pos = out_pos + 1;
+            i = i + 1;
         }
     }
-
-    return pos
+    return out_pos;
 }
 
-# Simplified LZ77 compression for Zstandard
-fn _zstd_lz77_compress(data, offset, len, output) {
-    var out_pos = 0
-    var pos = 0
-
-    while (pos < len) {
-        # Find match in dictionary/window
-        var match = _zstd_find_match(data, offset, pos, len)
-        var match_len = get_at(match, 0)
-        var match_offset = get_at(match, 1)
-
-        if (match_len >= 3) {
-            # Emit match (simplified encoding)
-            # Byte 0: match_len - 3
-            # Bytes 1-2: offset (little-endian)
-            set_at(output, out_pos, (match_len - 3) + 128)  # High bit = match
-            out_pos = out_pos + 1
-            set_at(output, out_pos, match_offset % 256)
-            out_pos = out_pos + 1
-            set_at(output, out_pos, match_offset / 256)
-            out_pos = out_pos + 1
-
-            pos = pos + match_len
-        } else {
-            # Emit literal
-            set_at(output, out_pos, get_at(data, offset + pos))
-            out_pos = out_pos + 1
-            pos = pos + 1
-        }
+fn zstd_compress(data, data_len) {
+    let mut pos = 0;
+    // Frame magic (little-endian)
+    set_at(zstd_output_buf, pos, 40);   pos = pos + 1;
+    set_at(zstd_output_buf, pos, 181);  pos = pos + 1;
+    set_at(zstd_output_buf, pos, 47);   pos = pos + 1;
+    set_at(zstd_output_buf, pos, 253);  pos = pos + 1;
+    // Frame descriptor
+    set_at(zstd_output_buf, pos, 0);    pos = pos + 1;
+    // Compress blocks
+    let mut data_pos = 0;
+    while data_pos < data_len {
+        let mut block_size = data_len - data_pos;
+        if block_size > ZSTD_MAX_BLOCK { block_size = ZSTD_MAX_BLOCK; }
+        let mut is_last = 0;
+        if data_pos + block_size >= data_len { is_last = 1; }
+        pos      = _zstd_compress_block(pos, data, data_pos, block_size, is_last);
+        data_pos = data_pos + block_size;
     }
-
-    return out_pos
+    zstd_output_len = pos;
+    return pos;
 }
 
-# Find matching sequence
-fn _zstd_find_match(data, base_offset, pos, len) {
-    var result = ZSTD_BUF + 196608
-    var best_len = 0
-    var best_offset = 0
-
-    if (pos < 3) {
-        set_at(result, 0, 0)
-        set_at(result, 1, 0)
-        return result
-    }
-
-    # Search window
-    var window_start = 0
-    if (pos > ZSTD_WINDOW_SIZE) {
-        window_start = pos - ZSTD_WINDOW_SIZE
-    }
-
-    var search_pos = window_start
-    while (search_pos < pos) {
-        # Count matching bytes
-        var match_len = 0
-        while (pos + match_len < len && search_pos + match_len < pos) {
-            if (get_at(data, base_offset + pos + match_len) == get_at(data, base_offset + search_pos + match_len)) {
-                match_len = match_len + 1
-                if (match_len >= 64) { break }  # Max match length
+fn zstd_decompress(data, data_len) {
+    if data_len < 5 { return 0 - 1; }
+    if data[0] != 40  { return 0 - 2; }
+    if data[1] != 181 { return 0 - 2; }
+    if data[2] != 47  { return 0 - 2; }
+    if data[3] != 253 { return 0 - 2; }
+    let mut pos     = 5;
+    let mut out_pos = 0;
+    let mut go = 1;
+    while go == 1 {
+        if pos >= data_len { go = 0; }
+        if go == 1 {
+            let mut bh        = data[pos] + data[pos + 1] * 256 + data[pos + 2] * 65536;
+            pos = pos + 3;
+            let mut is_last   = (bh / 16777216) % 2;
+            let mut block_type = (bh / 2097152) % 2;
+            let mut block_size = bh % 2097152;
+            if block_type == ZSTD_BLOCK_RAW {
+                let mut i = 0;
+                while i < block_size {
+                    set_at(zstd_output_buf, out_pos, data[pos]);
+                    out_pos = out_pos + 1;
+                    pos     = pos + 1;
+                    i = i + 1;
+                }
             } else {
-                break
+                if block_type == ZSTD_BLOCK_RLE {
+                    let mut rle_byte = data[pos];
+                    pos = pos + 1;
+                    let mut i = 0;
+                    while i < block_size {
+                        set_at(zstd_output_buf, out_pos, rle_byte);
+                        out_pos = out_pos + 1;
+                        i = i + 1;
+                    }
+                }
             }
+            if is_last == 1 { go = 0; }
         }
-
-        if (match_len > best_len) {
-            best_len = match_len
-            best_offset = pos - search_pos
-        }
-
-        search_pos = search_pos + 1
     }
-
-    set_at(result, 0, best_len)
-    set_at(result, 1, best_offset)
-    return result
+    zstd_output_len = out_pos;
+    return out_pos;
 }
 
-# Decompress Zstandard data
-fn zstd_decompress(data, len) {
-    var output = zstd_output
-    var pos = 0
-    var out_pos = 0
-
-    # Verify magic number (simplified)
-    if (len < 5) {
-        return -1
-    }
-
-    if (get_at(data, 0) != 40 || get_at(data, 1) != 181 ||
-        get_at(data, 2) != 47 || get_at(data, 3) != 253) {
-        return -2
-    }
-
-    pos = 5  # Skip magic + descriptor
-
-    # Decompress blocks
-    while (pos < len) {
-        # Read block header (3 bytes)
-        var block_header = get_at(data, pos) + get_at(data, pos + 1) * 256 + get_at(data, pos + 2) * 65536
-        pos = pos + 3
-
-        var is_last = (block_header / 16777216) % 2
-        var block_type = (block_header / 2097152) % 2
-        var block_size = block_header % 2097152
-
-        if (block_type == ZSTD_BLOCK_RAW) {
-            # Raw block: copy directly
-            var i = 0
-            while (i < block_size) {
-                set_at(output, out_pos, get_at(data, pos))
-                out_pos = out_pos + 1
-                pos = pos + 1
-                i = i + 1
-            }
-        } else if (block_type == ZSTD_BLOCK_RLE) {
-            # RLE block: repeat single byte
-            var byte = get_at(data, pos)
-            pos = pos + 1
-            var i = 0
-            while (i < block_size) {
-                set_at(output, out_pos, byte)
-                out_pos = out_pos + 1
-                i = i + 1
-            }
-        }
-
-        if (is_last == 1) {
-            break
-        }
-    }
-
-    zstd_output_len = out_pos
-    return out_pos
-}
-
-# Set compression level (1-22, simplified to 1-9)
 fn zstd_set_level(level) {
-    if (level >= 1 && level <= 9) {
-        zstd_compression_level = level
-        return 0
+    if level >= 1 {
+        if level <= 9 {
+            zstd_compression_level = level;
+            return 0;
+        }
     }
-    return -1
+    return 0 - 1;
 }
 
-# Get output buffer
-fn zstd_get_output() {
-    return zstd_output
-}
+fn zstd_get_output_len() { return zstd_output_len; }
 
-# Get output length
-fn zstd_get_output_len() {
-    return zstd_output_len
-}
-
-# Get compression ratio
 fn zstd_get_ratio(original_len) {
-    if (original_len == 0) { return 0 }
-    return (zstd_output_len * 100) / original_len
+    if original_len == 0 { return 0; }
+    return (zstd_output_len * 100) / original_len;
 }
 
-# Test Zstandard
 fn zstd_test() {
-    var test_data = "Zstandard compression test with repeating data: aaaa bbbb cccc dddd"
-    var len = strlen(test_data)
-
-    # Compress
-    var comp_len = zstd_compress(test_data, len)
-    if (comp_len < 0) {
-        serial_print("Zstandard test: compression failed")
-        return -1
+    zstd_init();
+    let td = array(20, 0);
+    set_at(td, 0, 97);  set_at(td, 1, 97);  set_at(td, 2, 97);  set_at(td, 3, 97);
+    set_at(td, 4, 32);  set_at(td, 5, 98);  set_at(td, 6, 98);  set_at(td, 7, 98);
+    set_at(td, 8, 32);  set_at(td, 9, 99);  set_at(td, 10, 99); set_at(td, 11, 99);
+    set_at(td, 12, 32); set_at(td, 13, 100); set_at(td, 14, 100); set_at(td, 15, 100);
+    set_at(td, 16, 32); set_at(td, 17, 101); set_at(td, 18, 101); set_at(td, 19, 101);
+    let mut comp_len = zstd_compress(td, 20);
+    if comp_len <= 0 {
+        print("zstd_test: FAIL compress");
+        return 0;
     }
-
-    # Decompress
-    var decomp_len = zstd_decompress(zstd_output, comp_len)
-    if (decomp_len != len) {
-        serial_print("Zstandard test: decompression length mismatch")
-        return -2
+    let mut decomp_len = zstd_decompress(zstd_output_buf, comp_len);
+    if decomp_len != 20 {
+        print("zstd_test: FAIL decomp len=" + to_string(decomp_len));
+        return 0;
     }
-
-    serial_print("Zstandard test: passed")
-    return 0
+    print("zstd_test: PASS comp=" + to_string(comp_len) + " decomp=" + to_string(decomp_len));
+    return 1;
 }
+
+print("zstd.hl loaded");

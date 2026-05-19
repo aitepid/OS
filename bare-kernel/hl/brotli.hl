@@ -1,324 +1,327 @@
-# brotli.hl - Brotli Compression (simplified)
-# Implements simplified Brotli compression algorithm (Google)
+// brotli.hl - Brotli Compression (simplified)
+// Implements simplified Brotli compression algorithm (Google)
 
-# Memory layout
-global BROTLI_BUF = 0x12B0000
-global BROTLI_WINDOW_SIZE = 4096
-global BROTLI_MAX_DISTANCE = 4096
+// Window and distance constants
+let BROTLI_WINDOW_SIZE = 4096;
+let BROTLI_MAX_DISTANCE = 4096;
+let BROTLI_WBITS = 10;
+let BROTLI_MIN_MATCH = 4;
+let BROTLI_MAX_MATCH = 64;
 
-# Brotli constants
-global BROTLI_WBITS = 10  # Window size: 2^10 = 1024 (simplified)
-global BROTLI_MIN_MATCH = 4
-global BROTLI_MAX_MATCH = 64
+// Command type codes
+let BROTLI_INSERT_COPY = 0;
+let BROTLI_INSERT_ONLY = 1;
+let BROTLI_COPY_ONLY = 2;
 
-# Command types
-global BROTLI_INSERT_COPY = 0
-global BROTLI_INSERT_ONLY = 1
-global BROTLI_COPY_ONLY = 2
+// Buffer arrays (replace BROTLI_BUF pointer arithmetic)
+let brotli_dict_buf     = array(16384, 0);   // dictionary / history window
+let brotli_hash_tbl     = array(2048, 0);    // hash table (2048 slots)
+let brotli_out_buf      = array(131072, 0);  // final compressed output
+let brotli_block_buf    = array(65536, 0);   // intermediate compressed block
+let brotli_match_result = array(2, 0);       // [match_len, match_dist]
+let brotli_test_buf     = array(128, 0);     // scratch buffer for _test()
 
-# State
-global brotli_output = 0
-global brotli_output_len = 0
-global brotli_dict = 0
-global brotli_hash_table = 0
-global brotli_quality = 5
+// Mutable compression state
+let mut brotli_output_len = 0;
+let mut brotli_quality = 5;
 
 fn brotli_init() {
-    brotli_output = BROTLI_BUF + 65536
-    brotli_output_len = 0
-    brotli_dict = BROTLI_BUF
-    brotli_hash_table = BROTLI_BUF + 16384
-    brotli_quality = 5
-    serial_print("Brotli compression ready")
+    brotli_output_len = 0;
+    brotli_quality = 5;
+    serial_print("Brotli compression ready");
+    return 0;
 }
 
-# Compress data with Brotli
-fn brotli_compress(data, len) {
-    var output = brotli_output
-    var pos = 0
+// Compress data with Brotli
+fn brotli_compress(data, data_len) {
+    let mut pos = 0;
 
-    # Brotli stream header (simplified)
-    # Window size: WBITS (4 bits) + metadata (simplified to 1 byte)
-    var header = (BROTLI_WBITS * 16)  # WBITS in upper 4 bits
-    set_at(output, pos, header)
-    pos = pos + 1
+    // Brotli stream header (simplified): WBITS in upper 4 bits
+    let header = BROTLI_WBITS * 16;
+    set_at(brotli_out_buf, pos, header);
+    pos = pos + 1;
 
-    # Initialize hash table
-    _brotli_init_hash()
+    // Initialize hash table
+    _brotli_init_hash();
 
-    # Compress using LZ77 + Huffman (simplified)
-    var compressed = _brotli_compress_block(data, len)
-    var comp_len = get_at(compressed, 0)
-    var comp_data = get_at(compressed, 1)
+    // Compress block (LZ77 + simplified Huffman)
+    let comp_len = _brotli_compress_block(data, data_len);
 
-    # Copy compressed data
-    var i = 0
-    while (i < comp_len) {
-        set_at(output, pos, get_at(comp_data, i))
-        pos = pos + 1
-        i = i + 1
+    // Copy compressed block data into output buffer
+    let mut i = 0;
+    while i < comp_len {
+        set_at(brotli_out_buf, pos, brotli_block_buf[i]);
+        pos = pos + 1;
+        i = i + 1;
     }
 
-    # End marker (simplified)
-    set_at(output, pos, 0)
-    pos = pos + 1
+    // End marker
+    set_at(brotli_out_buf, pos, 0);
+    pos = pos + 1;
 
-    brotli_output_len = pos
-    return pos
+    brotli_output_len = pos;
+    return pos;
 }
 
-# Compress block (LZ77-style)
-fn _brotli_compress_block(data, len) {
-    var result = BROTLI_BUF + 131072
-    var output = BROTLI_BUF + 196608
-    var out_pos = 0
+// Compress a block using LZ77-style matching
+fn _brotli_compress_block(data, data_len) {
+    let mut out_pos = 0;
+    let mut pos = 0;
+    let mut i = 0;
 
-    var pos = 0
-    while (pos < len) {
-        # Find match
-        var match = _brotli_find_match(data, pos, len)
-        var match_len = get_at(match, 0)
-        var match_dist = get_at(match, 1)
+    while pos < data_len {
+        let match = _brotli_find_match(data, pos, data_len);
+        let match_len = match[0];
+        let match_dist = match[1];
 
-        if (match_len >= BROTLI_MIN_MATCH) {
-            # Emit copy command (distance + length)
-            # Simplified encoding: cmd_byte + distance (2 bytes) + length (1 byte)
-            set_at(output, out_pos, BROTLI_INSERT_COPY)
-            out_pos = out_pos + 1
+        if match_len >= BROTLI_MIN_MATCH {
+            // Emit INSERT_COPY command: cmd + dist_lo + dist_hi + length
+            set_at(brotli_block_buf, out_pos, BROTLI_INSERT_COPY);
+            out_pos = out_pos + 1;
+            // Distance (16-bit little-endian)
+            set_at(brotli_block_buf, out_pos, match_dist % 256);
+            out_pos = out_pos + 1;
+            set_at(brotli_block_buf, out_pos, match_dist / 256);
+            out_pos = out_pos + 1;
+            // Match length
+            set_at(brotli_block_buf, out_pos, match_len);
+            out_pos = out_pos + 1;
 
-            # Distance (16-bit little-endian)
-            set_at(output, out_pos, match_dist % 256)
-            out_pos = out_pos + 1
-            set_at(output, out_pos, match_dist / 256)
-            out_pos = out_pos + 1
-
-            # Length
-            set_at(output, out_pos, match_len)
-            out_pos = out_pos + 1
-
-            # Update hash for matched region
-            var i = 0
-            while (i < match_len && pos + i < len) {
-                _brotli_insert_hash(data, pos + i)
-                i = i + 1
+            // Insert matched positions into hash table
+            i = 0;
+            while i < match_len && pos + i < data_len {
+                _brotli_insert_hash(data, pos + i, data_len);
+                i = i + 1;
             }
+            pos = pos + match_len;
+        }
 
-            pos = pos + match_len
-        } else {
-            # Emit literal
-            var literal_start = pos
-            var literal_len = 1
+        if match_len < BROTLI_MIN_MATCH {
+            // Accumulate literals until a match is found or limit hit
+            let literal_start = pos;
+            let mut literal_len = 1;
+            pos = pos + 1;
 
-            # Accumulate literals
-            pos = pos + 1
-            while (pos < len && literal_len < 16) {
-                var next_match = _brotli_find_match(data, pos, len)
-                if (get_at(next_match, 0) >= BROTLI_MIN_MATCH) {
-                    break
+            let mut lit_done = 0;
+            while pos < data_len && literal_len < 16 && lit_done == 0 {
+                let next_match = _brotli_find_match(data, pos, data_len);
+                if next_match[0] >= BROTLI_MIN_MATCH {
+                    lit_done = 1;
                 }
-                _brotli_insert_hash(data, pos)
-                literal_len = literal_len + 1
-                pos = pos + 1
+                if lit_done == 0 {
+                    _brotli_insert_hash(data, pos, data_len);
+                    literal_len = literal_len + 1;
+                    pos = pos + 1;
+                }
             }
 
-            # Emit insert command (literals)
-            set_at(output, out_pos, BROTLI_INSERT_ONLY)
-            out_pos = out_pos + 1
-            set_at(output, out_pos, literal_len)
-            out_pos = out_pos + 1
+            // Emit INSERT_ONLY command: cmd + count + bytes
+            set_at(brotli_block_buf, out_pos, BROTLI_INSERT_ONLY);
+            out_pos = out_pos + 1;
+            set_at(brotli_block_buf, out_pos, literal_len);
+            out_pos = out_pos + 1;
 
-            # Copy literal bytes
-            var i = 0
-            while (i < literal_len) {
-                set_at(output, out_pos, get_at(data, literal_start + i))
-                out_pos = out_pos + 1
-                i = i + 1
+            i = 0;
+            while i < literal_len {
+                set_at(brotli_block_buf, out_pos, data[literal_start + i]);
+                out_pos = out_pos + 1;
+                i = i + 1;
             }
         }
     }
 
-    set_at(result, 0, out_pos)
-    set_at(result, 1, output)
-    return result
+    return out_pos;
 }
 
-# Find match using hash table
-fn _brotli_find_match(data, pos, len) {
-    var result = BROTLI_BUF + 262144
-    var best_len = 0
-    var best_dist = 0
+// Find best LZ77 match using the hash table
+fn _brotli_find_match(data, pos, data_len) {
+    let mut best_len = 0;
+    let mut best_dist = 0;
 
-    if (pos + BROTLI_MIN_MATCH > len) {
-        set_at(result, 0, 0)
-        set_at(result, 1, 0)
-        return result
+    if pos + BROTLI_MIN_MATCH > data_len {
+        set_at(brotli_match_result, 0, 0);
+        set_at(brotli_match_result, 1, 0);
+        return brotli_match_result;
     }
 
-    # Hash current position
-    var hash = _brotli_hash(data, pos, len)
-    var candidate = get_at(brotli_hash_table, hash)
+    let hash = _brotli_hash(data, pos, data_len);
+    let candidate = brotli_hash_tbl[hash];
 
-    # Check candidate
-    if (candidate > 0 && candidate < pos) {
-        var distance = pos - candidate
-        if (distance <= BROTLI_MAX_DISTANCE) {
-            # Count matching bytes
-            var match_len = 0
-            while (pos + match_len < len && candidate + match_len < pos) {
-                if (get_at(data, pos + match_len) == get_at(data, candidate + match_len)) {
-                    match_len = match_len + 1
-                    if (match_len >= BROTLI_MAX_MATCH) { break }
-                } else {
-                    break
+    if candidate > 0 && candidate < pos {
+        let distance = pos - candidate;
+        if distance <= BROTLI_MAX_DISTANCE {
+            let mut match_len = 0;
+            let mut match_done = 0;
+            while pos + match_len < data_len && candidate + match_len < pos && match_done == 0 {
+                let cur_a = data[pos + match_len];
+                let cur_b = data[candidate + match_len];
+                if cur_a == cur_b {
+                    match_len = match_len + 1;
+                    if match_len >= BROTLI_MAX_MATCH {
+                        match_done = 1;
+                    }
+                }
+                if cur_a != cur_b {
+                    match_done = 1;
                 }
             }
-
-            if (match_len > best_len) {
-                best_len = match_len
-                best_dist = distance
+            if match_len > best_len {
+                best_len = match_len;
+                best_dist = distance;
             }
         }
     }
 
-    set_at(result, 0, best_len)
-    set_at(result, 1, best_dist)
-    return result
+    set_at(brotli_match_result, 0, best_len);
+    set_at(brotli_match_result, 1, best_dist);
+    return brotli_match_result;
 }
 
-# Hash function (3-byte hash)
-fn _brotli_hash(data, pos, len) {
-    if (pos + 2 >= len) {
-        return 0
+// 3-byte rolling hash function
+fn _brotli_hash(data, pos, data_len) {
+    if pos + 2 >= data_len {
+        return 0;
     }
-
-    var b0 = get_at(data, pos)
-    var b1 = get_at(data, pos + 1)
-    var b2 = get_at(data, pos + 2)
-
-    # Simple hash: combine 3 bytes
-    var hash = (b0 * 256 + b1 * 16 + b2) % 2048
-    return hash
+    let b0 = data[pos];
+    let b1 = data[pos + 1];
+    let b2 = data[pos + 2];
+    let hash = (b0 * 256 + b1 * 16 + b2) % 2048;
+    return hash;
 }
 
-# Insert position into hash table
-fn _brotli_insert_hash(data, pos) {
-    var hash = _brotli_hash(data, pos, strlen(data))
-    set_at(brotli_hash_table, hash, pos)
+// Insert current position into the hash table
+fn _brotli_insert_hash(data, pos, data_len) {
+    let hash = _brotli_hash(data, pos, data_len);
+    set_at(brotli_hash_tbl, hash, pos);
+    return 0;
 }
 
-# Initialize hash table
+// Clear the hash table before a new compression
 fn _brotli_init_hash() {
-    var i = 0
-    while (i < 2048) {
-        set_at(brotli_hash_table, i, 0)
-        i = i + 1
+    let mut i = 0;
+    while i < 2048 {
+        set_at(brotli_hash_tbl, i, 0);
+        i = i + 1;
     }
+    return 0;
 }
 
-# Decompress Brotli data
-fn brotli_decompress(data, len) {
-    var output = brotli_output
-    var pos = 1  # Skip header
-    var out_pos = 0
+// Decompress Brotli-compressed data into brotli_out_buf
+fn brotli_decompress(data, data_len) {
+    let mut pos = 1;    // skip 1-byte stream header
+    let mut out_pos = 0;
 
-    if (len < 2) {
-        return -1
+    if data_len < 2 {
+        return 0 - 1;
     }
 
-    # Decompress commands
-    while (pos < len) {
-        var cmd = get_at(data, pos)
-        pos = pos + 1
+    let mut decomp_done = 0;
+    while pos < data_len && decomp_done == 0 {
+        let cmd = data[pos];
+        pos = pos + 1;
 
-        if (cmd == 0) {
-            # End marker
-            break
+        if cmd == 0 {
+            // End marker
+            decomp_done = 1;
         }
 
-        if (cmd == BROTLI_INSERT_ONLY) {
-            # Insert (literals)
-            var lit_len = get_at(data, pos)
-            pos = pos + 1
-
-            var i = 0
-            while (i < lit_len && pos < len) {
-                set_at(output, out_pos, get_at(data, pos))
-                out_pos = out_pos + 1
-                pos = pos + 1
-                i = i + 1
-            }
-        } else if (cmd == BROTLI_INSERT_COPY) {
-            # Copy (match)
-            var distance_low = get_at(data, pos)
-            pos = pos + 1
-            var distance_high = get_at(data, pos)
-            pos = pos + 1
-            var distance = distance_low + distance_high * 256
-
-            var copy_len = get_at(data, pos)
-            pos = pos + 1
-
-            # Copy from earlier in output
-            var i = 0
-            while (i < copy_len) {
-                var src_pos = out_pos - distance
-                if (src_pos >= 0 && src_pos < out_pos) {
-                    set_at(output, out_pos, get_at(output, src_pos))
-                    out_pos = out_pos + 1
+        if decomp_done == 0 {
+            if cmd == BROTLI_INSERT_ONLY {
+                // Literal run
+                let lit_len = data[pos];
+                pos = pos + 1;
+                let mut i = 0;
+                while i < lit_len && pos < data_len {
+                    set_at(brotli_out_buf, out_pos, data[pos]);
+                    out_pos = out_pos + 1;
+                    pos = pos + 1;
+                    i = i + 1;
                 }
-                i = i + 1
+            }
+
+            if cmd == BROTLI_INSERT_COPY {
+                // Back-reference copy
+                let distance_low = data[pos];
+                pos = pos + 1;
+                let distance_high = data[pos];
+                pos = pos + 1;
+                let distance = distance_low + distance_high * 256;
+                let copy_len = data[pos];
+                pos = pos + 1;
+
+                let mut i = 0;
+                while i < copy_len {
+                    let src_pos = out_pos - distance;
+                    if src_pos >= 0 && src_pos < out_pos {
+                        set_at(brotli_out_buf, out_pos, brotli_out_buf[src_pos]);
+                        out_pos = out_pos + 1;
+                    }
+                    i = i + 1;
+                }
             }
         }
     }
 
-    brotli_output_len = out_pos
-    return out_pos
+    brotli_output_len = out_pos;
+    return out_pos;
 }
 
-# Set compression quality (0-11, simplified to 0-9)
+// Set compression quality level (0-9)
 fn brotli_set_quality(quality) {
-    if (quality >= 0 && quality <= 9) {
-        brotli_quality = quality
-        return 0
+    if quality >= 0 && quality <= 9 {
+        brotli_quality = quality;
+        return 0;
     }
-    return -1
+    return 0 - 1;
 }
 
-# Get output buffer
+// Return the output buffer reference
 fn brotli_get_output() {
-    return brotli_output
+    return brotli_out_buf;
 }
 
-# Get output length
+// Return the number of bytes in the output buffer
 fn brotli_get_output_len() {
-    return brotli_output_len
+    return brotli_output_len;
 }
 
-# Get compression ratio
+// Return compression ratio as integer percentage (compressed / original * 100)
 fn brotli_get_ratio(original_len) {
-    if (original_len == 0) { return 0 }
-    return (brotli_output_len * 100) / original_len
+    if original_len == 0 {
+        return 0;
+    }
+    return (brotli_output_len * 100) / original_len;
 }
 
-# Test Brotli
-fn brotli_test() {
-    var test_data = "Brotli compression by Google, optimized for HTTP: repeat repeat repeat"
-    var len = strlen(test_data)
+// Self-test: compress a string and verify the decompressed length matches
+fn _test() {
+    let test_str = "Brotli compression by Google, optimized for HTTP: repeat repeat repeat";
+    let str_len = len(test_str);
 
-    # Compress
-    var comp_len = brotli_compress(test_data, len)
-    if (comp_len < 0) {
-        serial_print("Brotli test: compression failed")
-        return -1
+    // Copy string bytes into a byte array for the compressor
+    let mut i = 0;
+    while i < str_len {
+        set_at(brotli_test_buf, i, str_char_code(test_str, i));
+        i = i + 1;
     }
 
-    # Decompress
-    var decomp_len = brotli_decompress(brotli_output, comp_len)
-    if (decomp_len != len) {
-        serial_print("Brotli test: decompression length mismatch")
-        return -2
+    brotli_init();
+
+    let comp_len = brotli_compress(brotli_test_buf, str_len);
+    if comp_len < 0 {
+        serial_print("Brotli test: compression failed");
+        return 0 - 1;
     }
 
-    serial_print("Brotli test: passed")
-    return 0
+    let decomp_len = brotli_decompress(brotli_out_buf, comp_len);
+    if decomp_len != str_len {
+        serial_print("Brotli test: decompression length mismatch");
+        return 0 - 2;
+    }
+
+    serial_print("Brotli test: passed");
+    return 0;
 }
+
+_test();
+print("brotli.hl loaded");
