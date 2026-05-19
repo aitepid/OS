@@ -96,13 +96,17 @@ fn virtio_blk_init(pci_bus, pci_dev, pci_func) {
         addr = addr + 1;
     }
 
-    // Initialize free descriptor chain
+    // Initialize free descriptor chain. Each descriptor points to the next
+    // one; the final descriptor terminates the chain with next=0, flags=0.
     let mut di = 0;
-    while di < actual_qsize - 1 {
-        // desc[di].next = di + 1
-        mem_write_u16(vq_desc_base + di * 16 + 14, di + 1);
-        // desc[di].flags = NEXT
-        mem_write_u16(vq_desc_base + di * 16 + 12, VIRTQ_DESC_F_NEXT);
+    while di < actual_qsize {
+        if di < actual_qsize - 1 {
+            mem_write_u16(vq_desc_base + di * 16 + 14, di + 1);
+            mem_write_u16(vq_desc_base + di * 16 + 12, VIRTQ_DESC_F_NEXT);
+        } else {
+            mem_write_u16(vq_desc_base + di * 16 + 14, 0);
+            mem_write_u16(vq_desc_base + di * 16 + 12, 0);
+        }
         di = di + 1;
     }
     vq_free_head = 0;

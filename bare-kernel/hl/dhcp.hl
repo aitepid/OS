@@ -109,9 +109,17 @@ fn dhcp_parse_offer(data) {
         if opt == 0 { off = off + 1; }
         else {
             let mut opt_len = data[off + 1];
-            if opt == 1 { dhcp_subnet = [data[off+2], data[off+3], data[off+4], data[off+5]]; }
-            if opt == 3 { dhcp_gateway = [data[off+2], data[off+3], data[off+4], data[off+5]]; }
-            if opt == 6 { dhcp_dns = [data[off+2], data[off+3], data[off+4], data[off+5]]; }
+            // Enforce opt_len == 4 for IPv4 address options to prevent
+            // malformed-packet heap overflow when length is lied about.
+            if opt == 1 {
+                if opt_len == 4 { dhcp_subnet = [data[off+2], data[off+3], data[off+4], data[off+5]]; }
+            }
+            if opt == 3 {
+                if opt_len == 4 { dhcp_gateway = [data[off+2], data[off+3], data[off+4], data[off+5]]; }
+            }
+            if opt == 6 {
+                if opt_len == 4 { dhcp_dns = [data[off+2], data[off+3], data[off+4], data[off+5]]; }
+            }
             off = off + 2 + opt_len;
         }
     }

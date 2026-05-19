@@ -163,9 +163,16 @@ fn hilbert_recv(x, y, z) {
 
 // Syscall-level IPC aliases
 fn ipc_send(dest_pid, buf_addr, length) {
-    // Use message queue indexed by destination PID
+    // mq_send expects an array; materialize from memory so callers can pass
+    // a raw buffer pointer + length (matches the IPC syscall ABI).
     let mut qi = dest_pid % MAX_MQ;
-    return mq_send(qi, buf_addr);
+    let mut msg = [];
+    let mut i = 0;
+    while i < length {
+        push(msg, mem_read_u8(buf_addr + i));
+        i = i + 1;
+    }
+    return mq_send(qi, msg);
 }
 
 fn ipc_recv(src_pid, buf_addr, max_len) {

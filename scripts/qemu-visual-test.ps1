@@ -98,12 +98,19 @@ if ($Uefi) {
 # Memory
 [void]$qemuArgs.AddRange(@('-m', "$Memory"))
 
-# Serial output to both file and stdio
-[void]$qemuArgs.AddRange(@('-serial', "file:$logFile"))
+# Serial: mux to stdio so the shell is interactive in this terminal
+# (HicOS renders its shell on serial; the framebuffer stays black by design).
+# Also tee a copy to the log file via -chardev.
+[void]$qemuArgs.AddRange(@(
+    '-chardev', "stdio,id=serial0,mux=on,logfile=$logFile",
+    '-serial', 'chardev:serial0',
+    '-mon', 'chardev=serial0,mode=readline'
+))
 
-# VGA display (SDL window)
-[void]$qemuArgs.AddRange(@('-display', 'sdl'))
-[void]$qemuArgs.AddRange(@('-vga', 'std'))
+# No graphical window: HicOS is a serial-console OS. The framebuffer is
+# initialized via VBE for the `vesa` shell command but the shell itself
+# is text-on-serial, so an SDL window would only show a black screen.
+[void]$qemuArgs.AddRange(@('-display', 'none'))
 
 # VirtIO disk for installation testing
 if (-not $NoDisk -and (Test-Path $diskFile)) {
@@ -130,15 +137,15 @@ Write-Host "=== HicOS Visual QEMU Test ===" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "  Image:   $imgFile ($imgSize bytes, $imgSectors sectors)" -ForegroundColor White
 Write-Host "  Memory:  ${Memory} MB" -ForegroundColor White
-Write-Host "  Display: SDL (graphical window)" -ForegroundColor White
-Write-Host "  Serial:  $logFile" -ForegroundColor White
+Write-Host "  Display: serial console (no GUI; shell on this terminal)" -ForegroundColor White
+Write-Host "  Serial:  $logFile (tee'd from stdio)" -ForegroundColor White
 Write-Host "  QEMU:    $qemu" -ForegroundColor Gray
 Write-Host "  Mode:    $(if ($Uefi) { 'UEFI' } else { 'BIOS (MBR)' })" -ForegroundColor White
 if (-not $NoDisk) { Write-Host "  Disk:    $diskFile (32 MB VirtIO)" -ForegroundColor White }
 if (-not $NoNet) { Write-Host "  Net:     VirtIO-net (user mode)" -ForegroundColor White }
 Write-Host ""
-Write-Host "  The QEMU window will open now." -ForegroundColor Yellow
-Write-Host "  Close the window or press Ctrl+C to stop." -ForegroundColor Yellow
+Write-Host "  HicOS shell will appear below (serial). Type 'help' for commands." -ForegroundColor Yellow
+Write-Host "  Press Ctrl+A then X to quit QEMU (or Ctrl+C to abort)." -ForegroundColor Yellow
 Write-Host ""
 
 # --- Launch QEMU ---
@@ -147,12 +154,13 @@ Write-Host "  CMD: qemu-system-x86_64 $argsStr" -ForegroundColor DarkGray
 Write-Host ""
 
 try {
-    $proc = Start-Process -FilePath $qemu -ArgumentList $qemuArgs.ToArray() -PassThru
-    Write-Host "  QEMU started (PID: $($proc.Id))" -ForegroundColor Green
-    Write-Host "  Waiting for QEMU to exit..." -ForegroundColor Gray
-    $proc.WaitForExit()
+    # Direct invocation (not Start-Process) so that QEMU inherits the
+    # current console's stdio — required for `-chardev stdio` mux to be
+    # interactive in this terminal.
+    & $qemu @qemuArgs
+    $exitCode = $LASTEXITCODE
     Write-Host ""
-    Write-Host "  QEMU exited (code: $($proc.ExitCode))" -ForegroundColor $(if ($proc.ExitCode -eq 0) { 'Green' } else { 'Yellow' })
+    Write-Host "  QEMU exited (code: $exitCode)" -ForegroundColor $(if ($exitCode -eq 0) { 'Green' } else { 'Yellow' })
 } catch {
     Write-Host "  ERROR: Failed to start QEMU: $_" -ForegroundColor Red
     exit 1

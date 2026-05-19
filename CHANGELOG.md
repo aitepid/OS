@@ -1,5 +1,47 @@
 ﻿# HicOS Changelog
 
+## Sprint 31 — Disk write flake investigation (2026-05-19, no code change)
+
+调查 Round 3/4 QEMU 压力测试日志中均出现的 `[!!] Disk: write FAILED` 间歇性闪烁（~25% 概率）。
+
+- 复现：`virtio-blk-pci,disable-modern=on` 配置下，8 次基线运行 6/8 通过、2/8 失败。
+- 尝试 MFENCE + 状态字节自旋等待修复（`scripts/rebuild-image.ps1`，5/8 通过、3/8 失败，未改善）。
+- 诊断输出显示失败时 `status=00`（OK）或 `status=FF`（哨兵未覆写），非 guest 端内存可见性问题。
+- 推测根因：QEMU 主机 virtio-blk 模型在 used ring idx 更新与 status byte DMA 写入之间存在非原子时序，guest 端 mfence 不足以修复。
+- 决定：撤销 race-fix（保留原始检查路径），记录为已知非阻塞 flake。`xxd` 已确认磁盘数据实际正确写入。
+
+## Sprint 30 — QEMU stress test Round 4 fixes (BUG-056 → BUG-060)
+
+5 个真 BUG（18 个候选经人工复核剔除 13 个误报）：
+
+- **BUG-056 `bare-kernel/hl/broken_profile_dp.hl`** — `_bpd_pow2(k)` 对 k>0 永远返回 2 而非 2^k；位运算掩码全部错误，DP 状态转移崩溃。修复：循环累乘 2^k。
+- **BUG-057 `bare-kernel/hl/trie.hl`** — `tr_insert` 节点池耗尽时 `tr_child[idx]` 仍为 -1，下一行 `set_at(tr_cnt, -1, ..)` 写入负索引损坏内存。修复：节点池满时返回 `0-1`。
+- **BUG-058 `HicOS_FileEncryption.hl`** — `vfs_open(dst_path)` 失败时仍调用 `vfs_write/close(-1)`，VFS 层污染。修复：检查 `ofd < 0`，释放 buf 并提前返回。
+- **BUG-059 `bare-kernel/hl/bmp.hl`** — `bmp_get_pixel` 当 `bmp_height==0` 时 `flipped_y = -1` 下溢，越界读取。修复：入口添加 height/x/y 守卫。
+- **BUG-060 `bare-kernel/hl/attention.hl`** — 位置编码 `attn_pos_enc[si*ATTN_MAX_DIM + di]` 未校验 `di < ATTN_MAX_DIM`；`d_model > ATTN_MAX_DIM` 时 OOB。修复：双重边界检查。
+
+## Sprint 29 — QEMU stress test Round 3 fixes (BUG-041 → BUG-055)
+
+13 个 BUG 修复（15 个候选中 2 个为误报）：
+
+- **BUG-041 `bare-kernel/hl/ext4.hl`** — `EXT4_BLOCK_SIZE` 大写常量遮蔽，应为 `ext4_block_size` 局部变量。两处。
+- **BUG-042 `bare-kernel/hl/lz4.hl`** — `if lit_nibble > 15 { let lit_nibble = 15; }` 局部 let 遮蔽，外层 lit_nibble 仍 >15。修复：去 let 改为赋值。
+- **BUG-043 `bare-kernel/hl/aes_gcm.hl`** — `set_at(ciphertext, i+j, enc)` 写空数组越界。修复：改 `push`。
+- **BUG-044 `bare-kernel/hl/quic.hl`** — nonce 构造未按 RFC 9001 把 pkt_num 与 implicit_iv XOR。修复：按 RFC 重写。
+- **BUG-045 `bare-kernel/hl/tls.hl`** — `push(cfin, len(verify_data))` Finished 消息长度少 1 字节。修复：`1 + len(verify_data)`。
+- **BUG-046 `bare-kernel/hl/udp.hl`** — UDP 长度字段未做 `udp_len < 8` / `udp_len > length` 边界检查。修复：入口添加。
+- **BUG-047 `bare-kernel/hl/dhcp.hl`** — DHCP options 1/3/6 未校验 `opt_len == 4`，畸形包导致读越界。修复：长度校验。
+- **BUG-048 `bare-kernel/hl/virtio_blk.hl`** — descriptor 链最后一项 `next` 未显式终止。修复：循环包含最后一项并显式终止。
+- **BUG-049 `bare-kernel/hl/mmap.hl`** — `if mmap_phys[region]==0 { set_at(...) }` 条件设置物理地址，复用区域无法更新。修复：无条件 set。
+- **BUG-050 `bare-kernel/hl/icmp.hl`** — `ARP_MAX` 常量名错误。修复：`ARP_CACHE_SIZE`。
+- **BUG-051 `bare-kernel/hl/breakpoint.hl`** — `i += 1` 非 H-L 语法（应 `i = i + 1`）。两处。
+- **BUG-052 `bare-kernel/hl/xml.hl`** — 死代码行 `let mut ent = str_sub(s, i + 1, j - 1 - n + n)`（`-n+n` 抵消，结果错误且未被使用）。修复：删除。
+- **BUG-055 `bare-kernel/hl/ipc.hl`** — `ipc_send` 直接传 `buf_addr` 给 `mq_send`（需要数组）。修复：`mem_read_u8` 循环转数组。
+
+## Sprint 28 — QEMU stress test Round 2 fixes (BUG-026 → BUG-040)
+
+15 个 BUG 修复（Round 2 并行 Explore agent 静态压力审查发现）。详见 Git log commit `11cd73f`。
+
 ## Current Snapshot
 
 - `.hl` 文件：`495`（~72 根目录 + 426 内核模块）
