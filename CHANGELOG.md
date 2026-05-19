@@ -12,6 +12,36 @@
 - **Milestone M5 已达成**（iter 420，生产级稳定性）
 - **Milestone M6 已达成**（iter 440，完整生态：包管理+LSP+调试器+POSIX+WASM）
 
+## Sprint 27 — QEMU 压力测试修复（BUG-007 至 BUG-025）
+
+- **BUG-007 x509.hl**：替换硬编码 `est_size=2048`，改为内联 `_x509_b64val()` + BER 长度解码，从实际 DER 数据读取证书长度
+- **BUG-008 dns.hl**：添加 `dns_on_recv` 回调、`dns_resp_ready` 标志、`DNS_LOCAL_PORT=1053`、`DNS_TIMEOUT=500`；UDP 绑定→发送→超时轮询完整实现
+- **BUG-009 socket.hl**：`sys_send` 按 `SOCK_STREAM`/`SOCK_DGRAM` 正确分派；`sys_recv` 读取缓冲区实际字节数
+- **BUG-010 quic.hl**：添加 `_quic_protect_packet(conn, plaintext)`，用 AES-GCM 保护 QUIC 初始报文；`quic_send_initial` 调用保护函数
+- **BUG-011 jit_stub.hl**：添加 SUB（REX.W+0x2D+imm32）和 IMUL（REX.W+0x69+0xC0+imm32）x86_64 指令；新增 `jit_compile_sub`/`jit_compile_mul` 入口
+- **BUG-012 wasm_jit.hl**：`WJ_CODE_BUF_SIZE` 从 256 扩大到 4096，防止大函数代码缓冲溢出
+- **BUG-013 ext4.hl**：实现 `_ext4_parse_extent_node` 递归遍历 extent 索引节点（depth > 0），正确处理 ext4 多级 extent 树
+- **BUG-014 linker.hl**：前向 stub 改为 `mov eax, 0xFFFFFFFF`（返回 -1）而非 `xor eax,eax`（返回 0），未解析符号有明确错误标识
+- **BUG-015 pty.hl**：PTY 主从端 FD 基址从 `64+id*2` 改为 `32768+id*2`，避免与标准文件描述符冲突
+- **BUG-016 cbor.hl**：`_cbor_decode_one` 添加 major-type 6（tag）和 addl==31（不定长）解码分支
+- **BUG-017 abi.hl**：`abi_register_func` 添加 `idx >= ABI_MAX_FUNCS` 防御性越界检查
+- **BUG-018 calling_conv.hl**：`cc_add_int_arg` 添加 `idx >= 16` 越界保护
+- **BUG-019 ui_settings.hl**：`uisettings_tick()` 在 `uisettings_dirty == 1` 时自动调用 `uisettings_apply()`
+- **BUG-020 musl_shim.hl**：`ms_malloc` 优先复用已释放槽位（first-fit），避免固定 arena 耗尽
+- **BUG-021 advanced_verify.hl**：替换占位打印为 `advanced_feature_summary()` 真实 eBPF/TLS1.3/QUIC 验证结果
+- **BUG-022 lsp_server.hl**：completion 调用 `cc_match_prefix`/`cc_get_best`；hover 返回诊断计数 + 行列位置信息
+- **BUG-023 debugger.hl**：添加 `dbg_set_arch(arch)` 支持 ARM64（全部 4 字节定长指令）与 x86_64 动态切换
+- **BUG-024 syntax_highlight.hl**：`sh_scan_token` 新增双字符运算符识别：`==` `!=` `<=` `>=` `&&` `||` `->`
+- **BUG-025 code_complete.hl**：添加 `cc_match_string(name_chars, name_len)` 字符串前缀匹配；`cc_load_hl_builtins()` 预注册 9 个 H-L 内建关键字
+
+## Sprint 26 — QEMU 压力测试修复（BUG-001 至 BUG-006）
+
+- **BUG-001 shell.hl**：过滤 PS/2 释键扫描码（≥128），使用 `scancode_to_ascii` 正确转译按键；清除 0x300008 标志位
+- **BUG-002 gdb_stub.hl**：`GS_CMD_READ_REG` 命令检查寄存器编号范围（0–7），越界返回 -1
+- **BUG-003/004 tls.hl**：`tls12_send` 改用真实 AES-GCM（`aes_gcm_init/set_key/set_nonce/encrypt`）；12 字节 nonce 高 8 位固定为 0、低 4 位为序列号大端编码；追加 ciphertext + tag
+- **BUG-005 random.hl**：`random_u32` 在 `csprng_ready==0` 时强制调用 `random_seed_timing` 两次 + `csprng_reseed()`，彻底消除固定种子 42
+- **BUG-006 jwt.hl**：添加 `_jwt_base64url_encode(bytes)` 函数；`jwt_verify_hs256(token, secret_bytes)` 使用 HMAC-SHA256 + base64url 真实比较而非返回常量
+
 ## Iteration 440 — wasm_jit.hl：WASM JIT 编译器 ✦ M6 达成
 
 - **`wasm_jit.hl`**（Buffer: 0x1EF0000）：WJ_MAX_FUNCS=16，WJ_HOT_THRESHOLD=4

@@ -4,6 +4,17 @@
 
 当前仓库处于 `v6.0` 发布线，最新功能里程碑为迭代 **440**（wasm_runtime + wasm_jit）。✦ **全部里程碑 M1–M6 已达成**
 
+## QEMU 压力测试状态 ✅
+
+25 个 QEMU 压力测试问题（BUG-001 至 BUG-025）**全部已修复**（Sprint 26–27）：
+
+| 分类 | 修复数 | 涉及模块 |
+|---|---:|---|
+| P0 崩溃/安全 | 3 | shell.hl、gdb_stub.hl、random.hl |
+| P1 加密/认证 | 5 | tls.hl、jwt.hl、quic.hl、x509.hl、linker.hl |
+| P2 功能不完整 | 11 | dns.hl、socket.hl、jit_stub.hl、wasm_jit.hl、ext4.hl、pty.hl、cbor.hl、debugger.hl、lsp_server.hl、syntax_highlight.hl、code_complete.hl |
+| P3 质量问题 | 6 | abi.hl、calling_conv.hl、ui_settings.hl、musl_shim.hl、advanced_verify.hl、（manifest 统计） |
+
 ## 当前基线（迭代 440）
 
 ### 仓库规模（精确计数）
