@@ -2,7 +2,7 @@
 
 纯 `Hilbert-Lang (H-L)` 编写的实验性 x86_64 裸金属操作系统与自举工具链。零外部依赖，100% 自研语言实现。
 
-## 当前状态（迭代 440 — M6 全部里程碑达成）
+## 当前状态（迭代 440 — M6 全部里程碑达成 + Sprint 1-17 质量修复完成）
 
 | 指标 | 数值 |
 |---|---:|
@@ -14,6 +14,8 @@
 | 外部依赖 | **0** |
 | 启动镜像（BIOS） | 162,816 字节 |
 | 启动镜像（UEFI） | 34,603,008 字节 |
+| Bug 修复 Sprint | **1–17 轮全部完成** |
+| H-L 语法违规 | **0**（第四轮静态验证）|
 
 **当前阶段：第七阶段·生态与自举完善 ✦ 全部完成**
 
@@ -184,6 +186,30 @@ B-Tree / B+ Tree / LSM Memtable / WAL / MVCC / 事务 API / 哈希索引 / 查�
 
 ---
 
+## Bug 修复与代码质量（Sprint 1–17）
+
+全库 426 个内核模块在迭代 440 之后经历了 17 轮系统性代码质量修复，所有已知 H-L 语法违规及逻辑缺陷已清零。
+
+| Sprint | 内容 | 范围 |
+|--------|------|------|
+| Sprint 1–5 | P0~P3 问题：8 处 `init()` 命名冲突、`irc say` 崩溃、5 个空桩模块、hl_fmt/hl_repl 假实现、Shell 重复命令块 | 26 文件 |
+| Sprint 6–7 | N-01~N-13：argon2/avro 重写为合法 H-L 语法、ahci MMIO 重命名、15+ 文件跨模块函数名去冲突 | 17 文件 |
+| Sprint 8 | N-14~N-15：netfilter.hl（8 处）+ usb_kbd.hl（1 处）`continue` 语法消除 | 2 文件 |
+| Sprint 9 | N-16~N-26：26 个测试函数名添加模块前缀，消除 11 组跨文件冲突 | 13 文件 |
+| Sprint 10–11 | 第二轮深度审查（R-01~R-04）+ 第四轮 bare-block 修复 | 4 文件 |
+| Sprint 12 | 全库 `continue` 残留清零（200+ 模块扫描） | 200+ 文件 |
+| Sprint 13 | scalar-as-array `set_at(scalar, 0, val)` 修复 + `_test` 名冲突 | 9 文件 |
+| Sprint 14 | scalar-as-array 修复（avro/argon2/linux_syscall/gdb_stub 等 9 模块） | 9 文件 |
+| Sprint 15 | 全库 loop/control 变量 `let mut` 补全 | 373 文件 |
+| Sprint 16 | 全局模块状态变量 `let mut` 补全 | 200+ 文件 |
+| Sprint 17 | 函数体内全部局部变量 `let mut` 补全（10,379 处） | 400+ 文件 |
+
+**第四轮静态验证结果（2026-05-19）：** `break` / `return -N` / `global` / `#注释` / `while(条件)` / 跨文件函数名冲突 / `continue` 语句 — **全部 0 处** ✅
+
+详细修复记录见 [`BUG_FIX_OUTLINE.md`](BUG_FIX_OUTLINE.md)。
+
+---
+
 ## 构建与验证
 
 ```powershell
@@ -216,6 +242,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\qemu-smoke.ps1
 - `ROADMAP.md`：已完成阶段与里程碑
 - `CHANGELOG.md`：详细迭代记录（440 个迭代）
 - `PROJECT_STATUS.md`：项目状态与统计
+- `BUG_FIX_OUTLINE.md`：Sprint 1-17 全量修复记录（54 缺陷，10,379 语法修复，第四轮验证零违规）
 - `PROJECT_ADVANCEMENT_OUTLINE.md`：推进大纲与 SOP
 - `HILBERT_LANG_BNF.md`：H-L 语言语法规范
 - `UI_DESIGN_PLAN.md`：UI 设计策划

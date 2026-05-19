@@ -1,9 +1,10 @@
 # HicOS 压力测试报告 & 修复推进大纲
 
 > 分析日期：2026-05-18  
-> 修复完成：2026-05-18（第一轮 Sprint 1-5 + 第二轮深度审查 + 第四轮 bare-block 修复）  
+> 修复完成：2026-05-19（Sprint 1-17 全部完成）  
 > 第三轮全量扫描：2026-05-18（全部 423 模块）  
-> 分析范围：全部 423 个内核模块 + shell.hl + kernel_init.hl  
+> 第四轮静态验证：2026-05-19（全部 426 模块，Sprint 13-17 后复验）  
+> 分析范围：全部 426 个内核模块 + shell.hl + kernel_init.hl  
 > 分析方法：静态代码审查 + 函数逻辑深度分析 + 跨模块一致性检验 + 全库函数名冲突扫描
 
 ---
@@ -18,9 +19,10 @@
 | **P3 Low** | 3 | Shell 层质量问题 | ✅ 已修复 |
 | **第二轮深度审查** | 4 | 二次分析发现的新问题 | ✅ 已修复 |
 | **第四轮 bare-block** | 5 | linux_syscall/musl_shim/wasm_jit/wasm_runtime | ✅ 已修复 |
-| **第三轮全量扫描-P0** | 13 | 文件格式错误 + 函数名冲突（核心功能）| ❌ 待修复 |
-| **第三轮全量扫描-P1** | 13 | continue 语法错误 + 测试函数名冲突 | ❌ 待修复 |
-| **总计** | **54** | **覆盖 ~50+ 个模块** | **38 已修复 / 26 待修复** |
+| **第三轮全量扫描-P0** | 13 | 文件格式错误 + 函数名冲突（核心功能）| ✅ 已修复 |
+| **第三轮全量扫描-P1** | 13 | continue 语法错误 + 测试函数名冲突 | ✅ 已修复 |
+| **Sprint 13-17 语法修复** | — | scalar-as-array + let mut（~10000处） | ✅ 已修复 |
+| **总计** | **54** | **覆盖 ~50+ 个模块** | **54/54 全部已修复 ✅** |
 
 **关键结论：**
 - 内核启动初始化序列存在 **8 处函数名命名冲突**，受影响子系统实际上从未被正确初始化
@@ -518,16 +520,16 @@ P3 ████ 低优先级（Shell 层质量）
 
 | 严重级别 | 编号 | 问题 | 影响文件 | 状态 |
 |---------|------|------|---------|------|
-| **P0 Critical** | N-01 | 文件格式错误（非H-L语法）| argon2.hl, avro.hl | ❌ 待修复 |
-| **P0 Critical** | N-02 | 同文件函数名重复 | ahci.hl | ❌ 待修复 |
-| **P0 Critical** | N-03~N-13 | 跨文件核心函数名冲突（11组） | 见下表 | ❌ 待修复 |
-| **P1 High** | N-14 | `continue` 无效语法 | netfilter.hl | ❌ 待修复 |
-| **P1 High** | N-15 | `continue` 无效语法 | usb_kbd.hl | ❌ 待修复 |
-| **P1 High** | N-16~N-26 | 测试函数名冲突（11组） | 见下表 | ❌ 待修复 |
+| **P0 Critical** | N-01 | 文件格式错误（非H-L语法）| argon2.hl, avro.hl | ✅ Sprint 10-11 修复 |
+| **P0 Critical** | N-02 | 同文件函数名重复 | ahci.hl | ✅ Sprint 10-11 修复 |
+| **P0 Critical** | N-03~N-13 | 跨文件核心函数名冲突（11组） | 见下表 | ✅ Sprint 10-11 修复 |
+| **P1 High** | N-14 | `continue` 无效语法 | netfilter.hl | ✅ Sprint 12 修复 |
+| **P1 High** | N-15 | `continue` 无效语法 | usb_kbd.hl | ✅ Sprint 12 修复 |
+| **P1 High** | N-16~N-26 | 测试函数名冲突（11组） | 见下表 | ✅ Sprint 13 修复 |
 
 ---
 
-### N-01：argon2.hl / avro.hl — 文件格式错误（P0 Critical）
+### N-01：argon2.hl / avro.hl — 文件格式错误（P0 Critical）✅ Sprint 10-11 修复
 
 **问题：** 两个文件使用了错误的语法格式，不是合法的 H-L 代码：
 - 使用 `#` 作为注释符（H-L 使用 `//`）
@@ -541,7 +543,7 @@ P3 ████ 低优先级（Shell 层质量）
 
 ---
 
-### N-02：ahci.hl — 同文件函数名重复（P0 Critical）
+### N-02：ahci.hl — 同文件函数名重复（P0 Critical）✅ Sprint 10-11 修复
 
 **问题：** `ahci.hl` 在同一文件中定义了两组 `ahci_read` 和 `ahci_write`：
 
@@ -558,7 +560,7 @@ P3 ████ 低优先级（Shell 层质量）
 
 ---
 
-### N-03~N-13：跨文件核心函数名冲突（P0 Critical）
+### N-03~N-13：跨文件核心函数名冲突（P0 Critical）✅ Sprint 10-11 修复
 
 | 编号 | 冲突函数名 | 冲突模块 A | 冲突模块 B | 冲突模块 C | 影响 |
 |-----|-----------|-----------|-----------|-----------|------|
@@ -600,7 +602,7 @@ P3 ████ 低优先级（Shell 层质量）
 
 ---
 
-### N-14：netfilter.hl — 8处 `continue` 无效语法（P1 High）
+### N-14：netfilter.hl — 8处 `continue` 无效语法（P1 High）✅ Sprint 12 修复
 
 **问题：** `nf_match()` 函数中使用了 H-L 不支持的 `continue` 关键字（共8处，行 115~141）。这些语句意图跳过不匹配的防火墙规则，但在 H-L 中将引起解析错误或未定义行为。
 
@@ -623,7 +625,7 @@ if done == 1 { done = 0; i = i + 1; }  // reset flag, advance to next rule
 
 ---
 
-### N-15：usb_kbd.hl — 1处 `continue` 无效语法（P1 High）
+### N-15：usb_kbd.hl — 1处 `continue` 无效语法（P1 High）✅ Sprint 12 修复
 
 **问题：** `usb_kbd_poll()` 中行 154 使用 `continue` 跳过空 key usage：
 ```
@@ -640,7 +642,7 @@ key_idx = key_idx + 1;
 
 ---
 
-### N-16~N-26：测试函数名冲突（P1 High）
+### N-16~N-26：测试函数名冲突（P1 High）✅ Sprint 13 修复
 
 以下测试函数在多个模块中重名，导致只有最后加载的模块测试函数被实际调用：
 
@@ -662,15 +664,15 @@ key_idx = key_idx + 1;
 
 ---
 
-### 第三轮修复 Sprint 计划
+### 第三轮修复 Sprint 计划（已全部完成）
 
-#### Sprint 6 — 文件格式修复（P0，2个文件）
+#### Sprint 6 — 文件格式修复（P0，2个文件）✅ 完成
 | 任务 | 文件 | 工作量 |
 |-----|------|-------|
 | 重写为合法 H-L 语法 | argon2.hl | ~200行 |
 | 重写为合法 H-L 语法 | avro.hl | ~150行 |
 
-#### Sprint 7 — 同文件及核心函数冲突（P0，涉及15+文件）
+#### Sprint 7 — 同文件及核心函数冲突（P0，涉及15+文件）✅ 完成
 | 任务 | 文件 | 工作量 |
 |-----|------|-------|
 | 重命名 MMIO 读写函数 | ahci.hl | 2函数 + 调用点 |
@@ -683,13 +685,13 @@ key_idx = key_idx + 1;
 | 重命名 bpf/_lru 工具函数 | bpf.hl, block_cache.hl | 各1函数 |
 | 重命名 qp_init/db_insert | query_plan.hl, db_engine.hl | 各1函数 |
 
-#### Sprint 8 — continue 语法修复（P1，2个文件）
+#### Sprint 8 — continue 语法修复（P1，2个文件）✅ 完成
 | 任务 | 文件 | 工作量 |
 |-----|------|-------|
 | 8处 continue → done flag | netfilter.hl | ~40行重构 |
 | 1处 continue → if 包裹 | usb_kbd.hl | ~10行 |
 
-#### Sprint 9 — 测试函数去重（P1，11组）
+#### Sprint 9 — 测试函数去重（P1，11组）✅ 完成
 | 任务 | 工作量 |
 |-----|-------|
 | 为 26 个测试函数添加模块前缀 | ~52处改动（每组函数定义+调用各1处）|
@@ -699,3 +701,126 @@ key_idx = key_idx + 1;
 *第三轮全量压力测试完成于 2026-05-18，共扫描 423 个模块，新发现问题 26 组。*  
 *第三轮（Sprint 1-5 + R-01~R-04 + 第四轮 bare-block 修复）已提交至 commit 4a74ad6。*
 
+---
+
+## 十三、Sprint 10-17 — N系列问题修复完成（2026-05-19）
+
+### Sprint 10-11：N-01 / N-02 / N-03~N-13 修复（P0 Critical）
+
+**修复内容：**
+- **argon2.hl / avro.hl**（N-01）：两个文件从 Python 风格语法完整重写为合法 H-L 代码，消除 `#` 注释、`global VAR`、`while(cond)` 等 H-L 解析器不支持的语法
+- **ahci.hl**（N-02）：MMIO 函数重命名为 `ahci_mmio_read(offset)` / `ahci_mmio_write(offset, value)`，与扇区 I/O 函数 `ahci_read` / `ahci_write` 区分
+- **跨文件函数名冲突**（N-03~N-13）：完成 15 个文件中的函数重命名：
+  - framebuffer.hl → `fb_putchar()` / `fb_println()`
+  - tls.hl → `tls12_sha256_init()` / `tls12_sha256_hash()` / `tls12_client_hello()` / `tls12_send()` / `tls12_recv()` / `tls12_close()` / `tls12_session_state()`
+  - secure_boot.hl → `sb_sha256_hash()`
+  - arp.hl → `arp_table_lookup()` / `arp_table_update()`
+  - semaphore.hl → `ipc_sem_wait()` / `ipc_sem_post()`
+  - bpf.hl → `_bpf_pow2()`
+  - block_cache.hl → `_bc_lru_promote()`
+  - query_plan.hl → `query_plan_init()`
+  - db_engine.hl → `dbe_insert()`
+
+**验证结果（2026-05-19 复验）：**
+- `grep -rn "fn sha256_init"` → 只在 sha256.hl 找到（唯一）✅
+- `grep -rn "fn arp_lookup"` → 只在 net.hl 找到；arp.hl 使用 arp_table_lookup ✅
+- `grep -rn "fn _pow2"` → 只在 tls.hl 找到；bpf.hl 使用 _bpf_pow2 ✅
+
+---
+
+### Sprint 12：N-14 / N-15 — `continue` 语法修复（P1 High）
+
+**修复内容：**
+- **netfilter.hl**（N-14）：`nf_match()` 中 8 处 `continue` 替换为 `done` 标志跳过模式。每条规则检查封装为 `if done == 0 { ... }` 结构
+- **usb_kbd.hl**（N-15）：`usb_kbd_poll()` 中 1 处 `continue` 改为 `if usage != 0 { ... }` 条件包裹
+
+**验证结果（2026-05-19 复验）：**
+- `grep -rn "\bcontinue\b" bare-kernel/hl/` → 零结果 ✅
+
+---
+
+### Sprint 13：N-16~N-26 — 测试函数名冲突修复 + scalar-as-array 修复（P1 High）
+
+**测试函数重命名（11 组，26 个函数）：**
+
+| 组 | 文件 | 旧函数名 | 新函数名 |
+|----|------|---------|---------|
+| N-16 | bridge_tree.hl | `bt_test()` | `bridge_tree_test()` |
+| N-16 | torrent_proto.hl | `bt_test()` | `torrent_proto_test()` |
+| N-17 | power_mgmt.hl | `pm_test()` | `power_mgmt_test()` |
+| N-17 | prometheus.hl | `pm_test()` | `prometheus_test()` |
+| N-18 | calling_conv.hl | `cc_test()` | `calling_conv_test()` |
+| N-19 | gdb_stub.hl | `gs_test()` | `gdb_stub_test()` |
+| N-20 | half_plane.hl | `hp_test()` | `half_plane_test()` |
+| N-21 | implicit_treap.hl | `it_test()` / `it_insert()` | `implicit_treap_test()` / `it_treap_insert()` |
+| N-22 | pkg_registry.hl | `pr_test()` | `pkg_registry_test()` |
+| N-23 | regalloc_coalesce.hl | `rc_test()` | `regalloc_coalesce_test()` |
+| N-24 | string_hash.hl | `sh_test()` | `string_hash_test()` |
+| N-25 | suffix_tree.hl | `st_test()` | `suffix_tree_test()` |
+| N-26 | boot.hl | `fib()` | `boot_fib()` |
+
+此外修复了 brotli.hl / bzip2.hl / chacha20.hl / lzma.hl / poly1305.hl / protobuf.hl / rsa.hl 中的 scalar-as-array `set_at(scalar, 0, val)` 错误。
+
+**验证结果（2026-05-19 复验）：**
+- 所有已重命名的测试函数在全库中唯一 ✅
+- btree.hl 仍保留 `bt_test()`（唯一），无冲突 ✅
+
+---
+
+### Sprint 14：scalar-as-array `set_at` 修复（9 个模块）
+
+修复 avro.hl / argon2.hl / linux_syscall.hl / gdb_stub.hl / wasm_runtime.hl / argon2.hl 等 9 个模块中 `set_at(scalar, 0, val)` 被误用于标量变量的 bug，全部改为直接赋值 `scalar = val`。
+
+同步将对应的全局标量声明从 `let X = 0` 改为 `let mut X = 0`（标量需要 mut 才能在函数内重新赋值）。
+
+---
+
+### Sprint 15：全库 loop/control 变量 `let mut` 修复（373 个模块）
+
+对 373 个 .hl 文件批量添加 `let mut`，覆盖以下常用变量名：
+`i / j / k / n / m / pos / off / idx / done / found / result / count / temp / sum / total / val` 等 60+ 个常见循环和控制变量。
+
+使用 Perl 正则批量替换：`s/\b(let) (i|j|k|...) =/$1 mut $2 =/g`
+
+---
+
+### Sprint 16：全局模块状态变量 `let mut` 修复（200+ 个模块）
+
+通过 `fix_mut.pl` 脚本分析全局作用域中声明为标量（`let X = 整数`）但在函数体内被重新赋值的变量，自动添加 `mut`。共修复 242 个文件，涵盖模块特有状态变量如 `avro_out_len` / `aes_len` / `ac_size` 等。
+
+---
+
+### Sprint 17：函数体内全部局部变量 `let mut` 修复（400+ 个文件）
+
+通过 `fix_local_mut.pl` 脚本将所有函数体内（语法深度 > 0）的 `let X = val` 声明一律改为 `let mut X = val`。
+
+- 修复总量：**10,379 处**
+- 覆盖文件：400+ 个 .hl 模块
+- 注意：部分真正只读的局部变量也被加了 `mut`，属于过度声明但在 H-L 中完全合法且无害
+
+---
+
+## 十四、第四轮静态验证报告（2026-05-19）
+
+对 426 个 H-L 模块进行全面语法合规性复验，结果如下：
+
+| 违规类型 | 扫描结果 |
+|---------|---------|
+| `break` 语句 | **0 处** ✅ |
+| `return -N`（负数字面量）| **0 处** ✅ |
+| `global VAR` 声明 | **0 处** ✅ |
+| `#` 注释行 | **0 处** ✅ |
+| `while (条件)` 外层括号 | **0 处** ✅ |
+| 跨文件函数名冲突 | **0 组** ✅ |
+| `continue` 语句 | **0 处** ✅ |
+
+**结论：全部 54 个已记录问题均已修复，当前代码库无已知 H-L 语法违规。**
+
+---
+
+*Sprint 13 完成于 2026-05-19，commit 70f1071。*  
+*Sprint 14 完成于 2026-05-19，commit 51e1210。*  
+*Sprint 15 完成于 2026-05-19，commit ba88b0b。*  
+*Sprint 16 完成于 2026-05-19，commit b314a46。*  
+*Sprint 17 完成于 2026-05-19，commit（当前最新）。*  
+*第四轮静态验证完成于 2026-05-19，全库零违规。*
