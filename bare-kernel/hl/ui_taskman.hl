@@ -31,19 +31,6 @@ let UITM_HDR_H          = 28;
 let UITM_ROW_H          = 18;
 let UITM_REFRESH_TICKS  = 50;   // refresh every ~0.5 s
 
-// Colors
-let UITM_BG         = 0x181C2A;
-let UITM_HDR_BG     = 0x252A3E;
-let UITM_ROW_EVEN   = 0x1E2336;
-let UITM_ROW_ODD    = 0x1A1F30;
-let UITM_ROW_SEL    = 0x2E4070;
-let UITM_FG         = 0xD0D4E8;
-let UITM_HDR_FG     = 0xAAB0CC;
-let UITM_ACCENT     = 0x5078FF;
-let UITM_GREEN      = 0x44CC88;
-let UITM_RED        = 0xFF5555;
-let UITM_YELLOW     = 0xFFAA44;
-
 // Column X offsets (relative to window content x)
 let UITM_COL_PID    = 4;
 let UITM_COL_NAME   = 52;
@@ -132,10 +119,10 @@ fn _uitm_state_str(s) {
 }
 
 fn _uitm_state_color(s) {
-    if s == 2 { return UITM_GREEN; }   // RUNNING
-    if s == 3 { return UITM_YELLOW; }  // BLOCKED
-    if s == 4 { return UITM_RED; }     // ZOMBIE
-    return UITM_FG;
+    if s == 2 { return ui_theme_success(); }   // RUNNING
+    if s == 3 { return ui_theme_warning(); }   // BLOCKED
+    if s == 4 { return ui_theme_error(); }     // ZOMBIE
+    return ui_theme_text_primary();
 }
 
 // ============================================================
@@ -178,23 +165,23 @@ fn uitaskman_draw() {
     let mut wy = _uitm_wy();
 
     // Background
-    ui_fill_rect(wx, wy, UITM_W, UITM_H, UITM_BG);
+    vesa_fill_rect(wx, wy, UITM_W, UITM_H, ui_theme_bg_surface());
 
     // Header row
-    ui_fill_rect(wx, wy, UITM_W, UITM_HDR_H, UITM_HDR_BG);
-    ui_draw_text(wx + UITM_COL_PID,   wy + 6, "PID",    UITM_ACCENT);
-    ui_draw_text(wx + UITM_COL_NAME,  wy + 6, "Name",   UITM_ACCENT);
-    ui_draw_text(wx + UITM_COL_STATE, wy + 6, "State",  UITM_ACCENT);
-    ui_draw_text(wx + UITM_COL_PRI,   wy + 6, "Pri",    UITM_ACCENT);
-    ui_draw_text(wx + UITM_COL_TICKS, wy + 6, "Ticks",  UITM_ACCENT);
-    ui_draw_text(wx + UITM_COL_MEM,   wy + 6, "Mem KB", UITM_ACCENT);
+    vesa_fill_rect(wx, wy, UITM_W, UITM_HDR_H, ui_theme_bg_elevated());
+    ui_draw_text(wx + UITM_COL_PID,   wy + 6, "PID",    ui_theme_accent(), 0);
+    ui_draw_text(wx + UITM_COL_NAME,  wy + 6, "Name",   ui_theme_accent(), 0);
+    ui_draw_text(wx + UITM_COL_STATE, wy + 6, "State",  ui_theme_accent(), 0);
+    ui_draw_text(wx + UITM_COL_PRI,   wy + 6, "Pri",    ui_theme_accent(), 0);
+    ui_draw_text(wx + UITM_COL_TICKS, wy + 6, "Ticks",  ui_theme_accent(), 0);
+    ui_draw_text(wx + UITM_COL_MEM,   wy + 6, "Mem KB", ui_theme_accent(), 0);
 
     // Status bar at bottom
     let mut stat_y = wy + UITM_H - 20;
-    ui_fill_rect(wx, stat_y, UITM_W, 20, UITM_HDR_BG);
+    vesa_fill_rect(wx, stat_y, UITM_W, 20, ui_theme_bg_elevated());
     ui_draw_text(wx + 6, stat_y + 3,
         "Procs: " + to_string(uitm_count) + "  [R]efresh  [K]ill  ↑↓ scroll",
-        UITM_HDR_FG);
+        ui_theme_text_secondary(), 0);
 
     // Visible area
     let mut content_h = UITM_H - UITM_HDR_H - 20;
@@ -205,17 +192,17 @@ fn uitaskman_draw() {
         if ti >= uitm_count { i = uitm_visible_rows; }
         else {
             let mut ry = wy + UITM_HDR_H + i * UITM_ROW_H;
-            let mut row_bg = UITM_ROW_ODD;
-            if i % 2 == 0 { row_bg = UITM_ROW_EVEN; }
-            if ti == uitm_selected { row_bg = UITM_ROW_SEL; }
-            ui_fill_rect(wx, ry, UITM_W, UITM_ROW_H, row_bg);
+            let mut row_bg = ui_theme_bg_elevated();
+            if i % 2 == 0 { row_bg = ui_theme_bg_surface(); }
+            if ti == uitm_selected { row_bg = ui_theme_bg_overlay(); }
+            vesa_fill_rect(wx, ry, UITM_W, UITM_ROW_H, row_bg);
             let mut sc = _uitm_state_color(uitm_states[ti]);
-            ui_draw_text(wx + UITM_COL_PID,   ry + 2, to_string(uitm_pids[ti]),   UITM_FG);
-            ui_draw_text(wx + UITM_COL_NAME,  ry + 2, uitm_names[ti],             UITM_FG);
-            ui_draw_text(wx + UITM_COL_STATE, ry + 2, _uitm_state_str(uitm_states[ti]), sc);
-            ui_draw_text(wx + UITM_COL_PRI,   ry + 2, to_string(uitm_pris[ti]),   UITM_FG);
-            ui_draw_text(wx + UITM_COL_TICKS, ry + 2, to_string(uitm_ticks[ti]),  UITM_FG);
-            ui_draw_text(wx + UITM_COL_MEM,   ry + 2, to_string(uitm_mems[ti]),   UITM_FG);
+            ui_draw_text(wx + UITM_COL_PID,   ry + 2, to_string(uitm_pids[ti]),            ui_theme_text_primary(), 0);
+            ui_draw_text(wx + UITM_COL_NAME,  ry + 2, uitm_names[ti],                      ui_theme_text_primary(), 0);
+            ui_draw_text(wx + UITM_COL_STATE, ry + 2, _uitm_state_str(uitm_states[ti]), sc, 0);
+            ui_draw_text(wx + UITM_COL_PRI,   ry + 2, to_string(uitm_pris[ti]),             ui_theme_text_primary(), 0);
+            ui_draw_text(wx + UITM_COL_TICKS, ry + 2, to_string(uitm_ticks[ti]),            ui_theme_text_primary(), 0);
+            ui_draw_text(wx + UITM_COL_MEM,   ry + 2, to_string(uitm_mems[ti]),             ui_theme_text_primary(), 0);
             i = i + 1;
         }
     }
