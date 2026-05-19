@@ -25,10 +25,10 @@ let wj_call_count  = array(WJ_MAX_FUNCS, 0);
 let wj_state       = array(WJ_MAX_FUNCS, 0);
 let wj_stub_addr   = array(WJ_MAX_FUNCS, 0);
 let wj_stub_bytes  = array(WJ_MAX_FUNCS, 0);
-let wj_func_count  = 0;
+let mut wj_func_count  = 0;
 
-let wj_total_compiled = 0;
-let wj_total_hot_calls = 0;
+let mut wj_total_compiled = 0;
+let mut wj_total_hot_calls = 0;
 
 fn wj_register(func_id) {
     if func_id >= WJ_MAX_FUNCS { return 0 - 1; }
@@ -37,7 +37,7 @@ fn wj_register(func_id) {
     set_at(wj_stub_addr,  func_id, 0);
     set_at(wj_stub_bytes, func_id, 0);
     if func_id >= wj_func_count {
-        set_at(wj_func_count, 0, func_id + 1);
+        wj_func_count = func_id + 1;
     }
     return func_id;
 }
@@ -61,7 +61,7 @@ fn wj_compile(func_id) {
     set_at(wj_state, func_id, WJ_STATE_COMPILING);
     let addr = wj_emit_stub(func_id);
     set_at(wj_state,          func_id, WJ_STATE_HOT);
-    set_at(wj_total_compiled, 0,       wj_total_compiled + 1);
+    wj_total_compiled = wj_total_compiled + 1;
     return addr;
 }
 
@@ -70,7 +70,7 @@ fn wj_tick(func_id) {
     set_at(wj_call_count, func_id, wj_call_count[func_id] + 1);
 
     if wj_state[func_id] == WJ_STATE_HOT {
-        set_at(wj_total_hot_calls, 0, wj_total_hot_calls + 1);
+        wj_total_hot_calls = wj_total_hot_calls + 1;
         return WJ_STATE_HOT;
     }
 
@@ -108,10 +108,10 @@ fn wj_get_total_hot_calls() { return wj_total_hot_calls; }
 fn wj_get_func_count()      { return wj_func_count; }
 
 fn wasm_jit_init() {
-    set_at(wj_func_count,      0, 0);
-    set_at(wj_total_compiled,  0, 0);
-    set_at(wj_total_hot_calls, 0, 0);
-    let i = 0;
+    wj_func_count = 0;
+    wj_total_compiled = 0;
+    wj_total_hot_calls = 0;
+    let mut i = 0;
     while i < WJ_MAX_FUNCS {
         set_at(wj_call_count, i, 0);
         set_at(wj_state,      i, WJ_STATE_COLD);
@@ -124,7 +124,7 @@ fn wasm_jit_init() {
 
 fn wasm_jit_test() {
     wasm_jit_init();
-    let pass = 1;
+    let mut pass = 1;
 
     wj_register(0);
     wj_register(1);

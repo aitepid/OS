@@ -20,13 +20,13 @@ let argon2_hash_out  = array(32, 0);
 let argon2_mix_tmp   = array(64, 0);
 let argon2_blocks    = array(4096, 0);  // ARGON2_NUM_BLOCKS * ARGON2_BLOCK_BYTES
 
-let argon2_variant   = 2;
-let argon2_time_cost = 3;
+let mut argon2_variant  = 2;
+let mut argon2_time_cost = 3;
 
 fn argon2_init() {
-    set_at(argon2_variant,   0, ARGON2_ID);
-    set_at(argon2_time_cost, 0, 3);
-    let i = 0;
+    argon2_variant = ARGON2_ID;
+    argon2_time_cost = 3;
+    let mut i = 0;
     while i < ARGON2_HASH_LENGTH {
         set_at(argon2_hash_out, i, 0);
         i = i + 1;
@@ -35,16 +35,16 @@ fn argon2_init() {
 }
 
 fn argon2_set_variant(v) {
-    if v == ARGON2_D  { set_at(argon2_variant, 0, ARGON2_D);  return 0; }
-    if v == ARGON2_I  { set_at(argon2_variant, 0, ARGON2_I);  return 0; }
-    if v == ARGON2_ID { set_at(argon2_variant, 0, ARGON2_ID); return 0; }
+    if v == ARGON2_D  { argon2_variant = ARGON2_D;  return 0; }
+    if v == ARGON2_I  { argon2_variant = ARGON2_I;  return 0; }
+    if v == ARGON2_ID { argon2_variant = ARGON2_ID; return 0; }
     return 0 - 1;
 }
 
 fn argon2_set_time_cost(t) {
     if t <= 0 { return 0 - 1; }
     if t > 10 { return 0 - 1; }
-    set_at(argon2_time_cost, 0, t);
+    argon2_time_cost = t;
     return 0;
 }
 
@@ -66,8 +66,8 @@ fn _argon2_init_block(blk, pwd_seed, salt_seed) {
     h = h - (h / 1073741824) * 1073741824;
     h = h * 16777619 + blk;
     h = h - (h / 1073741824) * 1073741824;
-    let base = blk * ARGON2_BLOCK_BYTES;
-    let i = 0;
+    let mut base = blk * ARGON2_BLOCK_BYTES;
+    let mut i = 0;
     while i < ARGON2_BLOCK_BYTES {
         let byte = (h / _argon2_pow256(i % 4)) % 256;
         set_at(argon2_blocks, base + i, byte);
@@ -81,14 +81,14 @@ fn _argon2_init_block(blk, pwd_seed, salt_seed) {
 fn _argon2_mix(target, ref_blk) {
     let tb = target * ARGON2_BLOCK_BYTES;
     let rb = ref_blk  * ARGON2_BLOCK_BYTES;
-    let i = 0;
+    let mut i = 0;
     while i < ARGON2_BLOCK_BYTES {
-        let m = (argon2_blocks[tb + i] + argon2_blocks[rb + i]) % 256;
+        let mut m = (argon2_blocks[tb + i] + argon2_blocks[rb + i]) % 256;
         m = (m * 31 + i) % 256;
         set_at(argon2_mix_tmp, i, m);
         i = i + 1;
     }
-    let j = 0;
+    let mut j = 0;
     while j < ARGON2_BLOCK_BYTES {
         set_at(argon2_blocks, tb + j, argon2_mix_tmp[j]);
         j = j + 1;
@@ -98,7 +98,7 @@ fn _argon2_mix(target, ref_blk) {
 // Select reference block index for block i at iteration pass.
 fn _argon2_ref_index(i, pass) {
     let nb   = ARGON2_NUM_BLOCKS;
-    let prev = (i + nb - 1) % nb;
+    let mut prev = (i + nb - 1) % nb;
     if argon2_variant == ARGON2_I {
         return (i * 7919 + pass * 1103) % nb;
     }
@@ -122,9 +122,9 @@ fn argon2_hash(pwd_seed, salt_seed) {
         b = b + 1;
     }
     // Phase 2: mixing passes
-    let pass = 0;
+    let mut pass = 0;
     while pass < argon2_time_cost {
-        let i = 0;
+        let mut i = 0;
         while i < ARGON2_NUM_BLOCKS {
             let ref_blk = _argon2_ref_index(i, pass);
             _argon2_mix(i, ref_blk);
@@ -155,7 +155,7 @@ fn argon2_get_byte(idx) {
 
 fn argon2_test() {
     argon2_init();
-    let pass = 1;
+    let mut pass = 1;
 
     // Argon2id: hash(1001, 2002) twice — bytes must be identical (determinism)
     argon2_set_variant(ARGON2_ID);
@@ -172,7 +172,7 @@ fn argon2_test() {
 
     // Output must be non-trivially non-zero somewhere
     let nonzero = 0;
-    let k = 0;
+    let mut k = 0;
     while k < ARGON2_HASH_LENGTH {
         if argon2_get_byte(k) != 0 { nonzero = 1; }
         k = k + 1;

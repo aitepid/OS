@@ -20,17 +20,17 @@ let AVRO_LONG    = 3;
 let AVRO_STRING  = 7;
 
 let avro_out     = array(4096, 0);   // encode output
-let avro_out_len = 0;
-let avro_dec_pos = 0;
+let mut avro_out_len = 0;
+let mut avro_dec_pos = 0;
 
 fn avro_init() {
-    set_at(avro_out_len, 0, 0);
-    set_at(avro_dec_pos, 0, 0);
+    avro_out_len = 0;
+    avro_dec_pos = 0;
     return 0;
 }
 
 fn avro_start() {
-    set_at(avro_out_len, 0, 0);
+    avro_out_len = 0;
     return 0;
 }
 
@@ -57,7 +57,7 @@ fn _avro_shift128(n) {
 
 // Encode unsigned varint into avro_out starting at pos; return new pos.
 fn _avro_enc_varint(pos, value) {
-    let done = 0;
+    let mut done = 0;
     while done == 0 {
         if value < 128 {
             set_at(avro_out, pos, value);
@@ -76,8 +76,8 @@ fn _avro_enc_varint(pos, value) {
 // Decode varint from buf starting at pos.
 // Stores end position in avro_dec_pos; returns decoded value.
 fn _avro_dec_varint(buf, pos) {
-    let value = 0;
-    let shift = 0;
+    let mut value = 0;
+    let mut shift = 0;
     let done  = 0;
     while done == 0 {
         let byte = buf[pos];
@@ -86,7 +86,7 @@ fn _avro_dec_varint(buf, pos) {
         shift = shift + 1;
         if byte < 128 { done = 1; }
     }
-    set_at(avro_dec_pos, 0, pos);
+    avro_dec_pos = pos;
     return value;
 }
 
@@ -94,13 +94,13 @@ fn avro_add_boolean(v) {
     let b = 0;
     if v != 0 { b = 1; }
     set_at(avro_out, avro_out_len, b);
-    set_at(avro_out_len, 0, avro_out_len + 1);
+    avro_out_len = avro_out_len + 1;
     return avro_out_len;
 }
 
 fn avro_add_int(v) {
     let zz = _avro_zigzag_enc(v);
-    set_at(avro_out_len, 0, _avro_enc_varint(avro_out_len, zz));
+    avro_out_len = _avro_enc_varint(avro_out_len, zz);
     return avro_out_len;
 }
 
@@ -109,24 +109,24 @@ fn avro_add_long(v) {
 }
 
 fn avro_add_bytes(data, nbytes) {
-    set_at(avro_out_len, 0, _avro_enc_varint(avro_out_len, _avro_zigzag_enc(nbytes)));
-    let i = 0;
+    avro_out_len = _avro_enc_varint(avro_out_len, _avro_zigzag_enc(nbytes));
+    let mut i = 0;
     while i < nbytes {
         set_at(avro_out, avro_out_len, data[i]);
-        set_at(avro_out_len, 0, avro_out_len + 1);
+        avro_out_len = avro_out_len + 1;
         i = i + 1;
     }
     return avro_out_len;
 }
 
 fn avro_decode_start(pos) {
-    set_at(avro_dec_pos, 0, pos);
+    avro_dec_pos = pos;
     return 0;
 }
 
 fn avro_decode_boolean(buf) {
     let v = buf[avro_dec_pos];
-    set_at(avro_dec_pos, 0, avro_dec_pos + 1);
+    avro_dec_pos = avro_dec_pos + 1;
     return v;
 }
 
@@ -144,7 +144,7 @@ fn avro_get_buf()    { return avro_out;     }
 
 fn avro_test() {
     avro_init();
-    let pass = 1;
+    let mut pass = 1;
 
     // Boolean round-trip
     avro_start();

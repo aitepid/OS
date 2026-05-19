@@ -49,25 +49,25 @@ let wr_func_nlocal = array(WR_MAX_FUNCS, 0);   // number of locals
 // Flat args: wr_func_args[func_idx * WR_MAX_BODY + instr_i] = operand
 let wr_func_body   = array(512, 0);            // WR_MAX_FUNCS * WR_MAX_BODY
 let wr_func_args   = array(512, 0);
-let wr_func_count  = 0;
+let mut wr_func_count  = 0;
 
 // Execution state
 let wr_stack       = array(WR_STACK_SIZE, 0);
-let wr_sp          = 0;   // stack pointer (next free slot)
+let mut wr_sp          = 0;   // stack pointer (next free slot)
 let wr_locals      = array(WR_MAX_LOCALS, 0);
 let wr_call_count  = array(WR_MAX_FUNCS, 0);
-let wr_total_calls = 0;
+let mut wr_total_calls = 0;
 
 fn wr_stack_push(v) {
     if wr_sp >= WR_STACK_SIZE { return 0 - 1; }
     set_at(wr_stack, wr_sp, v);
-    set_at(wr_sp, 0, wr_sp + 1);
+    wr_sp = wr_sp + 1;
     return wr_sp - 1;
 }
 
 fn wr_stack_pop() {
     if wr_sp <= 0 { return 0; }
-    set_at(wr_sp, 0, wr_sp - 1);
+    wr_sp = wr_sp - 1;
     return wr_stack[wr_sp];
 }
 
@@ -81,16 +81,16 @@ fn wr_define_func(func_id) {
     set_at(wr_func_len,    func_id, 0);
     set_at(wr_func_nlocal, func_id, 0);
     if func_id >= wr_func_count {
-        set_at(wr_func_count, 0, func_id + 1);
+        wr_func_count = func_id + 1;
     }
     return func_id;
 }
 
 fn wr_emit(func_id, opcode, arg) {
     if func_id >= WR_MAX_FUNCS { return 0 - 1; }
-    let pos = wr_func_len[func_id];
+    let mut pos = wr_func_len[func_id];
     if pos >= WR_MAX_BODY { return 0 - 1; }
-    let base = func_id * WR_MAX_BODY + pos;
+    let mut base = func_id * WR_MAX_BODY + pos;
     set_at(wr_func_body, base, opcode);
     set_at(wr_func_args, base, arg);
     set_at(wr_func_len, func_id, pos + 1);
@@ -114,8 +114,8 @@ fn wr_call(func_id) {
     if func_id >= wr_func_count { return 0 - 1; }
 
     set_at(wr_call_count, func_id, wr_call_count[func_id] + 1);
-    set_at(wr_total_calls, 0, wr_total_calls + 1);
-    set_at(wr_sp, 0, 0);
+    wr_total_calls = wr_total_calls + 1;
+    wr_sp = 0;
 
     let body_base = func_id * WR_MAX_BODY;
     let len       = wr_func_len[func_id];
@@ -192,10 +192,10 @@ fn wr_get_total_calls() { return wr_total_calls; }
 fn wr_get_func_count()  { return wr_func_count; }
 
 fn wasm_runtime_init() {
-    set_at(wr_func_count,  0, 0);
-    set_at(wr_sp,          0, 0);
-    set_at(wr_total_calls, 0, 0);
-    let i = 0;
+    wr_func_count = 0;
+    wr_sp = 0;
+    wr_total_calls = 0;
+    let mut i = 0;
     while i < WR_MAX_FUNCS {
         set_at(wr_func_len,    i, 0);
         set_at(wr_func_nlocal, i, 0);
@@ -207,7 +207,7 @@ fn wasm_runtime_init() {
 
 fn wasm_runtime_test() {
     wasm_runtime_init();
-    let pass = 1;
+    let mut pass = 1;
 
     // func 0: i32.const 10 + i32.const 20 + i32.add + return  => 30
     wr_define_func(0);
@@ -244,7 +244,7 @@ fn wasm_runtime_test() {
     let cc0 = wr_get_call_count(0);
     if cc0 != 2 { pass = 0; }
 
-    let total = wr_get_total_calls();
+    let mut total = wr_get_total_calls();
     if total != 4 { pass = 0; }
 
     let fc = wr_get_func_count();

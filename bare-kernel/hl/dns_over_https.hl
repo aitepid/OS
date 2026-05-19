@@ -47,7 +47,7 @@ let doh_cache_typ = array(32, 0);  // record type
 let doh_cache_used= array(32, 0);  // 1=valid
 let doh_cache_lru = array(32, 0);  // LRU counter
 let doh_cache_n   = 0;
-let doh_lru_clock = 0;
+let mut doh_lru_clock = 0;
 
 // Server table
 let doh_server_hash = array(4, 0);  // server URL hash
@@ -60,7 +60,7 @@ let doh_wire     = array(64, 0);   // DNS wire bytes
 let doh_wire_len = 0;
 
 fn doh_init() {
-    let i = 0;
+    let mut i = 0;
     while i < DOH_MAXQ {
         set_at(doh_qstate, i, DOH_Q_FREE);
         set_at(doh_qid,    i, 0);
@@ -108,8 +108,8 @@ fn _doh_build_wire(qname_hash, qtype) {
     set_at(doh_wire, 8,  0); set_at(doh_wire, 9, 0);  // NSCOUNT=0
     set_at(doh_wire, 10, 0); set_at(doh_wire, 11, 0); // ARCOUNT=0
     // QNAME: encode qname_hash as 2-label name (<high>.<low>.doha)
-    let hi = qname_hash / 256;
-    let lo = qname_hash - hi * 256;
+    let mut hi = qname_hash / 256;
+    let mut lo = qname_hash - hi * 256;
     set_at(doh_wire, 12, 2);   // label len=2
     set_at(doh_wire, 13, hi);
     set_at(doh_wire, 14, lo);
@@ -125,13 +125,13 @@ fn _doh_build_wire(qname_hash, qtype) {
 
 fn _doh_cache_lookup(qname_hash, qtype) {
     // Check cache; returns rdata value or -1
-    let i = 0;
+    let mut i = 0;
     while i < doh_cache_n {
         if doh_cache_used[i] == 1 {
             if doh_cache_key[i] == qname_hash {
                 if doh_cache_typ[i] == qtype {
                     if doh_cache_ttl[i] > 0 {
-                        set_at(doh_lru_clock, 0, doh_lru_clock + 1);
+                        doh_lru_clock = doh_lru_clock + 1;
                         set_at(doh_cache_lru, i, doh_lru_clock);
                         return doh_cache_val[i];
                     }
@@ -145,12 +145,12 @@ fn _doh_cache_lookup(qname_hash, qtype) {
 
 fn _doh_cache_insert(qname_hash, qtype, val, ttl) {
     // Evict LRU if full
-    let slot = doh_cache_n;
+    let mut slot = doh_cache_n;
     if doh_cache_n >= DOH_CACHE {
         // Find LRU slot
         let min_lru = doh_cache_lru[0];
         slot = 0;
-        let i = 1;
+        let mut i = 1;
         while i < DOH_CACHE {
             if doh_cache_lru[i] < min_lru {
                 min_lru = doh_cache_lru[i];
@@ -187,7 +187,7 @@ fn doh_query(qname_hash, qtype) {
     // Build wire query
     let qid = _doh_build_wire(qname_hash, qtype);
     // Find free query slot
-    let slot = doh_n_queries - (doh_n_queries / DOH_MAXQ) * DOH_MAXQ;
+    let mut slot = doh_n_queries - (doh_n_queries / DOH_MAXQ) * DOH_MAXQ;
     set_at(doh_qstate, slot, DOH_Q_PENDING);
     set_at(doh_qid,    slot, qid);
     set_at(doh_qname,  slot, qname_hash);
@@ -208,7 +208,7 @@ fn doh_query(qname_hash, qtype) {
 
 fn doh_flush() {
     // Invalidate all cache entries
-    let i = 0;
+    let mut i = 0;
     while i < doh_cache_n {
         set_at(doh_cache_used, i, 0);
         i += 1;
@@ -219,7 +219,7 @@ fn doh_flush() {
 
 fn doh_tick() {
     // Decrement TTLs; expire zero-TTL entries
-    let i = 0;
+    let mut i = 0;
     let expired = 0;
     while i < doh_cache_n {
         if doh_cache_used[i] == 1 {
@@ -236,8 +236,8 @@ fn doh_tick() {
 }
 
 fn doh_cache_size() {
-    let i = 0;
-    let n = 0;
+    let mut i = 0;
+    let mut n = 0;
     while i < doh_cache_n {
         if doh_cache_used[i] == 1 { n += 1; }
         i += 1;

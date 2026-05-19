@@ -27,42 +27,42 @@ let LS_SYS_KILL   = 62;
 let ls_call_num    = array(LS_MAX_CALLS, 0);
 let ls_call_arg0   = array(LS_MAX_CALLS, 0);
 let ls_call_result = array(LS_MAX_CALLS, 0);
-let ls_call_count  = 0;
+let mut ls_call_count  = 0;
 
 // Memory mappings
 let ls_map_addr    = array(LS_MAX_MAPPINGS, 0);
 let ls_map_len     = array(LS_MAX_MAPPINGS, 0);
 let ls_map_used    = array(LS_MAX_MAPPINGS, 0);
-let ls_map_count   = 0;
+let mut ls_map_count   = 0;
 
 // brk pointer
-let ls_brk_ptr     = 0x400000;
+let mut ls_brk_ptr     = 0x400000;
 
 // Counters
-let ls_total_reads  = 0;
-let ls_total_writes = 0;
-let ls_exit_code    = 0 - 1;
+let mut ls_total_reads  = 0;
+let mut ls_total_writes = 0;
+let mut ls_exit_code    = 0 - 1;
 
 fn ls_log(sysno, arg0, result) {
     if ls_call_count >= LS_MAX_CALLS { return 0 - 1; }
-    let idx = ls_call_count;
+    let mut idx = ls_call_count;
     set_at(ls_call_num,    idx, sysno);
     set_at(ls_call_arg0,   idx, arg0);
     set_at(ls_call_result, idx, result);
-    set_at(ls_call_count,  0,   ls_call_count + 1);
+    ls_call_count = ls_call_count + 1;
     return idx;
 }
 
 fn ls_syscall(sysno, arg0, arg1) {
-    let result = 0 - 1;
+    let mut result = 0 - 1;
 
     if sysno == LS_SYS_READ {
-        set_at(ls_total_reads, 0, ls_total_reads + 1);
+        ls_total_reads = ls_total_reads + 1;
         set_at(result, 0, arg1);
     }
 
     if sysno == LS_SYS_WRITE {
-        set_at(ls_total_writes, 0, ls_total_writes + 1);
+        ls_total_writes = ls_total_writes + 1;
         set_at(result, 0, arg1);
     }
 
@@ -80,15 +80,15 @@ fn ls_syscall(sysno, arg0, arg1) {
             set_at(ls_map_addr, mi, ls_brk_ptr);
             set_at(ls_map_len,  mi, arg1);
             set_at(ls_map_used, mi, 1);
-            set_at(ls_brk_ptr,  0,  ls_brk_ptr + arg1);
-            set_at(ls_map_count, 0, ls_map_count + 1);
+            ls_brk_ptr = ls_brk_ptr + arg1;
+            ls_map_count = ls_map_count + 1;
             set_at(result, 0, ls_map_addr[mi]);
         }
     }
 
     if sysno == LS_SYS_MUNMAP {
         let i    = 0;
-        let done = 0;
+        let mut done = 0;
         while i < ls_map_count {
             if done == 0 {
                 if ls_map_addr[i] == arg0 {
@@ -104,7 +104,7 @@ fn ls_syscall(sysno, arg0, arg1) {
 
     if sysno == LS_SYS_BRK {
         if arg0 > ls_brk_ptr {
-            set_at(ls_brk_ptr, 0, arg0);
+            ls_brk_ptr = arg0;
         }
         set_at(result, 0, ls_brk_ptr);
     }
@@ -114,7 +114,7 @@ fn ls_syscall(sysno, arg0, arg1) {
     }
 
     if sysno == LS_SYS_EXIT {
-        set_at(ls_exit_code, 0, arg0);
+        ls_exit_code = arg0;
         set_at(result, 0, 0);
     }
 
@@ -148,17 +148,17 @@ fn ls_active_map_count() {
 }
 
 fn linux_syscall_init() {
-    set_at(ls_call_count,   0, 0);
-    set_at(ls_map_count,    0, 0);
-    set_at(ls_total_reads,  0, 0);
-    set_at(ls_total_writes, 0, 0);
-    set_at(ls_exit_code,    0, 0 - 1);
-    set_at(ls_brk_ptr,      0, 0x400000);
+    ls_call_count = 0;
+    ls_map_count = 0;
+    ls_total_reads = 0;
+    ls_total_writes = 0;
+    ls_exit_code = 0 - 1;
+    ls_brk_ptr = 0x400000;
 }
 
 fn linux_syscall_test() {
     linux_syscall_init();
-    let pass = 1;
+    let mut pass = 1;
 
     // read + write
     ls_syscall(LS_SYS_READ,  0, 512);

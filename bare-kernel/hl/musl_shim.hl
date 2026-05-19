@@ -24,15 +24,15 @@ let MS_FILE_RW     = 3;
 let ms_alloc_addr  = array(MS_MAX_ALLOCS, 0);
 let ms_alloc_size  = array(MS_MAX_ALLOCS, 0);
 let ms_alloc_used  = array(MS_MAX_ALLOCS, 0);
-let ms_alloc_count = 0;
-let ms_total_alloc = 0;
+let mut ms_alloc_count = 0;
+let mut ms_total_alloc = 0;
 
 // File handle table
 let ms_file_id     = array(MS_MAX_FILES, 0);
 let ms_file_mode   = array(MS_MAX_FILES, 0);
 let ms_file_pos    = array(MS_MAX_FILES, 0);
 let ms_file_size   = array(MS_MAX_FILES, 0);
-let ms_file_count  = 0;
+let mut ms_file_count  = 0;
 
 fn ms_malloc(size) {
     if size <= 0 { return 0; }
@@ -42,17 +42,17 @@ fn ms_malloc(size) {
     set_at(ms_alloc_addr, idx, addr);
     set_at(ms_alloc_size, idx, size);
     set_at(ms_alloc_used, idx, 1);
-    set_at(ms_alloc_count, 0, ms_alloc_count + 1);
-    set_at(ms_total_alloc, 0, ms_total_alloc + size);
+    ms_alloc_count = ms_alloc_count + 1;
+    ms_total_alloc = ms_total_alloc + size;
     return addr;
 }
 
 fn ms_free(addr) {
-    let i = 0;
+    let mut i = 0;
     while i < ms_alloc_count {
         if ms_alloc_addr[i] == addr {
             if ms_alloc_used[i] == 1 {
-                set_at(ms_total_alloc, 0, ms_total_alloc - ms_alloc_size[i]);
+                ms_total_alloc = ms_total_alloc - ms_alloc_size[i];
             }
             set_at(ms_alloc_used, i, 0);
             return i;
@@ -74,12 +74,12 @@ fn ms_alloc_live_count() {
 
 fn ms_fopen(file_id, mode) {
     if ms_file_count >= MS_MAX_FILES { return 0 - 1; }
-    let idx = ms_file_count;
+    let mut idx = ms_file_count;
     set_at(ms_file_id,   idx, file_id);
     set_at(ms_file_mode, idx, mode);
     set_at(ms_file_pos,  idx, 0);
     set_at(ms_file_size, idx, 0);
-    set_at(ms_file_count, 0, ms_file_count + 1);
+    ms_file_count = ms_file_count + 1;
     return idx;
 }
 
@@ -146,20 +146,20 @@ fn ms_get_total_alloc() { return ms_total_alloc; }
 fn ms_get_file_count()  { return ms_file_count; }
 
 fn musl_shim_init() {
-    set_at(ms_alloc_count, 0, 0);
-    set_at(ms_total_alloc, 0, 0);
-    set_at(ms_file_count,  0, 0);
+    ms_alloc_count = 0;
+    ms_total_alloc = 0;
+    ms_file_count = 0;
 }
 
 fn musl_shim_test() {
     musl_shim_init();
-    let pass = 1;
+    let mut pass = 1;
 
     // malloc / free
     let a1 = ms_malloc(64);
     let a2 = ms_malloc(128);
     if ms_alloc_count != 2 { pass = 0; }
-    let total = ms_get_total_alloc();
+    let mut total = ms_get_total_alloc();
     if total != 192 { pass = 0; }
 
     ms_free(a1);
