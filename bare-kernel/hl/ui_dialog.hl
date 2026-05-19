@@ -17,6 +17,7 @@ let UI_DLG_INFO    = 1;
 let UI_DLG_CONFIRM = 2;
 let UI_DLG_WARNING = 3;
 let UI_DLG_ERROR   = 4;
+let UI_DLG_DANGER  = 5;
 
 let UI_DLG_RESULT_NONE   = 0;
 let UI_DLG_RESULT_OK     = 1;
@@ -81,20 +82,21 @@ fn ui_dialog_render() {
     vesa_fill_rect(x + 4, y + 4, w, h + title_h, ui_theme_shadow_color());
 
     // Title bar
-    let mut tb_color = ui_theme_titlebar_active_color();
-    if ui_dlg_type == UI_DLG_WARNING { tb_color = ui_theme_warning_color(); }
-    if ui_dlg_type == UI_DLG_ERROR { tb_color = ui_theme_error_color(); }
+    let mut tb_color = ui_theme_accent();
+    if ui_dlg_type == UI_DLG_WARNING { tb_color = ui_theme_warning(); }
+    if ui_dlg_type == UI_DLG_ERROR   { tb_color = ui_theme_error(); }
+    if ui_dlg_type == UI_DLG_DANGER  { tb_color = ui_theme_error(); }
     vesa_fill_rect(x, y, w, title_h, tb_color);
-    ui_draw_text(x + 8, y + (title_h - 16) / 2, ui_dlg_title, ui_theme_surface_color(), 0);
+    ui_draw_text(x + TK_SPACE_6, y + (title_h - 16) / 2, ui_dlg_title, ui_theme_text_primary(), 0);
 
     // Body
-    vesa_fill_rect(x, y + title_h, w, h, ui_theme_surface_color());
-    vesa_rect(x, y, w, h + title_h, ui_theme_border_color());
+    vesa_fill_rect(x, y + title_h, w, h, ui_theme_bg_surface());
+    vesa_rect(x, y, w, h + title_h, ui_theme_border());
 
-    // Message text
-    let mut msg_x = x + 20;
-    let mut msg_y = y + title_h + 20;
-    ui_draw_text(msg_x, msg_y, ui_dlg_message, ui_theme_text_muted_color(), 0);
+    // Message text (TK_SPACE_6 = 24 px inner padding)
+    let mut msg_x = x + TK_SPACE_6;
+    let mut msg_y = y + title_h + TK_SPACE_6;
+    ui_draw_text(msg_x, msg_y, ui_dlg_message, ui_theme_text_secondary(), 0);
 
     // Buttons
     let mut btn_w = 80;
@@ -106,7 +108,7 @@ fn ui_dialog_render() {
         if ui_dlg_selected == 0 {
             ui_button_active(ok_x, btn_y, btn_w, btn_h, "OK");
         } else {
-            ui_button(ok_x, btn_y, btn_w, btn_h, "OK");
+            ui_draw_button_ghost(ok_x, btn_y, btn_w, btn_h, "OK");
         }
     }
     if ui_dlg_type == UI_DLG_ERROR {
@@ -114,7 +116,7 @@ fn ui_dialog_render() {
         if ui_dlg_selected == 0 {
             ui_button_active(ok_x, btn_y, btn_w, btn_h, "OK");
         } else {
-            ui_button(ok_x, btn_y, btn_w, btn_h, "OK");
+            ui_draw_button_ghost(ok_x, btn_y, btn_w, btn_h, "OK");
         }
     }
     if ui_dlg_type == UI_DLG_CONFIRM {
@@ -122,9 +124,9 @@ fn ui_dialog_render() {
         let mut no_x = x + w / 2 + 10;
         if ui_dlg_selected == 0 {
             ui_button_active(yes_x, btn_y, btn_w, btn_h, "Yes");
-            ui_button(no_x, btn_y, btn_w, btn_h, "No");
+            ui_draw_button_ghost(no_x, btn_y, btn_w, btn_h, "No");
         } else {
-            ui_button(yes_x, btn_y, btn_w, btn_h, "Yes");
+            ui_draw_button_ghost(yes_x, btn_y, btn_w, btn_h, "Yes");
             ui_button_active(no_x, btn_y, btn_w, btn_h, "No");
         }
     }
@@ -133,10 +135,21 @@ fn ui_dialog_render() {
         let mut cancel_x = x + w / 2 + 10;
         if ui_dlg_selected == 0 {
             ui_button_active(ok_x, btn_y, btn_w, btn_h, "OK");
-            ui_button(cancel_x, btn_y, btn_w, btn_h, "Cancel");
+            ui_draw_button_ghost(cancel_x, btn_y, btn_w, btn_h, "Cancel");
         } else {
-            ui_button(ok_x, btn_y, btn_w, btn_h, "OK");
+            ui_draw_button_ghost(ok_x, btn_y, btn_w, btn_h, "OK");
             ui_button_active(cancel_x, btn_y, btn_w, btn_h, "Cancel");
+        }
+    }
+    if ui_dlg_type == UI_DLG_DANGER {
+        let mut yes_x = x + w / 2 - btn_w - 10;
+        let mut cancel_x = x + w / 2 + 10;
+        if ui_dlg_selected == 0 {
+            ui_draw_button_danger(yes_x, btn_y, btn_w, btn_h, "Confirm");
+            ui_draw_button_ghost(cancel_x, btn_y, btn_w, btn_h, "Cancel");
+        } else {
+            ui_draw_button_ghost(yes_x, btn_y, btn_w, btn_h, "Confirm");
+            ui_draw_button_danger(cancel_x, btn_y, btn_w, btn_h, "Cancel");
         }
     }
     return 0;
@@ -160,6 +173,10 @@ fn ui_dialog_key(key) {
             if ui_dlg_selected == 0 { ui_dlg_result = UI_DLG_RESULT_OK; }
             if ui_dlg_selected == 1 { ui_dlg_result = UI_DLG_RESULT_CANCEL; }
         }
+        if ui_dlg_type == UI_DLG_DANGER {
+            if ui_dlg_selected == 0 { ui_dlg_result = UI_DLG_RESULT_YES; }
+            if ui_dlg_selected == 1 { ui_dlg_result = UI_DLG_RESULT_CANCEL; }
+        }
         ui_dialog_close();
         return 1;
     }
@@ -169,6 +186,7 @@ fn ui_dialog_key(key) {
         if ui_dlg_type == UI_DLG_WARNING { ui_dlg_result = UI_DLG_RESULT_CANCEL; }
         if ui_dlg_type == UI_DLG_INFO { ui_dlg_result = UI_DLG_RESULT_OK; }
         if ui_dlg_type == UI_DLG_ERROR { ui_dlg_result = UI_DLG_RESULT_OK; }
+        if ui_dlg_type == UI_DLG_DANGER { ui_dlg_result = UI_DLG_RESULT_CANCEL; }
         ui_dialog_close();
         return 1;
     }
@@ -225,6 +243,20 @@ fn ui_dialog_click(mx, my) {
             return 1;
         }
     }
+    if ui_dlg_type == UI_DLG_DANGER {
+        let mut yes_x = ui_dlg_x + ui_dlg_w / 2 - btn_w - 10;
+        let mut cancel_x = ui_dlg_x + ui_dlg_w / 2 + 10;
+        if ui_button_hit(yes_x, btn_y, btn_w, btn_h, mx, my) == 1 {
+            ui_dlg_result = UI_DLG_RESULT_YES;
+            ui_dialog_close();
+            return 1;
+        }
+        if ui_button_hit(cancel_x, btn_y, btn_w, btn_h, mx, my) == 1 {
+            ui_dlg_result = UI_DLG_RESULT_CANCEL;
+            ui_dialog_close();
+            return 1;
+        }
+    }
     return 0;
 }
 
@@ -243,6 +275,10 @@ fn ui_dialog_warn(title, msg) {
 
 fn ui_dialog_error(title, msg) {
     return ui_dialog_open(UI_DLG_ERROR, title, msg);
+}
+
+fn ui_dialog_danger(title, msg) {
+    return ui_dialog_open(UI_DLG_DANGER, title, msg);
 }
 
 print("ui_dialog.hl loaded");

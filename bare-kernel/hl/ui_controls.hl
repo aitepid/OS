@@ -172,5 +172,141 @@ fn ui_badge_err(x, y, text) {
     return 0;
 }
 
+// --- Button Ghost Variant ---
+fn ui_draw_button_ghost(x, y, w, h, label) {
+    let mut border = ui_theme_accent();
+    let mut fg = ui_theme_accent();
+    vesa_fill_rect(x, y, w, h, ui_theme_bg_surface());
+    vesa_rect(x, y, w, h, border);
+    let mut tw = ui_text_width(label);
+    let mut tx = x + (w - tw) / 2;
+    let mut ty = y + (h - UI_CTRL_FONT_H) / 2;
+    ui_draw_text(tx, ty, label, fg, 0);
+    return 0;
+}
+
+// --- Button Danger Variant ---
+fn ui_draw_button_danger(x, y, w, h, label) {
+    let mut bg = ui_theme_error();
+    let mut fg = ui_theme_text_primary();
+    vesa_fill_rect(x, y, w, h, bg);
+    vesa_rect(x, y, w, h, bg);
+    let mut tw = ui_text_width(label);
+    let mut tx = x + (w - tw) / 2;
+    let mut ty = y + (h - UI_CTRL_FONT_H) / 2;
+    ui_draw_text(tx, ty, label, fg, 0);
+    return 0;
+}
+
+// --- Input / TextField ---
+// Draws an empty input box; caller paints cursor and content.
+fn ui_draw_input(x, y, w, h, is_focused) {
+    let mut bg = ui_theme_bg_surface();
+    let mut border = ui_theme_border();
+    if is_focused == 1 { border = ui_theme_accent(); }
+    vesa_fill_rect(x, y, w, h, bg);
+    vesa_rect(x, y, w, h, border);
+    return 0;
+}
+
+// --- Checkbox ---
+// 16x16 box; accent fill with inner mark when checked.
+fn ui_draw_checkbox(x, y, checked) {
+    let mut bg = ui_theme_bg_surface();
+    let mut border = ui_theme_border();
+    vesa_fill_rect(x, y, 16, 16, bg);
+    vesa_rect(x, y, 16, 16, border);
+    if checked == 1 {
+        vesa_fill_rect(x + 3, y + 3, 10, 10, ui_theme_accent());
+    }
+    return 0;
+}
+
+// --- Toggle Switch ---
+// 36x20 pill; on=accent track, knob slides right.
+fn ui_draw_toggle(x, y, on) {
+    let mut track = ui_theme_border();
+    if on == 1 { track = ui_theme_accent(); }
+    vesa_fill_rect(x, y, 36, 20, track);
+    let mut knob_x = x + 2;
+    if on == 1 { knob_x = x + 18; }
+    vesa_fill_rect(knob_x, y + 2, 16, 16, ui_theme_text_primary());
+    return 0;
+}
+
+// --- Vertical Scrollbar ---
+// 8px wide; thumb_pos and thumb_size are absolute px within height h.
+fn ui_draw_scrollbar(x, y, h, thumb_pos, thumb_size) {
+    let mut track_c = ui_theme_bg_elevated();
+    let mut thumb_c = ui_theme_border();
+    vesa_fill_rect(x, y, 8, h, track_c);
+    let mut t_y = y + thumb_pos;
+    let mut t_h = thumb_size;
+    if t_h < 8 { t_h = 8; }
+    if t_y + t_h > y + h { t_y = y + h - t_h; }
+    vesa_fill_rect(x + 1, t_y, 6, t_h, thumb_c);
+    return 0;
+}
+
+// --- Spinner (4-segment rotating indicator) ---
+// 16x16; frame cycles through N/E/S/W bright segment.
+fn ui_draw_spinner(x, y, frame) {
+    let mut dim_c = ui_theme_border();
+    let mut bright_c = ui_theme_accent();
+    let mut f = frame % 4;
+    let mut cn = dim_c;
+    let mut ce = dim_c;
+    let mut cs = dim_c;
+    let mut cw = dim_c;
+    if f == 0 { cn = bright_c; }
+    if f == 1 { ce = bright_c; }
+    if f == 2 { cs = bright_c; }
+    if f == 3 { cw = bright_c; }
+    vesa_fill_rect(x + 5, y + 0,  6, 3, cn);
+    vesa_fill_rect(x + 13, y + 5, 3, 6, ce);
+    vesa_fill_rect(x + 5, y + 13, 6, 3, cs);
+    vesa_fill_rect(x + 0, y + 5,  3, 6, cw);
+    return 0;
+}
+
+// --- Tooltip Background ---
+// Draws the rounded-rect shell; caller renders text inside.
+fn ui_draw_tooltip(x, y, w, h) {
+    let mut bg = ui_theme_bg_elevated();
+    let mut border = ui_theme_border();
+    vesa_fill_rect(x, y, w, h, bg);
+    vesa_rect(x, y, w, h, border);
+    return 0;
+}
+
+fn ui_controls_test() {
+    let mut pass = 1;
+
+    // Hit test inside
+    let mut hit = ui_button_hit(10, 10, 80, 30, 50, 25);
+    if hit != 1 { pass = 0; }
+
+    // Hit test outside
+    let mut miss = ui_button_hit(10, 10, 80, 30, 5, 25);
+    if miss != 0 { pass = 0; }
+
+    // Hit test on boundary (left edge)
+    let mut edge_l = ui_button_hit(10, 10, 80, 30, 10, 20);
+    if edge_l != 1 { pass = 0; }
+
+    // Hit test just outside right edge
+    let mut edge_r = ui_button_hit(10, 10, 80, 30, 90, 20);
+    if edge_r != 0 { pass = 0; }
+
+    // Text width: "Hello" = 5 chars * 8px = 40px
+    let mut tw = ui_text_width("Hello");
+    if tw != 40 { pass = 0; }
+
+    if pass == 1 { print("ui_controls_test PASS"); }
+    if pass == 0 { print("ui_controls_test FAIL"); }
+    return pass;
+}
+
+ui_controls_test();
 print("ui_controls.hl loaded");
-print("UI controls: label, button, progress bar, separator, badge");
+print("UI controls: label, button (primary/active/ghost/danger), input, checkbox, toggle, scrollbar, spinner, tooltip, progress, separator, badge");

@@ -184,13 +184,12 @@ fn wm_hit_test_close(win_id, px, py) {
     let mut addr = WM_TABLE_ADDR + win_id * 128;
     let mut wx = mem_read_u64(addr + 8);
     let mut wy = mem_read_u64(addr + 16);
-    let mut ww = mem_read_u64(addr + 24);
-    let mut bx = wx + ww - 18;
-    let mut by = wy + 2;
+    let mut title_h = ui_theme_title_height();
+    let mut bx = wx + 8;
     if px >= bx {
         if px < bx + 16 {
-            if py >= by {
-                if py < by + 16 { return 1; }
+            if py >= wy {
+                if py < wy + title_h { return 1; }
             }
         }
     }
@@ -201,13 +200,12 @@ fn wm_hit_test_minimize(win_id, px, py) {
     let mut addr = WM_TABLE_ADDR + win_id * 128;
     let mut wx = mem_read_u64(addr + 8);
     let mut wy = mem_read_u64(addr + 16);
-    let mut ww = mem_read_u64(addr + 24);
-    let mut bx = wx + ww - 38;
-    let mut by = wy + 2;
+    let mut title_h = ui_theme_title_height();
+    let mut bx = wx + 28;
     if px >= bx {
         if px < bx + 16 {
-            if py >= by {
-                if py < by + 16 { return 1; }
+            if py >= wy {
+                if py < wy + title_h { return 1; }
             }
         }
     }
@@ -363,21 +361,23 @@ fn wm_draw_window(win_id) {
     if win_id == wm_focused_id { title_color = ui_theme_titlebar_active_color(); }
     vesa_fill_rect(x, y, w, title_h, title_color);
 
-    // Title text
+    // Window chrome dots (macOS-style: close / minimize / maximize)
+    let mut dot_y = y + (title_h - 12) / 2;
+    vesa_fill_rect(x + 8,  dot_y, 12, 12, ui_theme_wm_close());
+    vesa_fill_rect(x + 28, dot_y, 12, 12, ui_theme_wm_minimize());
+    vesa_fill_rect(x + 48, dot_y, 12, 12, ui_theme_wm_maximize());
+
+    // Title text centered
     let mut t_str = wm_get_title(win_id);
     let mut t_ty = y + (title_h - 16) / 2;
-    let mut max_chars = (w - 48) / 8;
+    let mut max_chars = (w - 80) / 8;
     if max_chars > 0 {
         let mut draw_str = t_str;
         if len(draw_str) > max_chars { draw_str = substr(draw_str, 0, max_chars); }
-        ui_draw_text(x + 6, t_ty, draw_str, ui_theme_surface_color(), 0);
+        let mut t_tw = ui_text_width(draw_str);
+        let mut t_tx = x + (w - t_tw) / 2;
+        ui_draw_text(t_tx, t_ty, draw_str, ui_theme_text_color(), 0);
     }
-
-    // Minimize button (accent square next to close)
-    vesa_fill_rect(x + w - 38, y + 2, 16, 16, ui_theme_accent_color());
-
-    // Close button (red square at top-right)
-    vesa_fill_rect(x + w - 18, y + 2, 16, 16, ui_theme_error_color());
 
     // Border
     vesa_rect(x, y, w, h + title_h, ui_theme_border_color());

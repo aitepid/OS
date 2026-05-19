@@ -11,6 +11,7 @@
 let mut uidsk_initialized = 0;
 let mut uidsk_clock_tick = 0;
 let mut uidsk_clock_text = "00:00";
+let mut dock_hover_idx = 0 - 1;
 
 // App launcher entries in the dock (left side, before window buttons)
 let UIDSK_MAX_APPS = 8;
@@ -54,6 +55,10 @@ fn uidsk_app_label(app_id) {
     return "?";
 }
 
+fn uidsk_set_hover(idx) {
+    dock_hover_idx = idx;
+}
+
 fn uidsk_init() {
     uidsk_initialized = 1;
     uidsk_update_clock();
@@ -84,11 +89,17 @@ fn uidsk_draw_topbar() {
     let mut clock_w = ui_text_width(uidsk_clock_text);
     ui_draw_text(vesa_width - clock_w - 12, ty, uidsk_clock_text, ui_theme_text_color(), 0);
 
+    // System status icons: NET and BAT to the left of clock
+    let mut net_x = vesa_width - clock_w - 12 - 32 - 8;
+    let mut bat_x = net_x - 32 - 4;
+    ui_draw_text(net_x, ty, "NET", ui_theme_success_color(), 0);
+    ui_draw_text(bat_x, ty, "BAT", ui_theme_text_muted_color(), 0);
+
     // Window count indicator
     let mut wc = wm_get_window_count();
     let mut wc_str = to_string(wc) + "w";
     let mut wc_w = ui_text_width(wc_str);
-    ui_draw_text(vesa_width - clock_w - wc_w - 28, ty, wc_str, ui_theme_text_muted_color(), 0);
+    ui_draw_text(bat_x - wc_w - 8, ty, wc_str, ui_theme_text_muted_color(), 0);
 
     return 0;
 }
@@ -101,7 +112,13 @@ fn uidsk_draw_app_launchers() {
     let mut i = 0;
     while i < uidsk_app_count {
         let mut label = uidsk_app_label(i);
-        ui_button(x, btn_y, UIDSK_LAUNCH_BTN_W, UIDSK_LAUNCH_BTN_H, label);
+        let mut this_y = btn_y;
+        let mut this_h = UIDSK_LAUNCH_BTN_H;
+        if i == dock_hover_idx {
+            this_y = btn_y - 4;
+            this_h = UIDSK_LAUNCH_BTN_H + 4;
+        }
+        ui_button(x, this_y, UIDSK_LAUNCH_BTN_W, this_h, label);
         x = x + UIDSK_LAUNCH_BTN_W + UIDSK_LAUNCH_PAD;
         i = i + 1;
     }
