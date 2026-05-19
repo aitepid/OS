@@ -17,7 +17,7 @@ let mut uisettings_dirty   = 0;       // 1 = apply pending changes on close/appl
 
 // Display settings state
 let mut uisettings_theme   = 0;       // 0=Slate 1=Light 2=Dark
-let UISETTINGS_THEME_NAMES = ["Slate", "Light", "Dark"];
+let UISETTINGS_THEME_NAMES = ["Dark", "Light", "HC"];
 
 // Audio settings state
 let mut uisettings_volume  = 200;     // 0-255 master volume (default ~78%)
@@ -38,7 +38,7 @@ let UST_TABS = ["Display", "Audio", "Network", "About"];
 // === Internal helpers ===
 
 fn uisettings_apply() {
-    // Apply volume to mixer
+    ui_theme_set(uisettings_theme);
     mixer_set_master_volume(uisettings_volume);
     uisettings_dirty = 0;
     return 0;
@@ -49,14 +49,14 @@ fn uisettings_draw_tabs(wx, wy) {
     while i < 4 {
         let mut tx = wx + UST_PAD + i * (UST_TAB_W + 2);
         let mut ty = wy;
-        let mut bg = ui_theme_panel_color();
-        let mut fg = ui_theme_text_color();
+        let mut bg = ui_theme_bg_elevated();
+        let mut fg = ui_theme_text_secondary();
         if i == uisettings_tab {
-            bg = ui_theme_accent_color();
-            fg = ui_theme_surface_color();
+            bg = ui_theme_accent();
+            fg = ui_theme_text_primary();
         }
         vesa_fill_rect(tx, ty, UST_TAB_W, UST_TAB_H, bg);
-        vesa_rect(tx, ty, UST_TAB_W, UST_TAB_H, ui_theme_border_color());
+        vesa_rect(tx, ty, UST_TAB_W, UST_TAB_H, ui_theme_border());
         ui_draw_text(tx + 8, ty + 6, UST_TABS[i], fg, 0);
         i = i + 1;
     }
@@ -67,28 +67,36 @@ fn uisettings_render_display(wx, wy) {
     let mut row0 = wy + UST_PAD;
     let mut col0 = wx + UST_PAD;
 
-    ui_draw_text(col0, row0, "Theme:", ui_theme_text_color(), 0);
-    // Draw three theme buttons
+    // Theme section header
+    ui_draw_text(col0, row0, "Theme", ui_theme_accent(), 0);
+    ui_separator_h(wx, row0 + 18, UST_WIN_W);
+    let mut row1 = row0 + 26;
+    ui_draw_text(col0, row1, "Mode:", ui_theme_text_primary(), 0);
     let mut ti = 0;
     while ti < 3 {
-        let mut bx = col0 + 60 + ti * 80;
-        let mut by = row0 - 4;
-        let mut bg = ui_theme_panel_color();
-        if ti == uisettings_theme { bg = ui_theme_accent_color(); }
-        vesa_fill_rect(bx, by, 72, 18, bg);
-        vesa_rect(bx, by, 72, 18, ui_theme_border_color());
-        ui_draw_text(bx + 4, by + 2, UISETTINGS_THEME_NAMES[ti], ui_theme_text_color(), 0);
+        let mut bx = col0 + 56 + ti * 90;
+        let mut by = row1 - 4;
+        if ti == uisettings_theme {
+            ui_button_active(bx, by, 80, 24, UISETTINGS_THEME_NAMES[ti]);
+        } else {
+            ui_draw_button_ghost(bx, by, 80, 24, UISETTINGS_THEME_NAMES[ti]);
+        }
         ti = ti + 1;
     }
+    let mut row2 = row1 + 32;
+    ui_draw_text(col0, row2, "Press [T] to cycle, [Enter] to apply", ui_theme_text_secondary(), 0);
+    ui_separator_h(wx, row2 + 20, UST_WIN_W);
 
-    ui_separator_h(wx, row0 + UST_ROW_H, UST_WIN_W);
-
-    ui_draw_text(col0, row0 + UST_ROW_H + 8, "Resolution:", ui_theme_text_color(), 0);
+    // Display section header
+    let mut row3 = row2 + 28;
+    ui_draw_text(col0, row3, "Display", ui_theme_accent(), 0);
+    ui_separator_h(wx, row3 + 18, UST_WIN_W);
+    let mut row4 = row3 + 26;
+    ui_draw_text(col0, row4, "Resolution:", ui_theme_text_primary(), 0);
     let mut res_str = to_string(vesa_width) + " x " + to_string(vesa_height);
-    ui_draw_text(col0 + 100, row0 + UST_ROW_H + 8, res_str, ui_theme_text_color(), 0);
-
-    ui_draw_text(col0, row0 + UST_ROW_H * 2 + 8, "Color depth:", ui_theme_text_color(), 0);
-    ui_draw_text(col0 + 100, row0 + UST_ROW_H * 2 + 8, "32-bit BGRA", ui_theme_text_color(), 0);
+    ui_draw_text(col0 + 100, row4, res_str, ui_theme_text_secondary(), 0);
+    ui_draw_text(col0, row4 + UST_ROW_H, "Color depth:", ui_theme_text_primary(), 0);
+    ui_draw_text(col0 + 100, row4 + UST_ROW_H, "32-bit BGRA", ui_theme_text_secondary(), 0);
 
     return 0;
 }
@@ -97,28 +105,26 @@ fn uisettings_render_audio(wx, wy) {
     let mut row0 = wy + UST_PAD;
     let mut col0 = wx + UST_PAD;
 
-    ui_draw_text(col0, row0, "Master Volume:", ui_theme_text_color(), 0);
+    ui_draw_text(col0, row0, "Audio", ui_theme_accent(), 0);
+    ui_separator_h(wx, row0 + 18, UST_WIN_W);
+    let mut row1 = row0 + 26;
+    ui_draw_text(col0, row1, "Master Volume:", ui_theme_text_primary(), 0);
 
-    // Draw volume progress bar
     let mut bar_x = col0 + 120;
-    let mut bar_y = row0 - 2;
-    let mut bar_w = 200;
-    let mut bar_h = 16;
+    let mut bar_y = row1 - 2;
+    let mut bar_w = 180;
+    let mut bar_h = 14;
     let mut fill = bar_w * uisettings_volume / 255;
-    vesa_fill_rect(bar_x, bar_y, bar_w, bar_h, ui_theme_panel_color());
-    vesa_fill_rect(bar_x, bar_y, fill, bar_h, ui_theme_accent_color());
-    vesa_rect(bar_x, bar_y, bar_w, bar_h, ui_theme_border_color());
-
+    vesa_fill_rect(bar_x, bar_y, bar_w, bar_h, ui_theme_bg_elevated());
+    if fill > 0 { vesa_fill_rect(bar_x, bar_y, fill, bar_h, ui_theme_accent()); }
+    vesa_rect(bar_x, bar_y, bar_w, bar_h, ui_theme_border());
     let mut pct = uisettings_volume * 100 / 255;
-    ui_draw_text(bar_x + bar_w + 8, bar_y + 2, to_string(pct) + "%", ui_theme_text_color(), 0);
+    ui_draw_text(bar_x + bar_w + 8, bar_y + 0, to_string(pct) + "%", ui_theme_text_secondary(), 0);
 
-    ui_separator_h(wx, row0 + UST_ROW_H, UST_WIN_W);
-
-    ui_draw_text(col0, row0 + UST_ROW_H + 8, "[ - ] decrease  [ + ] increase  volume",
-                 ui_theme_text_color(), 0);
-
-    ui_draw_text(col0, row0 + UST_ROW_H * 2 + 8, "Audio device:", ui_theme_text_color(), 0);
-    ui_draw_text(col0 + 100, row0 + UST_ROW_H * 2 + 8, "AC97 (ICH)", ui_theme_text_color(), 0);
+    ui_separator_h(wx, row1 + UST_ROW_H, UST_WIN_W);
+    ui_draw_text(col0, row1 + UST_ROW_H + 8, "[-] decrease  [+] increase", ui_theme_text_secondary(), 0);
+    ui_draw_text(col0, row1 + UST_ROW_H * 2 + 8, "Audio device:", ui_theme_text_primary(), 0);
+    ui_draw_text(col0 + 100, row1 + UST_ROW_H * 2 + 8, "AC97 (ICH)", ui_theme_text_secondary(), 0);
 
     return 0;
 }
@@ -127,28 +133,26 @@ fn uisettings_render_network(wx, wy) {
     let mut row0 = wy + UST_PAD;
     let mut col0 = wx + UST_PAD;
 
-    // Show IP from net module
+    ui_draw_text(col0, row0, "Network", ui_theme_accent(), 0);
+    ui_separator_h(wx, row0 + 18, UST_WIN_W);
+    let mut row1 = row0 + 26;
+
     let mut my_ip_str = to_string(my_ip[0]) + "." + to_string(my_ip[1]) + "." +
                     to_string(my_ip[2]) + "." + to_string(my_ip[3]);
     let mut gw_str = to_string(gateway[0]) + "." + to_string(gateway[1]) + "." +
                     to_string(gateway[2]) + "." + to_string(gateway[3]);
 
-    ui_draw_text(col0, row0,               "IP Address:", ui_theme_text_color(), 0);
-    ui_draw_text(col0 + 110, row0,         my_ip_str, ui_theme_text_color(), 0);
-
-    ui_separator_h(wx, row0 + UST_ROW_H - 4, UST_WIN_W);
-
-    ui_draw_text(col0, row0 + UST_ROW_H,           "Gateway:",   ui_theme_text_color(), 0);
-    ui_draw_text(col0 + 110, row0 + UST_ROW_H,     gw_str,      ui_theme_text_color(), 0);
-
-    ui_draw_text(col0, row0 + UST_ROW_H * 2,       "MAC:",       ui_theme_text_color(), 0);
+    ui_draw_text(col0, row1,                    "IP Address:", ui_theme_text_primary(), 0);
+    ui_draw_text(col0 + 110, row1,              my_ip_str,    ui_theme_text_secondary(), 0);
+    ui_draw_text(col0, row1 + UST_ROW_H,        "Gateway:",   ui_theme_text_primary(), 0);
+    ui_draw_text(col0 + 110, row1 + UST_ROW_H,  gw_str,      ui_theme_text_secondary(), 0);
+    ui_draw_text(col0, row1 + UST_ROW_H * 2,    "MAC:",       ui_theme_text_primary(), 0);
     let mut mac_str = to_string(my_mac[0]) + ":" + to_string(my_mac[1]) + ":" +
                   to_string(my_mac[2]) + ":" + to_string(my_mac[3]) + ":" +
                   to_string(my_mac[4]) + ":" + to_string(my_mac[5]);
-    ui_draw_text(col0 + 110, row0 + UST_ROW_H * 2, mac_str,     ui_theme_text_color(), 0);
-
-    ui_draw_text(col0, row0 + UST_ROW_H * 3,       "Interface:", ui_theme_text_color(), 0);
-    ui_draw_text(col0 + 110, row0 + UST_ROW_H * 3, "eth0 (VirtIO-net)", ui_theme_text_color(), 0);
+    ui_draw_text(col0 + 110, row1 + UST_ROW_H * 2, mac_str,  ui_theme_text_secondary(), 0);
+    ui_draw_text(col0, row1 + UST_ROW_H * 3,    "Interface:", ui_theme_text_primary(), 0);
+    ui_draw_text(col0 + 110, row1 + UST_ROW_H * 3, "eth0 (VirtIO-net)", ui_theme_text_secondary(), 0);
 
     return 0;
 }
@@ -157,31 +161,26 @@ fn uisettings_render_about(wx, wy) {
     let mut row0 = wy + UST_PAD;
     let mut col0 = wx + UST_PAD;
 
-    ui_draw_text(col0, row0,                    "OS:",       ui_theme_text_color(), 0);
-    ui_draw_text(col0 + 80, row0,               "HicOS v6.0 (Iteration 132)", ui_theme_text_color(), 0);
+    ui_draw_text(col0, row0, "About HicOS", ui_theme_accent(), 0);
+    ui_separator_h(wx, row0 + 18, UST_WIN_W);
+    let mut row1 = row0 + 26;
 
-    ui_separator_h(wx, row0 + UST_ROW_H - 4, UST_WIN_W);
-
-    ui_draw_text(col0, row0 + UST_ROW_H,        "Arch:",     ui_theme_text_color(), 0);
-    ui_draw_text(col0 + 80, row0 + UST_ROW_H,   "x86_64", ui_theme_text_color(), 0);
-
-    ui_draw_text(col0, row0 + UST_ROW_H * 2,    "Lang:",     ui_theme_text_color(), 0);
-    ui_draw_text(col0 + 80, row0 + UST_ROW_H * 2, "Hilbert-Lang (all layers)", ui_theme_text_color(), 0);
-
-    ui_draw_text(col0, row0 + UST_ROW_H * 3,    "Kernel:",   ui_theme_text_color(), 0);
-    ui_draw_text(col0 + 80, row0 + UST_ROW_H * 3, "bare-kernel (130+ modules)", ui_theme_text_color(), 0);
-
-    ui_draw_text(col0, row0 + UST_ROW_H * 4,    "Uptime:",   ui_theme_text_color(), 0);
+    ui_draw_text(col0, row1,                    "OS:",        ui_theme_text_primary(), 0);
+    ui_draw_text(col0 + 80, row1,               "HicOS v6.0 (Iteration 440)", ui_theme_text_secondary(), 0);
+    ui_draw_text(col0, row1 + UST_ROW_H,        "Arch:",      ui_theme_text_primary(), 0);
+    ui_draw_text(col0 + 80, row1 + UST_ROW_H,   "x86_64 bare-metal", ui_theme_text_secondary(), 0);
+    ui_draw_text(col0, row1 + UST_ROW_H * 2,    "Lang:",      ui_theme_text_primary(), 0);
+    ui_draw_text(col0 + 80, row1 + UST_ROW_H * 2, "Hilbert-Lang (all layers)", ui_theme_text_secondary(), 0);
+    ui_draw_text(col0, row1 + UST_ROW_H * 3,    "Modules:",   ui_theme_text_primary(), 0);
+    ui_draw_text(col0 + 80, row1 + UST_ROW_H * 3, "426 kernel + 69 UI", ui_theme_text_secondary(), 0);
+    ui_draw_text(col0, row1 + UST_ROW_H * 4,    "Uptime:",    ui_theme_text_primary(), 0);
     let mut up = uptime_secs();
     let mut hh = up / 3600;
     let mut mm = (up % 3600) / 60;
     let mut ss = up % 60;
-    ui_draw_text(col0 + 80, row0 + UST_ROW_H * 4,
+    ui_draw_text(col0 + 80, row1 + UST_ROW_H * 4,
                  to_string(hh) + "h " + to_string(mm) + "m " + to_string(ss) + "s",
-                 ui_theme_text_color(), 0);
-
-    ui_draw_text(col0, row0 + UST_ROW_H * 5,    "Shell cmds:", ui_theme_text_color(), 0);
-    ui_draw_text(col0 + 80, row0 + UST_ROW_H * 5, "73", ui_theme_text_color(), 0);
+                 ui_theme_text_secondary(), 0);
 
     return 0;
 }
@@ -198,7 +197,8 @@ fn uisettings_open() {
     uisettings_win_id = wm_create_window(UST_WIN_X, UST_WIN_Y,
                                          UST_WIN_W, UST_WIN_H,
                                          "Settings", 0);
-    uisettings_tab  = 0;
+    uisettings_tab   = 0;
+    uisettings_theme = ui_theme_get_mode();
     uisettings_dirty = 0;
     return 0;
 }
@@ -225,7 +225,7 @@ fn uisettings_render() {
     // Content area background
     let mut panel_y = content_y + UST_TAB_H + 2;
     let mut panel_h = UST_WIN_H - UST_TAB_H - 2;
-    vesa_fill_rect(wx + 1, panel_y, UST_WIN_W - 2, panel_h, ui_theme_surface_color());
+    vesa_fill_rect(wx + 1, panel_y, UST_WIN_W - 2, panel_h, ui_theme_bg_surface());
     ui_separator_h(wx, panel_y, UST_WIN_W);
 
     // Active tab content
@@ -236,11 +236,9 @@ fn uisettings_render() {
     if uisettings_tab == 3 { uisettings_render_about(wx, inner_y); }
 
     // Apply button (bottom right)
-    let mut btn_x = wx + UST_WIN_W - 90;
-    let mut btn_y = wy + UST_WIN_H - 30;
-    vesa_fill_rect(btn_x, btn_y, 80, 22, ui_theme_accent_color());
-    vesa_rect(btn_x, btn_y, 80, 22, ui_theme_border_color());
-    ui_draw_text(btn_x + 18, btn_y + 4, "Apply", ui_theme_surface_color(), 0);
+    let mut btn_x = wx + UST_WIN_W - 92;
+    let mut btn_y = wy + UST_WIN_H - 34;
+    ui_button_active(btn_x, btn_y, 80, 26, "Apply");
 
     return 0;
 }

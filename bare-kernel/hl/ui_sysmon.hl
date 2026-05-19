@@ -13,7 +13,7 @@ let mut uismon_win_id = 0 - 1;
 let mut uismon_win_x = 200;
 let mut uismon_win_y = 80;
 let mut uismon_win_w = 360;
-let mut uismon_win_h = 300;
+let mut uismon_win_h = 340;
 let mut uismon_dirty = 1;
 let mut uismon_refresh_tick = 0;
 
@@ -71,8 +71,8 @@ fn uismon_render() {
     let mut cx = uismon_win_x + 1;
     let mut cy = uismon_win_y + title_h;
     let mut cw = uismon_win_w - 2;
-    let mut fg = ui_theme_text_color();
-    let mut fg2 = ui_theme_text_muted_color();
+    let mut fg = ui_theme_accent();
+    let mut fg2 = ui_theme_text_secondary();
     let mut y = cy + 12;
 
     // Section: System
@@ -103,7 +103,17 @@ fn uismon_render() {
     if total_pg > 0 { pct = used_pg * 100 / total_pg; }
     ui_draw_text(cx + 16, y, "Pages:    " + to_string(used_pg) + " / " + to_string(total_pg) + " used", fg2, 0);
     y = y + 18;
-    ui_progress_bar(cx + 16, y, cw - 32, 16, pct);
+    let mut bar_x = cx + 16;
+    let mut bar_w = cw - 32;
+    let mut bar_h = 14;
+    let mut fill_w = bar_w * pct / 100;
+    let mut bar_color = ui_theme_success();
+    if pct >= 60 { bar_color = ui_theme_warning(); }
+    if pct >= 80 { bar_color = ui_theme_error(); }
+    vesa_fill_rect(bar_x, y, bar_w, bar_h, ui_theme_bg_elevated());
+    if fill_w > 0 { vesa_fill_rect(bar_x, y, fill_w, bar_h, bar_color); }
+    vesa_rect(bar_x, y, bar_w, bar_h, ui_theme_border());
+    ui_draw_text(bar_x + bar_w + 6, y, to_string(pct) + "%", fg2, 0);
     y = y + 24;
 
     // Section: Tasks
@@ -119,7 +129,22 @@ fn uismon_render() {
     ui_draw_text(cx + 16, y, "Running: " + to_string(running) + "  Ready: " + to_string(ready), fg2, 0);
     y = y + 18;
     ui_draw_text(cx + 16, y, "Blocked: " + to_string(blocked) + "  Dead: " + to_string(dead), fg2, 0);
-    y = y + 24;
+    y = y + 10;
+    let mut total_tasks = running + ready + blocked + dead;
+    if total_tasks > 0 {
+        let mut tbar_x = cx + 16;
+        let mut tbar_w = cw - 32;
+        let mut tbar_h = 8;
+        let mut run_w = tbar_w * running / total_tasks;
+        let mut rdy_w = tbar_w * ready / total_tasks;
+        let mut blk_w = tbar_w * blocked / total_tasks;
+        vesa_fill_rect(tbar_x, y, tbar_w, tbar_h, ui_theme_bg_elevated());
+        if run_w > 0 { vesa_fill_rect(tbar_x, y, run_w, tbar_h, ui_theme_success()); }
+        if rdy_w > 0 { vesa_fill_rect(tbar_x + run_w, y, rdy_w, tbar_h, ui_theme_accent()); }
+        if blk_w > 0 { vesa_fill_rect(tbar_x + run_w + rdy_w, y, blk_w, tbar_h, ui_theme_warning()); }
+        vesa_rect(tbar_x, y, tbar_w, tbar_h, ui_theme_border());
+    }
+    y = y + 20;
 
     // Section: Windows
     ui_draw_text(cx + 12, y, "Windows", fg, 0);
@@ -142,6 +167,12 @@ fn uismon_tick() {
         uismon_refresh_tick = 0;
         uismon_dirty = 1;
     }
+    return 0;
+}
+
+fn uismon_handle_key(key) {
+    if uismon_win_id < 0 { return 0; }
+    if key == 1 { uismon_close(); return 1; }
     return 0;
 }
 
