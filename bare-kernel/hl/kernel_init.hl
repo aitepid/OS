@@ -10,20 +10,20 @@ fn kernel_main() {
     // === Phase 0: Early hardware ===
     serial_init();         // serial.hl  -- COM1 for debug output
     syslog_init();         // syslog.hl  -- kernel ring-buffer logger
-    serial_print("HicOS 6.0 -- Hilbert-Lang Kernel (426 modules)");
-    serial_print("Initializing subsystems...");
+    print("HicOS 6.0 -- Hilbert-Lang Kernel (426 modules)");
+    print("Initializing subsystems...");
 
     // === Phase 0b: Boot mode detection ===
     let is_uefi = uefi_is_boot();
     if is_uefi == 1 {
-        serial_print("  [ok] Boot: UEFI");
+        print("  [ok] Boot: UEFI");
     } else {
-        serial_print("  [ok] Boot: Legacy BIOS");
+        print("  [ok] Boot: Legacy BIOS");
     }
 
     // === Phase 1: Interrupts ===
     // PIC remap + PIT + IDT (inline in kernel_entry native code)
-    serial_print("  [ok] IDT + PIC + PIT (100 Hz)");
+    print("  [ok] IDT + PIC + PIT (100 Hz)");
 
     // === Phase 2: Memory management ===
     kmalloc_init();        // kmalloc.hl -- kernel heap (1 MB)
@@ -36,17 +36,17 @@ fn kernel_main() {
     hilbert_alloc_init();  // hilbert_alloc.hl
     mmap_init();           // mmap.hl -- demand paging + COW mmap regions
     swap_init();           // swap.hl -- 64 MB swap partition
-    serial_print("  [ok] Memory: kmalloc + page_alloc + virt_mem + hilbert + mmap + swap");
+    print("  [ok] Memory: kmalloc + page_alloc + virt_mem + hilbert + mmap + swap");
 
     // === Phase 3: Timer ===
-    serial_print("  [ok] Timer: PIT 100 Hz + RTC");
+    print("  [ok] Timer: PIT 100 Hz + RTC");
 
     // === Phase 4: Task management ===
     task_init();           // task.hl -- task table (64 slots)
     mlfq_init();           // sched.hl -- MLFQ scheduler (4 queues)
     signal_init_subsystem(); // signal.hl -- per-task signal state
     ns_init();             // namespace.hl -- PID/UTS/IPC/MNT namespace isolation
-    serial_print("  [ok] Tasks: 64 slots, CFS+MLFQ scheduler, signals, namespaces");
+    print("  [ok] Tasks: 64 slots, CFS+MLFQ scheduler, signals, namespaces");
 
     // === Phase 5: Filesystem ===
     fs_init();             // ramfs.hl -- RAM filesystem
@@ -55,7 +55,7 @@ fn kernel_main() {
     procfs_init();         // procfs.hl -- /proc virtual filesystem
     inotify_init_subsystem(); // inotify.hl -- filesystem event notifications
     overlay_init();           // overlay_fs.hl -- union mount (lower/upper/merged CoW)
-    serial_print("  [ok] Filesystem: ramfs + FAT16 + ext4 + VFS + devfs + procfs + inotify + overlayfs");
+    print("  [ok] Filesystem: ramfs + FAT16 + ext4 + VFS + devfs + procfs + inotify + overlayfs");
 
     // === Phase 6: Display ===
     if is_uefi == 1 {
@@ -67,7 +67,7 @@ fn kernel_main() {
     font_sync_fb();            // font.hl -- sync glyph renderer to current framebuffer
     wm_init();                 // wm.hl -- window manager, desktop chrome
     clipboard_init();          // clipboard.hl -- cross-window copy/paste
-    serial_print("  [ok] Devices: keyboard + mouse + VESA/GOP + WM + clipboard");
+    print("  [ok] Devices: keyboard + mouse + VESA/GOP + WM + clipboard");
 
     // === Phase 7: PCI + Storage + Network + Audio ===
     pci_scan();            // pci.hl -- enumerate PCI bus
@@ -87,13 +87,13 @@ fn kernel_main() {
         if gok == 1 {
             vesa_gpu_mode(gpu_fb_base(), gpu_display_w, gpu_display_h);
             font_sync_fb();    // font: re-sync to new GPU-backed framebuffer
-            serial_print("  [ok] VirtIO-GPU: " + to_string(gpu_display_w) + "x" + to_string(gpu_display_h));
+            print("  [ok] VirtIO-GPU: " + to_string(gpu_display_w) + "x" + to_string(gpu_display_h));
         }
     }
     // ext4: mount first AHCI SATA drive as root filesystem via VFS
     let e4ok = vfs_mount_ext4("/", 0);
     if e4ok == 1 {
-        serial_print("  [ok] ext4 root filesystem mounted via VFS");
+        print("  [ok] ext4 root filesystem mounted via VFS");
     }
     httpd_init();           // http_server.hl -- HTTP/1.1 server on port 8080
     ws_init();             // websocket.hl -- WebSocket RFC 6455
@@ -331,86 +331,86 @@ fn kernel_main() {
     em_init();               // embedding.hl -- word embedding lookup table (EM_DIM=8)
     ms_init();               // model_serialize.hl -- ML model serialization (custom binary)
     gi_init();               // gpu_inference.hl -- VirtIO-GPU accelerated inference
-    serial_print("  [ok] ... + Pooling + RNN + LSTM + Autograd + Optimizer + Tokenizer + Embedding + ModelSer + GPUInfer");
-    serial_print("  [M4] === Milestone M4: Complete ML Framework (iter 405) ===");
+    print("  [ok] ... + Pooling + RNN + LSTM + Autograd + Optimizer + Tokenizer + Embedding + ModelSer + GPUInfer");
+    print("  [M4] === Milestone M4: Complete ML Framework (iter 405) ===");
 
     // === Phase 6: System Stability ===
     sc_init();               // scheduler_cfs.hl -- CFS vruntime-based scheduler
     na_init();               // numa_alloc.hl -- NUMA-aware memory allocator
     ft_init();               // ftrace.hl -- function tracing framework
-    serial_print("  [ok] Stability: CFS Scheduler + NUMA Allocator + Ftrace");
+    print("  [ok] Stability: CFS Scheduler + NUMA Allocator + Ftrace");
 
     // === Phase 6b: Probing & Memory Safety ===
     kp_init();               // kprobe.hl -- dynamic kernel probes
     mp_init();               // memory_profiler.hl -- memory usage profiler
     hc_init();               // heap_checker.hl -- heap bounds checker
-    serial_print("  [ok] Safety: Kprobe + MemProfiler + HeapChecker");
+    print("  [ok] Safety: Kprobe + MemProfiler + HeapChecker");
 
     // === Phase 6c: Crash Handling & Hot-Patching ===
     cr_init();               // crash_reporter.hl -- crash report generator
     cd_init();               // core_dump.hl -- ELF core dump simulator
     hotpatch_init();          // hotpatch.hl -- runtime function hot-patching
-    serial_print("  [ok] CrashReport + CoreDump + HotPatch");
+    print("  [ok] CrashReport + CoreDump + HotPatch");
 
     // === Phase 6d: Live-Patch & Power Management ===
     lp_init();               // livepatch.hl -- atomic patch sets with versioning
     power_mgmt_init();               // power_mgmt.hl -- ACPI power states + battery events
     th_init();               // thermal.hl -- thermal zones + fan control
-    serial_print("  [ok] LivePatch + PowerMgmt + Thermal");
+    print("  [ok] LivePatch + PowerMgmt + Thermal");
 
     // === Phase 6e: CPU Freq + Hypervisor (Milestone M5) ===
     cf_init();               // cpufreq.hl -- CPU frequency governors (PERF/POWERSAVE/ONDEMAND)
     hv_init();               // hypervisor.hl -- basic hypervisor VM framework
     vx_init();               // vmx.hl -- VMX/VT-x VMCS + VMEXIT simulation
-    serial_print("  [ok] CPUFreq + Hypervisor + VMX");
-    serial_print("  [M5] === Milestone M5: Production-Grade Stability (iter 420) ===");
+    print("  [ok] CPUFreq + Hypervisor + VMX");
+    print("  [M5] === Milestone M5: Production-Grade Stability (iter 420) ===");
 
     // === Phase 7a: Package Manager + Registry + Build System ===
     pkg_mgr_init();                  // package_manager.hl -- H-L package install/remove/query
     pkg_reg_init();          // pkg_registry.hl -- remote package registry
     pb_init();               // pkg_build.hl -- build system with dep tracking
-    serial_print("  [ok] Package Manager + Registry + Build System");
+    print("  [ok] Package Manager + Registry + Build System");
 
     // === Phase 7b: Doc Generator + Test Framework + Bench Framework ===
     hd_init();               // hldoc.hl -- H-L documentation generator
     ht_init();               // hltest.hl -- unit test runner
     hb_init();               // hlbench.hl -- benchmark framework
-    serial_print("  [ok] HLDoc + HLTest + HLBench");
+    print("  [ok] HLDoc + HLTest + HLBench");
 
     // === Phase 7c: LSP + Syntax Highlight + Code Completion ===
     ls_init();               // lsp_server.hl -- Language Server Protocol stub
     syn_hi_init();           // syntax_highlight.hl -- token color/type rules
     code_cmp_init();         // code_complete.hl -- score-ranked completion candidates
-    serial_print("  [ok] LSP Server + Syntax Highlight + Code Complete");
+    print("  [ok] LSP Server + Syntax Highlight + Code Complete");
 
     // === Phase 7d: Debugger + GDB Stub + Breakpoints ===
     dbg_init();              // debugger.hl -- built-in debug session manager
     gdb_stub_init();          // gdb_stub.hl -- GDB Remote Protocol packet handler
     bp_init();               // breakpoint.hl -- breakpoint set/enable/disable/hit
-    serial_print("  [ok] Debugger + GDB Stub + Breakpoints");
+    print("  [ok] Debugger + GDB Stub + Breakpoints");
 
     // === Phase 7e: H-L Dev Tools ===
     repl_init();             // hl_repl.hl -- H-L REPL interactive environment
     fmt_init();              // hl_fmt.hl -- H-L code formatter
     lint_init();             // hl_lint2.hl -- enhanced lint checker
-    serial_print("  [ok] H-L REPL + Formatter + Enhanced Lint");
+    print("  [ok] H-L REPL + Formatter + Enhanced Lint");
 
     // === Phase 7f: POSIX Compatibility Layer ===
     posix_compat_init();     // posix_compat.hl -- POSIX signals/process/IO stubs
     musl_shim_init();        // musl_shim.hl -- musl libc interface mapping
     linux_syscall_init();    // linux_syscall.hl -- Linux syscall dispatch (read/write/mmap/brk)
-    serial_print("  [ok] POSIX Compat + musl shim + Linux syscall layer");
+    print("  [ok] POSIX Compat + musl shim + Linux syscall layer");
 
     // === Phase 7g: WebAssembly Runtime ===
     wasm_runtime_init();     // wasm_runtime.hl -- WASM MVP bytecode interpreter
     wasm_jit_init();         // wasm_jit.hl -- WASM JIT hot-path compiler (x86_64 stubs)
-    serial_print("  [ok] WASM Runtime (MVP interpreter) + JIT (hot-path x86_64)");
+    print("  [ok] WASM Runtime (MVP interpreter) + JIT (hot-path x86_64)");
 
     // === Phase 8: ACPI + SMP + RTC ===
     power_init();          // power.hl -- ACPI tables
     smp_init();            // smp.hl -- boot APs
     let boot_time = rtc_format_time();
-    serial_print("  [ok] ACPI + SMP: " + to_string(smp_cpu_count()) + " core(s) | Boot Time: " + boot_time);
+    print("  [ok] ACPI + SMP: " + to_string(smp_cpu_count()) + " core(s) | Boot Time: " + boot_time);
 
     // === Phase 9: Usermode + Security ===
     tss_init();            // usermode.hl -- TSS for ring 3
@@ -418,33 +418,33 @@ fn kernel_main() {
     users_init();          // users.hl -- multi-user + permissions
     secboot_init();        // secure_boot.hl
     seccomp_init();        // seccomp.hl -- syscall filter sandbox
-    serial_print("  [ok] Usermode + SYSCALL MSRs + Secure Boot + seccomp filter");
+    print("  [ok] Usermode + SYSCALL MSRs + Secure Boot + seccomp filter");
 
     // === Phase 10: Firmware + GPT ===
     firmware_init();       // firmware.hl
     let gpt_count = gpt_read();
     if gpt_count > 0 {
-        serial_print("  [ok] GPT: " + to_string(gpt_count) + " partition(s)");
+        print("  [ok] GPT: " + to_string(gpt_count) + " partition(s)");
     } else {
-        serial_print("  [ok] MBR partition layout");
+        print("  [ok] MBR partition layout");
     }
 
     // === Phase 11: Kernel Module Hot-Patching ===
     kmod_init();           // kmod.hl -- runtime module loading
-    serial_print("  [ok] kmod: 64 module slots, 256 trampolines");
+    print("  [ok] kmod: 64 module slots, 256 trampolines");
 
     // === Phase 12: VGA Text Console ===
     vga_console_init();    // vga_console.hl -- 80x25 text-mode display
-    serial_print("  [ok] VGA console: 80x25 text mode (0xB8000)");
+    print("  [ok] VGA console: 80x25 text mode (0xB8000)");
 
     // === Phase 13: Self-Image Awareness ===
     self_image_init();     // self_image.hl -- kernel self-install metadata
-    serial_print("  [ok] Self-image: " + to_string(self_image_sectors()) + " sectors");
+    print("  [ok] Self-image: " + to_string(self_image_sectors()) + " sectors");
 
     // === Summary ===
-    serial_print("");
-    serial_print("=== HicOS kernel initialized (426 modules) ===");
-    serial_print("");
+    print("");
+    print("=== HicOS kernel initialized (426 modules) ===");
+    print("");
 
     // === Login ===
     login_prompt();        // login.hl -- authenticate user before shell
@@ -453,7 +453,7 @@ fn kernel_main() {
     wm_open_terminal_window();  // wm.hl -- graphical terminal at startup
 
     // === Enter interactive shell ===
-    serial_print("HicOS> ");
+    print("HicOS> ");
     shell_main();          // shell.hl -- interactive command loop
 
     // === Idle loop (if shell exits) ===

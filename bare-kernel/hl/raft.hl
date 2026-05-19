@@ -130,12 +130,12 @@ fn raft_add_peer(peer_id) {
         }
         i = i + 1;
     }
-    return -1;
+    return 0 - 1;
 }
 
 // Append entry to local log
 fn raft_log_append(term, entry_type, command) {
-    if raft_log_count >= RAFT_MAX_LOG { return -1; }
+    if raft_log_count >= RAFT_MAX_LOG { return 0 - 1; }
     let idx = raft_log_count;
     set_at(raft_log_terms,    idx, term);
     set_at(raft_log_types,    idx, entry_type);
@@ -172,7 +172,7 @@ fn raft_start_election() {
     raft_election_timeout = RAFT_ELECTION_TIMEOUT_MIN
         + (raft_current_term * 37 + raft_node_id * 13)
         - (((raft_current_term * 37 + raft_node_id * 13) / 150) * 150);
-    serial_print("raft[" + to_string(raft_node_id) + "]: election term="
+    print("raft[" + to_string(raft_node_id) + "]: election term="
         + to_string(raft_current_term) + " timeout=" + to_string(raft_election_timeout));
     return 0;
 }
@@ -248,7 +248,7 @@ fn _raft_become_leader() {
     }
     // Append no-op entry to establish leadership
     raft_log_append(raft_current_term, RAFT_ENTRY_NOOP, "");
-    serial_print("raft[" + to_string(raft_node_id) + "]: became leader term=" + to_string(raft_current_term));
+    print("raft[" + to_string(raft_node_id) + "]: became leader term=" + to_string(raft_current_term));
     return 0;
 }
 
@@ -374,7 +374,7 @@ fn _raft_apply_committed() {
 
 // Propose a command (only callable on leader)
 fn raft_propose(command) {
-    if raft_state != RAFT_LEADER { return -1; }
+    if raft_state != RAFT_LEADER { return 0 - 1; }
     let index = raft_log_append(raft_current_term, RAFT_ENTRY_COMMAND, command);
     return index;
 }
@@ -438,7 +438,7 @@ fn raft_test() {
     raft_handle_vote_response(1, raft_current_term, 1);
     raft_handle_vote_response(2, raft_current_term, 1);
     // Node 0 should now be leader (3 votes including self = majority of 5)
-    serial_print("raft test: " + raft_status());
+    print("raft test: " + raft_status());
     // Propose commands
     let i1 = raft_propose("set x=1");
     let i2 = raft_propose("set y=2");
@@ -450,7 +450,7 @@ fn raft_test() {
     // Tick to simulate heartbeat
     raft_tick(60);
     let st = raft_status();
-    serial_print("raft test final: " + st);
+    print("raft test final: " + st);
     return "raft: " + st + " [Ongaro & Ousterhout 2014 ok]";
 }
 

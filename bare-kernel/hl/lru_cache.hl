@@ -99,7 +99,7 @@ fn _lru_hash_find(key) {
         if lru_key[s] == key { return s; }
         s = lru_hash_next[s];
     }
-    return -1;
+    return 0 - 1;
 }
 
 // Insert slot into hash bucket
@@ -155,13 +155,13 @@ fn _lru_alloc_slot() {
         if lru_in_use[i] == 0 { set_at(lru_in_use, i, 1); return i; }
         i = i + 1;
     }
-    return -1;
+    return 0 - 1;
 }
 
 // Evict LRU (tail) entry, return its slot
 fn _lru_evict() {
     let lru_slot = lru_prev[LRU_TAIL_SLOT];
-    if lru_slot == LRU_HEAD_SLOT { return -1; }  // empty
+    if lru_slot == LRU_HEAD_SLOT { return 0 - 1; }  // empty
     _lru_list_detach(lru_slot);
     _lru_hash_remove(lru_slot);
     set_at(lru_in_use, lru_slot, 0);
@@ -183,7 +183,7 @@ fn lru_get(key) {
     let slot = _lru_hash_find(key);
     if slot < 0 {
         lru_stat_misses = lru_stat_misses + 1;
-        return -1;
+        return 0 - 1;
     }
     // Increment hit counter; promote only if hits >= lru_k
     set_at(lru_hits, slot, lru_hits[slot] + 1);
@@ -195,7 +195,7 @@ fn lru_get(key) {
 // Peek: query without promoting (does not count as access for LRU-K)
 fn lru_peek(key) {
     let slot = _lru_hash_find(key);
-    if slot < 0 { return -1; }
+    if slot < 0 { return 0 - 1; }
     return lru_val[slot];
 }
 
@@ -277,8 +277,8 @@ fn lru_cache_test() {
     lru_get(0); lru_get(0);
     // Access key 3 once → not promoted (k=2 requires 2 accesses)
     lru_get(3);
-    serial_print("lru test: " + lru_status());
-    serial_print("lru test: get(1)=" + to_string(v1) + " get(2_evicted)=" + to_string(v2)
+    print("lru test: " + lru_status());
+    print("lru test: get(1)=" + to_string(v1) + " get(2_evicted)=" + to_string(v2)
         + " get(5)=" + to_string(v5) + " get(3_updated)=" + to_string(v3)
         + " get(4_invalidated)=" + to_string(v4));
     return "lru: cap=4 get(1)=" + to_string(v1)

@@ -154,16 +154,22 @@ fn dhcp_server_process(request_data) {
 
     let msg_type = 0;
     let mut pos = 240;
-    while pos < len(request_data) {
-        let option = str_char_code(request_data, pos);
-        if option == DHCP_OPTION_END {
-            break;
+    let mut go = 1;
+    while go == 1 {
+        if pos >= len(request_data) { go = 0; }
+        if go == 1 {
+            let option = str_char_code(request_data, pos);
+            if option == DHCP_OPTION_END { go = 0; }
+            if go == 1 {
+                if option == DHCP_OPTION_MSG_TYPE {
+                    msg_type = str_char_code(request_data, pos + 2);
+                    go = 0;
+                }
+                if go == 1 {
+                    pos = pos + 2 + str_char_code(request_data, pos + 1);
+                }
+            }
         }
-        if option == DHCP_OPTION_MSG_TYPE {
-            msg_type = str_char_code(request_data, pos + 2);
-            break;
-        }
-        pos = pos + 2 + str_char_code(request_data, pos + 1);
     }
 
     dhcp_srv_clear();

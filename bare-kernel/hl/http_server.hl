@@ -234,11 +234,17 @@ fn httpd_tick() {
                     // Build request string from buffer
                     let mut req = "";
                     let mut j = 0;
-                    while j < HTTP_MAX_REQ {
-                        let b = mem_read_u8(rx_buf + j);
-                        if b == 0 { break; }
-                        req = req + str_from_code(b);
-                        j = j + 1;
+                    let mut go = 1;
+                    while go == 1 {
+                        if j >= HTTP_MAX_REQ { go = 0; }
+                        if go == 1 {
+                            let b = mem_read_u8(rx_buf + j);
+                            if b == 0 { go = 0; }
+                            if go == 1 {
+                                req = req + str_from_code(b);
+                                j = j + 1;
+                            }
+                        }
                     }
                     if len(req) > 3 {
                         httpd_serve(i, req);

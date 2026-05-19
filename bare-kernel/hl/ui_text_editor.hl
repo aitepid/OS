@@ -345,31 +345,28 @@ fn uitxed_render(window_id) {
     let mut row = 0;
     while row < visible_rows {
         let line_idx = uitxed_scroll_top + row;
-        if line_idx >= uitxed_line_count { break; }
+        if line_idx >= uitxed_line_count { row = visible_rows; }
+        if row < visible_rows {
+            let line_y = wy + UITXED_MARGIN_Y + row * UITXED_CHAR_H;
+            let lnum   = line_idx + 1;
+            let lnum_s = to_string(lnum);
 
-        let line_y = wy + UITXED_MARGIN_Y + row * UITXED_CHAR_H;
-        let lnum   = line_idx + 1;
-        let lnum_s = to_string(lnum);
+            ui_label_colored(wx + 4, line_y + 1, lnum_s, ui_theme_text_muted_color());
 
-        // Line number
-        ui_label_colored(wx + 4, line_y + 1, lnum_s, ui_theme_text_muted_color());
+            if line_idx == uitxed_cursor_row {
+                vesa_fill_rect(wx + gutter_w + 1, line_y, ww - gutter_w - 1, UITXED_CHAR_H, ui_theme_accent_color());
+            }
 
-        // Highlight current line
-        if line_idx == uitxed_cursor_row {
-            vesa_fill_rect(wx + gutter_w + 1, line_y, ww - gutter_w - 1, UITXED_CHAR_H, ui_theme_accent_color());
+            let line = uitxed_lines[line_idx];
+            ui_draw_text(text_x, line_y + 1, line, ui_theme_text_color(), 0);
+
+            if line_idx == uitxed_cursor_row {
+                let cx = text_x + uitxed_cursor_col * UITXED_CHAR_W;
+                vesa_vline(cx, line_y, UITXED_CHAR_H, ui_theme_text_color());
+            }
+
+            row = row + 1;
         }
-
-        // Line text
-        let line = uitxed_lines[line_idx];
-        ui_draw_text(text_x, line_y + 1, line, ui_theme_text_color(), 0);
-
-        // Cursor caret on current row
-        if line_idx == uitxed_cursor_row {
-            let cx = text_x + uitxed_cursor_col * UITXED_CHAR_W;
-            vesa_vline(cx, line_y, UITXED_CHAR_H, ui_theme_text_color());
-        }
-
-        row = row + 1;
     }
 
     // Status bar

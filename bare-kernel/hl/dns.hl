@@ -229,20 +229,28 @@ fn dns_parse_response(data) {
 
     let mut off = 12;
     // Skip QNAME
-    while off < len(data) {
-        let lbl_len = data[off];
-        if lbl_len == 0 { off = off + 1; off = off; break; }
-        off = off + 1 + lbl_len;
+    let mut go1 = 1;
+    while go1 == 1 {
+        if off >= len(data) { go1 = 0; }
+        if go1 == 1 {
+            let lbl_len = data[off];
+            if lbl_len == 0 { off = off + 1; go1 = 0; }
+            if go1 == 1 { off = off + 1 + lbl_len; }
+        }
     }
     off = off + 4; // QTYPE + QCLASS
 
     if off + 12 > len(data) { return [0, 0, 0, 0]; }
     if data[off] >= 192 { off = off + 2; }
     else {
-        while off < len(data) {
-            let l = data[off];
-            if l == 0 { off = off + 1; break; }
-            off = off + 1 + l;
+        let mut go2 = 1;
+        while go2 == 1 {
+            if off >= len(data) { go2 = 0; }
+            if go2 == 1 {
+                let l = data[off];
+                if l == 0 { off = off + 1; go2 = 0; }
+                if go2 == 1 { off = off + 1 + l; }
+            }
         }
     }
     let rtype = data[off] * 256 + data[off + 1];

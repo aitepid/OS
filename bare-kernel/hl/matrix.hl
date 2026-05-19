@@ -43,8 +43,8 @@ fn matrix_init() {
 
 // Allocate a new matrix slot
 fn mat_alloc(rows, cols) {
-    if rows > MATRIX_MAX_DIM { return -1; }
-    if cols > MATRIX_MAX_DIM { return -1; }
+    if rows > MATRIX_MAX_DIM { return 0 - 1; }
+    if cols > MATRIX_MAX_DIM { return 0 - 1; }
     let i = 0;
     while i < MATRIX_POOL_SIZE {
         if mat_in_use[i] == 0 {
@@ -61,7 +61,7 @@ fn mat_alloc(rows, cols) {
         }
         i = i + 1;
     }
-    return -1;
+    return 0 - 1;
 }
 
 fn mat_free(m) {
@@ -84,7 +84,7 @@ fn mat_set(m, r, c, val) {
 // Create matrix from flat array (values already scaled by MATRIX_SCALE)
 fn mat_from_array(rows, cols, values) {
     let m = mat_alloc(rows, cols);
-    if m < 0 { return -1; }
+    if m < 0 { return 0 - 1; }
     let i = 0;
     while i < rows * cols {
         set_at(mat_data, m * MATRIX_MAX_SIZE + i, values[i]);
@@ -96,7 +96,7 @@ fn mat_from_array(rows, cols, values) {
 // Identity matrix × MATRIX_SCALE
 fn mat_identity(n) {
     let m = mat_alloc(n, n);
-    if m < 0 { return -1; }
+    if m < 0 { return 0 - 1; }
     let i = 0;
     while i < n {
         mat_set(m, i, i, MATRIX_SCALE);
@@ -110,7 +110,7 @@ fn mat_copy(src) {
     let rows = mat_rows[src];
     let cols = mat_cols[src];
     let dst = mat_alloc(rows, cols);
-    if dst < 0 { return -1; }
+    if dst < 0 { return 0 - 1; }
     let i = 0;
     while i < rows * cols {
         set_at(mat_data, dst * MATRIX_MAX_SIZE + i, mat_data[src * MATRIX_MAX_SIZE + i]);
@@ -124,7 +124,7 @@ fn mat_transpose(m) {
     let rows = mat_rows[m];
     let cols = mat_cols[m];
     let t = mat_alloc(cols, rows);
-    if t < 0 { return -1; }
+    if t < 0 { return 0 - 1; }
     let r = 0;
     while r < rows {
         let c = 0;
@@ -141,10 +141,10 @@ fn mat_transpose(m) {
 fn mat_add(a, b) {
     let rows = mat_rows[a];
     let cols = mat_cols[a];
-    if mat_rows[b] != rows { return -1; }
-    if mat_cols[b] != cols { return -1; }
+    if mat_rows[b] != rows { return 0 - 1; }
+    if mat_cols[b] != cols { return 0 - 1; }
     let c = mat_alloc(rows, cols);
-    if c < 0 { return -1; }
+    if c < 0 { return 0 - 1; }
     let i = 0;
     while i < rows * cols {
         set_at(mat_data, c * MATRIX_MAX_SIZE + i,
@@ -158,10 +158,10 @@ fn mat_add(a, b) {
 fn mat_sub(a, b) {
     let rows = mat_rows[a];
     let cols = mat_cols[a];
-    if mat_rows[b] != rows { return -1; }
-    if mat_cols[b] != cols { return -1; }
+    if mat_rows[b] != rows { return 0 - 1; }
+    if mat_cols[b] != cols { return 0 - 1; }
     let c = mat_alloc(rows, cols);
-    if c < 0 { return -1; }
+    if c < 0 { return 0 - 1; }
     let i = 0;
     while i < rows * cols {
         set_at(mat_data, c * MATRIX_MAX_SIZE + i,
@@ -176,7 +176,7 @@ fn mat_scale(m, scalar) {
     let rows = mat_rows[m];
     let cols = mat_cols[m];
     let result = mat_alloc(rows, cols);
-    if result < 0 { return -1; }
+    if result < 0 { return 0 - 1; }
     let i = 0;
     while i < rows * cols {
         set_at(mat_data, result * MATRIX_MAX_SIZE + i,
@@ -190,9 +190,9 @@ fn mat_scale(m, scalar) {
 fn mat_mul(a, b) {
     let ra = mat_rows[a]; let ca = mat_cols[a];
     let rb = mat_rows[b]; let cb = mat_cols[b];
-    if ca != rb { return -1; }
+    if ca != rb { return 0 - 1; }
     let c = mat_alloc(ra, cb);
-    if c < 0 { return -1; }
+    if c < 0 { return 0 - 1; }
     let i = 0;
     while i < ra {
         let j = 0;
@@ -214,10 +214,10 @@ fn mat_mul(a, b) {
 // Element-wise (Hadamard) product: C = A ⊙ B
 fn mat_hadamard(a, b) {
     let rows = mat_rows[a]; let cols = mat_cols[a];
-    if mat_rows[b] != rows { return -1; }
-    if mat_cols[b] != cols { return -1; }
+    if mat_rows[b] != rows { return 0 - 1; }
+    if mat_cols[b] != cols { return 0 - 1; }
     let c = mat_alloc(rows, cols);
-    if c < 0 { return -1; }
+    if c < 0 { return 0 - 1; }
     let i = 0;
     while i < rows * cols {
         set_at(mat_data, c * MATRIX_MAX_SIZE + i,
@@ -314,10 +314,10 @@ fn mat_lu_decompose(m) {
 // Gauss-Jordan inverse (augmented matrix method, O(n³))
 fn mat_inverse(m) {
     let n = mat_rows[m];
-    if mat_cols[m] != n { return -1; }
+    if mat_cols[m] != n { return 0 - 1; }
     // Create augmented matrix [A | I]
     let aug = mat_alloc(n, n * 2);
-    if aug < 0 { return -1; }
+    if aug < 0 { return 0 - 1; }
     let i = 0;
     while i < n {
         let j = 0;
@@ -332,7 +332,7 @@ fn mat_inverse(m) {
     i = 0;
     while i < n {
         let pivot = mat_get(aug, i, i);
-        if pivot == 0 { mat_free(aug); return -1; }  // singular
+        if pivot == 0 { mat_free(aug); return 0 - 1; }  // singular
         // Normalize pivot row
         let j = 0;
         while j < n * 2 {
@@ -357,7 +357,7 @@ fn mat_inverse(m) {
     }
     // Extract right half as inverse
     let inv = mat_alloc(n, n);
-    if inv < 0 { mat_free(aug); return -1; }
+    if inv < 0 { mat_free(aug); return 0 - 1; }
     i = 0;
     while i < n {
         let j = 0;
@@ -392,7 +392,7 @@ fn mat_vecmul(m, x) {
 // Print matrix to serial (truncated for large matrices)
 fn mat_print(m, label) {
     let rows = mat_rows[m]; let cols = mat_cols[m];
-    serial_print(label + " [" + to_string(rows) + "x" + to_string(cols) + "]:");
+    print(label + " [" + to_string(rows) + "x" + to_string(cols) + "]:");
     let r = 0;
     let max_r = rows; if max_r > 4 { max_r = 4; }
     while r < max_r {
@@ -409,10 +409,10 @@ fn mat_print(m, label) {
             c = c + 1;
         }
         if cols > 4 { line = line + "..."; }
-        serial_print(line);
+        print(line);
         r = r + 1;
     }
-    if rows > 4 { serial_print("  ..."); }
+    if rows > 4 { print("  ..."); }
     return 0;
 }
 
