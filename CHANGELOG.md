@@ -1,5 +1,50 @@
 ﻿# HicOS Changelog
 
+## Sprint Pipeline-Run — Phase 1–5 全量编译 (2026-05-20 23:29)
+
+Sprint G1（GUI 47 模块）落地后首次端到端跑通 `scripts/hl-compile-pipeline.ps1`，以验证 472 模块在新 GUI 脚手架下的可编译性。
+
+**编译结果**
+
+| 指标 | 数值 |
+|---|---:|
+| Modules compiled | **472 / 472** ✅ |
+| Total tokens | 705,588 |
+| Total AST nodes | 419,590 |
+| Total IR instrs | 391,722（live 292,591 / dead 99,131） |
+| IR optimizations | 99,846（const-fold + DCE + strength-reduce） |
+| x86_64 .text 输出 | 601,014 B |
+| Linker 符号数 | 6,401 |
+| Relocations resolved | 24,223 |
+| Builtin trampoline stubs | 227 |
+| **Unresolved relocs** | **1,871** |
+| Functions emitted | 5,598 |
+| Parse warnings | 5（已 recovery） |
+| **Balance errors**（token 流） | **17** |
+| `bare-kernel/kernel.bin` | **609,207 B @ 0x120000** |
+| 流水线 wall-time | ≈115 分钟 |
+
+**告警文件（12 个）**：`a11y / app_texteditor / consistent_hash / display_topology / ime / neural / shell / shell_dock / shell_form / shell_wallpaper / vdesktop / visual_audit`
+
+**新增诊断脚本**
+
+- `scripts/diag-balance.ps1` — 对告警文件做 token 级括号失衡定位 + 行级 depth 收支表，独立于流水线快速运行。复现：`powershell -ExecutionPolicy Bypass -File scripts/diag-balance.ps1`。
+
+**初步分析结论**
+
+- `a11y / app_texteditor / display_topology / ime / shell_dock / shell_form / shell_wallpaper / vdesktop` 等 8 个文件的 EOF 行级 depth 都为 0，但 token 流报失衡 → 字符串字面量内含 `{` `}`，被现行 tokenizer 误识别为代码 token（已知边界情形，非源码 bug）。
+- `consistent_hash / neural / visual_audit` 需进一步定位（`neural.hl` 4 处 + 1 处 `Mismatched ]`）。
+- `shell.hl` 仅触发 parse warning（recovery 后无 balance error）。
+- 1,871 个 unresolved relocs 大概率来自 H-L 内置函数与跨模块前向声明的尚未绑定项；linker 已通过 builtin-stub 兜底，不影响 `kernel.bin` 生成。
+
+**下一步（待 Sprint）**
+
+- (a) 修复 tokenizer 字符串内括号误识别，把 17 个 balance errors 清零；
+- (b) 枚举 1,871 个 unresolved relocs 的目标符号名 → 决定每个走真实绑定 / 真 stub / 删调用；
+- (c) `kernel-symbols.json` 当前只导出 `serial_puts / serial_hex_byte / base` 三个，G2 起需扩展到 framebuffer / input / heap 等 GUI 路径所需符号。
+
+---
+
 ## Sprint G1 — GUI 脚手架（47 模块） (2026-05-20)
 
 与 codegen Sprint 35–38 并行，Sprint G1 把 HicOS 从串口控制台 OS 演进为具备 **Windows 11 Fluent Design** 视觉与交互品质的图形系统的脚手架落地。设计大纲见 `GUI_DESIGN.md`，本 sprint 落地 47 个 .hl 模块（每个为框架级骨架，核心数据结构与公共 API 已定义，渲染 / 输入 / 合成的具体路径将在 G2 起逐 Sprint 接通）。

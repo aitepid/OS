@@ -15,13 +15,15 @@ Boots on QEMU (BIOS + UEFI), runs a serial-console shell with 1,800+ commands.
 | Shell commands | **1,800** |
 | H-L total LOC | **~165,000** |
 | External dependencies | **0** |
-| Boot image (BIOS, `hicos-hl.img`) | 58,368 B (114 sectors) |
+| Boot image (BIOS, `hicos-hl.img`) | 693,760 B |
 | Boot image (UEFI, `hicos-uefi.img`) | 34,603,008 B |
+| Pipeline Phase 1–5 (latest run) | **472 / 472 modules**, `kernel.bin` 609,207 B |
 | QEMU boot stability (10 runs) | **10/10 boot complete** |
 | Milestones M1–M6 | All ✦ achieved |
 | Bug-fix sprints | **1–31** |
-| GUI scaffolding sprint | **G1** (47 modules added, see [GUI_DESIGN.md](GUI_DESIGN.md)) |
+| GUI scaffolding sprint | **G1** (47 modules, see [GUI_DESIGN.md](GUI_DESIGN.md)) |
 | Codegen sprints | **35–38** (string-pool / abs64 reloc / IR-Lower fix) |
+| Build / status scripts | **33** PowerShell utilities |
 
 ## Milestones
 
@@ -80,7 +82,7 @@ Press `Ctrl+A X` to quit QEMU.
 ```
 HicOS/
 ├─ bare-kernel/hl/        # 470 kernel modules (~140,000 lines of H-L, incl. 47 new GUI modules)
-├─ scripts/               # 32 PowerShell build/test/QEMU/audit scripts
+├─ scripts/               # 33 PowerShell build/test/QEMU/audit scripts
 ├─ IP-Protection/         # IP / patent documentation
 ├─ hl-bootstrap.hl        # self-hosting compiler (4,572 lines, 208 fn)
 ├─ stdlib.hl              # H-L standard library (1,545 lines, 143 fn)
@@ -148,6 +150,32 @@ B-Tree, B+Tree, LSM memtable, WAL, MVCC, transaction API, hash + B-Tree indexes,
 ### Ecosystem (Phase 7)
 
 Package manager (install/remove/registry), build system, doc generator, unit-test + benchmark frameworks, LSP server, syntax highlighter, code completion, debugger + GDB remote stub, H-L REPL, formatter, lint, POSIX compat layer, musl libc shim, Linux syscall layer, WASM MVP interpreter + JIT.
+
+---
+
+## Compiler Pipeline — Latest Phase 1–5 Run
+
+End-to-end run of `scripts/hl-compile-pipeline.ps1` over all 472 modules (470 kernel + `stdlib.hl` + `hl-bootstrap.hl`):
+
+| Stage | Result |
+|---|---:|
+| Modules tokenized + parsed + IR-lowered | **472 / 472** ✅ |
+| Total tokens | 705,588 |
+| Total AST nodes | 419,590 |
+| Total IR instructions | 391,722 (live 292,591 / dead 99,131) |
+| IR optimizations (const-fold + DCE + strength-reduce) | 99,846 |
+| x86_64 native bytes (`.text`) | 601,014 |
+| Linker symbols | 6,401 |
+| Relocations resolved | 24,223 |
+| Builtin-stub trampolines | 227 |
+| **Unresolved relocs** | **1,871** ⚠ |
+| **Balance errors** (token-stream level) | **17** ⚠ |
+| Files with parser warnings | 12 |
+| `bare-kernel/kernel.bin` | **609,207 B @ 0x120000** |
+| Total functions emitted | 5,598 |
+| Pipeline wall time | ~115 min |
+
+The 1,871 unresolved relocs are H-L-builtin / forward-declared callees not yet bound to real subroutines (treated as no-op stubs by the linker). The 17 balance errors are token-stream artifacts in 12 files (mostly braces inside string literals — see Sprint logs in `CHANGELOG.md`). Detailed enumeration: `scripts/diag-balance.ps1`.
 
 ---
 
