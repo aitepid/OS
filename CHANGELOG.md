@@ -1,5 +1,16 @@
 ﻿# HicOS Changelog
 
+## Sprint 32 — QEMU stress test Round 5 fixes (BUG-061 → BUG-064) (2026-05-20)
+
+QEMU 可视化启动验证通过（`hicos-hl.img` boot 至 `HicOS>` shell，113 内核模块加载完成）。4 个并行 Explore agent 静态压力审查 → 32 候选 → 人工复核剔除 28 个 `+=`/`-=` 误报（BNF L68 确认合法语法），确认 4 个真 BUG：
+
+- **BUG-061 `bare-kernel/hl/mime.hl`** — `mime_parse_str` 调 `mime_clear` 在空数组 `set_at`，`mime_init` 全仓无调用方。修复：`mime_clear` 入口若数组为空则委托 `mime_init`。
+- **BUG-062 `bare-kernel/hl/http2.hl:230`** — `h2_last_frame_payload = []` 后立即 `set_at(arr, 0, ...)` 越界。修复：改 `push`。
+- **BUG-063 `bare-kernel/hl/toml.hl:96,102`** — `_toml_trim` 用 `let start/end` 在 if 块内尝试还原 sentinel，外层未变 → 含非空白字符的输入永远返回 `""`，破坏 `toml_load` 的三处调用（line/key/value）。修复：去 `let`，改为赋值。
+- **BUG-064 `bare-kernel/hl/xml.hl:194,203,210,211 + xml_parse_str`** — 4 处 `let` 在 if 块内遮蔽外层（self_close 检测、tn_end 还原、aend 自闭合调整、attr_str 解码），导致自闭合标签被压栈、tag_name 含空格、属性遗漏；`xml_init` 全仓无调用方。修复：4 处 `let` 改赋值 + `xml_parse_str` 入口空数组自调 `xml_init`。
+
+**误报根因**：Agent prompt 中"非 H-L 语法 `+=`/`-=`"线索来自历史 BUG-051（breakpoint.hl），但 `HILBERT_LANG_BNF.md` L68 明确 `<assign_op>` 含全部复合赋值。BUG-051 为历史误判，待另起 Sprint 回滚或核实编译器实际语义。
+
 ## Sprint Pipeline-Run — Phase 1–5 全量编译 (2026-05-20 23:29)
 
 Sprint G1（GUI 47 模块）落地后首次端到端跑通 `scripts/hl-compile-pipeline.ps1`，以验证 472 模块在新 GUI 脚手架下的可编译性。
