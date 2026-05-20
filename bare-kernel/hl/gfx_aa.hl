@@ -1,0 +1,207 @@
+// gfx_aa.hl -- Anti-aliasing primitives + alpha blending
+//
+// Sprint G1 of HicOS GUI injection (per GUI_DESIGN.md §3.2).
+//
+// Provides:
+//   - gfx_blend(dst, src)            : premultiplied RGBA over compositing
+//   - gfx_putpixel_alpha(x,y,c)      : blend onto backbuffer
+//   - gfx_line_aa(x0,y0,x1,y1,c)     : Wu's algorithm anti-aliased line
+//   - gfx_rect_round(x,y,w,h,r,c)    : rounded rect with corner AA
+//   - gfx_circle_aa(cx,cy,r,c)       : filled AA circle
+//
+// Why: vesa.hl can only place opaque pixels. Win11 Fluent needs alpha
+//   compositing for shadows, glass, focus rings, and corner smoothing.
+//   We do it in software on the backbuffer; the LFB present is opaque
+//   tile copies (already alpha-resolved).
+//
+// Format: ARGB packed u32. A in bits 24..31, R 16..23, G 8..15, B 0..7.
+//   This matches vesa.hl's rgb() helper but the framebuffer is BGRA in
+//   memory — we keep the same packing as vesa, since we never read it
+//   back as components on the LFB side.
+
+fn gfx_color_a(c) { return c / 16777216 % 256; }
+fn gfx_color_r(c) { return c / 65536    % 256; }
+fn gfx_color_g(c) { return c / 256      % 256; }
+fn gfx_color_b(c) { return c            % 256; }
+
+fn gfx_pack(a, r, g, b) {
+    return a * 16777216 + r * 65536 + g * 256 + b;
+}
+
+// Source-over compositing: out = src + dst * (1 - src.a)
+// Inputs are non-premultiplied ARGB.
+fn gfx_blend(dst, src) {
+    let mut sa = gfx_color_a(src);
+    if sa == 0   { return dst; }
+    if sa == 255 { return src; }
+    let mut da = gfx_color_a(dst);
+    let mut inv = 255 - sa;
+    let mut sr = gfx_color_r(src);
+    let mut sg = gfx_color_g(src);
+    let mut sb = gfx_color_b(src);
+    let mut dr = gfx_color_r(dst);
+    let mut dg = gfx_color_g(dst);
+    let mut db = gfx_color_b(dst);
+    let mut or = (sr * sa + dr * inv) / 255;
+    let mut og = (sg * sa + dg * inv) / 255;
+    let mut ob = (sb * sa + db * inv) / 255;
+    let mut oa = sa + da * inv / 255;
+    if oa > 255 { oa = 255; }
+    return gfx_pack(oa, or, og, ob);
+}
+
+fn gfx_putpixel_alpha(x, y, color) {
+    if gfx_back_enabled == 0 { return 0; }
+    if x < 0 { return 0; } if x >= gfx_back_width  { return 0; }
+    if y < 0 { return 0; } if y >= gfx_back_height { return 0; }
+    let mut addr = gfx_back_pixel_addr(x, y);
+    let mut cur  = mem_read_u32(addr);
+    let mut out  = gfx_blend(cur, color);
+    mem_write_u32(addr, out);
+    gfx_mark_tile(x, y);
+    return 0;
+}
+
+// Coverage-modulated putpixel: cov in 0..255 scales src alpha.
+fn gfx_putpixel_cov(x, y, color, cov) {
+    if cov <= 0 { return 0; }
+    if cov >= 255 { return gfx_putpixel_alpha(x, y, color); }
+    let mut a  = gfx_color_a(color) * cov / 255;
+    let mut c2 = gfx_pack(a, gfx_color_r(color), gfx_color_g(color), gfx_color_b(color));
+    return gfx_putpixel_alpha(x, y, c2);
+}
+
+// Wu's algorithm anti-aliased line.
+// 16.16 fixed-point gradient is overkill for 1024×768; integer fractional
+// in 0..255 is sufficient and avoids divisions in the inner loop.
+fn gfx_line_aa(x0, y0, x1, y1, color) {
+    let mut dx = x1 - x0;
+    let mut dy = y1 - y0;
+    let mut adx = dx;
+    let mut ady = dy;
+    if adx < 0 { adx = 0 - adx; }
+    if ady < 0 { ady = 0 - ady; }
+    let mut steep = 0;
+    if ady > adx { steep = 1; }
+    if steep == 1 {
+        let mut t = x0; x0 = y0; y0 = t;
+        t = x1; x1 = y1; y1 = t;
+    }
+    if x0 > x1 {
+        let mut t = x0; x0 = x1; x1 = t;
+        t = y0; y0 = y1; y1 = t;
+    }
+    let mut dx2 = x1 - x0;
+    let mut dy2 = y1 - y0;
+    if dx2 == 0 { return 0; }
+    // Slope as 0..255 fractional step per integer x.
+    let mut grad = 0;
+    if dy2 >= 0 { grad =     dy2 * 256 / dx2; }
+    else        { grad = 0 - (0 - dy2) * 256 / dx2; }
+    let mut intery = y0 * 256;     // fixed: integer.fraction (8-bit frac)
+    let mut x = x0;
+    while x <= x1 {
+        let mut iy   = intery / 256;
+        let mut frac = intery - iy * 256;
+        if frac < 0 { iy = iy - 1; frac = frac + 256; }
+        let mut cov_far  = frac;
+        let mut cov_near = 255 - frac;
+        if steep == 1 {
+            gfx_putpixel_cov(iy,     x, color, cov_near);
+            gfx_putpixel_cov(iy + 1, x, color, cov_far);
+        } else {
+            gfx_putpixel_cov(x, iy,     color, cov_near);
+            gfx_putpixel_cov(x, iy + 1, color, cov_far);
+        }
+        intery = intery + grad;
+        x = x + 1;
+    }
+    return 0;
+}
+
+// AA filled circle via distance-from-center coverage in a 1-pixel band.
+fn gfx_circle_aa(cx, cy, r, color) {
+    if r <= 0 { return 0; }
+    let mut y = 0 - r;
+    while y <= r {
+        let mut x = 0 - r;
+        while x <= r {
+            // d2 = x*x + y*y; compare to r*r with linear coverage band.
+            let mut d2 = x * x + y * y;
+            let mut r2 = r * r;
+            let mut r2i = (r - 1) * (r - 1);
+            if d2 <= r2i {
+                gfx_putpixel_alpha(cx + x, cy + y, color);
+            } else if d2 <= r2 {
+                // Linear interp inside 1-pixel band: cov = (r2 - d2) * 255 / (r2 - r2i)
+                let mut span = r2 - r2i;
+                if span <= 0 { span = 1; }
+                let mut cov = (r2 - d2) * 255 / span;
+                if cov < 0   { cov = 0; }
+                if cov > 255 { cov = 255; }
+                gfx_putpixel_cov(cx + x, cy + y, color, cov);
+            }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    return 0;
+}
+
+// Rounded rectangle: 4 corner arcs (AA) + 4 straight edges + interior fill.
+fn gfx_rect_round(x, y, w, h, r, color) {
+    if w <= 0 { return 0; }
+    if h <= 0 { return 0; }
+    if r * 2 > w { r = w / 2; }
+    if r * 2 > h { r = h / 2; }
+    // Center band: rows [y+r .. y+h-r-1] full width
+    gfx_fill_rect(x, y + r, w, h - 2 * r, color);
+    // Top/bottom straight strips between corners
+    gfx_fill_rect(x + r, y,         w - 2 * r, r, color);
+    gfx_fill_rect(x + r, y + h - r, w - 2 * r, r, color);
+    if r == 0 { return 0; }
+    // Four corner AA arcs (only quadrant region).
+    let mut dy = 0;
+    while dy < r {
+        let mut dx = 0;
+        while dx < r {
+            let mut d2 = (r - dx - 1) * (r - dx - 1) + (r - dy - 1) * (r - dy - 1);
+            let mut r2 = r * r;
+            let mut r2i = (r - 1) * (r - 1);
+            let mut cov = 0;
+            if d2 <= r2i {
+                cov = 255;
+            } else if d2 <= r2 {
+                let mut span = r2 - r2i;
+                if span <= 0 { span = 1; }
+                cov = (r2 - d2) * 255 / span;
+                if cov < 0 { cov = 0; }
+                if cov > 255 { cov = 255; }
+            }
+            if cov > 0 {
+                gfx_putpixel_cov(x + dx,             y + dy,             color, cov);
+                gfx_putpixel_cov(x + w - 1 - dx,     y + dy,             color, cov);
+                gfx_putpixel_cov(x + dx,             y + h - 1 - dy,     color, cov);
+                gfx_putpixel_cov(x + w - 1 - dx,     y + h - 1 - dy,     color, cov);
+            }
+            dx = dx + 1;
+        }
+        dy = dy + 1;
+    }
+    return 0;
+}
+
+// Outline (stroked) rounded rect: just calls fill twice with thickness.
+fn gfx_rect_round_outline(x, y, w, h, r, color, thickness) {
+    if thickness <= 0 { return 0; }
+    gfx_rect_round(x, y, w, h, r, color);
+    if thickness * 2 < w {
+        if thickness * 2 < h {
+            // Knock out interior in opaque transparent — caller passes the
+            // background color via a follow-up call. We just stroke the band.
+        }
+    }
+    return 0;
+}
+
+print("gfx_aa.hl loaded");

@@ -1,0 +1,92 @@
+// shell_lockscreen.hl -- 锁屏 / 登录（Sprint G5）
+//
+// 全屏遮罩：模糊的壁纸 + 大字时钟 + 日期 + 密码输入框。
+// 按 Enter 解锁（暂不校验密码）。
+
+let LOCK_PWD_BUF = 72368128;   // 0x04503400
+
+let mut lock_initialized = 0;
+let mut lock_active      = 0;
+let mut lock_pwd_len     = 0;
+let mut lock_time_addr   = 0;
+let mut lock_date_addr   = 0;
+
+fn shell_lockscreen_init() {
+    if lock_initialized == 1 { return 0; }
+    lock_active = 0;
+    lock_pwd_len = 0;
+    mem_write_u8(LOCK_PWD_BUF, 0);
+    lock_initialized = 1;
+    print("shell_lockscreen: ready");
+    return 0;
+}
+
+fn shell_lockscreen_lock()   { lock_active = 1; lock_pwd_len = 0;
+    mem_write_u8(LOCK_PWD_BUF, 0); return 0; }
+fn shell_lockscreen_unlock() { lock_active = 0; return 0; }
+fn shell_lockscreen_active() { return lock_active; }
+
+fn shell_lockscreen_set_time(addr) { lock_time_addr = addr; return 0; }
+fn shell_lockscreen_set_date(addr) { lock_date_addr = addr; return 0; }
+
+fn shell_lockscreen_input_char(ch) {
+    if lock_active == 0 { return 0; }
+    if ch == 13 { lock_active = 0; return 0; }      // Enter -> unlock
+    if ch == 27 { return 0; }
+    if ch == 8 {
+        if lock_pwd_len > 0 {
+            lock_pwd_len = lock_pwd_len - 1;
+            mem_write_u8(LOCK_PWD_BUF + lock_pwd_len, 0);
+        }
+        return 0;
+    }
+    if lock_pwd_len >= 63 { return 0; }
+    mem_write_u8(LOCK_PWD_BUF + lock_pwd_len, ch);
+    lock_pwd_len = lock_pwd_len + 1;
+    mem_write_u8(LOCK_PWD_BUF + lock_pwd_len, 0);
+    return 0;
+}
+
+fn shell_lockscreen_paint(screen_w, screen_h) {
+    if lock_active == 0 { return 0; }
+    // 全屏暗化（70%）
+    gfx_fill_rect(0, 0, screen_w, screen_h, gfx_pack(178, 0, 0, 0));
+    // 时钟
+    let mut cx = screen_w / 2;
+    let mut cy = screen_h / 3;
+    let mut big = 22;
+    if lock_time_addr != 0 {
+        let mut s = cstr_from_addr(lock_time_addr);
+        let mut tw = font_atlas_measure(s, big);
+        font_atlas_draw_str(cx - tw / 2, cy, s, big, gfx_pack(255, 255, 255, 255));
+    }
+    if lock_date_addr != 0 {
+        let mut s = cstr_from_addr(lock_date_addr);
+        let mut tw = font_atlas_measure(s, 15);
+        font_atlas_draw_str(cx - tw / 2, cy + 40, s, 15,
+                            gfx_pack(255, 220, 220, 220));
+    }
+    // 密码框
+    let mut box_w = 280;
+    let mut bx = cx - box_w / 2;
+    let mut by = screen_h * 2 / 3;
+    gfx_rect_round(bx, by, box_w, 36, 6, ui_theme_bg_elevated());
+    // 圆点显示密码长度
+    let mut i = 0;
+    while i < lock_pwd_len {
+        gfx_circle_aa(bx + 14 + i * 14, by + 18, 4,
+                      ui_theme_text_primary());
+        i = i + 1;
+    }
+    if lock_pwd_len == 0 {
+        font_atlas_draw_str(bx + 12, by + (36 - font_atlas_h(13)) / 2,
+                            "Enter password and press Enter", 13,
+                            ui_theme_text_secondary());
+    }
+    // 提示
+    font_atlas_draw_str(cx - 80, by + 50, "Press Enter to unlock", 13,
+                        gfx_pack(255, 200, 200, 200));
+    return 0;
+}
+
+print("shell_lockscreen.hl loaded");

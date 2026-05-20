@@ -10,16 +10,18 @@ Boots on QEMU (BIOS + UEFI), runs a serial-console shell with 1,800+ commands.
 
 | Metric | Value |
 |---|---:|
-| Total `.hl` files | **495** |
-| Kernel modules (`bare-kernel/hl/`) | **423** |
+| Total `.hl` files | **539** |
+| Kernel modules (`bare-kernel/hl/`) | **470** |
 | Shell commands | **1,800** |
-| H-L total LOC | **~163,700** |
+| H-L total LOC | **~165,000** |
 | External dependencies | **0** |
 | Boot image (BIOS, `hicos-hl.img`) | 58,368 B (114 sectors) |
 | Boot image (UEFI, `hicos-uefi.img`) | 34,603,008 B |
 | QEMU boot stability (10 runs) | **10/10 boot complete** |
 | Milestones M1–M6 | All ✦ achieved |
 | Bug-fix sprints | **1–31** |
+| GUI scaffolding sprint | **G1** (47 modules added, see [GUI_DESIGN.md](GUI_DESIGN.md)) |
+| Codegen sprints | **35–38** (string-pool / abs64 reloc / IR-Lower fix) |
 
 ## Milestones
 
@@ -77,8 +79,8 @@ Press `Ctrl+A X` to quit QEMU.
 
 ```
 HicOS/
-├─ bare-kernel/hl/        # 423 kernel modules (~140,000 lines of H-L)
-├─ scripts/               # 29 PowerShell build/test/QEMU scripts
+├─ bare-kernel/hl/        # 470 kernel modules (~140,000 lines of H-L, incl. 47 new GUI modules)
+├─ scripts/               # 32 PowerShell build/test/QEMU/audit scripts
 ├─ IP-Protection/         # IP / patent documentation
 ├─ hl-bootstrap.hl        # self-hosting compiler (4,572 lines, 208 fn)
 ├─ stdlib.hl              # H-L standard library (1,545 lines, 143 fn)
@@ -89,6 +91,7 @@ HicOS/
 ├─ README.md              # this file
 ├─ ARCHITECTURE.md        # three-layer architecture + boot chain
 ├─ HILBERT_LANG_BNF.md    # H-L grammar specification
+├─ GUI_DESIGN.md          # Win11 Fluent GUI design + multi-form-factor plan
 └─ CHANGELOG.md           # iteration & sprint history
 ```
 
@@ -172,14 +175,36 @@ No PANIC / page fault / triple-fault across all 10 runs.
 - **Zero external dependencies.** No C, no Rust, no third-party crates. The PowerShell scripts only emit raw machine code for the MBR / Stage 2 bootloader.
 - **Self-hosting.** Compiler, linker, interpreter, REPL, formatter, lint, debugger — all written in H-L.
 - **Bare metal.** Runs directly on x86_64, BIOS and UEFI dual-boot.
-- **Modular.** 423 kernel modules, each ~300–500 lines, single-responsibility.
+- **Modular.** 470 kernel modules, each ~300–500 lines, single-responsibility.
 - **Three-layer architecture.** Image build (Layer A) → bootstrap toolchain (Layer B) → kernel modules (Layer C). See `ARCHITECTURE.md`.
+
+## GUI Initiative (Sprint G1, in progress)
+
+Sprint G1 lays the scaffolding for evolving HicOS from a serial-console OS to a Windows-11-Fluent-style adaptive graphical OS (desktop / laptop / tablet / mobile / kiosk form factors, multi-display, touch + pen + mouse + keyboard).
+
+47 new modules added under `bare-kernel/hl/`, organized into:
+
+| Tier | Modules |
+|---|---|
+| Graphics (Layer 0–2) | `gfx_backbuffer`, `gfx_aa`, `gfx_path`, `gfx_blur`, `gfx_shadow`, `gfx_anim`, `gfx_hidpi`, `compositor`, `font_atlas` |
+| Window manager (Layer 3) | `wm_snap`, `vdesktop`, `mission_control`, `display_topology` |
+| Widget toolkit (Layer 4) | `widget_core`, `widget_button`, `widget_input`, `widget_select`, `widget_list`, `widget_nav`, `widget_container`, `widget_feedback` |
+| Adaptive layout (Layer 5) | `adaptive_layout` |
+| Shell (Layer 6) | `shell_topbar`, `shell_dock`, `shell_startmenu`, `shell_spotlight`, `shell_controlcenter`, `shell_notification`, `shell_lockscreen`, `shell_wallpaper`, `shell_themes`, `shell_form` |
+| Apps (Layer 7) | `app_files`, `app_settings`, `app_terminal`, `app_texteditor`, `app_sysmon` |
+| Input | `input_pointer`, `input_gesture`, `input_touch`, `input_pen` |
+| Services | `dnd`, `ime`, `a11y`, `eyecare`, `anim_tuning`, `visual_audit` |
+
+3 new audit scripts under `scripts/`: `gui-lex-audit.ps1`, `gui-ast-audit.ps1`, `gui-symbol-audit.ps1`.
+
+See [`GUI_DESIGN.md`](GUI_DESIGN.md) for full design (Mica/Acrylic, eye-care LUT, breakpoint grid, density tiers, gesture model).
 
 ## Related Documents
 
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — three-layer architecture, boot chain, milestone history.
 - [`HILBERT_LANG_BNF.md`](HILBERT_LANG_BNF.md) — H-L grammar specification.
-- [`CHANGELOG.md`](CHANGELOG.md) — iteration log + Sprint 1–31 bug-fix history.
+- [`GUI_DESIGN.md`](GUI_DESIGN.md) — Win11 Fluent GUI design + multi-form-factor plan.
+- [`CHANGELOG.md`](CHANGELOG.md) — iteration log + Sprint 1–38 history (bug-fix + codegen + GUI scaffold).
 
 ## License
 

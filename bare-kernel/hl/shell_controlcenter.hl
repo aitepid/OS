@@ -1,0 +1,127 @@
+// shell_controlcenter.hl -- 控制中心快捷面板（Sprint G5）
+//
+// Win11 风格：从顶栏右下角滑出的浮窗，包含 WiFi/蓝牙/飞行模式/夜间灯/
+// 护眼模式快捷按钮、亮度滑块、音量滑块、电量信息。
+
+let CC_W       = 360;
+let CC_H       = 440;
+let CC_TILE    = 84;
+let CC_TILES_PER_ROW = 3;
+
+let CC_TOGGLE_WIFI       = 0;
+let CC_TOGGLE_BT         = 1;
+let CC_TOGGLE_AIRPLANE   = 2;
+let CC_TOGGLE_NIGHTLIGHT = 3;
+let CC_TOGGLE_EYECARE    = 4;
+let CC_TOGGLE_DND        = 5;
+let CC_TOGGLE_COUNT      = 6;
+
+let mut cc_initialized = 0;
+let mut cc_visible     = 0;
+let mut cc_toggles     = [0];
+let mut cc_labels      = [0];
+let mut cc_brightness  = 100;
+let mut cc_volume      = 60;
+
+fn shell_controlcenter_init() {
+    if cc_initialized == 1 { return 0; }
+    cc_toggles = array_new(CC_TOGGLE_COUNT, 0);
+    cc_labels  = array_new(CC_TOGGLE_COUNT, 0);
+    cc_toggles[CC_TOGGLE_WIFI] = 1;
+    cc_toggles[CC_TOGGLE_BT]   = 0;
+    cc_toggles[CC_TOGGLE_AIRPLANE]   = 0;
+    cc_toggles[CC_TOGGLE_NIGHTLIGHT] = 0;
+    cc_toggles[CC_TOGGLE_EYECARE]    = 0;
+    cc_toggles[CC_TOGGLE_DND]        = 0;
+    cc_initialized = 1;
+    print("shell_controlcenter: ready");
+    return 0;
+}
+
+fn shell_controlcenter_show() {
+    if cc_initialized == 0 { shell_controlcenter_init(); }
+    cc_visible = 1; return 0;
+}
+fn shell_controlcenter_hide() { cc_visible = 0; return 0; }
+fn shell_controlcenter_toggle() {
+    if cc_visible == 1 { cc_visible = 0; } else { cc_visible = 1; }
+    return cc_visible;
+}
+fn shell_controlcenter_visible() { return cc_visible; }
+
+fn cc_label_for(i) {
+    if i == CC_TOGGLE_WIFI       { return "Wi-Fi"; }
+    if i == CC_TOGGLE_BT         { return "Bluetooth"; }
+    if i == CC_TOGGLE_AIRPLANE   { return "Airplane"; }
+    if i == CC_TOGGLE_NIGHTLIGHT { return "Nightlight"; }
+    if i == CC_TOGGLE_EYECARE    { return "EyeCare"; }
+    return "Quiet";
+}
+
+fn shell_controlcenter_paint(screen_w, screen_h) {
+    if cc_visible == 0 { return 0; }
+    let mut x = screen_w - CC_W - 8;
+    let mut y = shell_topbar_height() + 8;
+    gfx_shadow_draw_n(x, y, CC_W, CC_H, 24);
+    gfx_rect_round(x, y, CC_W, CC_H, 12, ui_theme_bg_elevated());
+    let mut size = 13;
+    // 快捷瓷砖
+    let mut i = 0;
+    while i < CC_TOGGLE_COUNT {
+        let mut col = i % CC_TILES_PER_ROW;
+        let mut row = i / CC_TILES_PER_ROW;
+        let mut tx = x + 16 + col * (CC_TILE + 12);
+        let mut ty = y + 16 + row * (CC_TILE + 12);
+        let mut bg = ui_theme_bg_overlay();
+        if cc_toggles[i] == 1 { bg = ui_theme_accent_get(); }
+        gfx_rect_round(tx, ty, CC_TILE, CC_TILE, 8, bg);
+        let mut fg = ui_theme_text_primary();
+        if cc_toggles[i] == 1 { fg = gfx_pack(255, 255, 255, 255); }
+        let mut s = cc_label_for(i);
+        let mut tw = font_atlas_measure(s, size);
+        font_atlas_draw_str(tx + (CC_TILE - tw) / 2, ty + CC_TILE - 18, s, size, fg);
+    i = i + 1;
+    }
+    // 滑块区
+    let mut sy = y + 16 + 2 * (CC_TILE + 12) + 12;
+    font_atlas_draw_str(x + 16, sy, "Brightness", size, ui_theme_text_primary());
+    gfx_rect_round(x + 16, sy + 22, CC_W - 32, 4, 2, ui_theme_bg_overlay());
+    gfx_rect_round(x + 16, sy + 22, (CC_W - 32) * cc_brightness / 100, 4, 2,
+                   ui_theme_accent_get());
+    sy = sy + 50;
+    font_atlas_draw_str(x + 16, sy, "Volume", size, ui_theme_text_primary());
+    gfx_rect_round(x + 16, sy + 22, CC_W - 32, 4, 2, ui_theme_bg_overlay());
+    gfx_rect_round(x + 16, sy + 22, (CC_W - 32) * cc_volume / 100, 4, 2,
+                   ui_theme_accent_get());
+    return 0;
+}
+
+fn shell_controlcenter_handle_pointer(ev_type, x, y, screen_w, screen_h) {
+    if cc_visible == 0 { return 0; }
+    let mut cx = screen_w - CC_W - 8;
+    let mut cy = shell_topbar_height() + 8;
+    if ev_type == PEV_TYPE_UP {
+        // 外部点击关闭
+        if x < cx { cc_visible = 0; return 1; }
+        if y > cy + CC_H { cc_visible = 0; return 1; }
+        if y < cy        { cc_visible = 0; return 1; }
+        // 瓷砖命中
+        let mut i = 0;
+        while i < CC_TOGGLE_COUNT {
+            let mut col = i % CC_TILES_PER_ROW;
+            let mut row = i / CC_TILES_PER_ROW;
+            let mut tx = cx + 16 + col * (CC_TILE + 12);
+            let mut ty = cy + 16 + row * (CC_TILE + 12);
+            if x >= tx { if x <= tx + CC_TILE { if y >= ty { if y <= ty + CC_TILE {
+                if cc_toggles[i] == 1 { cc_toggles[i] = 0; }
+                else                  { cc_toggles[i] = 1; }
+                if i == CC_TOGGLE_EYECARE { eyecare_set_enabled(cc_toggles[i]); }
+                return 1;
+            } } } }
+            i = i + 1;
+        }
+    }
+    return 0;
+}
+
+print("shell_controlcenter.hl loaded");

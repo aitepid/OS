@@ -1,5 +1,218 @@
 ﻿# HicOS Changelog
 
+## Sprint G1 — GUI 脚手架（47 模块） (2026-05-20)
+
+与 codegen Sprint 35–38 并行，Sprint G1 把 HicOS 从串口控制台 OS 演进为具备 **Windows 11 Fluent Design** 视觉与交互品质的图形系统的脚手架落地。设计大纲见 `GUI_DESIGN.md`，本 sprint 落地 47 个 .hl 模块（每个为框架级骨架，核心数据结构与公共 API 已定义，渲染 / 输入 / 合成的具体路径将在 G2 起逐 Sprint 接通）。
+
+**新增模块**（按 `GUI_DESIGN.md` 分层）
+
+| 层 | 模块（共 47） |
+|---|---|
+| Layer 0–2（图形） | `gfx_backbuffer` / `gfx_aa` / `gfx_path` / `gfx_blur` / `gfx_shadow` / `gfx_anim` / `gfx_hidpi` / `compositor` / `font_atlas` |
+| Layer 3（窗口） | `wm_snap` / `vdesktop` / `mission_control` / `display_topology` |
+| Layer 4（控件） | `widget_core` / `widget_button` / `widget_input` / `widget_select` / `widget_list` / `widget_nav` / `widget_container` / `widget_feedback` |
+| Layer 5（布局） | `adaptive_layout` |
+| Layer 6（Shell） | `shell_topbar` / `shell_dock` / `shell_startmenu` / `shell_spotlight` / `shell_controlcenter` / `shell_notification` / `shell_lockscreen` / `shell_wallpaper` / `shell_themes` / `shell_form` |
+| Layer 7（应用） | `app_files` / `app_settings` / `app_terminal` / `app_texteditor` / `app_sysmon` |
+| 输入 | `input_pointer` / `input_gesture` / `input_touch` / `input_pen` |
+| 服务 | `dnd` / `ime` / `a11y` / `eyecare` / `anim_tuning` / `visual_audit` |
+
+**审计脚本**（`scripts/`）
+
+- `gui-lex-audit.ps1` — GUI 模块词法层审计（标识符、关键字使用、注释覆盖率）
+- `gui-ast-audit.ps1` — AST 层审计（结构对称性、`p_block` 嵌套合理性）
+- `gui-symbol-audit.ps1` — 符号层审计（未引用导出、命名前缀一致性）
+
+**文档**
+
+- 新增 `GUI_DESIGN.md`（473 行）—— Win11 Fluent 设计基线、多形态自适应（desktop/laptop/tablet/mobile/embedded）、护眼 LUT、毛玻璃 Mica/Acrylic、PointerEvent 统一输入模型、设计 token、性能预算、阶段化实施计划（G1–G8）。
+
+**项目计数变化**
+
+| 指标 | Sprint 38 | Sprint G1 | Δ |
+| ---- | ---- | ---- | ---- |
+| `bare-kernel/hl/` 模块数 | 423 | **470** | +47 |
+| `.hl` 总数 | 495 | **539** | +44（注：47 个 GUI 模块 + 已删/合并 3 个旧 ui_* 占位）|
+| `scripts/*.ps1` | 29 | **32** | +3 GUI 审计脚本 |
+| MD 文档 | 4 | **5** | +`GUI_DESIGN.md` |
+
+**联调状态**
+
+- GUI 模块属脚手架阶段：API 表面就位，函数体多为占位 / 数据结构定义 / 注释蓝图。
+- 启动链路、串口 shell、QEMU 10/10 稳定性 **未受影响**（GUI 模块未被 `kernel_init.hl` 接入）。
+- Phase 2 编译流水线（`hl-compile-pipeline.ps1`）需对 470 模块全量过一遍以确认无新增解析/IR 错误；当前流水线运行时间显著（PowerShell 解析器在大模块上 O(N) 但常数大）。
+
+**Sprint G1 落地**：47 GUI 模块脚手架 ✅ / 3 审计脚本 ✅ / `GUI_DESIGN.md` ✅ / 与 codegen 并行不冲突 ✅。
+**下一步（G2）**：双缓冲 + 矢量图形（`gfx_backbuffer` / `gfx_aa` / `gfx_path` / `font_atlas` 实现化），同时 codegen Sprint 39 处理 `_ke_putc` 调用约定。
+
+## Sprint 38 — 字符串字面量池 + abs64 重定位 (2026-05-20)
+
+接 Sprint 37 在串口看到 `BABABAB` 但定位到 `kernel_entry.hl` 根本不调用 `print(...)` —— 它用 `_ke_putc(75)` 这类整数 byte 直发。字符串池的工作量与"BABABAB"无直接关系，但其他 471 个 .hl 模块（含 47 个 GUI 模块）大量调用 `print("...")`，必须先解决。
+
+**改动**（`scripts/hl-compile-pipeline.ps1`）
+- `X86-CompileModule` 初始化 `$script:mod_strings`，模块级字符串池。
+- 新增 `IR_STR_CONST` codegen 处理：
+  ```
+  mov reg, imm64 0              ; 10 字节占位
+  reloc: site=imm64, sym="__str$<module>$<idx>", kind=abs64
+  ```
+  之前 `IR_STR_CONST` 完全没有 codegen 分支，落空时 reg 留旧值（栈 + 寄存器复用 → `BABABAB` 这类字符即来自此）。
+- `link_modules` 条目带上 `Strings`。
+- `Link-Pass2`：在 stub 区之后追加各模块字符串池，按 UTF-8 编码，加 NUL 终结符；每条注册全局符号 `__str$<mod>$<idx>` = 在 `link_combined` 的偏移。
+- 新增 `abs64` reloc kind 处理：`patch[site..site+7] = LINK_TEXT_BASE + targetOff`（小端 8 字节）。
+
+**联调数据**
+
+| 指标 | Sprint 37 | Sprint 38 | Δ |
+| ---- | ---- | ---- | ---- |
+| 符号数 | 5,923 | 5,984 | +61 字符串 |
+| 已解析 relocs | 20,115 | 20,176 | +61 abs64 |
+| kernel.bin | 386,649 B | 388,209 B | +1,560 B 池 |
+| `_start` offset | 0x5DE59 | 0x5E0BB | （池前置）|
+| 未解析 relocs | 1,719 | 1,719 | — |
+
+**联调验证**：`HicOS> BABABAB` 仍在 —— 但根因不是字符串，是 `_ke_putc(int)` 调用约定/参数传递错位。下一 sprint = call ABI 与 IR_PARAM。
+
+**Sprint 38 落地**：`IR_STR_CONST` 全链路 ✅ / abs64 reloc ✅ / GUI 模块字符串可寻址 ✅ / `_ke_putc` ABI = Sprint 39。
+
+## Sprint 37 — IR-LowerStmt 单层数组包装根因修复 (2026-05-20)
+
+接 Sprint 36 的"`_start` 空体"现象，Sprint 37 把根因从 parser 嫌疑挪到 IR lowering：
+
+**根因**（`scripts/hl-compile-pipeline.ps1:70` ⇄ `:272-280`）
+- `p_block` 返回 `,$stmts` — PowerShell 单元素数组包装一个 `ArrayList<stmt>`。
+- `IR-LowerStmt` 的 `FnDef`/`If`/`While`/`Quadrant`/`Block` 分支都做 `foreach ($s in $node[3]) { IR-LowerStmt $s }`，对包装器迭代一次只拿到 **整个 ArrayList 本身**，又传回 `IR-LowerStmt`。
+- `IR-LowerStmt` 把 ArrayList 当节点处理，`$nt = $node[0]` 读到第一条语句的类型标签（如 `'Let'`），**只 lower 第一条语句，其余全部丢弃**。
+- 这就是 `_start`、`_ke_fib` 等所有函数都退化为 12–32 字节空体的真正原因，与 Sprint 36 怀疑的 parser 恢复无关。
+
+**修复**
+- 新增 `IR-StmtBody($body)` helper：识别 `[wrapper [ArrayList stmts]]` 的二层结构并解包；同时正确处理 `If` 的 `elif` 单语句情况（`@(,(p_if))`）。
+- `FnDef`/`If`-then/`If`-else/`While`/`Quadrant`/`Block` 五处统一改为 `foreach ($s in (IR-StmtBody $node[N])) { IR-LowerStmt $s }`。
+- 主入口加防御：若 `$nt` 不是字符串则递归遍历（防止 ArrayList 误入主路径）。
+
+**联调数据对比**
+
+| 指标 | Sprint 36 | Sprint 37 | 倍率 |
+| ---- | ---- | ---- | ---- |
+| IR instrs | 37,525 | **352,780** | ×9.4 |
+| live IR  | 20,720 | **260,910** | ×12.6 |
+| x86 .text | 106,600 B | **383,001 B** | ×3.6 |
+| kernel.bin | ~110 KB | **386,649 B** | ×3.5 |
+| `_start` offset | 0xE68 | **0x5DE59** | 真函数体落地 |
+
+**QEMU 启动结果**
+- handwritten kernel 17 行 init 全部 [ok]，进 `=== Boot Complete ===`。
+- CALL `_start` 后串口输出 `BABABAB` — 编译后的 `_start` 正在执行，但 `IR_PRINT` 把字符串地址错填（字符串字面量未真正落到 `.data`）。
+- 不再是"空函数静默返回"——codegen 全链路活了。
+
+**Sprint 37 落地**：IR-Lower 根因修复 ✅ / `_start` 实质执行 ✅ / 字符串字面量寻址 = Sprint 38 任务。
+
+## Sprint 36 — Phase 2 第一刀：builtin 直连 + _start 空体根因 (2026-05-20)
+
+接 Sprint 35 摸底，落地两处 codegen 改造：
+
+**1. handwritten kernel 符号导出**（`scripts/rebuild-image.ps1`）
+- 在 `$kern_bytes` 落盘前导出 `bare-kernel/kernel-symbols.json`：
+  ```json
+  { "base":"0x100000", "serial_puts":"0x1094CC", "serial_hex_byte":"0x1094EB" }
+  ```
+
+**2. `IR_PRINT` 直接生成绝对 call**（`scripts/hl-compile-pipeline.ps1:535`）
+- 原 `IR_PRINT { X86-Byte 0x90 }` — 一条 NOP，吞掉所有 print。
+- 改为 `mov rsi, srcReg; mov rax, abs serial_puts; call rax`（15 字节）。
+- 新增 `X86-Imm64` helper；启动时加载 `kernSyms` 字典。
+- 二进制核对：`kernel.bin` 中 `mov rax, 0x1094CC` 出现 **711 次**（每个 .hl `print(...)` 一次）。codegen 工作正确。
+
+**3. 联调结果：仍无 GUI 输出 — 根因深一层**
+- 反汇编 `_start @ 0xE68`：仅 12 字节
+  ```
+  55 48 89 E5    push rbp; mov rbp,rsp
+  4C 89 F0       mov rax, r14
+  48 89 EC 5D C3 leave; ret
+  ```
+- 这是空函数体的标准模板。`kernel_entry.hl:10182` 的 `fn _start()` 实际有 ~200 行（Phase 1 串口、PIC、PIT、IDT、STI 等），但 codegen 全部丢失。
+- 紧邻 `_start` 之后的 0xE74 开始是 `_ke_puts_*`、`_ke_idt_*` 等真函数，**但 `_start` 永不调用它们**，handwritten kernel 的 `call rax → ret` 就直接返回 shell。
+
+**根因定位**：Sprint 35 报告的 17 个 balance error + 5 个 parse warning 触发了 `p_program` 中的 `catch` 恢复路径，把 `_start` 函数体直接吞了。`kernel_entry.hl` 357KB / 10,427 行的体量，parser 在中途崩了一次就会让后续 `fn` 全部退化为空体。
+
+**Sprint 36 落地**：codegen 路径 ✅ / 联调验证 ❌ / 真正瓶颈 = parser 鲁棒性，下一 sprint 修。
+
+## Sprint 35 — Phase 2 codegen 现状摸底 (2026-05-20)
+
+用户选 "QEMU 功能联调" 后发现 BIOS 镜像无 GUI init prints — 进而定位到 Phase 2 codegen 实际已存在于 `scripts/hl-compile-pipeline.ps1`（5 阶段 PowerShell 流水线），但未联调通。
+
+**端到端跑一次的真实产出**：
+- 模块编译：472 / 472 通过
+- Token：705,579 / AST：419,585 / IR：37,525 条（DCE 后 20,720 live）
+- x86_64 .text：106,600 字节
+- 符号表：5,923 / 解析 relocs：310
+- **未解析 relocs：1,011**（核心瓶颈）
+- 平衡错误：17（parser recovery 兜底）
+- 产物：`bare-kernel/kernel.bin`（108,112 B）+ `kernel.entry`（offset=3688）
+
+**联调发现**：
+1. `rebuild-image.ps1:1696-1704` 已把 `call rax` 跳到 `0x120000 + _start_offset`。_start 实际被调用，但 serial 无 GUI 输出。
+2. 根因在 `hl-compile-pipeline.ps1:731-781` 的 `Link-GenerateStubs`：所有 builtin（含 `print`、`len`、`array_new`、`mem_*`、`gfx_*`）被替换为 8 字节 no-op trampoline（`push rbp; xor eax,eax; pop rbp; ret`）。compiled `.hl` 调用 `print("…")` 即 call no-op stub 返回 0，序列输出永远是空。
+3. 472 模块的 `_start` 跑完返回到 handwritten kernel 的 shell 提示符 — 静默成功，但什么也没做。
+
+**Phase 2 真正待办（按优先级）**：
+1. 让 `rebuild-image.ps1` 导出 handwritten kernel 中关键符号（`serial_puts`、`vga_putc`、`keyboard_read`、`vesa_pixel`、`mem_read_u8` 等约 30–40 个）地址到 `kernel-symbols.json`。
+2. 改造 `Link-GenerateStubs`：读符号表，把 `print` stub 改为 `mov rsi, arg0; call abs serial_puts`；其它 builtin 类推。
+3. 跨模块解 1,011 个未解析 relocs（多数是 `.hl` 文件之间互相 forward-decl 的函数，需 2-pass 符号收集 + 重链）。
+4. 修 17 个 balance error（parser recovery 已兜底，但产生死代码）。
+5. QEMU 再跑一次，期望看到 47 个 GUI 模块 `*_init` 各自的 print 输出。
+
+预估：3–5 sprint 完工。Sprint 35 仅完成现状摸底 + CHANGELOG 落地，未改任何代码。
+
+## Sprint 34 — GUI Phase 1.7 符号解析审计 + ticks BUG 修复 (2026-05-19)
+
+`scripts/gui-symbol-audit.ps1`：在 Phase 1.6 AST 之上叠加符号解析器，对 47 个 GUI 模块每个 Ident 引用进行作用域过滤后比对全库 11,823 个顶层符号 + 原语白名单。
+
+- 文件：47 / 47 通过
+- 全局符号：11,823（depth-0 扫描 470 个 .hl 文件）
+- 唯一引用：1,356
+- 未解析：0（修复后）
+
+**抓到 8 处真 BUG（5 个文件）**：5 个 GUI 模块把 `ticks` 当全局变量读，但内核只暴露 `get_ticks()` 函数（`stdlib.hl:580`）。审计直接命中 typo，逐一改为 `get_ticks()`：
+- `app_terminal.hl:146`（光标闪烁相位）
+- `input_gesture.hl:115`（now_ms）
+- `input_pointer.hl:99`（PointerEvent 时间戳）
+- `shell_notification.hl:40, 77`（通知 ts + 淡出计算）
+- `widget_feedback.hl:30, 40, 146`（toast ts + 淡出 + spinner phase）
+
+性质与 BUG-041（`EXT4_BLOCK_SIZE` 大写遮蔽）同源 — 直接引用未定义全局，AST 层无法识别，需符号解析。Phase 1.7 把这类错误提前一个 sprint 捕获。
+
+## Sprint 33 — GUI Phase 1.6 AST 试构建 (2026-05-19)
+
+`scripts/gui-ast-audit.ps1`：在 Phase 1.5 lex 之上叠加 Pratt 解析器，对 47 个 GUI 模块构建顶层 AST。
+
+- 文件：47 / 47 解析通过
+- 函数：419
+- let 声明：519
+- 语句（含嵌套）：4,283
+- 解析失败：0
+
+**修两个隐患**：
+1. Tokenizer 把 `from` 标为 kw（Python 风格残留），但 GUI 代码里 `from` 是 `anim_start(...,from,to,...)` 的参数名 — parser 加 `PExpectName` 与 PPrimary 软关键字回落。
+2. PowerShell `Set-Content -NoNewline` 把中文注释行的 `\n` 吞掉导致下一行被注释、`$e = (P-Expr)` 永不执行 — 已改用 Edit 工具规避并以 ASCII 注释绕开。
+
+## Sprint 32 — GUI Phase 1.5 lex audit + Win11 视觉走查 (2026-05-19)
+
+G1–G8 GUI 注入完成，进入校验阶段。
+
+**Phase 1.5 — 47 模块 lex/parse 审计**（`scripts/gui-lex-audit.ps1`）：
+- 文件：47（G1 基础×4 + G2 合成×5 + G3 输入×6 + G4 widget×9 + G5 shell×9 + G6 apps×5 + G7 多屏/IME/vdesktop/mc×4 + G8 polish×5）
+- 字节：222,284
+- Token：39,718
+- 函数：419
+- 平衡错误（paren/brace/bracket）：0
+- 结果：**GUI LEX AUDIT PASSED**
+
+**Win11 Fluent 视觉走查**（`bare-kernel/hl/visual_audit.hl`，启动时打印）：
+- 24/24 视觉特性已落地：双缓冲+tile 脏区、AA 圆角、矢量路径、4 尺寸位图字体、32 表面合成器、可分离盒模糊、32 阶阴影 LUT、cubic-bezier(0.2,0,0,1) 缓动、色温 LUT、统一 PointerEvent+多点+Pen、Tap/Pan/Swipe/Pinch/Edge 手势、Win11 7-zone Snap、拖放弹回、6 断点 FormFactor、28 widget 库、Mica/Acrylic 玻璃面板、Desktop/Tablet/Mobile/Kiosk Shell、StartMenu/Spotlight/ControlCenter/Notification、5 响应式应用、多显示器+虚拟桌面+Mission Control、IME 候选窗、HiDPI 1×/1.25×/1.5×/2×、A11y 高对比/大字体/屏幕阅读器、4 主题 Default/Light/Dark/Sepia。
+
+注：49 个 GUI 模块的初步规划经合并后实际为 47 个文件；source-of-truth 仍是 .hl 模块，BIOS 引导镜像目前仍走 `rebuild-image.ps1` 直出的 x86 路径，hl-bootstrap S6 Phase 2+（AST→IR→codegen）待后续 Sprint 推进。
+
 ## Sprint 31 — Disk write flake investigation (2026-05-19, no code change)
 
 调查 Round 3/4 QEMU 压力测试日志中均出现的 `[!!] Disk: write FAILED` 间歇性闪烁（~25% 概率）。

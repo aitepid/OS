@@ -1,0 +1,254 @@
+// widget_nav.hl -- Navigation widgets: Menu, MenuBar, ContextMenu, Toolbar, TabBar, Breadcrumb
+//
+// Sprint G4 of HicOS GUI injection (per GUI_DESIGN.md §3.5).
+//
+// Item strings are passed as an address of a cstring-pointer array
+// (one u64 per slot). Item count is stored in widget_value, selected
+// index in widget_extra.
+
+let NAV_ITEM_PAD = 8;
+
+// ─── Menu (popup) ───────────────────────────────────────────────────────────
+
+fn menu_new(parent, x, y, w, item_count, items_addr) {
+    let mut row_h = al_density_control();
+    let mut id = widget_new(WIDGET_KIND_MENU, parent, x, y, w, item_count * row_h + 8);
+    widget_set_value(id, item_count);
+    widget_set_extra(id, items_addr);
+    widget_set_label(id, 0 - 1);          // hovered index (-1 = none)
+    return id;
+}
+
+fn menu_paint(id) {
+    if widget_get_flag(id, WIDGET_FLAG_VISIBLE) == 0 { return 0; }
+    gfx_shadow_draw_n(widget_x[id], widget_y[id], widget_w[id], widget_h[id], 16);
+    gfx_rect_round(widget_x[id], widget_y[id], widget_w[id], widget_h[id], 8,
+                   ui_theme_bg_elevated());
+    let mut n      = widget_value[id];
+    let mut hov    = widget_label[id];
+    let mut row_h  = al_density_control();
+    let mut size   = al_density_font_body();
+    let mut pad    = al_density_pad();
+    let mut i = 0;
+    while i < n {
+        let mut ry = widget_y[id] + 4 + i * row_h;
+        if i == hov {
+            gfx_rect_round(widget_x[id] + 4, ry, widget_w[id] - 8, row_h, 4,
+                           ui_theme_bg_overlay());
+        }
+        let mut item_ptr = mem_read_u32(widget_extra[id] + i * 8);
+        if item_ptr != 0 {
+            font_atlas_draw_str(widget_x[id] + pad + 8,
+                                ry + (row_h - font_atlas_h(size)) / 2,
+                                cstr_from_addr(item_ptr), size,
+                                ui_theme_text_primary());
+        }
+        i = i + 1;
+    }
+    widget_set_flag(id, WIDGET_FLAG_DIRTY, 0);
+    return 0;
+}
+
+fn menu_handle_pointer(id, ev_type, x, y) {
+    if widget_hit(id, x, y) == 0 {
+        widget_set_label(id, 0 - 1);
+        return 0;
+    }
+    let mut row_h = al_density_control();
+    let mut idx = (y - widget_y[id] - 4) / row_h;
+    if idx < 0           { idx = 0; }
+    if idx >= widget_value[id] { idx = widget_value[id] - 1; }
+    if ev_type == PEV_TYPE_MOVE {
+        widget_set_label(id, idx);
+        return 1;
+    }
+    if ev_type == PEV_TYPE_UP {
+        widget_set_extra(id, idx);
+        widget_set_visible(id, 0);
+        return 1;
+    }
+    return 0;
+}
+
+// ─── ContextMenu — same shape, positioned near pointer ───────────────────────
+
+fn contextmenu_show(item_count, items_addr, x, y) {
+    let mut w = 180;
+    let mut id = menu_new(0, x, y, w, item_count, items_addr);
+    widget_set_visible(id, 1);
+    return id;
+}
+
+// ─── MenuBar (top-of-window app menu) ───────────────────────────────────────
+
+fn menubar_new(parent, x, y, w, h, item_count, items_addr) {
+    let mut id = widget_new(WIDGET_KIND_MENU, parent, x, y, w, h);
+    widget_set_value(id, item_count);
+    widget_set_extra(id, items_addr);
+    widget_set_label(id, 0 - 1);
+    return id;
+}
+
+fn menubar_paint(id) {
+    if widget_get_flag(id, WIDGET_FLAG_VISIBLE) == 0 { return 0; }
+    gfx_fill_rect(widget_x[id], widget_y[id], widget_w[id], widget_h[id],
+                  ui_theme_bg_surface());
+    let mut n    = widget_value[id];
+    let mut size = al_density_font_body();
+    let mut pad  = al_density_pad();
+    let mut cx   = widget_x[id] + pad;
+    let mut i = 0;
+    while i < n {
+        let mut item_ptr = mem_read_u32(widget_extra[id] + i * 8);
+        if item_ptr != 0 {
+            let mut s = cstr_from_addr(item_ptr);
+            let mut tw = font_atlas_measure(s, size);
+            font_atlas_draw_str(cx, widget_y[id] + (widget_h[id] - font_atlas_h(size)) / 2,
+                                s, size, ui_theme_text_primary());
+            cx = cx + tw + pad * 2;
+        }
+        i = i + 1;
+    }
+    widget_set_flag(id, WIDGET_FLAG_DIRTY, 0);
+    return 0;
+}
+
+// ─── Toolbar (horizontal button strip) ──────────────────────────────────────
+// Items stored same as menubar; renders as flat icon-text buttons.
+
+fn toolbar_new(parent, x, y, w, h, item_count, items_addr) {
+    let mut id = widget_new(WIDGET_KIND_TOOLBAR, parent, x, y, w, h);
+    widget_set_value(id, item_count);
+    widget_set_extra(id, items_addr);
+    return id;
+}
+
+fn toolbar_paint(id) {
+    if widget_get_flag(id, WIDGET_FLAG_VISIBLE) == 0 { return 0; }
+    gfx_fill_rect(widget_x[id], widget_y[id], widget_w[id], widget_h[id],
+                  ui_theme_bg_surface());
+    // Bottom divider
+    gfx_fill_rect(widget_x[id], widget_y[id] + widget_h[id] - 1, widget_w[id], 1,
+                  ui_theme_bg_overlay());
+    let mut n    = widget_value[id];
+    let mut size = al_density_font_body();
+    let mut pad  = al_density_pad();
+    let mut cx   = widget_x[id] + pad;
+    let mut i = 0;
+    while i < n {
+        let mut item_ptr = mem_read_u32(widget_extra[id] + i * 8);
+        if item_ptr != 0 {
+            let mut s = cstr_from_addr(item_ptr);
+            let mut tw = font_atlas_measure(s, size);
+            let mut bw = tw + pad * 2;
+            font_atlas_draw_str(cx + pad,
+                                widget_y[id] + (widget_h[id] - font_atlas_h(size)) / 2,
+                                s, size, ui_theme_text_primary());
+            cx = cx + bw + 4;
+        }
+        i = i + 1;
+    }
+    widget_set_flag(id, WIDGET_FLAG_DIRTY, 0);
+    return 0;
+}
+
+// ─── TabBar (mobile bottom navigation) ──────────────────────────────────────
+// 3-5 destinations, equal width, current shown with accent.
+
+fn tabbar_new(parent, x, y, w, h, item_count, items_addr, initial_index) {
+    let mut id = widget_new(WIDGET_KIND_TABBAR, parent, x, y, w, h);
+    widget_set_value(id, item_count);
+    widget_set_extra(id, items_addr);
+    widget_set_label(id, initial_index);
+    return id;
+}
+
+fn tabbar_paint(id) {
+    if widget_get_flag(id, WIDGET_FLAG_VISIBLE) == 0 { return 0; }
+    gfx_fill_rect(widget_x[id], widget_y[id], widget_w[id], widget_h[id],
+                  ui_theme_bg_surface());
+    gfx_fill_rect(widget_x[id], widget_y[id], widget_w[id], 1, ui_theme_bg_overlay());
+    let mut n   = widget_value[id];
+    if n <= 0 { return 0; }
+    let mut sel = widget_label[id];
+    let mut tab_w = widget_w[id] / n;
+    let mut size  = al_density_font_body();
+    let mut i = 0;
+    while i < n {
+        let mut tx = widget_x[id] + i * tab_w;
+        let mut item_ptr = mem_read_u32(widget_extra[id] + i * 8);
+        let mut fg = ui_theme_text_secondary();
+        if i == sel { fg = ui_theme_accent_get(); }
+        if item_ptr != 0 {
+            let mut s = cstr_from_addr(item_ptr);
+            let mut tw = font_atlas_measure(s, size);
+            font_atlas_draw_str(tx + (tab_w - tw) / 2,
+                                widget_y[id] + (widget_h[id] - font_atlas_h(size)) / 2,
+                                s, size, fg);
+        }
+        i = i + 1;
+    }
+    widget_set_flag(id, WIDGET_FLAG_DIRTY, 0);
+    return 0;
+}
+
+fn tabbar_handle_pointer(id, ev_type, x, y) {
+    if widget_hit(id, x, y) == 0 { return 0; }
+    if ev_type == PEV_TYPE_UP {
+        let mut n = widget_value[id];
+        if n <= 0 { return 0; }
+        let mut tab_w = widget_w[id] / n;
+        let mut idx = (x - widget_x[id]) / tab_w;
+        if idx < 0 { idx = 0; }
+        if idx >= n { idx = n - 1; }
+        widget_set_label(id, idx);
+        return 1;
+    }
+    return 0;
+}
+
+// ─── Breadcrumb (path navigator) ────────────────────────────────────────────
+// Items render as text segments separated by chevron glyphs (>).
+
+fn breadcrumb_new(parent, x, y, w, h, item_count, items_addr) {
+    let mut id = widget_new(WIDGET_KIND_BREADCRUMB, parent, x, y, w, h);
+    widget_set_value(id, item_count);
+    widget_set_extra(id, items_addr);
+    return id;
+}
+
+fn breadcrumb_paint(id) {
+    if widget_get_flag(id, WIDGET_FLAG_VISIBLE) == 0 { return 0; }
+    let mut n    = widget_value[id];
+    let mut size = al_density_font_body();
+    let mut cx   = widget_x[id];
+    let mut cy   = widget_y[id] + (widget_h[id] - font_atlas_h(size)) / 2;
+    let mut i = 0;
+    while i < n {
+        let mut item_ptr = mem_read_u32(widget_extra[id] + i * 8);
+        if item_ptr != 0 {
+            let mut s  = cstr_from_addr(item_ptr);
+            let mut tw = font_atlas_measure(s, size);
+            let mut fg = ui_theme_text_secondary();
+            if i == n - 1 { fg = ui_theme_text_primary(); }
+            font_atlas_draw_str(cx, cy, s, size, fg);
+            cx = cx + tw + 6;
+            if i < n - 1 {
+                // Chevron glyph
+                let mut chx = cx;
+                let mut chy = widget_y[id] + widget_h[id] / 2;
+                gfx_path_reset();
+                gfx_path_move(chx,     chy - 4);
+                gfx_path_line(chx + 4, chy);
+                gfx_path_line(chx,     chy + 4);
+                gfx_path_stroke(ui_theme_text_secondary());
+                cx = cx + 12;
+            }
+        }
+        i = i + 1;
+    }
+    widget_set_flag(id, WIDGET_FLAG_DIRTY, 0);
+    return 0;
+}
+
+print("widget_nav.hl loaded");

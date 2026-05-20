@@ -1,0 +1,273 @@
+// compositor.hl -- Surface / Layer tree + damage propagation
+//
+// Sprint G2 of HicOS GUI injection (per GUI_DESIGN.md §3.3).
+//
+// Why: wm.hl currently draws each window straight onto the LFB, so we
+//   cannot animate opacity, apply blur to the region behind a window, or
+//   re-use cached pixels when only a sibling changed. The compositor
+//   introduces an off-screen Surface per window and assembles the final
+//   frame on the backbuffer (gfx_backbuffer.hl) one layer at a time.
+//
+// Data model (flat arrays, no heap allocator dependence):
+//   - SURFACE_MAX = 32 windows; each owns a 32-bit RGBA pixel buffer.
+//   - Pixel storage is carved out of a fixed 16 MB pool at 0x3000000
+//     (= 16 MB / 32 = 512 KB max per surface => fits 512×256, enough
+//     for typical windows; large windows clamp width).
+//   - Layer attributes: x, y, w, h, z, opacity (0..255), effect_mask,
+//     visible flag, damage AABB (per-layer dirty region).
+//
+// Render pipeline:
+//   wm/app -> draws into surface buffer
+//          -> calls comp_damage(surface, x, y, w, h)
+//   compositor_present():
+//       for each visible layer in z-order ascending:
+//           if effect blur:  comp_apply_blur(layer)
+//           if effect glass: composite "behind" sample blurred + tint
+//           else:            alpha-blit surface -> backbuffer
+//       eyecare_apply()       (G2 LUT pass on the assembled backbuffer)
+//       gfx_present()          (push dirty tiles to LFB)
+
+let COMP_SURFACE_MAX  = 32;
+let COMP_POOL_ADDR    = 50331648;   // 0x03000000
+let COMP_POOL_BYTES   = 16777216;   // 16 MB
+let COMP_SLOT_BYTES   = 524288;     // 512 KB per surface
+
+let COMP_EFFECT_NONE   = 0;
+let COMP_EFFECT_BLUR   = 1;
+let COMP_EFFECT_GLASS  = 2;   // Mica/Acrylic
+let COMP_EFFECT_SHADOW = 4;   // OR-combined
+
+let mut comp_initialized = 0;
+let mut comp_surface_addr   = [0];
+let mut comp_surface_x      = [0];
+let mut comp_surface_y      = [0];
+let mut comp_surface_w      = [0];
+let mut comp_surface_h      = [0];
+let mut comp_surface_z      = [0];
+let mut comp_surface_alpha  = [0];
+let mut comp_surface_effect = [0];
+let mut comp_surface_visible= [0];
+let mut comp_surface_used   = [0];
+let mut comp_damage_x       = [0];
+let mut comp_damage_y       = [0];
+let mut comp_damage_w       = [0];
+let mut comp_damage_h       = [0];
+let mut comp_damage_set     = [0];
+
+fn compositor_init() {
+    if comp_initialized == 1 { return 0; }
+    comp_surface_addr    = array_new(COMP_SURFACE_MAX, 0);
+    comp_surface_x       = array_new(COMP_SURFACE_MAX, 0);
+    comp_surface_y       = array_new(COMP_SURFACE_MAX, 0);
+    comp_surface_w       = array_new(COMP_SURFACE_MAX, 0);
+    comp_surface_h       = array_new(COMP_SURFACE_MAX, 0);
+    comp_surface_z       = array_new(COMP_SURFACE_MAX, 0);
+    comp_surface_alpha   = array_new(COMP_SURFACE_MAX, 255);
+    comp_surface_effect  = array_new(COMP_SURFACE_MAX, 0);
+    comp_surface_visible = array_new(COMP_SURFACE_MAX, 0);
+    comp_surface_used    = array_new(COMP_SURFACE_MAX, 0);
+    comp_damage_x        = array_new(COMP_SURFACE_MAX, 0);
+    comp_damage_y        = array_new(COMP_SURFACE_MAX, 0);
+    comp_damage_w        = array_new(COMP_SURFACE_MAX, 0);
+    comp_damage_h        = array_new(COMP_SURFACE_MAX, 0);
+    comp_damage_set      = array_new(COMP_SURFACE_MAX, 0);
+    // Pre-compute pool slot addresses.
+    let mut i = 0;
+    while i < COMP_SURFACE_MAX {
+        comp_surface_addr[i] = COMP_POOL_ADDR + i * COMP_SLOT_BYTES;
+        i = i + 1;
+    }
+    comp_initialized = 1;
+    print("compositor: " + to_string(COMP_SURFACE_MAX) + " surfaces, " +
+          to_string(COMP_POOL_BYTES / 1048576) + " MB pool @ 0x" + format_hex(COMP_POOL_ADDR, 8));
+    return 1;
+}
+
+fn comp_alloc_surface(w, h) {
+    if comp_initialized == 0 { compositor_init(); }
+    // Clamp to slot capacity (512 KB = 128K pixels => 1024x128 or 512x256, etc.)
+    let mut max_pixels = COMP_SLOT_BYTES / 4;
+    if w * h > max_pixels {
+        // Reduce h to fit
+        h = max_pixels / w;
+        if h <= 0 { h = 1; }
+    }
+    let mut i = 0;
+    while i < COMP_SURFACE_MAX {
+        if comp_surface_used[i] == 0 {
+            comp_surface_used[i]    = 1;
+            comp_surface_w[i]       = w;
+            comp_surface_h[i]       = h;
+            comp_surface_x[i]       = 0;
+            comp_surface_y[i]       = 0;
+            comp_surface_z[i]       = i;
+            comp_surface_alpha[i]   = 255;
+            comp_surface_effect[i]  = 0;
+            comp_surface_visible[i] = 1;
+            comp_damage_set[i]      = 0;
+            // Clear surface to fully-transparent
+            let mut addr = comp_surface_addr[i];
+            mem_set32(addr, 0, w * h);
+            return i;
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn comp_free_surface(id) {
+    if id < 0 { return 0; }
+    if id >= COMP_SURFACE_MAX { return 0; }
+    comp_surface_used[id]    = 0;
+    comp_surface_visible[id] = 0;
+    return 0;
+}
+
+fn comp_set_pos(id, x, y) {
+    if id < 0 { return 0; } if id >= COMP_SURFACE_MAX { return 0; }
+    comp_surface_x[id] = x;
+    comp_surface_y[id] = y;
+    return 0;
+}
+
+fn comp_set_z(id, z)        { if id >= 0 { comp_surface_z[id]      = z; }      return 0; }
+fn comp_set_alpha(id, a)    { if id >= 0 { comp_surface_alpha[id]  = a; }      return 0; }
+fn comp_set_effect(id, e)   { if id >= 0 { comp_surface_effect[id] = e; }      return 0; }
+fn comp_set_visible(id, v)  { if id >= 0 { comp_surface_visible[id]= v; }      return 0; }
+fn comp_surface_pixel_addr(id, x, y) { return comp_surface_addr[id] + (y * comp_surface_w[id] + x) * 4; }
+
+fn comp_damage(id, x, y, w, h) {
+    if id < 0 { return 0; } if id >= COMP_SURFACE_MAX { return 0; }
+    if comp_damage_set[id] == 0 {
+        comp_damage_x[id] = x; comp_damage_y[id] = y;
+        comp_damage_w[id] = w; comp_damage_h[id] = h;
+        comp_damage_set[id] = 1;
+        return 0;
+    }
+    let mut x1 = comp_damage_x[id];
+    let mut y1 = comp_damage_y[id];
+    let mut x2 = x1 + comp_damage_w[id];
+    let mut y2 = y1 + comp_damage_h[id];
+    if x  < x1 { x1 = x; }
+    if y  < y1 { y1 = y; }
+    if x + w > x2 { x2 = x + w; }
+    if y + h > y2 { y2 = y + h; }
+    comp_damage_x[id] = x1; comp_damage_y[id] = y1;
+    comp_damage_w[id] = x2 - x1; comp_damage_h[id] = y2 - y1;
+    return 0;
+}
+
+// Blit surface (alpha-blended) into the backbuffer at its (x, y).
+fn comp_blit_surface(id) {
+    if id < 0 { return 0; }
+    if comp_surface_used[id] == 0 { return 0; }
+    if comp_surface_visible[id] == 0 { return 0; }
+    let mut sx = comp_surface_x[id];
+    let mut sy = comp_surface_y[id];
+    let mut sw = comp_surface_w[id];
+    let mut sh = comp_surface_h[id];
+    let mut alpha = comp_surface_alpha[id];
+    let mut src   = comp_surface_addr[id];
+    let mut dy = 0;
+    while dy < sh {
+        let mut py = sy + dy;
+        if py >= 0 {
+            if py < gfx_back_height {
+                let mut dx = 0;
+                while dx < sw {
+                    let mut px = sx + dx;
+                    if px >= 0 {
+                        if px < gfx_back_width {
+                            let mut sc = mem_read_u32(src + (dy * sw + dx) * 4);
+                            // Scale src alpha by surface alpha
+                            let mut sa = gfx_color_a(sc) * alpha / 255;
+                            if sa > 0 {
+                                let mut sc2 = gfx_pack(sa,
+                                    gfx_color_r(sc), gfx_color_g(sc), gfx_color_b(sc));
+                                gfx_putpixel_alpha(px, py, sc2);
+                            }
+                        }
+                    }
+                    dx = dx + 1;
+                }
+            }
+        }
+        dy = dy + 1;
+    }
+    return 0;
+}
+
+// Assemble visible surfaces in z-order ascending; emit to backbuffer.
+fn compositor_present() {
+    if comp_initialized == 0 { return 0; }
+    // Selection sort by z, stable enough at 32 elements.
+    let mut order = array_new(COMP_SURFACE_MAX, 0);
+    let mut n = 0;
+    let mut i = 0;
+    while i < COMP_SURFACE_MAX {
+        if comp_surface_used[i] == 1 {
+            if comp_surface_visible[i] == 1 {
+                order[n] = i;
+                n = n + 1;
+            }
+        }
+        i = i + 1;
+    }
+    let mut a = 1;
+    while a < n {
+        let mut v = order[a];
+        let mut vz = comp_surface_z[v];
+        let mut b = a - 1;
+        while b >= 0 {
+            if comp_surface_z[order[b]] > vz {
+                order[b + 1] = order[b];
+                b = b - 1;
+            } else {
+                b = 0 - 1;
+            }
+        }
+        order[b + 1] = v;
+        a = a + 1;
+    }
+    let mut k = 0;
+    while k < n {
+        let mut sid = order[k];
+        let mut eff = comp_surface_effect[sid];
+        if eff / COMP_EFFECT_SHADOW % 2 == 1 {
+            gfx_shadow_draw(
+                comp_surface_x[sid], comp_surface_y[sid],
+                comp_surface_w[sid], comp_surface_h[sid]);
+        }
+        if eff % 2 == 1 {
+            gfx_blur_region(
+                comp_surface_x[sid], comp_surface_y[sid],
+                comp_surface_w[sid], comp_surface_h[sid], 8);
+        }
+        if eff / COMP_EFFECT_GLASS % 2 == 1 {
+            // Mica tint on top of blurred backdrop.
+            gfx_fill_rect(comp_surface_x[sid], comp_surface_y[sid],
+                          comp_surface_w[sid], comp_surface_h[sid],
+                          ui_theme_glass_color());
+        }
+        comp_blit_surface(sid);
+        comp_damage_set[sid] = 0;
+        k = k + 1;
+    }
+    // Eye-care LUT pass + LFB push
+    eyecare_apply();
+    gfx_present();
+    return 0;
+}
+
+fn compositor_info() {
+    let mut used = 0;
+    let mut i = 0;
+    while i < COMP_SURFACE_MAX {
+        if comp_surface_used[i] == 1 { used = used + 1; }
+        i = i + 1;
+    }
+    print("compositor: surfaces=" + to_string(used) + "/" + to_string(COMP_SURFACE_MAX));
+    return 0;
+}
+
+print("compositor.hl loaded");

@@ -1,0 +1,112 @@
+// app_files.hl -- 响应式文件管理器（Sprint G6）
+//
+// 布局规则：
+//   xs/sm  -> 单栏列表，TabBar 切换 (Recent/Files/Trash)
+//   md+    -> 左 Sidebar + 右 List/Grid 主区
+// 视图模式：List / Grid，由 SegmentedControl 切换
+// 数据来源：调用 vfs_list / vfs_stat（如不可用则用静态示例数据）
+
+let APPFILES_VIEW_LIST = 0;
+let APPFILES_VIEW_GRID = 1;
+
+let mut appfiles_initialized = 0;
+let mut appfiles_win         = 0;
+let mut appfiles_sidebar     = 0;
+let mut appfiles_list        = 0;
+let mut appfiles_segmented   = 0;
+let mut appfiles_breadcrumb  = 0;
+let mut appfiles_view_mode   = 0;
+let mut appfiles_path_addr   = 0;
+let mut appfiles_rows_addr   = 0;
+let mut appfiles_row_count   = 0;
+
+// 静态示例条目（地址）；真实数据应由 vfs 填充
+let APPFILES_ROWS_BUF = 73400320;   // 0x04600000
+
+fn app_files_seed_demo() {
+    // 写入 6 个示例文件名指针（每项 8 字节）
+    let mut base = APPFILES_ROWS_BUF;
+    let mut s0 = "Documents"; let mut s1 = "Downloads";
+    let mut s2 = "Pictures";  let mut s3 = "Music";
+    let mut s4 = "README.md"; let mut s5 = "kernel.hl";
+    // 字符串地址不便取，用 cstring_pool 风格：写入字符到固定区
+    let mut pool = APPFILES_ROWS_BUF + 256;
+    let mut p = pool;
+    // Documents
+    mem_write_u32(base + 0, p);  p = appfiles_write_cstr(p, s0);
+    mem_write_u32(base + 8, p);  p = appfiles_write_cstr(p, s1);
+    mem_write_u32(base + 16, p); p = appfiles_write_cstr(p, s2);
+    mem_write_u32(base + 24, p); p = appfiles_write_cstr(p, s3);
+    mem_write_u32(base + 32, p); p = appfiles_write_cstr(p, s4);
+    mem_write_u32(base + 40, p); p = appfiles_write_cstr(p, s5);
+    appfiles_rows_addr = base;
+    appfiles_row_count = 6;
+    return 0;
+}
+
+fn appfiles_write_cstr(dst, s) {
+    let mut i = 0;
+    let mut n = strlen(s);
+    while i < n {
+        mem_write_u8(dst + i, str_byte(s, i));
+        i = i + 1;
+    }
+    mem_write_u8(dst + n, 0);
+    return dst + n + 1;
+}
+
+fn app_files_init() {
+    if appfiles_initialized == 1 { return 0; }
+    appfiles_view_mode = APPFILES_VIEW_LIST;
+    app_files_seed_demo();
+    appfiles_initialized = 1;
+    print("app_files: responsive file manager ready");
+    return 0;
+}
+
+fn app_files_open() {
+    if appfiles_initialized == 0 { app_files_init(); }
+    let mut sw = vesa_width;  if sw == 0 { sw = 1024; }
+    let mut sh = vesa_height; if sh == 0 { sh = 768; }
+    let mut w = 720; let mut h = 480;
+    let mut bp = al_breakpoint_get();
+    if bp <= AL_BP_SM { w = sw; h = sh - shell_topbar_height(); }
+    appfiles_win = widget_new(WIDGET_KIND_GROUPBOX, 0,
+                              (sw - w) / 2, (sh - h) / 2, w, h);
+    widget_set_label(appfiles_win, "Files");
+    // 响应式：md+ 才有侧栏
+    if bp >= AL_BP_MD {
+        appfiles_sidebar = sidebar_new(appfiles_win,
+            widget_x[appfiles_win], widget_y[appfiles_win] + 32,
+            200, h - 32, 4);
+        appfiles_list = list_new(appfiles_win,
+            widget_x[appfiles_win] + 200, widget_y[appfiles_win] + 64,
+            w - 200, h - 64,
+            appfiles_row_count, appfiles_rows_addr);
+    } else {
+        appfiles_list = list_new(appfiles_win,
+            widget_x[appfiles_win], widget_y[appfiles_win] + 64,
+            w, h - 64,
+            appfiles_row_count, appfiles_rows_addr);
+    }
+    appfiles_segmented = segmented_new(appfiles_win,
+        widget_x[appfiles_win] + w - 140, widget_y[appfiles_win] + 36,
+        128, 24, 2, 0);
+    appfiles_breadcrumb = breadcrumb_new(appfiles_win,
+        widget_x[appfiles_win] + 12, widget_y[appfiles_win] + 36,
+        w - 160, 24, 2, appfiles_rows_addr);
+    return appfiles_win;
+}
+
+fn app_files_paint() {
+    if appfiles_initialized == 0 { return 0; }
+    if appfiles_win == 0 { return 0; }
+    groupbox_paint(appfiles_win);
+    if appfiles_sidebar != 0 { sidebar_paint(appfiles_sidebar); }
+    segmented_paint(appfiles_segmented);
+    breadcrumb_paint(appfiles_breadcrumb);
+    list_paint(appfiles_list);
+    return 0;
+}
+
+print("app_files.hl loaded");

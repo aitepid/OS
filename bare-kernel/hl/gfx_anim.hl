@@ -1,0 +1,149 @@
+// gfx_anim.hl -- Animation tick + Fluent easing
+//
+// Sprint G2 of HicOS GUI injection (per GUI_DESIGN.md §3.3).
+//
+// Drives layer attribute interpolation (x, y, w, h, alpha). Each animation
+// references a target by tag (compositor surface id or wm window id) plus
+// an integer property selector (ANIM_PROP_*). Easing is Fluent's standard
+// cubic-bezier(0.2, 0, 0, 1) approximated by a 64-entry LUT.
+//
+// Tick source: the 100 Hz PIT scheduler heartbeat calls anim_tick(10) once
+// per frame. Default Fluent durations: 167/250/333 ms (fast/normal/slow).
+
+let ANIM_MAX = 64;
+
+let ANIM_PROP_X      = 0;
+let ANIM_PROP_Y      = 1;
+let ANIM_PROP_W      = 2;
+let ANIM_PROP_H      = 3;
+let ANIM_PROP_ALPHA  = 4;
+let ANIM_PROP_SCALE  = 5;
+
+let ANIM_TARGET_SURFACE = 1;
+let ANIM_TARGET_WM      = 2;
+
+let ANIM_EASE_LINEAR = 0;
+let ANIM_EASE_OUT    = 1;     // Fluent default
+let ANIM_EASE_SPRING = 2;
+
+let mut anim_initialized = 0;
+let mut anim_active   = [0];
+let mut anim_target_t = [0];
+let mut anim_target_id= [0];
+let mut anim_prop     = [0];
+let mut anim_from     = [0];
+let mut anim_to       = [0];
+let mut anim_dur_ms   = [0];
+let mut anim_t_ms     = [0];
+let mut anim_ease     = [0];
+let mut anim_lut      = [0];     // 64 entries, scaled 0..1000
+
+fn anim_init() {
+    if anim_initialized == 1 { return 0; }
+    anim_active    = array_new(ANIM_MAX, 0);
+    anim_target_t  = array_new(ANIM_MAX, 0);
+    anim_target_id = array_new(ANIM_MAX, 0);
+    anim_prop      = array_new(ANIM_MAX, 0);
+    anim_from      = array_new(ANIM_MAX, 0);
+    anim_to        = array_new(ANIM_MAX, 0);
+    anim_dur_ms    = array_new(ANIM_MAX, 0);
+    anim_t_ms      = array_new(ANIM_MAX, 0);
+    anim_ease      = array_new(ANIM_MAX, 0);
+    // Build the easing LUT for cubic-bezier(0.2, 0, 0, 1).
+    // We approximate with: y = 1 - (1 - t)^3 (cubic ease-out), which is
+    // visually identical at this size and avoids the bezier solver.
+    anim_lut = array_new(64, 0);
+    let mut i = 0;
+    while i < 64 {
+        let mut t  = i * 1000 / 63;          // 0..1000
+        let mut iv = 1000 - t;
+        let mut e  = 1000 - (iv * iv * iv) / 1000000;  // 0..1000
+        anim_lut[i] = e;
+        i = i + 1;
+    }
+    anim_initialized = 1;
+    return 0;
+}
+
+fn anim_ease_value(progress_per_mille, ease) {
+    if ease == ANIM_EASE_LINEAR { return progress_per_mille; }
+    if anim_initialized == 0 { anim_init(); }
+    let mut idx = progress_per_mille * 63 / 1000;
+    if idx < 0 { idx = 0; }
+    if idx > 63 { idx = 63; }
+    let mut v = anim_lut[idx];
+    if ease == ANIM_EASE_SPRING {
+        // Cheap spring: overshoot by 12% then settle.
+        let mut over = 1120 - (idx - 50) * (idx - 50);
+        if over < v { v = over; }
+        if v > 1120 { v = 1120; }
+    }
+    return v;
+}
+
+fn anim_start(target_t, target_id, prop, from, to, dur_ms, ease) {
+    if anim_initialized == 0 { anim_init(); }
+    let mut i = 0;
+    while i < ANIM_MAX {
+        if anim_active[i] == 0 {
+            anim_active[i]    = 1;
+            anim_target_t[i]  = target_t;
+            anim_target_id[i] = target_id;
+            anim_prop[i]      = prop;
+            anim_from[i]      = from;
+            anim_to[i]        = to;
+            anim_dur_ms[i]    = dur_ms;
+            anim_t_ms[i]      = 0;
+            anim_ease[i]      = ease;
+            return i;
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn anim_apply(target_t, target_id, prop, value) {
+    if target_t == ANIM_TARGET_SURFACE {
+        if prop == ANIM_PROP_X     { comp_set_pos(target_id, value, comp_surface_y[target_id]); }
+        if prop == ANIM_PROP_Y     { comp_set_pos(target_id, comp_surface_x[target_id], value); }
+        if prop == ANIM_PROP_ALPHA { comp_set_alpha(target_id, value); }
+        // Width/height changes require surface resize (G3 territory); ignore here.
+    }
+    return 0;
+}
+
+fn anim_tick(dt_ms) {
+    if anim_initialized == 0 { return 0; }
+    let mut i = 0;
+    while i < ANIM_MAX {
+        if anim_active[i] == 1 {
+            anim_t_ms[i] = anim_t_ms[i] + dt_ms;
+            let mut progress = 1000;
+            if anim_dur_ms[i] > 0 {
+                progress = anim_t_ms[i] * 1000 / anim_dur_ms[i];
+            }
+            if progress >= 1000 { progress = 1000; }
+            let mut e = anim_ease_value(progress, anim_ease[i]);
+            let mut v = anim_from[i] + (anim_to[i] - anim_from[i]) * e / 1000;
+            anim_apply(anim_target_t[i], anim_target_id[i], anim_prop[i], v);
+            if progress >= 1000 {
+                anim_active[i] = 0;
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn anim_count_active() {
+    if anim_initialized == 0 { return 0; }
+    let mut n = 0;
+    let mut i = 0;
+    while i < ANIM_MAX {
+        if anim_active[i] == 1 { n = n + 1; }
+        i = i + 1;
+    }
+    return n;
+}
+
+print("gfx_anim.hl loaded");

@@ -3804,6 +3804,17 @@ $kern_bytes = [byte[]]$script:buf.ToArray()
 $kern_sectors = [math]::Ceiling($kern_bytes.Length / 512)
 Write-Host "  Kernel: $($kern_bytes.Length) bytes ($kern_sectors sectors)" -ForegroundColor White
 
+# === Export handwritten-kernel symbol table for hl-compile-pipeline linker ===
+# Sprint 36: builtin trampolines need absolute addresses of handwritten subroutines.
+$kernSymTable = @{
+    base       = '0x100000'
+    serial_puts     = ('0x{0:X}' -f (0x100000 + $serial_puts_off))
+    serial_hex_byte = ('0x{0:X}' -f (0x100000 + $serial_hex_byte_off))
+}
+$kernSymPath = Join-Path $PSScriptRoot '..\bare-kernel\kernel-symbols.json'
+$kernSymTable | ConvertTo-Json | Set-Content -Path $kernSymPath -Encoding ASCII
+Write-Host "  Symbol export: serial_puts=$($kernSymTable.serial_puts)" -ForegroundColor DarkGray
+
 # === Append optional `kernel.bin` payload after the handwritten kernel ===
 # Pad the handwritten kernel to 128 KB (0x20000), then append `kernel.bin`.
 # The appended payload runs at 0x120000 (0x100000 + 0x20000).

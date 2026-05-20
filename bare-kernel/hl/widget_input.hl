@@ -1,0 +1,208 @@
+// widget_input.hl -- Text input family (textfield, search, spinbox, slider)
+//
+// Sprint G4 of HicOS GUI injection (per GUI_DESIGN.md §3.5).
+//
+// Single backing store for typed text: a 256-byte buffer per widget, with
+// the address packed into widget_extra (positive = heap, negative = inline
+// at widget_buffers[-extra]). For G4 we only support inline buffers.
+
+let INPUT_BUF_SIZE = 256;
+let INPUT_MAX      = 64;
+
+let mut input_initialized = 0;
+let mut input_buf_addr = [0];     // address into a fixed 0x4500000 pool
+let mut input_buf_len  = [0];
+let mut input_cursor   = [0];
+
+let INPUT_POOL_ADDR = 72351744;   // 0x04500000  (64 * 256 = 16 KB)
+
+fn widget_input_init() {
+    if input_initialized == 1 { return 0; }
+    input_buf_addr = array_new(INPUT_MAX, 0);
+    input_buf_len  = array_new(INPUT_MAX, 0);
+    input_cursor   = array_new(INPUT_MAX, 0);
+    let mut i = 0;
+    while i < INPUT_MAX {
+        input_buf_addr[i] = INPUT_POOL_ADDR + i * INPUT_BUF_SIZE;
+        i = i + 1;
+    }
+    input_initialized = 1;
+    return 0;
+}
+
+fn input_alloc_slot() {
+    if input_initialized == 0 { widget_input_init(); }
+    let mut i = 0;
+    while i < INPUT_MAX {
+        if input_buf_len[i] == 0 - 1 {
+            input_buf_len[i] = 0;
+            return i;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn textfield_new(parent, x, y, w, h, placeholder_addr) {
+    let mut id = widget_new(WIDGET_KIND_TEXTFIELD, parent, x, y, w, h);
+    let mut slot = input_alloc_slot();
+    widget_set_extra(id, slot);
+    widget_set_label(id, placeholder_addr);
+    input_buf_len[slot] = 0;
+    input_cursor[slot]  = 0;
+    return id;
+}
+
+fn search_new(parent, x, y, w, h, placeholder_addr) {
+    let mut id = textfield_new(parent, x, y, w, h, placeholder_addr);
+    widget_kind[id] = WIDGET_KIND_SEARCH;
+    return id;
+}
+
+fn input_text_addr(id) { return input_buf_addr[widget_extra[id]]; }
+fn input_text_len(id)  { return input_buf_len[widget_extra[id]]; }
+
+fn input_append_char(id, ch) {
+    let mut slot = widget_extra[id];
+    let mut len = input_buf_len[slot];
+    if len >= INPUT_BUF_SIZE - 1 { return 0; }
+    mem_write_u8(input_buf_addr[slot] + len, ch);
+    input_buf_len[slot] = len + 1;
+    input_cursor[slot]  = input_cursor[slot] + 1;
+    widget_set_dirty(id);
+    return 0;
+}
+
+fn input_backspace(id) {
+    let mut slot = widget_extra[id];
+    if input_buf_len[slot] == 0 { return 0; }
+    input_buf_len[slot] = input_buf_len[slot] - 1;
+    if input_cursor[slot] > 0 { input_cursor[slot] = input_cursor[slot] - 1; }
+    widget_set_dirty(id);
+    return 0;
+}
+
+fn textfield_paint(id) {
+    if widget_get_flag(id, WIDGET_FLAG_VISIBLE) == 0 { return 0; }
+    widget_base_rect(id, 4);
+    let mut slot = widget_extra[id];
+    let mut size = al_density_font_body();
+    let mut pad  = al_density_pad();
+    let mut tx = widget_x[id] + pad;
+    let mut ty = widget_y[id] + (widget_h[id] - font_atlas_h(size)) / 2;
+    if widget_kind[id] == WIDGET_KIND_SEARCH {
+        // Draw magnifier glyph (cheap path: small circle + line).
+        let mut cx = tx + 6;
+        let mut cy = ty + font_atlas_h(size) / 2;
+        gfx_circle_aa(cx, cy, 4, ui_theme_text_secondary());
+        gfx_line_aa(cx + 3, cy + 3, cx + 8, cy + 8, ui_theme_text_secondary());
+        tx = tx + 16;
+    }
+    if input_buf_len[slot] == 0 {
+        if widget_label[id] != 0 {
+            font_atlas_draw_str(tx, ty, cstr_from_addr(widget_label[id]), size,
+                                ui_theme_text_secondary());
+        }
+    } else {
+        font_atlas_draw_str(tx, ty, cstr_from_addr(input_buf_addr[slot]), size,
+                            ui_theme_text_primary());
+    }
+    // Caret when focused — simple 1 px vertical line at end of text.
+    if widget_get_flag(id, WIDGET_FLAG_FOCUSED) == 1 {
+        let mut cx = tx + font_atlas_measure_n(slot, size);
+        gfx_line_aa(cx, ty, cx, ty + font_atlas_h(size), ui_theme_accent_get());
+    }
+    widget_set_flag(id, WIDGET_FLAG_DIRTY, 0);
+    return 0;
+}
+
+fn font_atlas_measure_n(slot, size) {
+    let mut len = input_buf_len[slot];
+    let mut adv = font_atlas_w(size) + 1;
+    return len * adv;
+}
+
+// ─── Slider ──────────────────────────────────────────────────────────────────
+
+fn slider_new(parent, x, y, w, h, lo, hi, initial) {
+    let mut id = widget_new(WIDGET_KIND_SLIDER, parent, x, y, w, h);
+    widget_set_range(id, lo, hi);
+    widget_set_value(id, initial);
+    return id;
+}
+
+fn slider_paint(id) {
+    if widget_get_flag(id, WIDGET_FLAG_VISIBLE) == 0 { return 0; }
+    let mut sx = widget_x[id];
+    let mut sy = widget_y[id] + widget_h[id] / 2 - 2;
+    let mut sw = widget_w[id];
+    // Track
+    gfx_rect_round(sx, sy, sw, 4, 2, ui_theme_bg_overlay());
+    // Filled portion
+    let mut span = widget_max[id] - widget_min[id];
+    if span <= 0 { span = 1; }
+    let mut prog = (widget_value[id] - widget_min[id]) * sw / span;
+    if prog < 0    { prog = 0; }
+    if prog > sw   { prog = sw; }
+    gfx_rect_round(sx, sy, prog, 4, 2, ui_theme_accent_get());
+    // Thumb (Fluent: filled disc with 1 px ring)
+    let mut tx = sx + prog;
+    let mut ty = sy + 2;
+    gfx_circle_aa(tx, ty, 8, ui_theme_accent_get());
+    gfx_circle_aa(tx, ty, 4, gfx_pack(255, 255, 255, 255));
+    widget_set_flag(id, WIDGET_FLAG_DIRTY, 0);
+    return 0;
+}
+
+fn slider_handle_pointer(id, ev_type, x, y) {
+    if widget_hit(id, x, y) == 0 { return 0; }
+    if ev_type == PEV_TYPE_DOWN { widget_set_flag(id, WIDGET_FLAG_PRESSED, 1); }
+    if ev_type == PEV_TYPE_UP   { widget_set_flag(id, WIDGET_FLAG_PRESSED, 0); }
+    if widget_get_flag(id, WIDGET_FLAG_PRESSED) == 1 {
+        let mut rel = x - widget_x[id];
+        if rel < 0 { rel = 0; }
+        if rel > widget_w[id] { rel = widget_w[id]; }
+        let mut span = widget_max[id] - widget_min[id];
+        widget_set_value(id, widget_min[id] + rel * span / widget_w[id]);
+        return 1;
+    }
+    return 0;
+}
+
+// ─── SpinBox: integer field with +/- buttons ─────────────────────────────────
+
+fn spinbox_new(parent, x, y, w, h, lo, hi, initial) {
+    let mut id = widget_new(WIDGET_KIND_SPINBOX, parent, x, y, w, h);
+    widget_set_range(id, lo, hi);
+    widget_set_value(id, initial);
+    return id;
+}
+
+fn spinbox_paint(id) {
+    if widget_get_flag(id, WIDGET_FLAG_VISIBLE) == 0 { return 0; }
+    widget_base_rect(id, 4);
+    let mut size = al_density_font_body();
+    let mut s = to_string(widget_value[id]);
+    let mut tw = font_atlas_measure(s, size);
+    let mut tx = widget_x[id] + (widget_w[id] - tw) / 2;
+    let mut ty = widget_y[id] + (widget_h[id] - font_atlas_h(size)) / 2;
+    font_atlas_draw_str(tx, ty, s, size, ui_theme_text_primary());
+    // Up / down chevrons
+    let mut bx = widget_x[id] + widget_w[id] - 20;
+    let mut up_y = widget_y[id] + 4;
+    let mut dn_y = widget_y[id] + widget_h[id] - 14;
+    gfx_path_reset();
+    gfx_path_move(bx + 2,  up_y + 6);
+    gfx_path_line(bx + 6,  up_y);
+    gfx_path_line(bx + 10, up_y + 6);
+    gfx_path_stroke(ui_theme_text_secondary());
+    gfx_path_reset();
+    gfx_path_move(bx + 2,  dn_y);
+    gfx_path_line(bx + 6,  dn_y + 6);
+    gfx_path_line(bx + 10, dn_y);
+    gfx_path_stroke(ui_theme_text_secondary());
+    widget_set_flag(id, WIDGET_FLAG_DIRTY, 0);
+    return 0;
+}
+
+print("widget_input.hl loaded");

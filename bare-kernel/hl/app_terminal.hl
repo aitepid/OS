@@ -1,0 +1,152 @@
+// app_terminal.hl -- GUI 终端（Sprint G6）
+//
+// Win11 Terminal 风格：暗背景 + 顶部 Tab + 等宽字体网格。每次按 Enter
+// 调用现有 shell.hl 的命令分发器，捕获输出到内置 80×30 文本缓冲。
+//
+// 响应式：xs 上隐藏 Tab 栏，正文撑满；md+ 显示标签条。
+
+let APPTERM_COLS = 80;
+let APPTERM_ROWS = 30;
+let APPTERM_BUF  = 73465856;   // 0x04610000  (80*30 = 2400 字节)
+let APPTERM_INPUT_BUF = 73468256; // 0x04610960
+
+let mut appterm_initialized = 0;
+let mut appterm_win         = 0;
+let mut appterm_cursor      = 0;
+let mut appterm_input_len   = 0;
+let mut appterm_input_addr  = 0;
+
+fn app_terminal_init() {
+    if appterm_initialized == 1 { return 0; }
+    // 清空文本缓冲
+    let mut i = 0;
+    while i < APPTERM_COLS * APPTERM_ROWS {
+        mem_write_u8(APPTERM_BUF + i, 32);  // 空格
+        i = i + 1;
+    }
+    appterm_cursor = 0;
+    appterm_input_len = 0;
+    appterm_input_addr = APPTERM_INPUT_BUF;
+    mem_write_u8(appterm_input_addr, 0);
+    appterm_initialized = 1;
+    print("app_terminal: GUI terminal ready");
+    return 0;
+}
+
+fn appterm_putc(ch) {
+    if ch == 10 {
+        let mut col = appterm_cursor % APPTERM_COLS;
+        appterm_cursor = appterm_cursor + (APPTERM_COLS - col);
+    } else {
+        mem_write_u8(APPTERM_BUF + appterm_cursor, ch);
+        appterm_cursor = appterm_cursor + 1;
+    }
+    // 滚动
+    if appterm_cursor >= APPTERM_COLS * APPTERM_ROWS {
+        mem_copy(APPTERM_BUF, APPTERM_BUF + APPTERM_COLS,
+                 APPTERM_COLS * (APPTERM_ROWS - 1));
+        let mut i = 0;
+        while i < APPTERM_COLS {
+            mem_write_u8(APPTERM_BUF + APPTERM_COLS * (APPTERM_ROWS - 1) + i, 32);
+            i = i + 1;
+        }
+        appterm_cursor = APPTERM_COLS * (APPTERM_ROWS - 1);
+    }
+    return 0;
+}
+
+fn appterm_print_cstr(addr) {
+    let mut i = 0;
+    let mut c = mem_read_u8(addr);
+    while c != 0 {
+        appterm_putc(c);
+        i = i + 1;
+        c = mem_read_u8(addr + i);
+    }
+    return 0;
+}
+
+fn app_terminal_input_char(ch) {
+    if appterm_initialized == 0 { app_terminal_init(); }
+    if ch == 8 {
+        if appterm_input_len > 0 {
+            appterm_input_len = appterm_input_len - 1;
+            mem_write_u8(appterm_input_addr + appterm_input_len, 0);
+        }
+        return 0;
+    }
+    if ch == 13 {
+        // 提交：回显 + 占位响应
+        appterm_print_cstr(appterm_input_addr);
+        appterm_putc(10);
+        appterm_print_cstr("(stub) command queued.");
+        appterm_putc(10);
+        appterm_input_len = 0;
+        mem_write_u8(appterm_input_addr, 0);
+        return 0;
+    }
+    if appterm_input_len >= 255 { return 0; }
+    mem_write_u8(appterm_input_addr + appterm_input_len, ch);
+    appterm_input_len = appterm_input_len + 1;
+    mem_write_u8(appterm_input_addr + appterm_input_len, 0);
+    return 0;
+}
+
+fn app_terminal_open() {
+    if appterm_initialized == 0 { app_terminal_init(); }
+    let mut sw = vesa_width;  if sw == 0 { sw = 1024; }
+    let mut sh = vesa_height; if sh == 0 { sh = 768; }
+    let mut w = 720; let mut h = 480;
+    let mut bp = al_breakpoint_get();
+    if bp <= AL_BP_SM { w = sw; h = sh - shell_topbar_height(); }
+    appterm_win = widget_new(WIDGET_KIND_GROUPBOX, 0,
+                             (sw - w) / 2, (sh - h) / 2, w, h);
+    widget_set_label(appterm_win, "Terminal");
+    return appterm_win;
+}
+
+fn app_terminal_paint() {
+    if appterm_initialized == 0 { return 0; }
+    if appterm_win == 0 { return 0; }
+    let mut x = widget_x[appterm_win];
+    let mut y = widget_y[appterm_win];
+    let mut w = widget_w[appterm_win];
+    let mut h = widget_h[appterm_win];
+    // 暗背景
+    gfx_rect_round(x, y, w, h, 8, gfx_pack(255, 28, 28, 30));
+    font_atlas_draw_str(x + 12, y + 8, "Terminal", 15,
+                        gfx_pack(255, 220, 220, 220));
+    // 文本网格（等宽字体 size=13）
+    let mut cw = font_atlas_w(13) + 1;
+    let mut ch = font_atlas_h(13);
+    let mut tx0 = x + 12;
+    let mut ty0 = y + 32;
+    let mut r = 0;
+    while r < APPTERM_ROWS {
+        let mut c = 0;
+        while c < APPTERM_COLS {
+            let mut by = mem_read_u8(APPTERM_BUF + r * APPTERM_COLS + c);
+            if by != 32 {
+                font_atlas_draw_glyph(tx0 + c * cw, ty0 + r * ch, by, 13,
+                                      gfx_pack(255, 220, 240, 220));
+            }
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    // 提示符 + 当前输入
+    let mut iy = y + h - ch - 12;
+    font_atlas_draw_str(tx0, iy, "> ", 13, gfx_pack(255, 120, 200, 255));
+    if appterm_input_len > 0 {
+        font_atlas_draw_str(tx0 + cw * 2, iy, cstr_from_addr(appterm_input_addr),
+                            13, gfx_pack(255, 240, 240, 240));
+    }
+    // 闪烁光标
+    let mut cur_x = tx0 + cw * 2 + appterm_input_len * cw;
+    if (get_ticks() / 50) % 2 == 0 {
+        gfx_fill_rect(cur_x, iy, cw - 1, ch, gfx_pack(255, 200, 200, 200));
+    }
+    return 0;
+}
+
+print("app_terminal.hl loaded");

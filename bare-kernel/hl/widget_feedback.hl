@@ -1,0 +1,203 @@
+// widget_feedback.hl -- Toast, dialog, tooltip, progressbar, spinner
+//
+// Sprint G4 of HicOS GUI injection (per GUI_DESIGN.md §3.5).
+
+let TOAST_DURATION_MS  = 4000;
+let TOAST_MAX          = 4;
+
+let mut toast_initialized = 0;
+let mut toast_msg_addr    = [0];
+let mut toast_start_ts    = [0];
+let mut toast_active      = [0];
+
+fn widget_feedback_init() {
+    if toast_initialized == 1 { return 0; }
+    toast_msg_addr = array_new(TOAST_MAX, 0);
+    toast_start_ts = array_new(TOAST_MAX, 0);
+    toast_active   = array_new(TOAST_MAX, 0);
+    toast_initialized = 1;
+    print("widget_feedback: toast/tooltip/progress/spinner ready");
+    return 0;
+}
+
+fn toast_show(msg_addr) {
+    if toast_initialized == 0 { widget_feedback_init(); }
+    let mut i = 0;
+    while i < TOAST_MAX {
+        if toast_active[i] == 0 {
+            toast_active[i]   = 1;
+            toast_msg_addr[i] = msg_addr;
+            toast_start_ts[i] = get_ticks() * 10;
+            return i;
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn toast_paint_all(screen_w, screen_h) {
+    if toast_initialized == 0 { return 0; }
+    let mut now = get_ticks() * 10;
+    let mut size = al_density_font_body();
+    let mut i = 0;
+    let mut visible = 0;
+    while i < TOAST_MAX {
+        if toast_active[i] == 1 {
+            let mut elapsed = now - toast_start_ts[i];
+            if elapsed >= TOAST_DURATION_MS {
+                toast_active[i] = 0;
+            } else {
+                let mut tx = screen_w - 320;
+                let mut ty = screen_h - 80 - visible * 56;
+                let mut alpha = 255;
+                if elapsed > TOAST_DURATION_MS - 400 {
+                    alpha = (TOAST_DURATION_MS - elapsed) * 255 / 400;
+                }
+                let mut bg = gfx_pack(alpha,
+                    gfx_color_r(ui_theme_bg_elevated()),
+                    gfx_color_g(ui_theme_bg_elevated()),
+                    gfx_color_b(ui_theme_bg_elevated()));
+                gfx_shadow_draw(tx, ty, 300, 48);
+                gfx_rect_round(tx, ty, 300, 48, 8, bg);
+                if toast_msg_addr[i] != 0 {
+                    font_atlas_draw_str(tx + 16, ty + 14,
+                                        cstr_from_addr(toast_msg_addr[i]), size,
+                                        ui_theme_text_primary());
+                }
+                visible = visible + 1;
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// ─── Tooltip ────────────────────────────────────────────────────────────────
+// Singleton: only one tooltip visible at a time.
+let mut tooltip_msg_addr = 0;
+let mut tooltip_x = 0;
+let mut tooltip_y = 0;
+let mut tooltip_visible = 0;
+
+fn tooltip_show(msg_addr, x, y) {
+    tooltip_msg_addr = msg_addr;
+    tooltip_x        = x;
+    tooltip_y        = y;
+    tooltip_visible  = 1;
+    return 0;
+}
+
+fn tooltip_hide() { tooltip_visible = 0; return 0; }
+
+fn tooltip_paint() {
+    if tooltip_visible == 0 { return 0; }
+    if tooltip_msg_addr == 0 { return 0; }
+    let mut size = 13;
+    let mut w = font_atlas_measure(cstr_from_addr(tooltip_msg_addr), size) + 16;
+    let mut h = font_atlas_h(size) + 8;
+    gfx_shadow_draw(tooltip_x, tooltip_y, w, h);
+    gfx_rect_round(tooltip_x, tooltip_y, w, h, 4, ui_theme_bg_elevated());
+    font_atlas_draw_str(tooltip_x + 8, tooltip_y + 4,
+                        cstr_from_addr(tooltip_msg_addr), size,
+                        ui_theme_text_primary());
+    return 0;
+}
+
+// ─── ProgressBar ────────────────────────────────────────────────────────────
+
+fn progress_new(parent, x, y, w, h) {
+    let mut id = widget_new(WIDGET_KIND_PROGRESS, parent, x, y, w, h);
+    widget_set_range(id, 0, 100);
+    widget_set_value(id, 0);
+    return id;
+}
+
+fn progress_paint(id) {
+    if widget_get_flag(id, WIDGET_FLAG_VISIBLE) == 0 { return 0; }
+    gfx_rect_round(widget_x[id], widget_y[id], widget_w[id], widget_h[id],
+                   widget_h[id] / 2, ui_theme_bg_overlay());
+    let mut span = widget_max[id] - widget_min[id];
+    if span <= 0 { span = 1; }
+    let mut fill_w = (widget_value[id] - widget_min[id]) * widget_w[id] / span;
+    if fill_w < 0           { fill_w = 0; }
+    if fill_w > widget_w[id]{ fill_w = widget_w[id]; }
+    if fill_w > 0 {
+        gfx_rect_round(widget_x[id], widget_y[id], fill_w, widget_h[id],
+                       widget_h[id] / 2, ui_theme_accent_get());
+    }
+    widget_set_flag(id, WIDGET_FLAG_DIRTY, 0);
+    return 0;
+}
+
+// ─── Spinner (indeterminate) ────────────────────────────────────────────────
+// Renders a 270° arc that rotates with the PIT tick.
+
+fn spinner_new(parent, x, y, r) {
+    let mut id = widget_new(WIDGET_KIND_SPINNER, parent, x, y, r * 2, r * 2);
+    widget_set_value(id, r);
+    return id;
+}
+
+fn spinner_paint(id) {
+    if widget_get_flag(id, WIDGET_FLAG_VISIBLE) == 0 { return 0; }
+    let mut r = widget_value[id];
+    let mut cx = widget_x[id] + r;
+    let mut cy = widget_y[id] + r;
+    let mut phase = get_ticks() % 24;     // 24 frames @ 100 Hz ≈ 240 ms full turn
+    // Draw 8 dots around the circle with fading alpha based on phase.
+    let mut i = 0;
+    while i < 8 {
+        // Position via 8-step approximation: precomputed offsets.
+        let mut dx = 0; let mut dy = 0;
+        if i == 0 { dx = 0;     dy = 0 - r; }
+        if i == 1 { dx = r;     dy = 0 - r; }
+        if i == 2 { dx = r;     dy = 0; }
+        if i == 3 { dx = r;     dy = r; }
+        if i == 4 { dx = 0;     dy = r; }
+        if i == 5 { dx = 0 - r; dy = r; }
+        if i == 6 { dx = 0 - r; dy = 0; }
+        if i == 7 { dx = 0 - r; dy = 0 - r; }
+        dx = dx * 70 / 100;
+        dy = dy * 70 / 100;
+        let mut alpha = 64 + ((i + phase / 3) % 8) * 24;
+        if alpha > 255 { alpha = 255; }
+        gfx_circle_aa(cx + dx, cy + dy, 2,
+                      gfx_pack(alpha,
+                          gfx_color_r(ui_theme_accent_get()),
+                          gfx_color_g(ui_theme_accent_get()),
+                          gfx_color_b(ui_theme_accent_get())));
+        i = i + 1;
+    }
+    widget_set_flag(id, WIDGET_FLAG_DIRTY, 0);
+    return 0;
+}
+
+// ─── Dialog (modal) ─────────────────────────────────────────────────────────
+
+fn dialog_new(parent, w, h, title_addr) {
+    let mut sw = vesa_width;  if sw == 0 { sw = 1024; }
+    let mut sh = vesa_height; if sh == 0 { sh = 768; }
+    let mut id = widget_new(WIDGET_KIND_DIALOG, parent,
+                            (sw - w) / 2, (sh - h) / 2, w, h);
+    widget_set_label(id, title_addr);
+    return id;
+}
+
+fn dialog_paint(id) {
+    if widget_get_flag(id, WIDGET_FLAG_VISIBLE) == 0 { return 0; }
+    // Scrim over backdrop (40% black)
+    gfx_fill_rect(0, 0, vesa_width, vesa_height, gfx_pack(102, 0, 0, 0));
+    gfx_shadow_draw_n(widget_x[id], widget_y[id], widget_w[id], widget_h[id], 24);
+    gfx_rect_round(widget_x[id], widget_y[id], widget_w[id], widget_h[id], 8,
+                   ui_theme_bg_elevated());
+    if widget_label[id] != 0 {
+        let mut size = 17;   // subhead
+        font_atlas_draw_str(widget_x[id] + 24, widget_y[id] + 20,
+                            cstr_from_addr(widget_label[id]), size,
+                            ui_theme_text_primary());
+    }
+    widget_set_flag(id, WIDGET_FLAG_DIRTY, 0);
+    return 0;
+}
+
+print("widget_feedback.hl loaded");

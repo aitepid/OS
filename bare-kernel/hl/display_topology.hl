@@ -1,0 +1,86 @@
+// display_topology.hl -- 多显示器拓扑（Sprint G7）
+//
+// 模型：最多 4 路显示输出，每路有逻辑矩形 (x, y, w, h) 和缩放因子。
+// 主显示永远是 #0，由 VBE 提供。其余显示输出在裸机当前仅占位，
+// QEMU 单显环境下我们用同一帧缓冲，按 vdesktop 投影。
+
+let DT_MAX_DISPLAYS = 4;
+
+let mut dt_initialized = 0;
+let mut dt_count       = 1;
+let mut dt_x           = [0];
+let mut dt_y           = [0];
+let mut dt_w           = [0];
+let mut dt_h           = [0];
+let mut dt_scale_num   = [0];
+let mut dt_scale_den   = [0];
+let mut dt_primary     = 0;
+
+fn display_topology_init() {
+    if dt_initialized == 1 { return 0; }
+    dt_x         = array_new(DT_MAX_DISPLAYS, 0);
+    dt_y         = array_new(DT_MAX_DISPLAYS, 0);
+    dt_w         = array_new(DT_MAX_DISPLAYS, 0);
+    dt_h         = array_new(DT_MAX_DISPLAYS, 0);
+    dt_scale_num = array_new(DT_MAX_DISPLAYS, 1);
+    dt_scale_den = array_new(DT_MAX_DISPLAYS, 1);
+    dt_x[0] = 0;
+    dt_y[0] = 0;
+    dt_w[0] = vesa_width;  if dt_w[0] == 0 { dt_w[0] = 1024; }
+    dt_h[0] = vesa_height; if dt_h[0] == 0 { dt_h[0] = 768; }
+    dt_scale_num[0] = 1;
+    dt_scale_den[0] = 1;
+    dt_count = 1;
+    dt_primary = 0;
+    dt_initialized = 1;
+    print("display_topology: 1 display detected (primary)");
+    return 0;
+}
+
+fn dt_add_display(x, y, w, h, num, den) {
+    if dt_initialized == 0 { display_topology_init(); }
+    if dt_count >= DT_MAX_DISPLAYS { return 0 - 1; }
+    let mut i = dt_count;
+    dt_x[i] = x; dt_y[i] = y; dt_w[i] = w; dt_h[i] = h;
+    dt_scale_num[i] = num;
+    dt_scale_den[i] = den;
+    dt_count = dt_count + 1;
+    return i;
+}
+
+fn dt_count_get()     { return dt_count; }
+fn dt_primary_get()   { return dt_primary; }
+fn dt_x_of(i)         { return dt_x[i]; }
+fn dt_y_of(i)         { return dt_y[i]; }
+fn dt_w_of(i)         { return dt_w[i]; }
+fn dt_h_of(i)         { return dt_h[i]; }
+fn dt_scale_num_of(i) { return dt_scale_num[i]; }
+fn dt_scale_den_of(i) { return dt_scale_den[i]; }
+
+// 点 -> 显示器索引
+fn dt_display_at(px, py) {
+    let mut i = 0;
+    while i < dt_count {
+        if px >= dt_x[i] {
+            if px < dt_x[i] + dt_w[i] {
+                if py >= dt_y[i] {
+                    if py < dt_y[i] + dt_h[i] {
+                        return i;
+                    }
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return dt_primary;
+}
+
+// 工作区矩形：扣除顶栏与 dock
+fn dt_workarea_x(i) { return dt_x[i]; }
+fn dt_workarea_y(i) { return dt_y[i] + shell_topbar_height(); }
+fn dt_workarea_w(i) { return dt_w[i]; }
+fn dt_workarea_h(i) {
+    return dt_h[i] - shell_topbar_height() - shell_dock_height();
+}
+
+print("display_topology.hl loaded");

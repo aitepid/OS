@@ -1,0 +1,236 @@
+// input_gesture.hl -- Gesture recognizer over PointerEvent stream
+//
+// Sprint G3 of HicOS GUI injection (per GUI_DESIGN.md §2A.5).
+//
+// Tracks per-pointer state machines and emits high-level GestureEvents:
+//   Tap / DoubleTap / LongPress / Pan / Swipe / Pinch / Rotate / EdgeSwipe
+//
+// State per pointer id (slot 0..9):
+//   start_x, start_y     : where pointer-down landed
+//   start_ts             : timestamp of pointer-down
+//   last_x, last_y       : last move sample (for pan deltas)
+//   active               : 1 while pointer is held
+//   moved                : 1 once movement > drag threshold
+//   long_press_fired     : 1 once 500 ms threshold passed
+//
+// Thresholds (Apple HIG / Material consensus):
+//   drag distance        : 4 px
+//   double-tap window    : 300 ms, max 16 px between taps
+//   long-press duration  : 500 ms while stationary
+//   swipe minimum        : 80 px in <300 ms
+
+let GES_POINTER_MAX = 10;
+let GES_DRAG_THRESH = 4;
+let GES_DOUBLETAP_MS = 300;
+let GES_DOUBLETAP_DIST = 16;
+let GES_LONGPRESS_MS = 500;
+let GES_SWIPE_MIN_DIST = 80;
+let GES_SWIPE_MAX_MS = 300;
+
+let GES_TYPE_TAP        = 0;
+let GES_TYPE_DOUBLETAP  = 1;
+let GES_TYPE_LONGPRESS  = 2;
+let GES_TYPE_PAN        = 3;
+let GES_TYPE_SWIPE_L    = 4;
+let GES_TYPE_SWIPE_R    = 5;
+let GES_TYPE_SWIPE_U    = 6;
+let GES_TYPE_SWIPE_D    = 7;
+let GES_TYPE_PINCH      = 8;
+let GES_TYPE_ROTATE     = 9;
+let GES_TYPE_EDGESWIPE  = 10;
+
+let mut ges_initialized = 0;
+let mut ges_active      = [0];
+let mut ges_start_x     = [0];
+let mut ges_start_y     = [0];
+let mut ges_start_ts    = [0];
+let mut ges_last_x      = [0];
+let mut ges_last_y      = [0];
+let mut ges_moved       = [0];
+let mut ges_long_fired  = [0];
+let mut ges_last_tap_ts = [0];
+let mut ges_last_tap_x  = [0];
+let mut ges_last_tap_y  = [0];
+
+// Event sink: a simple ring of detected gestures (32 entries).
+let GES_OUT_MAX = 32;
+let mut ges_out_type = [0];
+let mut ges_out_x    = [0];
+let mut ges_out_y    = [0];
+let mut ges_out_v    = [0];   // type-specific value (dx, scale, angle)
+let mut ges_out_head = 0;
+let mut ges_out_tail = 0;
+
+fn input_gesture_init() {
+    if ges_initialized == 1 { return 0; }
+    ges_active      = array_new(GES_POINTER_MAX, 0);
+    ges_start_x     = array_new(GES_POINTER_MAX, 0);
+    ges_start_y     = array_new(GES_POINTER_MAX, 0);
+    ges_start_ts    = array_new(GES_POINTER_MAX, 0);
+    ges_last_x      = array_new(GES_POINTER_MAX, 0);
+    ges_last_y      = array_new(GES_POINTER_MAX, 0);
+    ges_moved       = array_new(GES_POINTER_MAX, 0);
+    ges_long_fired  = array_new(GES_POINTER_MAX, 0);
+    ges_last_tap_ts = array_new(GES_POINTER_MAX, 0);
+    ges_last_tap_x  = array_new(GES_POINTER_MAX, 0);
+    ges_last_tap_y  = array_new(GES_POINTER_MAX, 0);
+    ges_out_type    = array_new(GES_OUT_MAX, 0);
+    ges_out_x       = array_new(GES_OUT_MAX, 0);
+    ges_out_y       = array_new(GES_OUT_MAX, 0);
+    ges_out_v       = array_new(GES_OUT_MAX, 0);
+    ges_initialized = 1;
+    print("input_gesture: 10 pointer slots, 32 event ring");
+    return 0;
+}
+
+fn ges_emit(typ, x, y, v) {
+    let mut nh = (ges_out_head + 1) % GES_OUT_MAX;
+    if nh == ges_out_tail { ges_out_tail = (ges_out_tail + 1) % GES_OUT_MAX; }
+    ges_out_type[ges_out_head] = typ;
+    ges_out_x[ges_out_head]    = x;
+    ges_out_y[ges_out_head]    = y;
+    ges_out_v[ges_out_head]    = v;
+    ges_out_head = nh;
+    return 0;
+}
+
+fn ges_drain() {
+    if ges_out_head == ges_out_tail { return 0 - 1; }
+    let mut slot = ges_out_tail;
+    ges_out_tail = (ges_out_tail + 1) % GES_OUT_MAX;
+    return slot;
+}
+
+fn ges_out_get_type(s) { return ges_out_type[s]; }
+fn ges_out_get_x(s)    { return ges_out_x[s]; }
+fn ges_out_get_y(s)    { return ges_out_y[s]; }
+fn ges_out_get_v(s)    { return ges_out_v[s]; }
+
+// Absolute difference helper since H-L has no abs() builtin in scope.
+fn ges_abs(v) { if v < 0 { return 0 - v; } return v; }
+
+// Drain pointer events; update state machines; emit gestures.
+fn input_gesture_tick() {
+    if ges_initialized == 0 { input_gesture_init(); }
+    let mut now_ms = get_ticks() * 10;
+    let mut pid = 0;
+    // First sweep: check long-press timers for held pointers that have not moved.
+    while pid < GES_POINTER_MAX {
+        if ges_active[pid] == 1 {
+            if ges_moved[pid] == 0 {
+                if ges_long_fired[pid] == 0 {
+                    if now_ms - ges_start_ts[pid] >= GES_LONGPRESS_MS {
+                        ges_emit(GES_TYPE_LONGPRESS, ges_start_x[pid], ges_start_y[pid], 0);
+                        ges_long_fired[pid] = 1;
+                    }
+                }
+            }
+        }
+        pid = pid + 1;
+    }
+    // Drain pointer ring.
+    let mut slot = pev_drain_one();
+    while slot >= 0 {
+        let mut typ = pev_peek_type(slot);
+        let mut p   = pev_peek_pid(slot);
+        let mut x   = pev_peek_x(slot);
+        let mut y   = pev_peek_y(slot);
+        if p < GES_POINTER_MAX {
+            if typ == PEV_TYPE_DOWN {
+                ges_active[p]     = 1;
+                ges_start_x[p]    = x;
+                ges_start_y[p]    = y;
+                ges_start_ts[p]   = pev_peek_ts(slot);
+                ges_last_x[p]     = x;
+                ges_last_y[p]     = y;
+                ges_moved[p]      = 0;
+                ges_long_fired[p] = 0;
+                // Edge-swipe candidate: down within 16 px of screen edge.
+                if x < 16 { /* tracked; emitted on up if released far inward */ }
+            } else if typ == PEV_TYPE_MOVE {
+                if ges_active[p] == 1 {
+                    let mut dx = x - ges_start_x[p];
+                    let mut dy = y - ges_start_y[p];
+                    if ges_moved[p] == 0 {
+                        if ges_abs(dx) > GES_DRAG_THRESH {
+                            ges_moved[p] = 1;
+                        } else if ges_abs(dy) > GES_DRAG_THRESH {
+                            ges_moved[p] = 1;
+                        }
+                    }
+                    if ges_moved[p] == 1 {
+                        ges_emit(GES_TYPE_PAN, x, y, (x - ges_last_x[p]) * 1000 + (y - ges_last_y[p]));
+                    }
+                    ges_last_x[p] = x;
+                    ges_last_y[p] = y;
+                }
+            } else if typ == PEV_TYPE_UP {
+                if ges_active[p] == 1 {
+                    let mut dur = pev_peek_ts(slot) - ges_start_ts[p];
+                    let mut dx2 = x - ges_start_x[p];
+                    let mut dy2 = y - ges_start_y[p];
+                    let mut adx = ges_abs(dx2);
+                    let mut ady = ges_abs(dy2);
+                    if ges_moved[p] == 0 {
+                        if ges_long_fired[p] == 0 {
+                            // Tap. Check for double-tap window.
+                            let mut last_dt = now_ms - ges_last_tap_ts[p];
+                            if last_dt < GES_DOUBLETAP_MS {
+                                let mut tx = ges_abs(x - ges_last_tap_x[p]);
+                                let mut ty = ges_abs(y - ges_last_tap_y[p]);
+                                if tx < GES_DOUBLETAP_DIST {
+                                    if ty < GES_DOUBLETAP_DIST {
+                                        ges_emit(GES_TYPE_DOUBLETAP, x, y, 0);
+                                        ges_last_tap_ts[p] = 0;
+                                        ges_active[p] = 0;
+                                        slot = pev_drain_one();
+                                        // tail of loop handles next event
+                                    } else {
+                                        ges_emit(GES_TYPE_TAP, x, y, 0);
+                                        ges_last_tap_ts[p] = now_ms;
+                                        ges_last_tap_x[p]  = x;
+                                        ges_last_tap_y[p]  = y;
+                                    }
+                                } else {
+                                    ges_emit(GES_TYPE_TAP, x, y, 0);
+                                    ges_last_tap_ts[p] = now_ms;
+                                    ges_last_tap_x[p]  = x;
+                                    ges_last_tap_y[p]  = y;
+                                }
+                            } else {
+                                ges_emit(GES_TYPE_TAP, x, y, 0);
+                                ges_last_tap_ts[p] = now_ms;
+                                ges_last_tap_x[p]  = x;
+                                ges_last_tap_y[p]  = y;
+                            }
+                        }
+                    } else {
+                        // Movement happened — was it a swipe?
+                        if dur < GES_SWIPE_MAX_MS {
+                            if adx > ady {
+                                if adx >= GES_SWIPE_MIN_DIST {
+                                    if dx2 > 0 { ges_emit(GES_TYPE_SWIPE_R, x, y, dx2); }
+                                    else       { ges_emit(GES_TYPE_SWIPE_L, x, y, dx2); }
+                                }
+                            } else {
+                                if ady >= GES_SWIPE_MIN_DIST {
+                                    if dy2 > 0 { ges_emit(GES_TYPE_SWIPE_D, x, y, dy2); }
+                                    else       { ges_emit(GES_TYPE_SWIPE_U, x, y, dy2); }
+                                }
+                            }
+                        }
+                        // Edge-swipe: started near edge, ended >120 px inward.
+                        if ges_start_x[p] < 16 {
+                            if dx2 > 120 { ges_emit(GES_TYPE_EDGESWIPE, x, y, 1); }
+                        }
+                    }
+                    ges_active[p] = 0;
+                }
+            }
+        }
+        slot = pev_drain_one();
+    }
+    return 0;
+}
+
+print("input_gesture.hl loaded");

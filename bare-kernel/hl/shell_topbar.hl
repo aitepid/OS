@@ -1,0 +1,76 @@
+// shell_topbar.hl -- 顶部状态栏（Sprint G5）
+//
+// Win11 平板/移动形态使用：左侧 logo 与活动窗口标题，中部留白，
+// 右侧时钟、电量、网络、音量等状态指示。点击右区进入 ControlCenter。
+
+let TOPBAR_HEIGHT_DEFAULT = 32;
+
+let mut topbar_visible      = 1;
+let mut topbar_title_addr   = 0;
+let mut topbar_clock_str    = 0;
+let mut topbar_battery_pct  = 100;
+let mut topbar_wifi_on      = 1;
+let mut topbar_volume_pct   = 60;
+
+fn shell_topbar_init() {
+    topbar_visible     = 1;
+    topbar_battery_pct = 100;
+    topbar_wifi_on     = 1;
+    topbar_volume_pct  = 60;
+    print("shell_topbar: ready");
+    return 0;
+}
+
+fn shell_topbar_set_title(addr)   { topbar_title_addr = addr;  return 0; }
+fn shell_topbar_set_clock(addr)   { topbar_clock_str = addr;   return 0; }
+fn shell_topbar_set_battery(pct)  { topbar_battery_pct = pct;  return 0; }
+fn shell_topbar_set_wifi(on)      { topbar_wifi_on = on;       return 0; }
+fn shell_topbar_set_volume(pct)   { topbar_volume_pct = pct;   return 0; }
+fn shell_topbar_height()          { return TOPBAR_HEIGHT_DEFAULT; }
+
+fn shell_topbar_paint(screen_w) {
+    if topbar_visible == 0 { return 0; }
+    let mut h = TOPBAR_HEIGHT_DEFAULT;
+    gfx_fill_rect(0, 0, screen_w, h, ui_theme_bg_surface());
+    gfx_fill_rect(0, h - 1, screen_w, 1, ui_theme_bg_overlay());
+    let mut size = al_density_font_body();
+    let mut pad  = al_density_pad();
+    if topbar_title_addr != 0 {
+        font_atlas_draw_str(pad, (h - font_atlas_h(size)) / 2,
+                            cstr_from_addr(topbar_title_addr), size,
+                            ui_theme_text_primary());
+    }
+    // 右侧状态簇
+    let mut rx = screen_w - pad;
+    if topbar_clock_str != 0 {
+        let mut s = cstr_from_addr(topbar_clock_str);
+        let mut tw = font_atlas_measure(s, size);
+        rx = rx - tw;
+        font_atlas_draw_str(rx, (h - font_atlas_h(size)) / 2, s, size,
+                            ui_theme_text_primary());
+        rx = rx - 12;
+    }
+    // 电量条
+    rx = rx - 24;
+    gfx_rect_round(rx, h / 2 - 5, 22, 10, 2, ui_theme_bg_overlay());
+    gfx_fill_rect(rx + 1, h / 2 - 4, 20 * topbar_battery_pct / 100, 8,
+                  ui_theme_accent_get());
+    rx = rx - 12;
+    // Wi-Fi 圆点
+    let mut wifi_col = ui_theme_text_secondary();
+    if topbar_wifi_on == 1 { wifi_col = ui_theme_accent_get(); }
+    gfx_circle_aa(rx, h / 2, 4, wifi_col);
+    return 0;
+}
+
+fn shell_topbar_handle_pointer(ev_type, x, y) {
+    if topbar_visible == 0 { return 0; }
+    if y >= TOPBAR_HEIGHT_DEFAULT { return 0; }
+    if ev_type == PEV_TYPE_UP {
+        // 右区触发 ControlCenter
+        if x > vesa_width - 120 { shell_controlcenter_toggle(); return 1; }
+    }
+    return 0;
+}
+
+print("shell_topbar.hl loaded");

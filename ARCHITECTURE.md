@@ -8,7 +8,7 @@ HicOS is a three-layer experimental x86_64 OS written entirely in Hilbert-Lang (
 |---|---|---|
 | A | `scripts/rebuild-image.ps1` (190 KB PowerShell) | Emits raw x86_64 machine code → `hicos-hl.img` (MBR + Stage 2 + kernel) |
 | B | `hl-bootstrap.hl` (4,572 lines, 208 fn) | Self-hosting compiler / interpreter / linker / REPL |
-| C | `bare-kernel/hl/*.hl` (423 modules) | Kernel modules — subsystems, drivers, protocol stacks, algorithms |
+| C | `bare-kernel/hl/*.hl` (470 modules, incl. 47 GUI scaffold) | Kernel modules — subsystems, drivers, protocol stacks, algorithms, GUI |
 
 Layer A is the only non-H-L code in the repo. It exists because no H-L bootstrap is available before the kernel comes up — once the kernel runs, the H-L interpreter takes over and all further code is H-L.
 
@@ -37,16 +37,17 @@ OVMF firmware → GPT → ESP → BOOTX64.EFI → UEFI boot
 
 | Metric | Value |
 |---|---:|
-| Total `.hl` files | 495 |
-| Root `.hl` files | ~72 |
-| `bare-kernel/hl/` modules | 423 |
-| Total H-L lines | ~163,700 |
-| `kernel_entry.hl` | 10,427 lines, 307 fn |
+| Total `.hl` files | 539 |
+| Root `.hl` files | 69 |
+| `bare-kernel/hl/` modules | 470 |
+| Total H-L lines | ~165,000 |
+| `kernel_entry.hl` | 10,435 lines, 307 fn |
 | `hl-bootstrap.hl` | 4,572 lines, 208 fn |
 | `stdlib.hl` | 1,545 lines, 143 fn |
-| `scripts/*.ps1` | 29 scripts, ~11,200 lines |
+| `scripts/*.ps1` | 32 scripts, ~11,500 lines |
 | Shell commands | 1,800 |
 | `HicOS_*.hl` subsystem modules | 27 |
+| GUI scaffold modules (Sprint G1) | 47 |
 
 ## Key Source Locations
 
@@ -124,6 +125,34 @@ After milestone M6, the codebase went through 31 sprints of systematic quality w
 | 31 | Investigated pre-existing disk-write flake (host-side virtio timing); documented as non-blocking | 0 fixes |
 
 Total: 60 unique BUG entries, all fixed except 1 known QEMU-host timing flake (data correctness verified externally).
+
+## Codegen Sprints (Sprint 35–38)
+
+After Phase 2 codegen integration, four sprints addressed compilation-pipeline correctness:
+
+| Sprint | Date | Focus |
+|---|---|---|
+| 35 | 2026-05-20 | Phase 2 codegen reconnaissance — identified `_start` empty-body and `IR_PRINT` no-op |
+| 36 | 2026-05-20 | First codegen cut — `IR_PRINT` direct `call` to `serial_puts`; handwritten kernel symbol export `bare-kernel/kernel-symbols.json` |
+| 37 | 2026-05-20 | **Root cause: IR-LowerStmt array-wrapper bug** — `p_block` returned `,$stmts` (single-element wrapper); IR-Lower iterated once and dropped tail statements. Fix: `IR-StmtBody` helper unwraps the `[wrapper [ArrayList]]` shape. IR ×9.4, live IR ×12.6, x86 .text ×3.6, kernel.bin 110 KB → 386 KB. |
+| 38 | 2026-05-20 | String-literal pool + `abs64` reloc kind. `IR_STR_CONST` now emits `mov reg, imm64 0` placeholder + per-module `__str$<mod>$<idx>` symbol; Pass-2 appends UTF-8 string pools. +61 symbols, +61 abs64 relocs, kernel.bin 386 → 388 KB. |
+
+Open thread: `_ke_putc(int)` calling-convention / `IR_PARAM` lowering — to be addressed in Sprint 39.
+
+## GUI Initiative (Sprint G1, scaffolding)
+
+Parallel to the codegen sprints, Sprint G1 stands up the scaffolding to evolve HicOS from a serial-console OS to a Windows-11-Fluent-style adaptive graphical OS. 47 modules added under `bare-kernel/hl/`, organized into the Layer 0–7 stack defined in [`GUI_DESIGN.md`](GUI_DESIGN.md):
+
+- **Graphics (L0–2)**: `gfx_backbuffer`, `gfx_aa`, `gfx_path`, `gfx_blur`, `gfx_shadow`, `gfx_anim`, `gfx_hidpi`, `compositor`, `font_atlas`
+- **Window manager (L3)**: `wm_snap`, `vdesktop`, `mission_control`, `display_topology`
+- **Widget toolkit (L4)**: `widget_core`, `widget_button`, `widget_input`, `widget_select`, `widget_list`, `widget_nav`, `widget_container`, `widget_feedback`
+- **Adaptive layout (L5)**: `adaptive_layout`
+- **Shell (L6)**: `shell_topbar`, `shell_dock`, `shell_startmenu`, `shell_spotlight`, `shell_controlcenter`, `shell_notification`, `shell_lockscreen`, `shell_wallpaper`, `shell_themes`, `shell_form`
+- **Apps (L7)**: `app_files`, `app_settings`, `app_terminal`, `app_texteditor`, `app_sysmon`
+- **Input**: `input_pointer`, `input_gesture`, `input_touch`, `input_pen`
+- **Services**: `dnd`, `ime`, `a11y`, `eyecare`, `anim_tuning`, `visual_audit`
+
+Three new audit scripts (`scripts/gui-lex-audit.ps1`, `gui-ast-audit.ps1`, `gui-symbol-audit.ps1`) gate GUI-module quality.
 
 ## Verification
 

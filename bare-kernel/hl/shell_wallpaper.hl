@@ -1,0 +1,64 @@
+// shell_wallpaper.hl -- 桌面壁纸 (Sprint G5)
+//
+// 提供 4 个内置主题渐变壁纸：Aurora（极光蓝紫）、Sunset（日落橙红）、
+// Forest（森林青绿）、Mono（单色深灰）。直接写入 backbuffer，由
+// compositor 在每帧 z=0 重绘前用作底图。
+
+let WP_THEME_AURORA = 0;
+let WP_THEME_SUNSET = 1;
+let WP_THEME_FOREST = 2;
+let WP_THEME_MONO   = 3;
+
+let mut wp_theme = 0;
+let mut wp_initialized = 0;
+
+fn shell_wallpaper_init() {
+    if wp_initialized == 1 { return 0; }
+    wp_theme = WP_THEME_AURORA;
+    wp_initialized = 1;
+    print("shell_wallpaper: 4 themes ready");
+    return 0;
+}
+
+fn shell_wallpaper_set(theme) { wp_theme = theme; return 0; }
+fn shell_wallpaper_get()      { return wp_theme; }
+
+// 颜色端点（u32 ARGB）
+fn wp_top_color() {
+    if wp_theme == WP_THEME_AURORA { return gfx_pack(255,  32,  64, 160); }
+    if wp_theme == WP_THEME_SUNSET { return gfx_pack(255, 240, 130,  80); }
+    if wp_theme == WP_THEME_FOREST { return gfx_pack(255,  40, 100,  80); }
+    return gfx_pack(255, 32, 32, 36);
+}
+
+fn wp_bottom_color() {
+    if wp_theme == WP_THEME_AURORA { return gfx_pack(255, 100,  40, 180); }
+    if wp_theme == WP_THEME_SUNSET { return gfx_pack(255, 180,  40,  90); }
+    if wp_theme == WP_THEME_FOREST { return gfx_pack(255,  16,  48,  40); }
+    return gfx_pack(255, 12, 12, 14);
+}
+
+fn wp_lerp(a, b, t, total) {
+    if total == 0 { return a; }
+    return a + (b - a) * t / total;
+}
+
+fn shell_wallpaper_paint(screen_w, screen_h) {
+    if wp_initialized == 0 { shell_wallpaper_init(); }
+    let mut top = wp_top_color();
+    let mut bot = wp_bottom_color();
+    let mut tr = gfx_color_r(top); let mut tg = gfx_color_g(top); let mut tb = gfx_color_b(top);
+    let mut br = gfx_color_r(bot); let mut bg = gfx_color_g(bot); let mut bb = gfx_color_b(bot);
+    // 每 8 行一条，减少绘制成本（QEMU 友好）
+    let mut y = 0;
+    while y < screen_h {
+        let mut r = wp_lerp(tr, br, y, screen_h);
+        let mut g = wp_lerp(tg, bg, y, screen_h);
+        let mut b = wp_lerp(tb, bb, y, screen_h);
+        gfx_fill_rect(0, y, screen_w, 8, gfx_pack(255, r, g, b));
+        y = y + 8;
+    }
+    return 0;
+}
+
+print("shell_wallpaper.hl loaded");

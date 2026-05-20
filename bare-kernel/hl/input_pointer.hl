@@ -1,0 +1,138 @@
+// input_pointer.hl -- Unified PointerEvent bus
+//
+// Sprint G3 of HicOS GUI injection (per GUI_DESIGN.md §2A.5).
+//
+// All input sources (mouse, touch, pen, trackpad) push normalized events
+// onto a single ring buffer here. Higher layers (gesture recognizer, WM,
+// widgets) drain the ring once per frame. Decoupling lets us add new
+// pointer kinds without rewiring every consumer.
+//
+// PointerEvent record (40 bytes packed into a flat-array column store):
+//   type     : 0 down / 1 move / 2 up / 3 cancel / 4 wheel / 5 hover
+//   pid      : pointer id (0 = primary mouse / touch[0]; 1..9 = multi-touch)
+//   source   : 0 mouse / 1 touch / 2 pen / 3 trackpad / 4 keyboard
+//   x, y     : logical pixel coords (post scale_factor)
+//   pressure : 0..1023 (mouse = 512; touch defaults 256; pen full range)
+//   tilt_x   : 0 if not a pen, else -90..90
+//   tilt_y   : 0 if not a pen, else -90..90
+//   buttons  : bitmask (bit0 left / bit1 right / bit2 middle / bit3 wheel-up / bit4 wheel-dn)
+//   mods     : bitmask (bit0 Shift / bit1 Ctrl / bit2 Alt / bit3 Win)
+//   ts_ms    : timestamp from PIT tick × 10 (100 Hz)
+//
+// Ring capacity is 256 events; older entries are overwritten if not drained
+// within ~4 seconds of stalled consumers.
+
+let PEV_RING_MAX = 256;
+
+let PEV_TYPE_DOWN   = 0;
+let PEV_TYPE_MOVE   = 1;
+let PEV_TYPE_UP     = 2;
+let PEV_TYPE_CANCEL = 3;
+let PEV_TYPE_WHEEL  = 4;
+let PEV_TYPE_HOVER  = 5;
+
+let PEV_SRC_MOUSE    = 0;
+let PEV_SRC_TOUCH    = 1;
+let PEV_SRC_PEN      = 2;
+let PEV_SRC_TRACKPAD = 3;
+let PEV_SRC_KEYBOARD = 4;
+
+let PEV_BTN_LEFT     = 1;
+let PEV_BTN_RIGHT    = 2;
+let PEV_BTN_MIDDLE   = 4;
+let PEV_BTN_WHEEL_UP = 8;
+let PEV_BTN_WHEEL_DN = 16;
+
+let PEV_MOD_SHIFT = 1;
+let PEV_MOD_CTRL  = 2;
+let PEV_MOD_ALT   = 4;
+let PEV_MOD_WIN   = 8;
+
+let mut pev_initialized = 0;
+let mut pev_type     = [0];
+let mut pev_pid      = [0];
+let mut pev_source   = [0];
+let mut pev_x        = [0];
+let mut pev_y        = [0];
+let mut pev_pressure = [0];
+let mut pev_tilt_x   = [0];
+let mut pev_tilt_y   = [0];
+let mut pev_buttons  = [0];
+let mut pev_mods     = [0];
+let mut pev_ts       = [0];
+let mut pev_head     = 0;      // write cursor (next free slot)
+let mut pev_tail     = 0;      // read cursor (oldest unread)
+let mut pev_drops    = 0;
+let mut pev_total    = 0;
+
+fn input_pointer_init() {
+    if pev_initialized == 1 { return 0; }
+    pev_type     = array_new(PEV_RING_MAX, 0);
+    pev_pid      = array_new(PEV_RING_MAX, 0);
+    pev_source   = array_new(PEV_RING_MAX, 0);
+    pev_x        = array_new(PEV_RING_MAX, 0);
+    pev_y        = array_new(PEV_RING_MAX, 0);
+    pev_pressure = array_new(PEV_RING_MAX, 0);
+    pev_tilt_x   = array_new(PEV_RING_MAX, 0);
+    pev_tilt_y   = array_new(PEV_RING_MAX, 0);
+    pev_buttons  = array_new(PEV_RING_MAX, 0);
+    pev_mods     = array_new(PEV_RING_MAX, 0);
+    pev_ts       = array_new(PEV_RING_MAX, 0);
+    pev_initialized = 1;
+    print("input_pointer: ring=" + to_string(PEV_RING_MAX) + " slots");
+    return 0;
+}
+
+fn pev_push(typ, pid, source, x, y, pressure, tilt_x, tilt_y, buttons, mods) {
+    if pev_initialized == 0 { input_pointer_init(); }
+    let mut slot = pev_head;
+    pev_type[slot]     = typ;
+    pev_pid[slot]      = pid;
+    pev_source[slot]   = source;
+    pev_x[slot]        = x;
+    pev_y[slot]        = y;
+    pev_pressure[slot] = pressure;
+    pev_tilt_x[slot]   = tilt_x;
+    pev_tilt_y[slot]   = tilt_y;
+    pev_buttons[slot]  = buttons;
+    pev_mods[slot]     = mods;
+    pev_ts[slot]       = get_ticks() * 10;
+    pev_head = (pev_head + 1) % PEV_RING_MAX;
+    pev_total = pev_total + 1;
+    if pev_head == pev_tail {
+        pev_tail = (pev_tail + 1) % PEV_RING_MAX;
+        pev_drops = pev_drops + 1;
+    }
+    return 0;
+}
+
+fn pev_available() {
+    if pev_head >= pev_tail { return pev_head - pev_tail; }
+    return PEV_RING_MAX - pev_tail + pev_head;
+}
+
+fn pev_drain_one() {
+    if pev_available() == 0 { return 0 - 1; }
+    let mut slot = pev_tail;
+    pev_tail = (pev_tail + 1) % PEV_RING_MAX;
+    return slot;
+}
+
+fn pev_peek_type(slot)     { return pev_type[slot]; }
+fn pev_peek_pid(slot)      { return pev_pid[slot]; }
+fn pev_peek_source(slot)   { return pev_source[slot]; }
+fn pev_peek_x(slot)        { return pev_x[slot]; }
+fn pev_peek_y(slot)        { return pev_y[slot]; }
+fn pev_peek_pressure(slot) { return pev_pressure[slot]; }
+fn pev_peek_buttons(slot)  { return pev_buttons[slot]; }
+fn pev_peek_mods(slot)     { return pev_mods[slot]; }
+fn pev_peek_ts(slot)       { return pev_ts[slot]; }
+
+fn input_pointer_info() {
+    print("pointer: total=" + to_string(pev_total) +
+          " avail=" + to_string(pev_available()) +
+          " drops=" + to_string(pev_drops));
+    return 0;
+}
+
+print("input_pointer.hl loaded");

@@ -1,0 +1,118 @@
+// mission_control.hl -- 窗口总览（Sprint G7）
+//
+// F3 触发：所有当前 vdesktop 窗口缩放至 0.4× 平铺，鼠标悬停高亮，
+// 点击直接激活并退出 Mission Control。顶部显示 vdesktop 切换器。
+
+let MC_THUMB_SCALE_NUM = 4;
+let MC_THUMB_SCALE_DEN = 10;
+let MC_THUMB_MAX       = 64;
+let MC_COLS            = 4;
+
+let mut mc_initialized = 0;
+let mut mc_active      = 0;
+let mut mc_hover_idx   = 0 - 1;
+
+fn mission_control_init() {
+    if mc_initialized == 1 { return 0; }
+    mc_active = 0;
+    mc_hover_idx = 0 - 1;
+    mc_initialized = 1;
+    print("mission_control: ready (F3 to toggle)");
+    return 0;
+}
+
+fn mission_control_show()    { mc_active = 1; mc_hover_idx = 0 - 1; return 0; }
+fn mission_control_hide()    { mc_active = 0; return 0; }
+fn mission_control_toggle()  {
+    if mc_active == 1 { mc_active = 0; }
+    else              { mc_active = 1; }
+    return mc_active;
+}
+fn mission_control_active() { return mc_active; }
+
+// 列出当前 vdesktop 的可见窗口数，返回 (idx, win_id) 通过 helper
+fn mc_collect_windows() {
+    // 简化：扫描 vdesktop 分配表中匹配当前桌面的项
+    let mut count = 0;
+    let mut i = 0;
+    while i < VDT_WIN_MAX {
+        if vdesktop_window_visible(i) == 1 { count = count + 1; }
+        i = i + 1;
+    }
+    return count;
+}
+
+fn mission_control_paint(screen_w, screen_h) {
+    if mc_active == 0 { return 0; }
+    // 半透明背景
+    gfx_fill_rect(0, 0, screen_w, screen_h, gfx_pack(204, 16, 16, 20));
+    // 顶部切换器
+    vdesktop_switcher_paint(screen_w, 24);
+    // 缩略图网格
+    let mut count = mc_collect_windows();
+    if count == 0 {
+        font_atlas_draw_str(screen_w / 2 - 80, screen_h / 2,
+                            "No windows on this desktop", 17,
+                            gfx_pack(255, 220, 220, 220));
+        return 0;
+    }
+    let mut cols = MC_COLS;
+    if count < cols { cols = count; }
+    let mut rows = (count + cols - 1) / cols;
+    let mut area_y = 120;
+    let mut area_h = screen_h - area_y - 40;
+    let mut tile_w = (screen_w - 80) / cols - 16;
+    let mut tile_h = area_h / rows - 16;
+    let mut shown = 0;
+    let mut win = 0;
+    while win < VDT_WIN_MAX {
+        if vdesktop_window_visible(win) == 1 {
+            let mut col = shown % cols;
+            let mut row = shown / cols;
+            let mut tx = 40 + col * (tile_w + 16);
+            let mut ty = area_y + row * (tile_h + 16);
+            let mut bg = ui_theme_bg_elevated();
+            if shown == mc_hover_idx { bg = ui_theme_accent_get(); }
+            gfx_shadow_draw_n(tx, ty, tile_w, tile_h, 12);
+            gfx_rect_round(tx, ty, tile_w, tile_h, 8, bg);
+            font_atlas_draw_str(tx + 8, ty + 8, to_string(win), 13,
+                                ui_theme_text_primary());
+            shown = shown + 1;
+        }
+        win = win + 1;
+    }
+    return 0;
+}
+
+fn mission_control_handle_pointer(ev_type, x, y, screen_w, screen_h) {
+    if mc_active == 0 { return 0; }
+    if ev_type != PEV_TYPE_UP { return 0; }
+    // 顶部切换器命中
+    let mut tile_w = 120;
+    let mut tile_h = 68;
+    let mut gap = 12;
+    let mut total = vdesktop_count_get() * tile_w + (vdesktop_count_get() - 1) * gap;
+    let mut sx = (screen_w - total) / 2;
+    if y >= 24 { if y <= 24 + tile_h {
+        let mut rel = x - sx;
+        if rel >= 0 {
+            let mut idx = rel / (tile_w + gap);
+            if idx < vdesktop_count_get() {
+                vdesktop_switch_to(idx);
+                mc_active = 0;
+                return 1;
+            }
+        }
+    } }
+    // 缩略图区点击 = 退出
+    mc_active = 0;
+    return 1;
+}
+
+// 键盘 F3 处理入口
+fn mission_control_input_key(keycode) {
+    if keycode == 0x3D { mission_control_toggle(); return 1; }  // F3 scancode
+    return 0;
+}
+
+print("mission_control.hl loaded");

@@ -1,0 +1,152 @@
+// gfx_blur.hl -- Separable box blur (Mica/Acrylic substrate)
+//
+// Sprint G2 of HicOS GUI injection (per GUI_DESIGN.md §3.3).
+//
+// Algorithm:
+//   3-pass box blur ≈ Gaussian (Pascal-Kiss approximation). Each box pass
+//   is separable: horizontal sliding window then vertical sliding window,
+//   O(N) regardless of radius. For Mica we use radius 8 with 2 passes
+//   (= effective σ ≈ 9.3); for Acrylic radius 16 with 3 passes.
+//
+// Performance budget @ 1024×768: per region 300×200 with r=8,2 passes
+//   ≈ 240K pixel updates × 2 = 480K reads/writes ≈ 1.2 ms on hot path.
+//
+// QEMU fallback: comp_glass_quality global. If 0 the blur degrades to
+//   plain alpha tint and we skip the kernel passes entirely. Toggled by
+//   compositor_present() based on a heuristic in eyecare_or_blur_perf().
+//
+// Buffers: a 1 MB scratch at 0x4000000 holds one transient row/column
+//   accumulator. Operations run in place on the backbuffer.
+
+let GFX_BLUR_SCRATCH = 67108864;   // 0x04000000 (1 MB)
+let mut comp_glass_quality = 1;    // 1 = full blur, 0 = degrade to tint
+let mut gfx_blur_runs      = 0;
+
+fn gfx_blur_quality_set(q) { comp_glass_quality = q; return 0; }
+
+// One horizontal box pass over rect (x,y,w,h) on the backbuffer, radius r.
+// Stores result into scratch buffer first to avoid in-place artefacts.
+fn gfx_blur_h_pass(x, y, w, h, r) {
+    let mut row = 0;
+    while row < h {
+        let mut src_row = gfx_back_pixel_addr(x, y + row);
+        let mut dst_row = GFX_BLUR_SCRATCH + row * w * 4;
+        // Walk window across the row with running sums per channel.
+        let mut sr = 0; let mut sg = 0; let mut sb = 0; let mut sa = 0; let mut cnt = 0;
+        // Prefill
+        let mut j = 0 - r;
+        while j <= r {
+            let mut sx = j;
+            if sx < 0 { sx = 0; }
+            if sx >= w { sx = w - 1; }
+            let mut c = mem_read_u32(src_row + sx * 4);
+            sa = sa + gfx_color_a(c);
+            sr = sr + gfx_color_r(c);
+            sg = sg + gfx_color_g(c);
+            sb = sb + gfx_color_b(c);
+            cnt = cnt + 1;
+            j = j + 1;
+        }
+        let mut col = 0;
+        while col < w {
+            mem_write_u32(dst_row + col * 4, gfx_pack(sa / cnt, sr / cnt, sg / cnt, sb / cnt));
+            // Slide window: subtract leftmost, add right neighbour.
+            let mut lo = col - r;
+            let mut hi = col + r + 1;
+            let mut sxl = lo;
+            if sxl < 0 { sxl = 0; }
+            if sxl >= w { sxl = w - 1; }
+            let mut sxh = hi;
+            if sxh < 0 { sxh = 0; }
+            if sxh >= w { sxh = w - 1; }
+            let mut cl = mem_read_u32(src_row + sxl * 4);
+            let mut ch = mem_read_u32(src_row + sxh * 4);
+            sa = sa - gfx_color_a(cl) + gfx_color_a(ch);
+            sr = sr - gfx_color_r(cl) + gfx_color_r(ch);
+            sg = sg - gfx_color_g(cl) + gfx_color_g(ch);
+            sb = sb - gfx_color_b(cl) + gfx_color_b(ch);
+            col = col + 1;
+        }
+        // Copy scratch row back to backbuffer
+        let mut i = 0;
+        while i < w {
+            mem_write_u32(src_row + i * 4, mem_read_u32(dst_row + i * 4));
+            i = i + 1;
+        }
+        row = row + 1;
+    }
+    return 0;
+}
+
+// One vertical box pass over rect (x,y,w,h) on the backbuffer, radius r.
+fn gfx_blur_v_pass(x, y, w, h, r) {
+    let mut col = 0;
+    while col < w {
+        // Use the scratch buffer as a column accumulator.
+        let mut dst_col = GFX_BLUR_SCRATCH + col * h * 4;
+        let mut sr = 0; let mut sg = 0; let mut sb = 0; let mut sa = 0; let mut cnt = 0;
+        let mut j = 0 - r;
+        while j <= r {
+            let mut sy = j;
+            if sy < 0 { sy = 0; }
+            if sy >= h { sy = h - 1; }
+            let mut c = mem_read_u32(gfx_back_pixel_addr(x + col, y + sy));
+            sa = sa + gfx_color_a(c);
+            sr = sr + gfx_color_r(c);
+            sg = sg + gfx_color_g(c);
+            sb = sb + gfx_color_b(c);
+            cnt = cnt + 1;
+            j = j + 1;
+        }
+        let mut row = 0;
+        while row < h {
+            mem_write_u32(dst_col + row * 4, gfx_pack(sa / cnt, sr / cnt, sg / cnt, sb / cnt));
+            let mut lo = row - r;
+            let mut hi = row + r + 1;
+            let mut syl = lo;
+            if syl < 0 { syl = 0; }
+            if syl >= h { syl = h - 1; }
+            let mut syh = hi;
+            if syh < 0 { syh = 0; }
+            if syh >= h { syh = h - 1; }
+            let mut cl = mem_read_u32(gfx_back_pixel_addr(x + col, y + syl));
+            let mut ch = mem_read_u32(gfx_back_pixel_addr(x + col, y + syh));
+            sa = sa - gfx_color_a(cl) + gfx_color_a(ch);
+            sr = sr - gfx_color_r(cl) + gfx_color_r(ch);
+            sg = sg - gfx_color_g(cl) + gfx_color_g(ch);
+            sb = sb - gfx_color_b(cl) + gfx_color_b(ch);
+            row = row + 1;
+        }
+        let mut i = 0;
+        while i < h {
+            mem_write_u32(gfx_back_pixel_addr(x + col, y + i), mem_read_u32(dst_col + i * 4));
+            i = i + 1;
+        }
+        col = col + 1;
+    }
+    return 0;
+}
+
+// Public entry: blur the rect with given radius. Degrades to a no-op when
+// quality flag is off (compositor will then just paint a flat tint).
+fn gfx_blur_region(x, y, w, h, radius) {
+    if comp_glass_quality == 0 { return 0; }
+    if w <= 0 { return 0; }
+    if h <= 0 { return 0; }
+    // Clamp to backbuffer.
+    if x < 0 { w = w + x; x = 0; }
+    if y < 0 { h = h + y; y = 0; }
+    if x + w > gfx_back_width  { w = gfx_back_width  - x; }
+    if y + h > gfx_back_height { h = gfx_back_height - y; }
+    if w <= 0 { return 0; } if h <= 0 { return 0; }
+    // Two box passes ≈ Gaussian. Each is HxW + WxH operations.
+    gfx_blur_h_pass(x, y, w, h, radius);
+    gfx_blur_v_pass(x, y, w, h, radius);
+    gfx_blur_h_pass(x, y, w, h, radius);
+    gfx_blur_v_pass(x, y, w, h, radius);
+    gfx_blur_runs = gfx_blur_runs + 1;
+    gfx_dirty_rect(x, y, w, h);
+    return 0;
+}
+
+print("gfx_blur.hl loaded");

@@ -1,0 +1,119 @@
+// dnd.hl -- Drag-and-drop session manager
+//
+// Sprint G3 of HicOS GUI injection (per GUI_DESIGN.md §4.4).
+//
+// A DragSession carries an MIME-like type tag, an opaque payload (text or
+// file path or surface id for image), an icon surface id used as the
+// ghost rendered under the cursor, and source/target window ids.
+//
+// Lifecycle:
+//   1. Source widget calls dnd_begin(type, payload, icon_surface, src_wm).
+//   2. Pointer-move events update dnd_x/dnd_y; compositor draws the ghost
+//      at half-transparency on top of all other surfaces.
+//   3. On pointer-up, dnd_drop(target_wm, x, y) hands the payload to the
+//      target's onDrop handler, which can accept (return 1) or reject (0).
+//   4. If rejected, dnd_cancel() animates the ghost back to source.
+//
+// Storage: a single global session — no nested drags. The standard
+// requirement of one drag at a time matches user expectation.
+
+let DND_TYPE_NONE  = 0;
+let DND_TYPE_TEXT  = 1;
+let DND_TYPE_FILE  = 2;
+let DND_TYPE_IMAGE = 3;
+let DND_TYPE_URL   = 4;
+let DND_TYPE_HTML  = 5;
+
+let mut dnd_active        = 0;
+let mut dnd_type          = 0;
+let mut dnd_payload_addr  = 0;
+let mut dnd_payload_len   = 0;
+let mut dnd_icon_surface  = 0 - 1;
+let mut dnd_src_wm        = 0 - 1;
+let mut dnd_x             = 0;
+let mut dnd_y             = 0;
+let mut dnd_start_x       = 0;
+let mut dnd_start_y       = 0;
+let mut dnd_initialized   = 0;
+
+fn dnd_init() {
+    dnd_initialized = 1;
+    print("dnd: drag-and-drop service ready");
+    return 0;
+}
+
+fn dnd_begin(typ, payload_addr, payload_len, icon_surface, src_wm, start_x, start_y) {
+    if dnd_active == 1 { return 0; }
+    dnd_active       = 1;
+    dnd_type         = typ;
+    dnd_payload_addr = payload_addr;
+    dnd_payload_len  = payload_len;
+    dnd_icon_surface = icon_surface;
+    dnd_src_wm       = src_wm;
+    dnd_start_x      = start_x;
+    dnd_start_y      = start_y;
+    dnd_x            = start_x;
+    dnd_y            = start_y;
+    return 1;
+}
+
+fn dnd_update_pos(x, y) {
+    if dnd_active == 0 { return 0; }
+    dnd_x = x;
+    dnd_y = y;
+    if dnd_icon_surface >= 0 {
+        // Re-position ghost surface; halve its alpha for ghostly feel.
+        comp_set_pos(dnd_icon_surface, x - 16, y - 16);
+        comp_set_alpha(dnd_icon_surface, 128);
+        comp_set_z(dnd_icon_surface, 9999);
+        comp_set_visible(dnd_icon_surface, 1);
+    }
+    return 0;
+}
+
+// Drop on a target window. The target onDrop hook returns 1 to accept.
+fn dnd_drop(target_wm, x, y, accepted) {
+    if dnd_active == 0 { return 0; }
+    if accepted == 1 {
+        // Caller has consumed the payload — just tear down.
+        dnd_finish();
+        return 1;
+    }
+    dnd_cancel();
+    return 0;
+}
+
+fn dnd_cancel() {
+    if dnd_active == 0 { return 0; }
+    // Spring the ghost back to its starting point, then hide.
+    if dnd_icon_surface >= 0 {
+        anim_start(ANIM_TARGET_SURFACE, dnd_icon_surface, ANIM_PROP_X,
+                   dnd_x - 16, dnd_start_x - 16, 200, ANIM_EASE_OUT);
+        anim_start(ANIM_TARGET_SURFACE, dnd_icon_surface, ANIM_PROP_Y,
+                   dnd_y - 16, dnd_start_y - 16, 200, ANIM_EASE_OUT);
+        anim_start(ANIM_TARGET_SURFACE, dnd_icon_surface, ANIM_PROP_ALPHA,
+                   128, 0, 200, ANIM_EASE_OUT);
+    }
+    dnd_finish();
+    return 0;
+}
+
+fn dnd_finish() {
+    dnd_active       = 0;
+    dnd_type         = DND_TYPE_NONE;
+    dnd_payload_addr = 0;
+    dnd_payload_len  = 0;
+    if dnd_icon_surface >= 0 {
+        comp_set_visible(dnd_icon_surface, 0);
+    }
+    dnd_icon_surface = 0 - 1;
+    dnd_src_wm       = 0 - 1;
+    return 0;
+}
+
+fn dnd_is_active()    { return dnd_active; }
+fn dnd_current_type() { return dnd_type; }
+fn dnd_payload_addr_get() { return dnd_payload_addr; }
+fn dnd_payload_len_get()  { return dnd_payload_len; }
+
+print("dnd.hl loaded");

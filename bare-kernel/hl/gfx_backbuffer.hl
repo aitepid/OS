@@ -1,0 +1,208 @@
+// gfx_backbuffer.hl -- Double-buffered framebuffer + tile dirty tracking
+//
+// Sprint G1 of HicOS GUI injection (per GUI_DESIGN.md §3.1).
+//
+// Why: vesa.hl draws directly to the LFB and uses a single AABB dirty
+//   region. That causes tearing during animation and wastes bandwidth
+//   when only a small area changes. The compositor needs an off-screen
+//   surface to assemble a frame before atomically copying to the LFB.
+//
+// Design:
+//   - Backbuffer at 0x2000000 (32 MB mark), 4 MB region covers 1024×768×32.
+//   - Tile grid 16×16 pixels => 64 cols × 48 rows = 3072 tiles.
+//     A bitmap of 3072 bits (384 bytes) at 0x23F0000 marks dirty tiles.
+//   - gfx_present() copies only dirty tiles from back -> LFB, then clears.
+//   - Drawing primitives target the backbuffer; vesa_* legacy keeps writing
+//     to LFB so we don't break the existing shell until G6 wires it.
+//
+// HiDPI: scale_factor global (1/2/3 = 1.0×/1.5×/2.0×); geometry passes
+//   convert logical px -> physical px via gfx_scale_px(). For G1 we keep
+//   it = 1.0× and just plumb the API.
+
+let GFX_BACK_ADDR    = 33554432;   // 0x02000000  backbuffer base
+let GFX_TILE_W       = 16;
+let GFX_TILE_H       = 16;
+let GFX_DIRTY_ADDR   = 37683200;   // 0x023F0000  tile bitmap base (384 B)
+
+let mut gfx_back_width   = 0;
+let mut gfx_back_height  = 0;
+let mut gfx_back_pitch   = 0;       // bytes per row of backbuffer
+let mut gfx_tile_cols    = 0;
+let mut gfx_tile_rows    = 0;
+let mut gfx_back_enabled = 0;
+let mut gfx_scale_num    = 1;       // scale numerator (1, 3, 2)
+let mut gfx_scale_den    = 1;       // denominator        (1, 2, 1)
+let mut gfx_present_count = 0;      // diagnostic counter
+
+fn gfx_back_init() {
+    if vesa_enabled == 0 { return 0; }
+    gfx_back_width  = vesa_width;
+    gfx_back_height = vesa_height;
+    gfx_back_pitch  = vesa_width * 4;
+    gfx_tile_cols   = (gfx_back_width  + GFX_TILE_W - 1) / GFX_TILE_W;
+    gfx_tile_rows   = (gfx_back_height + GFX_TILE_H - 1) / GFX_TILE_H;
+    gfx_back_enabled = 1;
+    // Zero the backbuffer (one full page = 4 MB).
+    mem_set32(GFX_BACK_ADDR, 4278190080, gfx_back_width * gfx_back_height);
+    gfx_dirty_clear();
+    print("gfx_backbuffer: " + to_string(gfx_back_width) + "x" + to_string(gfx_back_height) +
+          " tiles " + to_string(gfx_tile_cols) + "x" + to_string(gfx_tile_rows));
+    return 1;
+}
+
+fn gfx_scale_set(num, den) {
+    if den == 0 { return 0; }
+    gfx_scale_num = num;
+    gfx_scale_den = den;
+    return 1;
+}
+
+fn gfx_scale_px(logical) {
+    return logical * gfx_scale_num / gfx_scale_den;
+}
+
+fn gfx_back_pixel_addr(x, y) {
+    return GFX_BACK_ADDR + y * gfx_back_pitch + x * 4;
+}
+
+fn gfx_putpixel(x, y, color) {
+    if gfx_back_enabled == 0 { return 0; }
+    if x < 0 { return 0; } if x >= gfx_back_width { return 0; }
+    if y < 0 { return 0; } if y >= gfx_back_height { return 0; }
+    mem_write_u32(gfx_back_pixel_addr(x, y), color);
+    gfx_mark_tile(x, y);
+    return 0;
+}
+
+fn gfx_fill_rect(x, y, w, h, color) {
+    if gfx_back_enabled == 0 { return 0; }
+    let mut x0 = x;
+    let mut y0 = y;
+    let mut w0 = w;
+    let mut h0 = h;
+    if x0 < 0 { w0 = w0 + x0; x0 = 0; }
+    if y0 < 0 { h0 = h0 + y0; y0 = 0; }
+    if x0 + w0 > gfx_back_width  { w0 = gfx_back_width  - x0; }
+    if y0 + h0 > gfx_back_height { h0 = gfx_back_height - y0; }
+    if w0 <= 0 { return 0; }
+    if h0 <= 0 { return 0; }
+    let mut row = 0;
+    while row < h0 {
+        let mut addr = gfx_back_pixel_addr(x0, y0 + row);
+        mem_set32(addr, color, w0);
+        row = row + 1;
+    }
+    gfx_dirty_rect(x0, y0, w0, h0);
+    return 0;
+}
+
+fn gfx_clear(color) {
+    if gfx_back_enabled == 0 { return 0; }
+    mem_set32(GFX_BACK_ADDR, color, gfx_back_width * gfx_back_height);
+    let mut i = 0;
+    while i < 384 { mem_write_u8(GFX_DIRTY_ADDR + i, 255); i = i + 1; }
+    return 0;
+}
+
+// --- Tile dirty bitmap (3072 tiles for 1024x768, 1 bit each) ---
+
+fn gfx_dirty_clear() {
+    let mut i = 0;
+    while i < 384 { mem_write_u8(GFX_DIRTY_ADDR + i, 0); i = i + 1; }
+    return 0;
+}
+
+fn gfx_tile_index(tx, ty) {
+    return ty * gfx_tile_cols + tx;
+}
+
+fn gfx_mark_tile(x, y) {
+    let mut tx = x / GFX_TILE_W;
+    let mut ty = y / GFX_TILE_H;
+    if tx < 0 { return 0; } if tx >= gfx_tile_cols { return 0; }
+    if ty < 0 { return 0; } if ty >= gfx_tile_rows { return 0; }
+    let mut idx = gfx_tile_index(tx, ty);
+    let mut byte = idx / 8;
+    let mut bit  = idx - byte * 8;
+    let mut cur  = mem_read_u8(GFX_DIRTY_ADDR + byte);
+    let mut mask = 1;
+    let mut s = bit;
+    while s > 0 { mask = mask * 2; s = s - 1; }
+    if cur / mask % 2 == 0 {
+        mem_write_u8(GFX_DIRTY_ADDR + byte, cur + mask);
+    }
+    return 0;
+}
+
+fn gfx_dirty_rect(x, y, w, h) {
+    let mut tx0 = x / GFX_TILE_W;
+    let mut ty0 = y / GFX_TILE_H;
+    let mut tx1 = (x + w - 1) / GFX_TILE_W;
+    let mut ty1 = (y + h - 1) / GFX_TILE_H;
+    if tx0 < 0 { tx0 = 0; }
+    if ty0 < 0 { ty0 = 0; }
+    if tx1 >= gfx_tile_cols { tx1 = gfx_tile_cols - 1; }
+    if ty1 >= gfx_tile_rows { ty1 = gfx_tile_rows - 1; }
+    let mut ty = ty0;
+    while ty <= ty1 {
+        let mut tx = tx0;
+        while tx <= tx1 {
+            gfx_mark_tile(tx * GFX_TILE_W, ty * GFX_TILE_H);
+            tx = tx + 1;
+        }
+        ty = ty + 1;
+    }
+    return 0;
+}
+
+// Copy backbuffer dirty tiles to LFB, then clear bitmap.
+// Falls back to no-op if VESA is not enabled.
+fn gfx_present() {
+    if gfx_back_enabled == 0 { return 0; }
+    if vesa_enabled == 0 { return 0; }
+    let mut ty = 0;
+    while ty < gfx_tile_rows {
+        let mut tx = 0;
+        while tx < gfx_tile_cols {
+            let mut idx = gfx_tile_index(tx, ty);
+            let mut byte = idx / 8;
+            let mut bit  = idx - byte * 8;
+            let mut cur  = mem_read_u8(GFX_DIRTY_ADDR + byte);
+            let mut mask = 1;
+            let mut s = bit;
+            while s > 0 { mask = mask * 2; s = s - 1; }
+            if cur / mask % 2 == 1 {
+                let mut x = tx * GFX_TILE_W;
+                let mut y = ty * GFX_TILE_H;
+                let mut w = GFX_TILE_W;
+                let mut h = GFX_TILE_H;
+                if x + w > gfx_back_width  { w = gfx_back_width  - x; }
+                if y + h > gfx_back_height { h = gfx_back_height - y; }
+                let mut row = 0;
+                while row < h {
+                    let mut src = gfx_back_pixel_addr(x, y + row);
+                    let mut dst = vesa_fb_addr + (y + row) * vesa_pitch + x * 4;
+                    mem_copy(dst, src, w * 4);
+                    row = row + 1;
+                }
+                vesa_mark_dirty(x, y, w, h);
+            }
+            tx = tx + 1;
+        }
+        ty = ty + 1;
+    }
+    gfx_dirty_clear();
+    gfx_present_count = gfx_present_count + 1;
+    if gpu_initialized == 1 { vesa_flush_dirty(); }
+    return 0;
+}
+
+fn gfx_back_info() {
+    print("backbuffer: addr=0x" + format_hex(GFX_BACK_ADDR, 8) +
+          " size=" + to_string(gfx_back_width) + "x" + to_string(gfx_back_height) +
+          " enabled=" + to_string(gfx_back_enabled) +
+          " presents=" + to_string(gfx_present_count));
+    return 0;
+}
+
+print("gfx_backbuffer.hl loaded");

@@ -1,0 +1,172 @@
+// app_texteditor.hl -- 响应式文本编辑器（Sprint G6）
+//
+// 单文档 16 KB 缓冲。布局：
+//   xs/sm -> 隐藏 Toolbar，正文撑满
+//   md+   -> 顶部 Toolbar (New/Open/Save) + 状态栏（行列号/字符数）
+// 文档模型：纯字节数组 + 光标位置（线性偏移）。
+
+let APPTE_BUF       = 73531392;   // 0x04620000
+let APPTE_BUF_SIZE  = 16384;
+
+let mut appte_initialized = 0;
+let mut appte_win         = 0;
+let mut appte_toolbar     = 0;
+let mut appte_doc_len     = 0;
+let mut appte_cursor      = 0;
+let mut appte_scroll_y    = 0;
+
+fn app_texteditor_init() {
+    if appte_initialized == 1 { return 0; }
+    mem_write_u8(APPTE_BUF, 0);
+    appte_doc_len = 0;
+    appte_cursor  = 0;
+    appte_scroll_y = 0;
+    appte_initialized = 1;
+    print("app_texteditor: ready");
+    return 0;
+}
+
+fn app_texteditor_open() {
+    if appte_initialized == 0 { app_texteditor_init(); }
+    let mut sw = vesa_width;  if sw == 0 { sw = 1024; }
+    let mut sh = vesa_height; if sh == 0 { sh = 768; }
+    let mut w = 800; let mut h = 560;
+    let mut bp = al_breakpoint_get();
+    if bp <= AL_BP_SM { w = sw; h = sh - shell_topbar_height(); }
+    appte_win = widget_new(WIDGET_KIND_GROUPBOX, 0,
+                           (sw - w) / 2, (sh - h) / 2, w, h);
+    widget_set_label(appte_win, "TextEditor");
+    if bp >= AL_BP_MD {
+        let mut toolbar_items = APPTE_BUF + APPTE_BUF_SIZE - 256;
+        // 写入 3 个工具栏项的字符串指针表（地址常量）
+        // 这里仅占位；真实使用应该构造常量地址
+        appte_toolbar = toolbar_new(appte_win,
+            widget_x[appte_win], widget_y[appte_win] + 32,
+            w, 36, 0, toolbar_items);
+    }
+    return appte_win;
+}
+
+fn app_texteditor_insert_char(ch) {
+    if appte_initialized == 0 { app_texteditor_init(); }
+    if appte_doc_len >= APPTE_BUF_SIZE - 1 { return 0; }
+    // 在 cursor 处插入
+    if appte_cursor < appte_doc_len {
+        let mut i = appte_doc_len;
+        while i > appte_cursor {
+            mem_write_u8(APPTE_BUF + i, mem_read_u8(APPTE_BUF + i - 1));
+            i = i - 1;
+        }
+    }
+    mem_write_u8(APPTE_BUF + appte_cursor, ch);
+    appte_doc_len = appte_doc_len + 1;
+    appte_cursor  = appte_cursor + 1;
+    mem_write_u8(APPTE_BUF + appte_doc_len, 0);
+    return 0;
+}
+
+fn app_texteditor_backspace() {
+    if appte_cursor == 0 { return 0; }
+    let mut i = appte_cursor - 1;
+    while i < appte_doc_len - 1 {
+        mem_write_u8(APPTE_BUF + i, mem_read_u8(APPTE_BUF + i + 1));
+        i = i + 1;
+    }
+    appte_doc_len = appte_doc_len - 1;
+    appte_cursor  = appte_cursor - 1;
+    mem_write_u8(APPTE_BUF + appte_doc_len, 0);
+    return 0;
+}
+
+fn app_texteditor_input_char(ch) {
+    if ch == 8  { app_texteditor_backspace(); return 0; }
+    if ch == 13 { app_texteditor_insert_char(10); return 0; }
+    if ch >= 32 { app_texteditor_insert_char(ch); return 0; }
+    return 0;
+}
+
+fn appte_count_lines() {
+    let mut lines = 1;
+    let mut i = 0;
+    while i < appte_doc_len {
+        if mem_read_u8(APPTE_BUF + i) == 10 { lines = lines + 1; }
+        i = i + 1;
+    }
+    return lines;
+}
+
+fn appte_cursor_line_col() {
+    let mut line = 1;
+    let mut col  = 1;
+    let mut i = 0;
+    while i < appte_cursor {
+        if mem_read_u8(APPTE_BUF + i) == 10 {
+            line = line + 1;
+            col = 1;
+        } else {
+            col = col + 1;
+        }
+        i = i + 1;
+    }
+    return line * 10000 + col;   // 简单打包
+}
+
+fn app_texteditor_paint() {
+    if appte_initialized == 0 { return 0; }
+    if appte_win == 0 { return 0; }
+    groupbox_paint(appte_win);
+    let mut bp = al_breakpoint_get();
+    let mut top_off = 32;
+    if bp >= AL_BP_MD {
+        toolbar_paint(appte_toolbar);
+        top_off = 68;
+    }
+    // 正文区
+    let mut x = widget_x[appte_win] + 12;
+    let mut y = widget_y[appte_win] + top_off;
+    let mut w = widget_w[appte_win] - 24;
+    let mut h = widget_h[appte_win] - top_off - 28;
+    gfx_rect_round(x, y, w, h, 6, ui_theme_bg_elevated());
+    // 等宽渲染
+    let mut size = 13;
+    let mut cw   = font_atlas_w(size) + 1;
+    let mut ch   = font_atlas_h(size);
+    let mut tx0  = x + 8;
+    let mut ty0  = y + 8;
+    let mut row  = 0;
+    let mut col  = 0;
+    let mut i = 0;
+    while i < appte_doc_len {
+        let mut by = mem_read_u8(APPTE_BUF + i);
+        if by == 10 { row = row + 1; col = 0; }
+        else {
+            if ty0 + row * ch < y + h - ch {
+                font_atlas_draw_glyph(tx0 + col * cw, ty0 + row * ch, by, size,
+                                      ui_theme_text_primary());
+            }
+            col = col + 1;
+        }
+        if i == appte_cursor {
+            let mut cur_x = tx0 + col * cw;
+            let mut cur_y = ty0 + row * ch;
+            gfx_line_aa(cur_x, cur_y, cur_x, cur_y + ch, ui_theme_accent_get());
+        }
+        i = i + 1;
+    }
+    // 状态栏
+    let mut sy = widget_y[appte_win] + widget_h[appte_win] - 22;
+    gfx_fill_rect(widget_x[appte_win], sy, widget_w[appte_win], 1,
+                  ui_theme_bg_overlay());
+    let mut lines = appte_count_lines();
+    font_atlas_draw_str(widget_x[appte_win] + 12, sy + 4,
+        to_string(lines), 13, ui_theme_text_secondary());
+    font_atlas_draw_str(widget_x[appte_win] + 60, sy + 4,
+        "lines", 13, ui_theme_text_secondary());
+    font_atlas_draw_str(widget_x[appte_win] + widget_w[appte_win] - 80, sy + 4,
+        to_string(appte_doc_len), 13, ui_theme_text_secondary());
+    font_atlas_draw_str(widget_x[appte_win] + widget_w[appte_win] - 36, sy + 4,
+        "chars", 13, ui_theme_text_secondary());
+    return 0;
+}
+
+print("app_texteditor.hl loaded");

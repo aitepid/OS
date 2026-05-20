@@ -1,0 +1,44 @@
+// input_pen.hl -- Active stylus (pressure + tilt + barrel button)
+//
+// Sprint G3 of HicOS GUI injection (per GUI_DESIGN.md §2A.5).
+//
+// Pen events use pid = 0 by convention; tilt_x / tilt_y are in -90..90
+// degrees, pressure is the full 0..1023 range from Wacom/USI-class HID
+// reports. Hover events are emitted while the pen is in proximity but
+// not yet touching the surface — Paint and TextEditor use that to show
+// a brush preview.
+
+let mut pen_present = 0;        // 1 if pen hardware enumerated
+let mut pen_in_proximity = 0;
+let mut pen_last_x = 0;
+let mut pen_last_y = 0;
+let mut pen_last_pressure = 0;
+let mut pen_initialized = 0;
+
+fn input_pen_init() {
+    if pen_initialized == 1 { return 0; }
+    pen_initialized = 1;
+    print("input_pen: hardware=" + to_string(pen_present));
+    return 0;
+}
+
+// HID report decode entry point. typ uses PEV_TYPE_* codes.
+fn input_pen_push(typ, x, y, pressure, tilt_x, tilt_y, barrel_button) {
+    if pen_initialized == 0 { input_pen_init(); }
+    let mut buttons = 0;
+    if barrel_button != 0 { buttons = buttons + PEV_BTN_RIGHT; }
+    if pressure > 0       { buttons = buttons + PEV_BTN_LEFT; }
+    pen_last_x        = x;
+    pen_last_y        = y;
+    pen_last_pressure = pressure;
+    if typ == PEV_TYPE_HOVER { pen_in_proximity = 1; }
+    if typ == PEV_TYPE_DOWN  { pen_in_proximity = 1; }
+    if typ == PEV_TYPE_UP    { pen_in_proximity = 0; }
+    pev_push(typ, 0, PEV_SRC_PEN, x, y, pressure, tilt_x, tilt_y, buttons, 0);
+    return 0;
+}
+
+fn input_pen_in_proximity() { return pen_in_proximity; }
+fn input_pen_last_pressure() { return pen_last_pressure; }
+
+print("input_pen.hl loaded");

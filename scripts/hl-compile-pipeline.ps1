@@ -144,16 +144,16 @@ $script:ir_dead = $null; $script:ir_count = 0; $script:ir_next_tmp = 0
 $script:ir_label_counter = 0; $script:ir_vars = $null; $script:ir_fns = $null
 
 function IR-Init {
-    $script:ir_op = [int[]]::new(4096); $script:ir_dst = [int[]]::new(4096)
-    $script:ir_src1 = [System.Object[]]::new(4096); $script:ir_src2 = [System.Object[]]::new(4096)
-    $script:ir_dead = [int[]]::new(4096)
+    $script:ir_op = [int[]]::new(16384); $script:ir_dst = [int[]]::new(16384)
+    $script:ir_src1 = [System.Object[]]::new(16384); $script:ir_src2 = [System.Object[]]::new(16384)
+    $script:ir_dead = [int[]]::new(16384)
     $script:ir_count = 0; $script:ir_next_tmp = 0; $script:ir_label_counter = 0
     $script:ir_vars = @{}; $script:ir_fns = @{}
 }
 function IR-Tmp  { $t = $script:ir_next_tmp; $script:ir_next_tmp++; return $t }
 function IR-Lbl  { $script:ir_label_counter++; return $script:ir_label_counter }
 function IR-Emit($op, $d, $s1, $s2) {
-    $i = $script:ir_count; if ($i -ge 4096) { return -1 }
+    $i = $script:ir_count; if ($i -ge 16384) { return -1 }
     $script:ir_op[$i]=$op; $script:ir_dst[$i]=$d; $script:ir_src1[$i]=$s1; $script:ir_src2[$i]=$s2
     $script:ir_dead[$i]=0; $script:ir_count++; return $i
 }
@@ -263,21 +263,35 @@ function IR-LowerExpr($node) {
     $t = IR-Tmp; IR-Emit $IR_CONST $t 0 0 | Out-Null; return $t
 }
 
+# Unwrap a body produced by p_block. p_block returns ",$stmts" â€” a 1-element wrapper
+# whose [0] is an ArrayList of statements. Without unwrapping, foreach iterates the
+# wrapper once and hands the ArrayList to IR-LowerStmt as if it were a single stmt.
+function IR-StmtBody($body) {
+    if ($null -eq $body) { return @() }
+    if ($body -is [System.Collections.IList] -and $body.Count -eq 1 -and $body[0] -is [System.Collections.IList] -and -not ($body[0] -is [string])) {
+        $inner = $body[0]
+        if ($inner.Count -ge 1 -and -not ($inner[0] -is [string])) { return $inner }
+        if ($inner -is [System.Collections.ArrayList]) { return $inner }
+    }
+    return $body
+}
+
 function IR-LowerStmt($node) {
     if ($null -eq $node) { return }
-    if ($node -isnot [array] -or $node.Count -lt 1) { return }
+    if ($node -isnot [System.Collections.IList] -or $node.Count -lt 1) { return }
     $nt = $node[0]
+    if ($nt -isnot [string]) { foreach ($s in $node) { IR-LowerStmt $s }; return }
     if ($nt -eq 'Let') { $vr = IR-Tmp; $script:ir_vars[$node[1]] = $vr; if ($null -ne $node[3]) { $val = IR-LowerExpr $node[3]; IR-Emit $IR_COPY $vr $val 0 | Out-Null } else { IR-Emit $IR_CONST $vr 0 0 | Out-Null }; return }
     if ($nt -eq 'Assign') { $val = IR-LowerExpr $node[2]; $vr = $script:ir_vars[$node[1]]; if ($null -ne $vr) { IR-Emit $IR_COPY $vr $val 0 | Out-Null }; return }
-    if ($nt -eq 'FnDef') { $lbl = IR-Lbl; $script:ir_fns[$node[1]] = $lbl; IR-Emit $IR_LABEL $lbl 0 0 | Out-Null; $pi=0; if ($node[2] -is [array]) { foreach ($p in $node[2]) { $pv=IR-Tmp; $script:ir_vars[$p]=$pv; IR-Emit $IR_PARAM $pv $pi 0|Out-Null; $pi++ } }; if ($node[3] -is [array]) { foreach ($s in $node[3]) { IR-LowerStmt $s } }; $z=IR-Tmp; IR-Emit $IR_CONST $z 0 0|Out-Null; IR-Emit $IR_RET $z 0 0|Out-Null; return }
+    if ($nt -eq 'FnDef') { $lbl = IR-Lbl; $script:ir_fns[$node[1]] = $lbl; IR-Emit $IR_LABEL $lbl 0 0 | Out-Null; $pi=0; if ($node[2] -is [System.Collections.IList]) { foreach ($p in $node[2]) { $pv=IR-Tmp; $script:ir_vars[$p]=$pv; IR-Emit $IR_PARAM $pv $pi 0|Out-Null; $pi++ } }; foreach ($s in (IR-StmtBody $node[3])) { IR-LowerStmt $s }; $z=IR-Tmp; IR-Emit $IR_CONST $z 0 0|Out-Null; IR-Emit $IR_RET $z 0 0|Out-Null; return }
     if ($nt -eq 'Return') { if ($null -ne $node[1]) { $val = IR-LowerExpr $node[1]; IR-Emit $IR_RET $val 0 0 | Out-Null } else { $z=IR-Tmp; IR-Emit $IR_CONST $z 0 0|Out-Null; IR-Emit $IR_RET $z 0 0|Out-Null }; return }
-    if ($nt -eq 'If') { $c = IR-LowerExpr $node[1]; $el = IR-Lbl; $end = IR-Lbl; IR-Emit $IR_JZ $c $el 0|Out-Null; if ($node[2] -is [array]) { foreach ($s in $node[2]) { IR-LowerStmt $s } }; IR-Emit $IR_JMP $end 0 0|Out-Null; IR-Emit $IR_LABEL $el 0 0|Out-Null; if ($null -ne $node[3] -and $node[3] -is [array]) { foreach ($s in $node[3]) { IR-LowerStmt $s } }; IR-Emit $IR_LABEL $end 0 0|Out-Null; return }
-    if ($nt -eq 'While') { $lp = IR-Lbl; $end = IR-Lbl; IR-Emit $IR_LABEL $lp 0 0|Out-Null; $c = IR-LowerExpr $node[1]; IR-Emit $IR_JZ $c $end 0|Out-Null; if ($node[2] -is [array]) { foreach ($s in $node[2]) { IR-LowerStmt $s } }; IR-Emit $IR_JMP $lp 0 0|Out-Null; IR-Emit $IR_LABEL $end 0 0|Out-Null; return }
+    if ($nt -eq 'If') { $c = IR-LowerExpr $node[1]; $el = IR-Lbl; $end = IR-Lbl; IR-Emit $IR_JZ $c $el 0|Out-Null; foreach ($s in (IR-StmtBody $node[2])) { IR-LowerStmt $s }; IR-Emit $IR_JMP $end 0 0|Out-Null; IR-Emit $IR_LABEL $el 0 0|Out-Null; if ($null -ne $node[3]) { foreach ($s in (IR-StmtBody $node[3])) { IR-LowerStmt $s } }; IR-Emit $IR_LABEL $end 0 0|Out-Null; return }
+    if ($nt -eq 'While') { $lp = IR-Lbl; $end = IR-Lbl; IR-Emit $IR_LABEL $lp 0 0|Out-Null; $c = IR-LowerExpr $node[1]; IR-Emit $IR_JZ $c $end 0|Out-Null; foreach ($s in (IR-StmtBody $node[2])) { IR-LowerStmt $s }; IR-Emit $IR_JMP $lp 0 0|Out-Null; IR-Emit $IR_LABEL $end 0 0|Out-Null; return }
     if ($nt -eq 'For') { IR-Emit $IR_NOP 0 0 0 | Out-Null; return }
     if ($nt -eq 'Print') { $val = IR-LowerExpr $node[1]; IR-Emit $IR_PRINT $val 0 0 | Out-Null; return }
     if ($nt -eq 'ExprStmt') { IR-LowerExpr $node[1] | Out-Null; return }
-    if ($nt -eq 'Quadrant') { if ($node[2] -is [array]) { foreach ($s in $node[2]) { IR-LowerStmt $s } }; return }
-    if ($nt -eq 'Block') { if ($node[1] -is [array]) { foreach ($s in $node[1]) { IR-LowerStmt $s } }; return }
+    if ($nt -eq 'Quadrant') { foreach ($s in (IR-StmtBody $node[2])) { IR-LowerStmt $s }; return }
+    if ($nt -eq 'Block') { foreach ($s in (IR-StmtBody $node[1])) { IR-LowerStmt $s }; return }
     if ($nt -eq 'IndexAssign') { return }
     if ($nt -eq 'FnDecl') { return }
     IR-Emit $IR_NOP 0 0 0 | Out-Null
@@ -334,7 +348,7 @@ function IR-OptDCE {
     return $changed
 }
 
-# Optimization: strength reduction (mul/div by powers of 2 ¡ú shift)
+# Optimization: strength reduction (mul/div by powers of 2 ï¿½ï¿½ shift)
 function IR-OptStrength {
     $changed = 0
     for ($i = 0; $i -lt $script:ir_count; $i++) {
@@ -375,8 +389,8 @@ function IR-LiveCount {
 # ================================================================
 # Register pool: RAX=0 RCX=1 RDX=2 RBX=3 RSP=4(res) RBP=5(res) RSI=6 RDI=7 R8-R15=8-15
 $script:REG_POOL = @(0,1,2,3,6,7,8,9,10,11,12,13,14,15)
-$script:ra_map = $null  # vreg ¡ú physical reg or -1 (spilled)
-$script:ra_spill_map = $null  # vreg ¡ú spill offset
+$script:ra_map = $null  # vreg ï¿½ï¿½ physical reg or -1 (spilled)
+$script:ra_spill_map = $null  # vreg ï¿½ï¿½ spill offset
 $script:ra_spill_top = 0
 
 function RA-Init {
@@ -399,9 +413,23 @@ function RA-Alloc([int]$vreg) {
 
 # x86_64 byte buffer
 $script:x86_buf = $null
+# Sprint 36: handwritten-kernel symbol addresses for direct codegen
+$script:kernSyms = @{}
+$kernSymPath = Join-Path $repoRoot 'bare-kernel\kernel-symbols.json'
+if (Test-Path $kernSymPath) {
+    $raw = Get-Content $kernSymPath -Raw | ConvertFrom-Json
+    foreach ($p in $raw.PSObject.Properties) {
+        $v = $p.Value; if ($v -is [string] -and $v.StartsWith('0x')) { $v = [Convert]::ToInt64($v.Substring(2),16) }
+        $script:kernSyms[$p.Name] = [int64]$v
+    }
+}
 function X86-Init { $script:x86_buf = [System.Collections.ArrayList]::new() }
 function X86-Byte([int]$b) { [void]$script:x86_buf.Add([byte]($b -band 0xFF)) }
 function X86-Imm32([long]$v) { X86-Byte ($v -band 0xFF); X86-Byte (($v -shr 8) -band 0xFF); X86-Byte (($v -shr 16) -band 0xFF); X86-Byte (($v -shr 24) -band 0xFF) }
+function X86-Imm64([long]$v) {
+    $b = [System.BitConverter]::GetBytes([int64]$v)
+    for ($i = 0; $i -lt 8; $i++) { X86-Byte $b[$i] }
+}
 
 # Emit: mov reg, imm64 (REX.W B8+r)
 function X86-MovRegImm([int]$r, [long]$v) {
@@ -478,13 +506,24 @@ function X86-XorRR([int]$dst, [int]$src) {
     X86-Byte $rex; X86-Byte 0x31; X86-Byte (0xC0 + (($src -band 7) -shl 3) + ($dst -band 7))
 }
 
-# Translate one IR instruction ¡ú x86_64 bytes
+# Translate one IR instruction ï¿½ï¿½ x86_64 bytes
 function X86-EmitIR([int]$idx) {
     $op = $script:ir_op[$idx]; $dst = $script:ir_dst[$idx]
     $s1 = $script:ir_src1[$idx]; $s2 = $script:ir_src2[$idx]
     $rd = RA-Alloc $dst
     switch ($op) {
         $IR_CONST  { if ($rd -ge 0) { X86-MovRegImm $rd $s1 } }
+        $IR_STR_CONST {
+            # Sprint 38: pool the literal, emit mov reg, imm64 0 + abs64 reloc.
+            if ($rd -ge 0) {
+                $idx = $script:mod_strings.Count
+                [void]$script:mod_strings.Add([string]$s1)
+                $sym = "__str`$$($script:current_module)`$$idx"
+                X86-MovRegImm $rd 0
+                $site = $script:x86_buf.Count - 8
+                [void]$script:mod_relocs.Add(@($site, $sym, 'abs64'))
+            }
+        }
         $IR_COPY   { $rs = RA-Alloc $s1; if ($rd -ge 0 -and $rs -ge 0) { X86-MovRR $rd $rs } }
         $IR_ADD    { $r1 = RA-Alloc $s1; $r2 = RA-Alloc $s2; if ($rd -ge 0) { if ($rd -ne $r1 -and $r1 -ge 0) { X86-MovRR $rd $r1 }; if ($r2 -ge 0) { X86-AddRR $rd $r2 } } }
         $IR_SUB    { $r1 = RA-Alloc $s1; $r2 = RA-Alloc $s2; if ($rd -ge 0) { if ($rd -ne $r1 -and $r1 -ge 0) { X86-MovRR $rd $r1 }; if ($r2 -ge 0) { X86-SubRR $rd $r2 } } }
@@ -506,11 +545,11 @@ function X86-EmitIR([int]$idx) {
             # Labels: emit nop alignment; if this is a function entry, emit prologue
             $lbl = $dst; $isFn = $false
             foreach ($kv in $script:ir_fns.GetEnumerator()) { if ($kv.Value -eq $lbl) { $isFn = $true } }
-            if ($isFn) { X86-Prologue } else { X86-Byte 0x90 }
+            if ($isFn) { RA-Init; X86-Prologue } else { X86-Byte 0x90 }
         }
         $IR_JMP    { X86-Byte 0xEB; X86-Byte 0x00 <# rel8 placeholder #> }
         $IR_JZ     { X86-Byte 0x74; X86-Byte 0x00 <# je rel8 placeholder #> }
-        $IR_RET    { $r1 = RA-Alloc $s1; if ($null -ne $r1 -and $r1 -ge 0 -and $r1 -ne 0) { X86-MovRR 0 $r1 <# result¡úRAX #> }; X86-Epilogue; X86-Ret }
+        $IR_RET    { $r1 = RA-Alloc $s1; if ($null -ne $r1 -and $r1 -ge 0 -and $r1 -ne 0) { X86-MovRR 0 $r1 <# resultï¿½ï¿½RAX #> }; X86-Epilogue; X86-Ret }
         $IR_CALL   { X86-Byte 0xE8; X86-Imm32 0 <# call rel32 placeholder #> }
         $IR_ARG    {
             # Call-site arg setup: move value vreg to ABI register
@@ -532,7 +571,18 @@ function X86-EmitIR([int]$idx) {
                 if ($rd -ne $srcReg) { X86-MovRR $rd $srcReg }
             }
         }
-        $IR_PRINT  { <# serial output stub #> X86-Byte 0x90 }
+        $IR_PRINT  {
+            # Sprint 36: emit direct call to handwritten serial_puts.
+            # IR layout: s1 = vreg holding string pointer.
+            $srcReg = RA-Alloc $s1
+            if ($srcReg -ge 0 -and $script:kernSyms.ContainsKey('serial_puts')) {
+                if ($srcReg -ne 6) { X86-MovRR 6 $srcReg }   # rsi = ptr
+                X86-Byte 0x48; X86-Byte 0xB8; X86-Imm64 $script:kernSyms['serial_puts']  # mov rax, abs
+                X86-Byte 0xFF; X86-Byte 0xD0                  # call rax
+            } else {
+                X86-Byte 0x90  # fallback nop
+            }
+        }
         $IR_PORT_OUT {
             # port_out_u8: mov edx, port_reg; mov eax, val_reg; out dx, al
             $rPort = RA-Alloc $s1; $rVal = RA-Alloc $s2
@@ -644,6 +694,7 @@ function X86-CompileModule {
     RA-Init; X86-Init; X86-Prologue
     $script:mod_symbols = [System.Collections.ArrayList]::new()
     $script:mod_relocs  = [System.Collections.ArrayList]::new()
+    $script:mod_strings = [System.Collections.ArrayList]::new()
     for ($i = 0; $i -lt $script:ir_count; $i++) {
         if ($script:ir_dead[$i] -eq 0) {
             # Track function labels as exported symbols
@@ -677,6 +728,21 @@ function X86-CompileModule {
         }
     }
     X86-Epilogue; X86-Ret
+    if ($env:HL_DUMP_SYMS_FOR -and $script:current_module -eq $env:HL_DUMP_SYMS_FOR) {
+        $sorted = $script:mod_symbols | Sort-Object { $_[1] }
+        $prev = $null
+        foreach ($s in $sorted) {
+            if ($null -ne $prev) {
+                $sz = $s[1] - $prev[1]
+                Write-Host ("  symdump[{0}]: {1,-30} off={2,-6} sz={3}" -f $env:HL_DUMP_SYMS_FOR, $prev[0], $prev[1], $sz) -ForegroundColor DarkCyan
+            }
+            $prev = $s
+        }
+        if ($null -ne $prev) {
+            $sz = $script:x86_buf.Count - $prev[1]
+            Write-Host ("  symdump[{0}]: {1,-30} off={2,-6} sz={3}" -f $env:HL_DUMP_SYMS_FOR, $prev[0], $prev[1], $sz) -ForegroundColor DarkCyan
+        }
+    }
     return $script:x86_buf.Count
 }
 
@@ -685,7 +751,7 @@ function X86-CompileModule {
 # ================================================================
 $script:LINK_TEXT_BASE = 0x120000   # 1 MB + 128 KB -- .text segment start (after padded handwritten kernel)
 $script:link_modules = $null        # array of @{Name;Code;Symbols;Relocs}
-$script:link_global_syms = $null    # hashtable: name ¡ú absolute offset
+$script:link_global_syms = $null    # hashtable: name ï¿½ï¿½ absolute offset
 $script:link_combined = $null       # flat byte array
 
 function Link-Init {
@@ -739,20 +805,39 @@ function Link-GenerateStubs {
                   'str_replace','str_to_upper','str_to_lower','str_join',
                   'abs','min','max','floor','ceil','sqrt','pow','log',
                   'random','time_ms','sleep_ms','panic')
+    # Sprint 36: read handwritten-kernel symbol export, route specific builtins
+    # to real subroutines instead of no-op stubs.
+    $kernSyms = @{}
+    $kernSymPath = Join-Path $repoRoot 'bare-kernel\kernel-symbols.json'
+    if (Test-Path $kernSymPath) {
+        $raw = Get-Content $kernSymPath -Raw | ConvertFrom-Json
+        foreach ($p in $raw.PSObject.Properties) { $kernSyms[$p.Name] = [int64]$p.Value }
+    }
     $stubBase = $script:link_combined.Count
     $stubCount = 0
     foreach ($name in $builtins) {
         if (-not $script:link_global_syms.ContainsKey($name)) {
             $stubOff = $script:link_combined.Count
-            # Stub: push rbp; mov rbp,rsp; xor eax,eax; pop rbp; ret (8 bytes)
-            [void]$script:link_combined.Add([byte]0x55)           # push rbp
-            [void]$script:link_combined.Add([byte]0x48)           # REX.W
-            [void]$script:link_combined.Add([byte]0x89)           # mov rbp, rsp
-            [void]$script:link_combined.Add([byte]0xE5)
-            [void]$script:link_combined.Add([byte]0x31)           # xor eax, eax
-            [void]$script:link_combined.Add([byte]0xC0)
-            [void]$script:link_combined.Add([byte]0x5D)           # pop rbp
-            [void]$script:link_combined.Add([byte]0xC3)           # ret
+            if ($name -eq 'print' -and $kernSyms.ContainsKey('serial_puts')) {
+                # Trampoline: mov rsi,rdi ; mov rax,abs ; call rax ; ret  (15 bytes)
+                $abs = $kernSyms['serial_puts']
+                [void]$script:link_combined.Add([byte]0x48); [void]$script:link_combined.Add([byte]0x89); [void]$script:link_combined.Add([byte]0xFE)  # mov rsi,rdi
+                [void]$script:link_combined.Add([byte]0x48); [void]$script:link_combined.Add([byte]0xB8)                                              # mov rax,imm64
+                $ab = [System.BitConverter]::GetBytes([int64]$abs)
+                for ($bi = 0; $bi -lt 8; $bi++) { [void]$script:link_combined.Add([byte]$ab[$bi]) }
+                [void]$script:link_combined.Add([byte]0xFF); [void]$script:link_combined.Add([byte]0xD0)                                              # call rax
+                [void]$script:link_combined.Add([byte]0xC3)                                                                                            # ret
+            } else {
+                # No-op fallback: push rbp; mov rbp,rsp; xor eax,eax; pop rbp; ret (8 bytes)
+                [void]$script:link_combined.Add([byte]0x55)
+                [void]$script:link_combined.Add([byte]0x48)
+                [void]$script:link_combined.Add([byte]0x89)
+                [void]$script:link_combined.Add([byte]0xE5)
+                [void]$script:link_combined.Add([byte]0x31)
+                [void]$script:link_combined.Add([byte]0xC0)
+                [void]$script:link_combined.Add([byte]0x5D)
+                [void]$script:link_combined.Add([byte]0xC3)
+            }
             $script:link_global_syms[$name] = $stubOff
             $script:link_builtin_stubs[$name] = $stubOff
             $stubCount++
@@ -789,7 +874,32 @@ function Link-Pass2 {
     $stubResult = Link-GenerateStubs
     $script:link_stub_base = $stubResult[0]
     $script:link_stub_count = $stubResult[1]
-    # Resolve relocations (now with stubs available)
+    # Sprint 38: append string-literal pool after stubs; register each as a global symbol.
+    foreach ($mod in $script:link_modules) {
+        if (-not $mod.ContainsKey('Strings') -or $null -eq $mod.Strings) { continue }
+        $modName = $mod.Name
+        for ($si = 0; $si -lt $mod.Strings.Count; $si++) {
+            $sym = "__str`$$modName`$$si"
+            $script:link_global_syms[$sym] = $script:link_combined.Count
+            $raw = [string]$mod.Strings[$si]
+            $sb = New-Object System.Text.StringBuilder
+            $i = 0
+            while ($i -lt $raw.Length) {
+                $ch = $raw[$i]
+                if ($ch -eq '\' -and ($i + 1) -lt $raw.Length) {
+                    $n = $raw[$i + 1]
+                    $repl = switch ($n) { 'n' { "`n" } 't' { "`t" } 'r' { "`r" } '0' { [char]0 } '\' { '\' } '"' { '"' } "'" { "'" } default { [string]$n } }
+                    [void]$sb.Append($repl); $i += 2
+                } else {
+                    [void]$sb.Append($ch); $i++
+                }
+            }
+            $bytes = [System.Text.Encoding]::UTF8.GetBytes($sb.ToString())
+            foreach ($b in $bytes) { [void]$script:link_combined.Add([byte]$b) }
+            [void]$script:link_combined.Add([byte]0)  # NUL terminator
+        }
+    }
+    # Resolve relocations (now with stubs + strings available)
     $resolved = 0; $unresolved = 0
     foreach ($mod in $script:link_modules) {
         foreach ($reloc in $mod.Relocs) {
@@ -804,6 +914,12 @@ function Link-Pass2 {
                     $script:link_combined[$site + 1] = [byte](($rel -shr 8) -band 0xFF)
                     $script:link_combined[$site + 2] = [byte](($rel -shr 16) -band 0xFF)
                     $script:link_combined[$site + 3] = [byte](($rel -shr 24) -band 0xFF)
+                    $resolved++
+                } elseif ($rtype -eq 'abs64' -and ($site + 7) -lt $script:link_combined.Count) {
+                    $abs = [int64]($script:LINK_TEXT_BASE + $targetOff)
+                    for ($bi = 0; $bi -lt 8; $bi++) {
+                        $script:link_combined[$site + $bi] = [byte](($abs -shr ($bi * 8)) -band 0xFF)
+                    }
                     $resolved++
                 }
             } else { $unresolved++ }
@@ -858,6 +974,9 @@ foreach ($file in $modulePaths) {
 
     # Validate balanced brackets
     $balErrors = Test-Balanced $tokens
+    if ($balErrors.Count -gt 0 -and $env:HL_DUMP_BAL -eq '1') {
+        Write-Host ("    bal[" + $file.Name + "]: " + ($balErrors -join '; ')) -ForegroundColor DarkYellow
+    }
     $fnCount = Count-Functions $tokens
 
     # Phase 2: Parse
@@ -895,10 +1014,24 @@ foreach ($file in $modulePaths) {
     $irLive = IR-LiveCount
     # Phase 4: x86_64 codegen
     $x86Bytes = 0
+    $script:current_module = $file.Name
     try { $x86Bytes = X86-CompileModule } catch {}
     # Register module for linking
     if ($x86Bytes -gt 0) {
-        [void]$script:link_modules.Add(@{ Name = $file.Name; Code = [System.Collections.ArrayList]::new($script:x86_buf); Symbols = $script:mod_symbols; Relocs = $script:mod_relocs; Offset = 0 })
+        if ($file.Name -eq 'kernel_entry.hl') {
+            $hasStart = $false; foreach ($s in $script:mod_symbols) { if ($s[0] -eq '_start') { $hasStart = $true; Write-Host ("  [DBG] _start in mod_symbols @ off={0}" -f $s[1]) -ForegroundColor Magenta } }
+            if (-not $hasStart) { Write-Host "  [DBG] _start NOT in kernel_entry mod_symbols !" -ForegroundColor Red }
+            $startLbl = $script:ir_fns['_start']
+            Write-Host ("  [DBG] ir_fns has _start? {0}; ir_fns count = {1}; _start label = {2}; irTotal = {3}" -f $script:ir_fns.ContainsKey('_start'), $script:ir_fns.Count, $startLbl, $irTotal) -ForegroundColor Magenta
+            $foundIdx = -1; $foundDead = -1
+            for ($ii = 0; $ii -lt $script:ir_count; $ii++) {
+                if ($script:ir_op[$ii] -eq $IR_LABEL -and $script:ir_dst[$ii] -eq $startLbl) {
+                    $foundIdx = $ii; $foundDead = $script:ir_dead[$ii]; break
+                }
+            }
+            Write-Host ("  [DBG] _start IR_LABEL idx={0} dead={1}" -f $foundIdx, $foundDead) -ForegroundColor Magenta
+        }
+        [void]$script:link_modules.Add(@{ Name = $file.Name; Code = [System.Collections.ArrayList]::new($script:x86_buf); Symbols = $script:mod_symbols; Relocs = $script:mod_relocs; Strings = $script:mod_strings; Offset = 0 })
     }
     $totalIR += $irTotal; $totalIRLive += $irLive; $totalIROpt += $irOpt; $totalFns += $fnCount; $totalX86 += $x86Bytes
     [void]$moduleASTs.Add(@{ Name = $file.Name; AST = $ast; IR = $irTotal; Live = $irLive; Opt = $irOpt; X86 = $x86Bytes })
@@ -960,7 +1093,7 @@ foreach ($extra in $extraFiles) {
 Write-Host ''
 
 # ================================================================
-#  PHASE 5: Link all modules ¡ú kernel.bin
+#  PHASE 5: Link all modules ï¿½ï¿½ kernel.bin
 # ================================================================
 $textSize = Link-Pass1
 $linkResult = Link-Pass2
