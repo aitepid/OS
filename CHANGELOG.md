@@ -1,5 +1,22 @@
 ﻿# HicOS Changelog
 
+## Sprint 33 — GUI render loop 接线（kernel_init → 壁纸/topbar/dock）(2026-05-20)
+
+`bare-kernel/hl/kernel_init.hl` 在 `wm_open_terminal_window()` 之后、`shell_main()` 之前插入初始 GUI paint 序列：
+
+```
+shell_wallpaper_paint(vesa_width, vesa_height);
+shell_topbar_paint(vesa_width);
+shell_dock_paint(vesa_width, vesa_height);
+compositor_present();
+gfx_present();
+vesa_flip();
+```
+
+修复 Sprint G1 GUI 47 模块脚手架仅有 `_init` 没 paint 调用的问题：boot 完成后 VESA framebuffer 黑屏。接线后 H-L 编译产物 `kernel.bin` 在 `_start` 流程末尾绘制壁纸+顶栏+dock 到 1024×768×32 LFB，QEMU SDL 窗口可见桌面。
+
+`hl-compile-pipeline.ps1` 跑通 472/472 模块编译（705,639 tokens, 419,638 AST nodes, 391,760 IR instr, 601,079 字节 .text）；`rebuild-image.ps1` 拼装 `hicos-hl.img` 741,376 字节。QEMU `-vga std -display sdl` 启动验证。
+
 ## Sprint 32 — QEMU stress test Round 5 fixes (BUG-061 → BUG-064) (2026-05-20)
 
 QEMU 可视化启动验证通过（`hicos-hl.img` boot 至 `HicOS>` shell，113 内核模块加载完成）。4 个并行 Explore agent 静态压力审查 → 32 候选 → 人工复核剔除 28 个 `+=`/`-=` 误报（BNF L68 确认合法语法），确认 4 个真 BUG：
