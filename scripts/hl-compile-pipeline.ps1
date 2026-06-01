@@ -858,7 +858,17 @@ function Link-GenerateStubs {
                   'recv','socket','socket_create','connect',
                   'rdmsr','mem_write_dword','get_uptime','timer_ticks',
                   'rtc_read_timestamp','notify_show','ot_span_id_of',
-                  'hicos_kernel_info','str_find_from','file_list','net_ip_string')
+                  'hicos_kernel_info','str_find_from','file_list','net_ip_string',
+                  # Sprint 35 第六波：C 类未实现模块的对外 API（容器 / 音频 / 服务 / USB / VESA / UI / IR）
+                  'ctr_create','ctr_start','ctr_stop','ctr_destroy','ctr_status','ctr_exec','ctr_list',
+                  'aus_init','aus_play','aus_stop','aus_beep','aus_connect','aus_set_master',
+                  'svc_start','svc_stop','svc_status','svc_list',
+                  'usb_control_transfer','usb_device_count','usb_interrupt_read',
+                  'usb_device_protocol','usb_device_subclass','usb_device_class',
+                  'vesa_get_width','vesa_get_height','vesa_get_fb',
+                  'uiinst_handle_key','uifiles_handle_key','uiterm_handle_key',
+                  'ui_dialog_show','mixer_set_master_volume','aho_corasick_init',
+                  'ir_lower_stmts','ir_lower_reset','ir_optimize')
     # Sprint 36: read handwritten-kernel symbol export, route specific builtins
     # to real subroutines instead of no-op stubs.
     $kernSyms = @{}
