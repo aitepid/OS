@@ -835,7 +835,17 @@ function Link-GenerateStubs {
                   'from_char_code','str_contains','str_starts_with','str_ends_with',
                   'str_replace','str_to_upper','str_to_lower','str_join',
                   'abs','min','max','floor','ceil','sqrt','pow','log',
-                  'random','time_ms','sleep_ms','panic')
+                  'random','time_ms','sleep_ms','panic',
+                  # Sprint 35 阶段 1：A 类高频别名（trampoline 桩，消化 ~2,142 unresolved 站点）
+                  'array','to_int','parse_int','str_char_code','_starts_with',
+                  'str_slice','substr','str_index_of','str_to_bytes','str_from_byte',
+                  'to_char','str_byte','strlen',
+                  # Sprint 35 阶段 1：B 类 kernel 符号（暂时 no-op 桩，待 kernel.entry 暴露真实实现）
+                  'serial_print','_ke_pci_read','mem_set32','wrmsr','random_get',
+                  # Sprint 35 阶段 1：C 类高频前向声明（待对应 .hl 模块实现后自动接管）
+                  '_find_space','cstr_from_addr','udp_recv','file_read',
+                  'ui_fill_rect','font_draw_string','socket_send','socket_close',
+                  'partition','encode','close','search','insert','send')
     # Sprint 36: read handwritten-kernel symbol export, route specific builtins
     # to real subroutines instead of no-op stubs.
     $kernSyms = @{}
@@ -932,6 +942,8 @@ function Link-Pass2 {
     }
     # Resolve relocations (now with stubs + strings available)
     $resolved = 0; $unresolved = 0
+    # Sprint 35: 收集未解析 target → 数量映射，便于事后分类
+    $script:link_unresolved_map = @{}
     foreach ($mod in $script:link_modules) {
         foreach ($reloc in $mod.Relocs) {
             $site = $mod.Offset + $reloc[0]   # absolute site in combined binary
@@ -953,7 +965,14 @@ function Link-Pass2 {
                     }
                     $resolved++
                 }
-            } else { $unresolved++ }
+            } else {
+                $unresolved++
+                if ($script:link_unresolved_map.ContainsKey($target)) {
+                    $script:link_unresolved_map[$target]++
+                } else {
+                    $script:link_unresolved_map[$target] = 1
+                }
+            }
         }
     }
     return @($resolved, $unresolved)
@@ -1162,6 +1181,23 @@ if ($stubCount -gt 0) {
 }
 if ($unresolved -gt 0) {
     Write-Host "  Unresolved relocs: $unresolved" -ForegroundColor Yellow
+    # Sprint 35: dump 未解析符号 → .tmp/unresolved-syms.txt（按出现次数降序）
+    $tmpDir = Join-Path $repoRoot '.tmp'
+    if (-not (Test-Path $tmpDir)) { [void](New-Item -ItemType Directory -Path $tmpDir -Force) }
+    $dumpPath = Join-Path $tmpDir 'unresolved-syms.txt'
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.AppendLine("# Unresolved relocations dump — Sprint 35 诊断输入")
+    [void]$sb.AppendLine("# Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')")
+    [void]$sb.AppendLine("# Total unresolved sites: $unresolved")
+    [void]$sb.AppendLine("# Distinct symbols: $($script:link_unresolved_map.Count)")
+    [void]$sb.AppendLine("# Format: <count>`t<symbol>")
+    [void]$sb.AppendLine("")
+    $sorted = $script:link_unresolved_map.GetEnumerator() | Sort-Object -Property Value -Descending
+    foreach ($kv in $sorted) {
+        [void]$sb.AppendLine(("{0}`t{1}" -f $kv.Value, $kv.Key))
+    }
+    [System.IO.File]::WriteAllText($dumpPath, $sb.ToString(), [System.Text.UTF8Encoding]::new($false))
+    Write-Host "  Unresolved dump:   $dumpPath ($($script:link_unresolved_map.Count) distinct)" -ForegroundColor DarkYellow
 }
 Write-Host "  kernel.bin:       $binSize bytes @ 0x$($script:LINK_TEXT_BASE.ToString('X'))" -ForegroundColor White
 Write-Host "  Functions found:  $totalFns" -ForegroundColor White

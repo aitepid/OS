@@ -419,7 +419,7 @@ ci:      warning = error, hint = warning
 | KPI | 当前 | 阶段目标 | 终态目标 |
 |---|---:|---:|---:|
 | Balance errors | **0** ✅ | 0（Sprint 34 完成） | 0 |
-| Unresolved relocs | 1,871 | < 50（Sprint 35） | 0 |
+| Unresolved relocs | 1,871（dump 工具已就位） | < 50（Sprint 35） | 0 |
 | Parse warnings | 5 | ≤ 5 | 0 |
 | 单测通过率 | ~95% | 100% | 100% |
 | Smoke 启动时间 | < 30s | < 30s | < 10s |
