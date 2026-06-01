@@ -852,7 +852,13 @@ function Link-GenerateStubs {
                   # Sprint 35 阶段 1：C 类高频前向声明（待对应 .hl 模块实现后自动接管）
                   '_find_space','cstr_from_addr','udp_recv','file_read',
                   'ui_fill_rect','font_draw_string','socket_send','socket_close',
-                  'partition','encode','close','search','insert','send')
+                  'partition','encode','close','search','insert','send',
+                  # Sprint 35 第五波：B 类 builtin / 内核 API（暂用 no-op 桩，等接入真实实现）
+                  'chr','char_from_code','is_digit','is_alnum','memcpy',
+                  'recv','socket','socket_create','connect',
+                  'rdmsr','mem_write_dword','get_uptime','timer_ticks',
+                  'rtc_read_timestamp','notify_show','ot_span_id_of',
+                  'hicos_kernel_info','str_find_from','file_list','net_ip_string')
     # Sprint 36: read handwritten-kernel symbol export, route specific builtins
     # to real subroutines instead of no-op stubs.
     $kernSyms = @{}
