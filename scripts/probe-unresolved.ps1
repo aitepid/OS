@@ -56,10 +56,14 @@ $called  = @{}
 foreach ($f in $sources) {
     $src = Get-Content $f.FullName -Raw -Encoding UTF8
     $src = $src -replace '//[^\n]*', ''
+    # Strip string literals to avoid false positives like print("partition(")
+    $src = $src -replace '"(?:[^"\\]|\\.)*"', '""'
+    $src = $src -replace "'(?:[^'\\]|\\.)*'", "''"
     foreach ($m in [regex]::Matches($src, '\bfn\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(')) {
         $defined[$m.Groups[1].Value] = $true
     }
-    foreach ($m in [regex]::Matches($src, '\b([a-zA-Z_][a-zA-Z0-9_]*)\s*\(')) {
+    # Match `name(` but exclude `.name(` (method calls — resolved via dispatch, not symbol table)
+    foreach ($m in [regex]::Matches($src, '(?<![\.a-zA-Z0-9_])([a-zA-Z_][a-zA-Z0-9_]*)\s*\(')) {
         $name = $m.Groups[1].Value
         if ($called.ContainsKey($name)) { $called[$name]++ } else { $called[$name] = 1 }
     }
