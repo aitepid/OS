@@ -763,6 +763,9 @@ function X86-CompileModule {
         }
     }
     X86-Epilogue; X86-Ret
+    if ($env:HL_DEBUG_STRINGS -and $script:mod_strings.Count -gt 0) {
+        Write-Host ("  [STR] {0}: mod_strings.Count={1}" -f $script:current_module, $script:mod_strings.Count) -ForegroundColor DarkYellow
+    }
     if ($env:HL_DUMP_SYMS_FOR -and $script:current_module -eq $env:HL_DUMP_SYMS_FOR) {
         $sorted = $script:mod_symbols | Sort-Object { $_[1] }
         $prev = $null
@@ -1136,6 +1139,7 @@ foreach ($extra in $extraFiles) {
             $irTotal = $script:ir_count
             $irLive = IR-LiveCount
             $x86Bytes = 0
+            $script:current_module = $extra
             try { $x86Bytes = X86-CompileModule } catch {
         if ($env:HL_DEBUG_CODEGEN) {
             Write-Host ("  [CODEGEN-ERR] {0}: {1}" -f $file.Name, $_.Exception.Message) -ForegroundColor Magenta
@@ -1143,7 +1147,7 @@ foreach ($extra in $extraFiles) {
         }
     }
             if ($x86Bytes -gt 0) {
-                [void]$script:link_modules.Add(@{ Name = $extra; Code = [System.Collections.ArrayList]::new($script:x86_buf); Symbols = $script:mod_symbols; Relocs = $script:mod_relocs; Offset = 0 })
+                [void]$script:link_modules.Add(@{ Name = $extra; Code = [System.Collections.ArrayList]::new($script:x86_buf); Symbols = $script:mod_symbols; Relocs = $script:mod_relocs; Strings = $script:mod_strings; Offset = 0 })
             }
             $totalIR += $irTotal; $totalIRLive += $irLive; $totalIROpt += $irOpt; $totalX86 += $x86Bytes
 
