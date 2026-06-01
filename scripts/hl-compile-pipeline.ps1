@@ -722,13 +722,17 @@ function X86-CompileModule {
             }
             # Track jump sites for rel32 backpatch (IR_JMP dst=label; IR_JZ dst=cond src1=label)
             if ($script:ir_op[$i] -eq $IR_JMP) {
-                [void]$jmpSites.Add(@($script:x86_buf.Count + 1, $script:ir_dst[$i]))
+                $cnt = [int]$script:x86_buf.Count
+                [void]$jmpSites.Add(@(($cnt + 1), [int]$script:ir_dst[$i]))
             } elseif ($script:ir_op[$i] -eq $IR_JZ -or $script:ir_op[$i] -eq $IR_JNZ) {
-                [void]$jmpSites.Add(@($script:x86_buf.Count + 2, $script:ir_src1[$i]))
+                $cnt = [int]$script:x86_buf.Count
+                $tgt = $script:ir_src1[$i]
+                if ($tgt -isnot [int]) { $tgt = [int]$tgt }
+                [void]$jmpSites.Add(@(($cnt + 2), $tgt))
             }
             # Track CALL sites as relocations
             if ($script:ir_op[$i] -eq $IR_CALL) {
-                $callSite = $script:x86_buf.Count + 1  # offset of imm32 in E8 xx xx xx xx
+                $callSite = [int]$script:x86_buf.Count + 1  # offset of imm32 in E8 xx xx xx xx
                 $fnLabel = $script:ir_src1[$i]
                 $fnName = ''
                 if ($fnLabel -is [string] -and $fnLabel -ne '') {
@@ -1066,7 +1070,12 @@ foreach ($file in $modulePaths) {
     # Phase 4: x86_64 codegen
     $x86Bytes = 0
     $script:current_module = $file.Name
-    try { $x86Bytes = X86-CompileModule } catch {}
+    try { $x86Bytes = X86-CompileModule } catch {
+        if ($env:HL_DEBUG_CODEGEN) {
+            Write-Host ("  [CODEGEN-ERR] {0}: {1}" -f $file.Name, $_.Exception.Message) -ForegroundColor Magenta
+            Write-Host ("    at {0}" -f $_.ScriptStackTrace) -ForegroundColor DarkMagenta
+        }
+    }
     # Register module for linking
     if ($x86Bytes -gt 0) {
         if ($file.Name -eq 'kernel_entry.hl') {
@@ -1127,7 +1136,12 @@ foreach ($extra in $extraFiles) {
             $irTotal = $script:ir_count
             $irLive = IR-LiveCount
             $x86Bytes = 0
-            try { $x86Bytes = X86-CompileModule } catch {}
+            try { $x86Bytes = X86-CompileModule } catch {
+        if ($env:HL_DEBUG_CODEGEN) {
+            Write-Host ("  [CODEGEN-ERR] {0}: {1}" -f $file.Name, $_.Exception.Message) -ForegroundColor Magenta
+            Write-Host ("    at {0}" -f $_.ScriptStackTrace) -ForegroundColor DarkMagenta
+        }
+    }
             if ($x86Bytes -gt 0) {
                 [void]$script:link_modules.Add(@{ Name = $extra; Code = [System.Collections.ArrayList]::new($script:x86_buf); Symbols = $script:mod_symbols; Relocs = $script:mod_relocs; Offset = 0 })
             }
