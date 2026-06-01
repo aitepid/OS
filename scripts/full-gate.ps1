@@ -17,6 +17,8 @@ Set-Location $repoRoot
 
 $checks = @(
     @{ Name = 'Workspace validation'; Cmd = 'powershell -ExecutionPolicy Bypass -File .\scripts\validate-workspace.ps1' },
+    @{ Name = 'Token balance gate'; Cmd = 'powershell -ExecutionPolicy Bypass -File .\scripts\diag-balance.ps1' },
+    @{ Name = 'Robustness lint (R1/R2/R4/R5)'; Cmd = 'powershell -ExecutionPolicy Bypass -File .\scripts\lint-robustness.ps1' },
     @{ Name = 'Boot chain readiness'; Cmd = 'powershell -ExecutionPolicy Bypass -File .\scripts\boot-readiness.ps1' },
     @{ Name = 'Runtime path readiness'; Cmd = 'powershell -ExecutionPolicy Bypass -File .\scripts\runtime-path-readiness.ps1' },
     @{ Name = 'Image layout readiness'; Cmd = 'powershell -ExecutionPolicy Bypass -File .\scripts\image-layout-readiness.ps1' },

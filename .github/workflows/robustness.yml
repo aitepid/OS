@@ -1,0 +1,38 @@
+name: Robustness Gates
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: Lint + Balance
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Token balance gate
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File .\scripts\diag-balance.ps1
+
+      - name: Robustness lint (R1/R2/R4/R5)
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File .\scripts\lint-robustness.ps1
+
+      - name: Static unresolved pre-scan
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File .\scripts\probe-unresolved.ps1
+
+      - name: Robustness self-test (verify rules trigger)
+        shell: pwsh
+        run: |
+          $out = powershell -ExecutionPolicy Bypass -File .\scripts\lint-robustness.ps1 --with-tests 2>&1
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 1) {
+            Write-Host "Self-test failed: expected exit 1 (R1 error), got $exitCode" -ForegroundColor Red
+            $out | Write-Host
+            exit 1
+          }
+          Write-Host "Self-test passed: linter correctly detects all 4 rule violations"
