@@ -42,7 +42,7 @@ $totalBal = 0
 foreach ($f in $warnFiles) {
     $p = Join-Path $hlDir $f
     if (-not (Test-Path $p)) { Write-Host "[MISS] $f"; continue }
-    $code = Get-Content $p -Raw
+    $code = Get-Content $p -Raw -Encoding UTF8
     $toks = Tokenize-HL $code
     $errs = Test-Balanced $toks
     $totalBal += $errs.Count
@@ -65,3 +65,10 @@ foreach ($f in $warnFiles) {
 }
 Write-Host ""
 Write-Host ("总计 balance errors: {0}" -f $totalBal) -ForegroundColor Yellow
+
+# 健壮性闸门：balance errors > 0 时以非零退出码终止（用于 pre-commit / CI）
+if ($totalBal -gt 0) {
+    Write-Host "GATE FAIL: balance errors must be 0 (see HILBERT_LANG_ROBUSTNESS.md §14.2)" -ForegroundColor Red
+    exit 1
+}
+exit 0

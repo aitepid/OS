@@ -31,7 +31,7 @@ HicOS 是一台用自研 **Hilbert-Lang (H-L)** 语言从零自举的裸机 x86_
 | 启动镜像 | 741,376 B |
 | 流水线耗时 | ≈115 min |
 | **未解析重定位** ⚠ | 1,871 |
-| **Token balance errors** ⚠ | 17 |
+| **Token balance errors** ✅ | 0（Sprint 34 完成 2026-06-01） |
 
 ---
 
@@ -80,7 +80,7 @@ HicOS 是一台用自研 **Hilbert-Lang (H-L)** 语言从零自举的裸机 x86_
 
 | 编号 | 任务 | 依赖 | 验收 |
 |---|---|---|---|
-| **A1** | Sprint 34：tokenizer 字符串内括号修复 | `scripts/hl-compile-pipeline.ps1` lex 阶段改造 | balance errors = 0 |
+| **A1** | Sprint 34：tokenizer / 诊断脚本 UTF-8 编码统一 ✅ | 修 `Get-Content -Encoding UTF8` 缺失（GB2312 默认编码导致中文 `}` 字节误识别）+ diag-balance.ps1 闸门退出码 | balance errors = 0 ✅ |
 | **A2** | Sprint 35：unresolved relocs 枚举 + 分类 | `Link-Pass2` 增加 dump | `unresolved-syms.txt` 完整产出 |
 | **A3** | A2 后续：按类别绑定/补 stub/删死代码 | `kernel-symbols.json` 扩展 | unresolved < 50 |
 | **A4** | `neural.hl` 真实 `Mismatched ]` 修正 | 源码修正 | parse warning ≤ 5 |

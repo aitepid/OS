@@ -82,7 +82,7 @@
 | 问题 | 数量 | 定位 | 优先级 |
 |---|---:|---|---|
 | 未解析重定位（unresolved relocs） | **1,871** | 跨模块前向声明 + builtin 绑定缺失 | P1 |
-| Token 级 balance error | **17** | 字符串字面量内含 `{` `}`（tokenizer 误识别） | P1 |
+| Token 级 balance error ✅ | **0** | 已修复（GB2312→UTF8 编码根因，Sprint 34）| 完成 |
 | 告警模块（parse/balance warning） | **12** | a11y / app_texteditor / consistent_hash / display_topology / ime / neural / shell_dock / shell_form / shell_wallpaper / vdesktop / visual_audit | P2 |
 | kernel-symbols.json 符号不全 | 3 个（仅 serial_puts / serial_hex_byte / base） | 缺 framebuffer / input / heap 等 GUI 路径符号 | P2 |
 

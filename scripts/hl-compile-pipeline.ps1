@@ -426,7 +426,7 @@ $script:x86_buf = $null
 $script:kernSyms = @{}
 $kernSymPath = Join-Path $repoRoot 'bare-kernel\kernel-symbols.json'
 if (Test-Path $kernSymPath) {
-    $raw = Get-Content $kernSymPath -Raw | ConvertFrom-Json
+    $raw = Get-Content $kernSymPath -Raw -Encoding UTF8 | ConvertFrom-Json
     foreach ($p in $raw.PSObject.Properties) {
         $v = $p.Value; if ($v -is [string] -and $v.StartsWith('0x')) { $v = [Convert]::ToInt64($v.Substring(2),16) }
         $script:kernSyms[$p.Name] = [int64]$v
@@ -812,7 +812,7 @@ function Link-PreScan {
     param([string[]]$sourcePaths)
     foreach ($p in $sourcePaths) {
         if (-not (Test-Path $p)) { continue }
-        $src = Get-Content $p -Raw
+        $src = Get-Content $p -Raw -Encoding UTF8
         $modName = [System.IO.Path]::GetFileName($p)
         # Match fn <name>( patterns
         $matches = [regex]::Matches($src, '\bfn\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(')
@@ -841,7 +841,7 @@ function Link-GenerateStubs {
     $kernSyms = @{}
     $kernSymPath = Join-Path $repoRoot 'bare-kernel\kernel-symbols.json'
     if (Test-Path $kernSymPath) {
-        $raw = Get-Content $kernSymPath -Raw | ConvertFrom-Json
+        $raw = Get-Content $kernSymPath -Raw -Encoding UTF8 | ConvertFrom-Json
         foreach ($p in $raw.PSObject.Properties) { $kernSyms[$p.Name] = [int64]$p.Value }
     }
     $stubBase = $script:link_combined.Count
@@ -1084,7 +1084,7 @@ $extraFiles = @('stdlib.hl', 'hl-bootstrap.hl')
 foreach ($extra in $extraFiles) {
     $extraPath = Join-Path $repoRoot $extra
     if (Test-Path $extraPath) {
-        $src = Get-Content $extraPath -Raw
+        $src = Get-Content $extraPath -Raw -Encoding UTF8
         $tokens = Tokenize-HL $src
         $tokCount = $tokens.Count
         $totalTokens += $tokCount

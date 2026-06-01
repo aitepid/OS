@@ -36,7 +36,7 @@ HicOS 是一个用自研 **Hilbert-Lang (H-L)** 语言写的裸机 x86_64 实验
 | Linker 符号数 / relocs resolved / stubs | 6,401 / 24,223 / 227 |
 | **Unresolved relocs** | **1,871** ⚠ |
 | Functions emitted | 5,598 |
-| **Balance errors**（token 级） | **17** ⚠ |
+| **Balance errors**（token 级） | **0** ✅（Sprint 34 完成） |
 | Parse warnings | 5（已 recovery） |
 | `bare-kernel/kernel.bin` | **609,207 B @ 0x120000** |
 | 流水线耗时 | ≈115 min |
