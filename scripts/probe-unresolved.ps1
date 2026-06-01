@@ -73,12 +73,22 @@ $keywords = @('if','elif','while','for','return','print','fn','let','mut','class
               'switch','default','typeof','sizeof','new','delete','using','with')
 foreach ($k in $keywords) { $defined[$k] = $true; $builtinSet[$k] = $true }
 
-# Candidates = called - defined - builtin - kernel
+# Candidates = called - defined - builtin - kernel - D-class noise
+# D-class filters (false positives from regex):
+#   - Names starting with uppercase letter (H-L convention: fn names are snake_case lowercase)
+#     -> filters class constructors / type names: Set, Find, LCA, Key, Tree, Speed, OK
+#   - Single-character names (F, O, q) -> always variables
+#   - Two-character lowercase short names that are typical loop vars (re-include if frequent)
 $cand = @{}
+$noise = @{}
 foreach ($name in $called.Keys) {
     if ($defined.ContainsKey($name)) { continue }
     if ($builtinSet.ContainsKey($name)) { continue }
     if ($kernelSet.ContainsKey($name)) { continue }
+    # D-class: uppercase first letter -> probable class/type, not fn call
+    if ($name -cmatch '^[A-Z]') { $noise[$name] = $called[$name]; continue }
+    # D-class: single char -> probable variable
+    if ($name.Length -le 1) { $noise[$name] = $called[$name]; continue }
     $cand[$name] = $called[$name]
 }
 
@@ -96,6 +106,7 @@ $sb = New-Object System.Text.StringBuilder
 [void]$sb.AppendLine("# Builtins/keywords: $($builtinSet.Keys.Count)")
 [void]$sb.AppendLine("# Kernel symbols: $($kernelSet.Keys.Count)")
 [void]$sb.AppendLine("# Candidate unresolved (distinct): $($cand.Keys.Count)")
+[void]$sb.AppendLine("# D-class noise filtered (distinct): $($noise.Keys.Count)")
 [void]$sb.AppendLine("#")
 [void]$sb.AppendLine("# Format: <call_count>`t<symbol>")
 [void]$sb.AppendLine("")
@@ -111,6 +122,7 @@ Write-Host "Distinct call names : $($called.Keys.Count)" -ForegroundColor White
 Write-Host "Kernel symbols      : $($kernelSet.Keys.Count)" -ForegroundColor White
 Write-Host "Builtin/runtime     : $($builtins.Count)" -ForegroundColor White
 Write-Host ("Candidate unresolved: {0}" -f $cand.Keys.Count) -ForegroundColor Yellow
+Write-Host ("D-class noise filt. : {0}" -f $noise.Keys.Count) -ForegroundColor DarkGray
 Write-Host ""
 Write-Host "Top 30 by call frequency:" -ForegroundColor Cyan
 $sorted | Select-Object -First 30 | ForEach-Object { Write-Host ("  {0,5}  {1}" -f $_.Value, $_.Name) }
