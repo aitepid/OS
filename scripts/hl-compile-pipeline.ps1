@@ -42,17 +42,17 @@ function Count-Functions { param($tokens); $c = 0; for ($j = 0; $j -lt $tokens.C
 #  PHASE 2: RECURSIVE-DESCENT PARSER (hl-bootstrap.hl S3 port)
 # ================================================================
 $script:ptok = $null; $script:ppos = 0; $script:pnodes = 0; $script:perrors = 0; $script:_ltok = @('EOF','')
-function pk  { if ($script:ppos -lt $script:ptok.Count) { return $script:ptok[$script:ppos] }; return @('EOF','') }
-function adv { if ($script:ppos -lt $script:ptok.Count) { $script:_ltok = $script:ptok[$script:ppos] } else { $script:_ltok = @('EOF','') }; $script:ppos++ }
+function pk  { if ($script:ppos -lt $script:ptok_len) { return $script:ptok[$script:ppos] }; return @('EOF','') }
+function adv { if ($script:ppos -lt $script:ptok_len) { $script:_ltok = $script:ptok[$script:ppos] } else { $script:_ltok = @('EOF','') }; $script:ppos++ }
 function advt { adv; return $script:_ltok }
 function chk([string]$ty) { return (pk)[0] -eq $ty }
 function skp([string]$ty) { if (chk $ty) { $script:ppos++ } }
 function eat([string]$ty) { if (chk $ty) { adv } else { throw "expected $ty got $((pk)[0])" } }
 function nd($type) { $script:pnodes++; return $type }
-function p_program { $stmts = [System.Collections.ArrayList]::new(); while ((pk)[0] -ne 'EOF') { try { $s = p_stmt; if ($null -ne $s) { [void]$stmts.Add($s) } } catch { $script:perrors++; while ($script:ppos -lt $script:ptok.Count) { $t = (pk)[0]; if ($t -eq ';') { $script:ppos++; break }; if ($t -eq '}') { $script:ppos++; break }; if ($t -eq 'EOF') { break }; if ($t -eq 'let' -or $t -eq 'fn' -or $t -eq 'class' -or $t -eq 'if' -or $t -eq 'while' -or $t -eq 'for' -or $t -eq 'return' -or $t -eq 'print' -or $t -eq 'quadrant') { break }; $script:ppos++ } } }; return $stmts }
+function p_program { $stmts = [System.Collections.ArrayList]::new(); while ((pk)[0] -ne 'EOF') { try { $s = p_stmt; if ($null -ne $s) { [void]$stmts.Add($s) } } catch { $script:perrors++; while ($script:ppos -lt $script:ptok_len) { $t = (pk)[0]; if ($t -eq ';') { $script:ppos++; break }; if ($t -eq '}') { $script:ppos++; break }; if ($t -eq 'EOF') { break }; if ($t -eq 'let' -or $t -eq 'fn' -or $t -eq 'class' -or $t -eq 'if' -or $t -eq 'while' -or $t -eq 'for' -or $t -eq 'return' -or $t -eq 'print' -or $t -eq 'quadrant') { break }; $script:ppos++ } } }; return $stmts }
 function p_stmt { $tt = (pk)[0]; if ($tt -eq '@') { return p_decorated }; if ($tt -eq 'let') { return p_let }; if ($tt -eq 'fn') { return p_fn }; if ($tt -eq 'class') { return p_class }; if ($tt -eq 'if') { return p_if }; if ($tt -eq 'while') { return p_while }; if ($tt -eq 'for') { return p_for }; if ($tt -eq 'return') { return p_return }; if ($tt -eq 'yield') { adv; $v = $null; if ((pk)[0] -ne ';' -and (pk)[0] -ne '}') { $v = p_expr }; skp ';'; return @((nd 'Yield'), $v) }; if ($tt -eq 'raise') { adv; $v = $null; if ((pk)[0] -ne ';' -and (pk)[0] -ne '}') { $v = p_expr }; skp ';'; return @((nd 'Raise'), $v) }; if ($tt -eq 'print') { return p_print }; if ($tt -eq 'quadrant') { return p_quadrant }; if ($tt -eq 'break') { adv; skp ';'; return @((nd 'Break')) }; if ($tt -eq 'continue') { adv; skp ';'; return @((nd 'Continue')) }; if ($tt -eq 'pass') { adv; skp ';'; return @((nd 'Pass')) }; if ($tt -eq 'try') { return p_try }; if ($tt -eq 'import') { return p_import }; if ($tt -eq 'from') { return p_from }; if ($tt -eq 'assert') { adv; $c = p_expr; $m = $null; if (chk ',') { adv; $m = p_expr }; skp ';'; return @((nd 'Assert'), $c, $m) }; if ($tt -eq 'del') { adv; $n = (advt)[1]; skp ';'; return @((nd 'Del'), $n) }; if ($tt -eq '{') { return p_block_stmt }; return p_expr_stmt }
 function p_let { adv; $mut = $false; if (chk 'mut') { $mut = $true; adv }; if ((pk)[0] -in @('[','(')) { $close = if ((pk)[0] -eq '[') { ']' } else { ')' }; adv; $names = [System.Collections.ArrayList]::new(); while (-not (chk $close) -and -not (chk 'EOF')) { if ((pk)[0] -eq 'Ident' -or (pk)[1] -eq '_') { [void]$names.Add((advt)[1]) } elseif (chk '[') { [void]$names.Add('_nested'); p_skip_brackets } else { adv }; skp ',' }; skp $close; skp '='; $val = p_expr; skp ';'; return @((nd 'LetDestruct'), $names, $mut, $val) }; $name = (advt)[1]; if (chk ':') { adv; while ((pk)[0] -in @('Ident','[',']',',','|')) { adv } }; $init = $null; if (chk '=') { adv; $init = p_expr }; skp ';'; return @((nd 'Let'), $name, $mut, $init) }
-function p_skip_brackets { $depth = 0; while ($script:ppos -lt $script:ptok.Count) { $t = (pk)[0]; if ($t -eq '[' -or $t -eq '(') { $depth++; adv } elseif ($t -eq ']' -or $t -eq ')') { $depth--; adv; if ($depth -le 0) { return } } else { adv } } }
+function p_skip_brackets { $depth = 0; while ($script:ppos -lt $script:ptok_len) { $t = (pk)[0]; if ($t -eq '[' -or $t -eq '(') { $depth++; adv } elseif ($t -eq ']' -or $t -eq ')') { $depth--; adv; if ($depth -le 0) { return } } else { adv } } }
 function p_fn { adv; $name = (advt)[1]; eat '('; $params = [System.Collections.ArrayList]::new(); if (-not (chk ')')) { [void]$params.Add((p_param)); while (chk ',') { adv; [void]$params.Add((p_param)) } }; eat ')'; if (chk '->') { adv; while ((pk)[0] -in @('Ident','[',']',',','|')) { adv } }; if (chk ';') { adv; return @((nd 'FnDecl'), $name, $params) }; $body = p_block; return @((nd 'FnDef'), $name, $params, $body) }
 function p_param { if (chk '*') { adv; $n = (advt)[1]; p_param_type; return "*$n" }; if (chk '**') { adv; $n = (advt)[1]; p_param_type; return "**$n" }; $n = (advt)[1]; p_param_type; if (chk '=') { adv; $null = p_expr }; return $n }
 function p_param_type { if (chk ':') { adv; while ((pk)[0] -in @('Ident','[',']',',','|')) { adv } } }
@@ -67,7 +67,7 @@ function p_try { adv; $tbody = p_block; $catches = [System.Collections.ArrayList
 function p_import { adv; $path = (advt)[1]; $alias = $null; if (chk 'as') { adv; $alias = (advt)[1] }; skp ';'; return @((nd 'Import'), $path, $alias) }
 function p_from { adv; $mod = (advt)[1]; adv; $name = (advt)[1]; skp ';'; return @((nd 'Import'), "$mod.$name", $null) }
 function p_decorated { $decs = [System.Collections.ArrayList]::new(); while (chk '@') { adv; $dn = (advt)[1]; if (chk '(') { adv; $depth = 1; while ($depth -gt 0 -and (pk)[0] -ne 'EOF') { if ((pk)[0] -eq '(') { $depth++ }; if ((pk)[0] -eq ')') { $depth-- }; if ($depth -gt 0) { adv } }; skp ')' }; [void]$decs.Add($dn) }; $inner = p_stmt; return @((nd 'Decorated'), $decs, $inner) }
-function p_block { eat '{'; $stmts = [System.Collections.ArrayList]::new(); while (-not (chk '}') -and -not (chk 'EOF')) { try { $s = p_stmt; if ($null -ne $s) { [void]$stmts.Add($s) } } catch { $script:perrors++; while ($script:ppos -lt $script:ptok.Count) { $t = (pk)[0]; if ($t -eq ';') { $script:ppos++; break }; if ($t -eq '}' -or $t -eq 'EOF') { break }; if ($t -eq 'let' -or $t -eq 'fn' -or $t -eq 'if' -or $t -eq 'while' -or $t -eq 'for' -or $t -eq 'return') { break }; $script:ppos++ } } }; skp '}'; return ,$stmts }
+function p_block { eat '{'; $stmts = [System.Collections.ArrayList]::new(); while (-not (chk '}') -and -not (chk 'EOF')) { try { $s = p_stmt; if ($null -ne $s) { [void]$stmts.Add($s) } } catch { $script:perrors++; while ($script:ppos -lt $script:ptok_len) { $t = (pk)[0]; if ($t -eq ';') { $script:ppos++; break }; if ($t -eq '}' -or $t -eq 'EOF') { break }; if ($t -eq 'let' -or $t -eq 'fn' -or $t -eq 'if' -or $t -eq 'while' -or $t -eq 'for' -or $t -eq 'return') { break }; $script:ppos++ } } }; skp '}'; return ,$stmts }
 function p_block_stmt { $b = p_block; return @((nd 'Block'), $b) }
 function p_expr_stmt { $expr = p_expr; $aop = (pk)[0]; if ($expr -is [array] -and $expr.Count -ge 2 -and $expr[0] -eq 'Var' -and ($aop -in @('=','+=','-=','*=','/=','%=','**='))) { adv; $val = p_expr; skp ';'; if ($aop -eq '=') { return @((nd 'Assign'), $expr[1], $val) }; $binop = switch ($aop) { '+=' { '+' } '-=' { '-' } '*=' { '*' } '/=' { '/' } '%=' { '%' } '**=' { '**' } }; return @((nd 'Assign'), $expr[1], @((nd 'BinOp'), $binop, $expr, $val)) }; if ($expr -is [array] -and $expr.Count -ge 3 -and $expr[0] -eq 'Index' -and (chk '=')) { adv; $val = p_expr; skp ';'; return @((nd 'IndexAssign'), $expr[1], $expr[2], $val) }; if ($expr -is [array] -and $expr.Count -ge 3 -and $expr[0] -eq 'Field' -and ((pk)[0] -in @('=','+=','-=','*=','/='))) { $fop = (advt)[0]; $val = p_expr; skp ';'; if ($fop -eq '=') { return @((nd 'FieldAssign'), $expr[1], $expr[2], $val) }; $binop = switch ($fop) { '+=' { '+' } '-=' { '-' } '*=' { '*' } '/=' { '/' } }; return @((nd 'FieldAssign'), $expr[1], $expr[2], @((nd 'BinOp'), $binop, $expr, $val)) }; skp ';'; return @((nd 'ExprStmt'), $expr) }
 function p_expr   { return p_or }
@@ -106,10 +106,10 @@ function p_primary {
     if ($tt -eq '{') {
         $next = $script:ptok[$script:ppos + 1][0]
         if ($next -eq '}') { adv; adv; return @((nd 'Dict'), @()) }
-        $next2 = if (($script:ppos + 2) -lt $script:ptok.Count) { $script:ptok[$script:ppos + 2][0] } else { '' }
+        $next2 = if (($script:ppos + 2) -lt $script:ptok_len) { $script:ptok[$script:ppos + 2][0] } else { '' }
         if ($next2 -eq ':') { adv; $pairs = [System.Collections.ArrayList]::new(); while (-not (chk '}') -and -not (chk 'EOF')) { $k = p_expr; eat ':'; $v = p_expr; [void]$pairs.Add(@($k, $v)); skp ',' }; skp '}'; return @((nd 'Dict'), $pairs) }
     }
-    if ($tt -eq 'fn' -and ($script:ppos + 1) -lt $script:ptok.Count -and $script:ptok[$script:ppos + 1][0] -eq '(') {
+    if ($tt -eq 'fn' -and ($script:ppos + 1) -lt $script:ptok_len -and $script:ptok[$script:ppos + 1][0] -eq '(') {
         adv; eat '('; $params = [System.Collections.ArrayList]::new()
         if (-not (chk ')')) { [void]$params.Add((advt)[1]); while (chk ',') { adv; [void]$params.Add((advt)[1]) } }
         eat ')'
@@ -330,20 +330,29 @@ function IR-OptConstFold {
     return $changed
 }
 
-# Optimization: dead code elimination
+# Optimization: dead code elimination — O(n) via HashSet use-set
 function IR-OptDCE {
     $changed = 0
     $skip = @($IR_JMP,$IR_JZ,$IR_JNZ,$IR_LABEL,$IR_CALL,$IR_RET,$IR_STORE,$IR_ARG,$IR_PARAM,$IR_NOP,$IR_PRINT,$IR_PORT_OUT,$IR_PORT_IN,$IR_CLI,$IR_STI,$IR_HLT,$IR_MEM_STORE8,$IR_MEM_LOAD64,$IR_MEM_STORE64,$IR_LIDT,$IR_PORT_OUT32,$IR_PORT_IN32,$IR_MEM_STORE32,$IR_MEM_LOAD32,$IR_MEM_LOAD8)
-    for ($i = $script:ir_count - 1; $i -ge 0; $i--) {
+    # Pass 1: collect all vreg numbers that appear as read operands (O(n))
+    $usedVregs = [System.Collections.Generic.HashSet[int]]::new()
+    for ($i = 0; $i -lt $script:ir_count; $i++) {
+        if ($script:ir_dead[$i] -ne 0) { continue }
+        $op = $script:ir_op[$i]
+        $s1 = $script:ir_src1[$i]; if ($s1 -is [int]) { [void]$usedVregs.Add($s1) }
+        $s2 = $script:ir_src2[$i]; if ($s2 -is [int]) { [void]$usedVregs.Add($s2) }
+        # IR_JZ/IR_JNZ/IR_RET: condition/return-value vreg is in dst field (it's a READ)
+        if ($op -eq $IR_JZ -or $op -eq $IR_JNZ -or $op -eq $IR_RET) {
+            [void]$usedVregs.Add($script:ir_dst[$i])
+        }
+    }
+    # Pass 2: mark dead any instruction whose dst vreg has no readers (O(n))
+    for ($i = 0; $i -lt $script:ir_count; $i++) {
         if ($script:ir_dead[$i] -ne 0) { continue }
         if ($script:ir_op[$i] -in $skip) { continue }
-        $dst = $script:ir_dst[$i]; $used = $false
-        for ($j = $i + 1; $j -lt $script:ir_count; $j++) {
-            if ($script:ir_dead[$j] -eq 0) {
-                if ($script:ir_src1[$j] -eq $dst -or $script:ir_src2[$j] -eq $dst) { $used = $true; break }
-            }
+        if (-not $usedVregs.Contains($script:ir_dst[$i])) {
+            $script:ir_dead[$i] = 1; $changed++
         }
-        if (-not $used) { $script:ir_dead[$i] = 1; $changed++ }
     }
     return $changed
 }
@@ -547,9 +556,9 @@ function X86-EmitIR([int]$idx) {
             foreach ($kv in $script:ir_fns.GetEnumerator()) { if ($kv.Value -eq $lbl) { $isFn = $true } }
             if ($isFn) { RA-Init; X86-Prologue } else { X86-Byte 0x90 }
         }
-        $IR_JMP    { X86-Byte 0xEB; X86-Byte 0x00 <# rel8 placeholder #> }
-        $IR_JZ     { X86-Byte 0x74; X86-Byte 0x00 <# je rel8 placeholder #> }
-        $IR_RET    { $r1 = RA-Alloc $s1; if ($null -ne $r1 -and $r1 -ge 0 -and $r1 -ne 0) { X86-MovRR 0 $r1 <# result��RAX #> }; X86-Epilogue; X86-Ret }
+        $IR_JMP    { X86-Byte 0xE9; X86-Imm32 0 <# near JMP rel32 placeholder #> }
+        $IR_JZ     { X86-Byte 0x0F; X86-Byte 0x84; X86-Imm32 0 <# near JE rel32 placeholder #> }
+        $IR_RET    { $r1 = RA-Alloc $dst; if ($null -ne $r1 -and $r1 -ge 0 -and $r1 -ne 0) { X86-MovRR 0 $r1 <# result→RAX #> }; X86-Epilogue; X86-Ret }
         $IR_CALL   { X86-Byte 0xE8; X86-Imm32 0 <# call rel32 placeholder #> }
         $IR_ARG    {
             # Call-site arg setup: move value vreg to ABI register
@@ -695,16 +704,27 @@ function X86-CompileModule {
     $script:mod_symbols = [System.Collections.ArrayList]::new()
     $script:mod_relocs  = [System.Collections.ArrayList]::new()
     $script:mod_strings = [System.Collections.ArrayList]::new()
+    $labelOffsets = @{}   # non-fn label_num -> x86_buf offset (for jump backpatch)
+    $jmpSites = [System.Collections.ArrayList]::new()  # @(imm32_site, target_label_num)
     for ($i = 0; $i -lt $script:ir_count; $i++) {
         if ($script:ir_dead[$i] -eq 0) {
-            # Track function labels as exported symbols
+            # Track function labels as exported symbols; track non-fn labels for jump backpatch
             if ($script:ir_op[$i] -eq $IR_LABEL) {
                 $lbl = $script:ir_dst[$i]
+                $isFnLbl = $false
                 foreach ($kv in $script:ir_fns.GetEnumerator()) {
                     if ($kv.Value -eq $lbl) {
                         [void]$script:mod_symbols.Add(@($kv.Key, $script:x86_buf.Count, 'fn'))
+                        $isFnLbl = $true
                     }
                 }
+                if (-not $isFnLbl) { $labelOffsets[$lbl] = $script:x86_buf.Count }
+            }
+            # Track jump sites for rel32 backpatch (IR_JMP dst=label; IR_JZ dst=cond src1=label)
+            if ($script:ir_op[$i] -eq $IR_JMP) {
+                [void]$jmpSites.Add(@($script:x86_buf.Count + 1, $script:ir_dst[$i]))
+            } elseif ($script:ir_op[$i] -eq $IR_JZ -or $script:ir_op[$i] -eq $IR_JNZ) {
+                [void]$jmpSites.Add(@($script:x86_buf.Count + 2, $script:ir_src1[$i]))
             }
             # Track CALL sites as relocations
             if ($script:ir_op[$i] -eq $IR_CALL) {
@@ -725,6 +745,17 @@ function X86-CompileModule {
                 }
             }
             X86-EmitIR $i
+        }
+    }
+    # Backpatch all jump rel32 offsets now that label offsets are known
+    foreach ($js in $jmpSites) {
+        $imm32site = $js[0]; $tgtLbl = $js[1]
+        if ($labelOffsets.ContainsKey($tgtLbl)) {
+            $rel = $labelOffsets[$tgtLbl] - ($imm32site + 4)
+            $script:x86_buf[$imm32site]     = [byte]($rel -band 0xFF)
+            $script:x86_buf[$imm32site + 1] = [byte](($rel -shr 8)  -band 0xFF)
+            $script:x86_buf[$imm32site + 2] = [byte](($rel -shr 16) -band 0xFF)
+            $script:x86_buf[$imm32site + 3] = [byte](($rel -shr 24) -band 0xFF)
         }
     }
     X86-Epilogue; X86-Ret
@@ -964,7 +995,7 @@ Write-Host "Phase 1-5: Tokenize + Parse + IR + x86_64 + Link  ($totalFiles kerne
 Write-Host ''
 
 foreach ($file in $modulePaths) {
-    $src = Get-Content $file.FullName -Raw
+    $src = Get-Content $file.FullName -Raw -Encoding UTF8
     if ($null -eq $src) { $src = '' }
 
     # Phase 1: Tokenize
@@ -979,8 +1010,9 @@ foreach ($file in $modulePaths) {
     }
     $fnCount = Count-Functions $tokens
 
-    # Phase 2: Parse
-    $script:ptok = $tokens
+    # Phase 2: Parse — convert ArrayList to plain array for faster indexed access
+    $script:ptok = if ($tokens -is [System.Collections.ArrayList]) { $tokens.ToArray() } else { $tokens }
+    $script:ptok_len = $script:ptok.Count
     $script:ppos = 0
     $script:pnodes = 0
     $script:perrors = 0
@@ -1058,7 +1090,8 @@ foreach ($extra in $extraFiles) {
         $totalTokens += $tokCount
         $fnCount = Count-Functions $tokens
 
-        $script:ptok = $tokens
+        $script:ptok = if ($tokens -is [System.Collections.ArrayList]) { $tokens.ToArray() } else { $tokens }
+        $script:ptok_len = $script:ptok.Count
         $script:ppos = 0
         $script:pnodes = 0
         $script:perrors = 0
