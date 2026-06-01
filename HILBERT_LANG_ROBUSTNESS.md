@@ -280,7 +280,10 @@ fn binary_search(arr: array[int], key: int) -> int {
 | 未使用变量 | ✅ 已检测 |
 | 变量遮蔽（shadow） | ✅ Sprint 1–16 已统一 `let mut` |
 | 死代码 | ✅ IR 阶段消除 |
-| 空 catch | 🟡 计划 v1.2 |
+| 空 catch (R1) | ✅ Sprint 36 `lint-robustness.ps1` |
+| catch 仅 log (R2) | ✅ Sprint 36 |
+| 未初始化 `let mut` (R4) | ✅ Sprint 36 |
+| `finally` 内 return (R5) | ✅ Sprint 36 |
 | 整数溢出风险 | 🟡 v1.3 |
 | 未捕获异常路径 | 🟡 v1.3 |
 | 跨 sector 共享写 | 🟡 v2.0 |
