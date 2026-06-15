@@ -296,9 +296,10 @@ fn mmap_cow_fork(parent_region, child_task) {
     // Mark parent as COW too
     set_at(mmap_cow, parent_region, 1);
 
-    // Increment ref count
-    _cow_ref_inc(phys);
-    _cow_ref_inc(phys);
+    // Increment ref count: once for child (new mapping); if page was untracked,
+    // the first call creates entry at 1 (parent), second adds child to reach 2.
+    let mut rc = _cow_ref_inc(phys);
+    if rc == 1 { _cow_ref_inc(phys); }
 
     // Remap both as read-only (fault on write triggers copy)
     let mut vaddr = mmap_vaddr[parent_region];

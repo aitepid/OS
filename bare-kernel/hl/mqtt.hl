@@ -176,6 +176,7 @@ fn _mqtt_send_connect(id) {
 
 fn mqtt_publish(id, topic, payload) {
     if id < 0 { return 0 - 1; }
+    if id >= MQTT_MAX { return 0 - 1; }
     if mqtt_active[id] == 0 { return 0 - 1; }
     if mqtt_state[id] != MQTT_ST_READY {
         print("mqtt[" + to_string(id) + "]: not ready"); return 0 - 1;
@@ -191,8 +192,7 @@ fn mqtt_publish(id, topic, payload) {
         let mut enc = v % 128;
         v = v / 128;
         if v > 0 { pkt = pkt + str_from_code(enc + 128); }
-        else { pkt = pkt + str_from_code(enc); }
-        if v == 0 { v = 0 - 1; }
+        else { pkt = pkt + str_from_code(enc); break; }
     }
     pkt = pkt + str_from_code(tlen / 256) + str_from_code(tlen % 256);
     pkt = pkt + topic + payload;
@@ -207,6 +207,7 @@ fn mqtt_publish(id, topic, payload) {
 
 fn mqtt_subscribe(id, topic) {
     if id < 0 { return 0 - 1; }
+    if id >= MQTT_MAX { return 0 - 1; }
     if mqtt_active[id] == 0 { return 0 - 1; }
     let mut pid = mqtt_pkt_id[id];
     set_at(mqtt_pkt_id, id, pid + 1);
@@ -218,8 +219,7 @@ fn mqtt_subscribe(id, topic) {
         let mut enc = v % 128;
         v = v / 128;
         if v > 0 { pkt = pkt + str_from_code(enc + 128); }
-        else { pkt = pkt + str_from_code(enc); }
-        if v == 0 { v = 0 - 1; }
+        else { pkt = pkt + str_from_code(enc); break; }
     }
     pkt = pkt + str_from_code(pid / 256) + str_from_code(pid % 256);
     pkt = pkt + str_from_code(tlen / 256) + str_from_code(tlen % 256);
@@ -232,6 +232,7 @@ fn mqtt_subscribe(id, topic) {
 
 fn mqtt_unsubscribe(id, topic) {
     if id < 0 { return 0 - 1; }
+    if id >= MQTT_MAX { return 0 - 1; }
     if mqtt_active[id] == 0 { return 0 - 1; }
     let mut pid = mqtt_pkt_id[id];
     set_at(mqtt_pkt_id, id, pid + 1);
@@ -243,8 +244,7 @@ fn mqtt_unsubscribe(id, topic) {
         let mut enc = v % 128;
         v = v / 128;
         if v > 0 { pkt = pkt + str_from_code(enc + 128); }
-        else { pkt = pkt + str_from_code(enc); }
-        if v == 0 { v = 0 - 1; }
+        else { pkt = pkt + str_from_code(enc); break; }
     }
     pkt = pkt + str_from_code(pid / 256) + str_from_code(pid % 256);
     pkt = pkt + str_from_code(tlen / 256) + str_from_code(tlen % 256);
@@ -260,6 +260,7 @@ fn mqtt_unsubscribe(id, topic) {
 
 fn mqtt_ping(id) {
     if id < 0 { return 0; }
+    if id >= MQTT_MAX { return 0; }
     if mqtt_active[id] == 0 { return 0; }
     // PINGREQ = 0xC0 0x00
     tcp_send(mqtt_tcb[id], str_from_code(192) + str_from_code(0));
@@ -268,6 +269,7 @@ fn mqtt_ping(id) {
 
 fn mqtt_disconnect(id) {
     if id < 0 { return 0; }
+    if id >= MQTT_MAX { return 0; }
     if mqtt_active[id] == 0 { return 0; }
     // DISCONNECT = 0xE0 0x00
     tcp_send(mqtt_tcb[id], str_from_code(224) + str_from_code(0));
