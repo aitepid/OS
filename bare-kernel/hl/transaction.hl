@@ -17,6 +17,7 @@ let tx_snap_ts  = array(16, 0);   // snapshot timestamp assigned at begin
 let tx_commit_ts= array(16, 0);   // commit timestamp (set at commit)
 let tx_wb_start = array(16, 0);   // write buffer start index
 let tx_wb_len   = array(16, 0);   // write buffer entry count
+let tx_id       = array(16, 0);   // WAL transaction id per slot
 
 // Write buffer (all txns share one array; each txn has a contiguous slice)
 let TX_WB_MAX = 128;
@@ -36,6 +37,7 @@ fn tx_init() {
         set_at(tx_commit_ts, i, 0);
         set_at(tx_wb_start,  i, 0);
         set_at(tx_wb_len,    i, 0);
+        set_at(tx_id,        i, 0);
         i += 1;
     }
     tx_wb_n    = 0;
@@ -68,6 +70,7 @@ fn tx_begin() {
 
     set_at(tx_state,    slot, TX_ACTIVE);
     set_at(tx_snap_ts,  slot, snap);
+    set_at(tx_id,       slot, txid);
     set_at(tx_wb_start, slot, tx_wb_n);
     set_at(tx_wb_len,   slot, 0);
 
@@ -89,8 +92,8 @@ fn tx_write(slot, key, val) {
     tx_wb_n += 1;
     set_at(tx_wb_len, slot, tx_wb_len[slot] + 1);
 
-    // WAL: log WRITE (using snap_ts as surrogate txid in WAL)
-    wal_write(tx_snap_ts[slot], key, val);
+    // WAL: log WRITE
+    wal_write(tx_id[slot], key, val);
     return 0;
 }
 
@@ -157,10 +160,12 @@ fn tx_commit(slot) {
     }
 
     // WAL: log COMMIT
-    wal_commit(tx_snap_ts[slot]);
+    wal_commit(tx_id[slot]);
 
     // Update state
     set_at(tx_state, slot, TX_COMMITTED);
+    tx_wb_n = tx_wb_start[slot];
+    set_at(tx_wb_len, slot, 0);
     mvcc_end_tx(slot);
     return cts;
 }
@@ -168,8 +173,10 @@ fn tx_commit(slot) {
 fn tx_abort(slot) {
     if tx_state[slot] != TX_ACTIVE { return 0 - 1; }
     // WAL: log ABORT
-    wal_abort(tx_snap_ts[slot]);
-    // Discard write buffer (just mark slot idle; entries stay but are unreferenced)
+    wal_abort(tx_id[slot]);
+    // Discard write buffer
+    tx_wb_n = tx_wb_start[slot];
+    set_at(tx_wb_len, slot, 0);
     set_at(tx_state, slot, TX_ABORTED);
     mvcc_end_tx(slot);
     return 0;

@@ -60,6 +60,9 @@ fn licm_init() {
 }
 
 fn licm_add_instr(op, dst, src0, src1, bb) {
+    if licm_n >= LICM_MAXINSTR { return 0 - 1; }
+    if dst < 0 { return 0 - 1; }
+    if dst >= LICM_MAXINSTR { return 0 - 1; }
     let mut id = licm_n;
     set_at(licm_op,   id, op);
     set_at(licm_dst,  id, dst);
@@ -72,6 +75,7 @@ fn licm_add_instr(op, dst, src0, src1, bb) {
 }
 
 fn licm_add_loop(header) {
+    if licm_ln >= LICM_MAXLOOP { return 0 - 1; }
     let mut lid = licm_ln;
     set_at(licm_lhdr, lid, header);
     set_at(licm_lbsz, lid, 0);
@@ -80,7 +84,12 @@ fn licm_add_loop(header) {
 }
 
 fn licm_add_body(loop_id, bb) {
+    if loop_id < 0 { return 0 - 1; }
+    if loop_id >= LICM_MAXLOOP { return 0 - 1; }
+    if bb < 0 { return 0 - 1; }
+    if bb >= LICM_MAXBB { return 0 - 1; }
     let mut sz = licm_lbsz[loop_id];
+    if sz >= 8 { return 0 - 1; }
     set_at(licm_lbody, loop_id * 8 + sz, bb);
     set_at(licm_lbsz, loop_id, sz + 1);
     set_at(licm_bb_loop, bb, loop_id);
@@ -108,6 +117,7 @@ fn _licm_is_invariant(instr_id, loop_id) {
     if op == 4 { return 1; }
 
     // Check src0: def_bb must be outside loop (or undefined = -1)
+    if src0 >= 0 { if src0 < LICM_MAXINSTR {
     let mut dbb0 = licm_def_bb[src0];
     if dbb0 != 0 - 1 {
         if _licm_in_loop(dbb0, loop_id) == 1 {
@@ -123,9 +133,11 @@ fn _licm_is_invariant(instr_id, loop_id) {
             if found_hoisted == 0 { return 0; }
         }
     }
+    }}
 
     // Check src1 for binary ops
     if op != 3 {  // not a load (load uses only src0)
+        if src1 >= 0 { if src1 < LICM_MAXINSTR {
         let mut dbb1 = licm_def_bb[src1];
         if dbb1 != 0 - 1 {
             if _licm_in_loop(dbb1, loop_id) == 1 {
@@ -140,6 +152,7 @@ fn _licm_is_invariant(instr_id, loop_id) {
                 if found2 == 0 { return 0; }
             }
         }
+        }}
     }
     return 1;
 }

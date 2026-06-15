@@ -42,19 +42,25 @@ fn mvcc_tick() {
 }
 
 fn mvcc_begin_tx(slot) {
-    // Assign snapshot timestamp to txn slot
+    if slot < 0 { return 0 - 1; }
+    if slot >= TX_MAX { return 0 - 1; }
     let mut ts = mvcc_tick();
     set_at(mv_tx_snap, slot, ts);
     return ts;
 }
 
 fn mvcc_end_tx(slot) {
+    if slot < 0 { return 0; }
+    if slot >= TX_MAX { return 0; }
     set_at(mv_tx_snap, slot, 0);
     return 0;
 }
 
 fn mvcc_write(key, val, xmin_ts) {
     // Insert a new version visible from xmin_ts onwards
+    // Close any previous live version of the same key
+    // Append new version first (capacity check before closing old version)
+    if mv_n >= MV_MAXVER { return 0 - 1; }
     // Close any previous live version of the same key
     let mut i = 0;
     while i < mv_n {
@@ -67,8 +73,6 @@ fn mvcc_write(key, val, xmin_ts) {
         }
         i += 1;
     }
-    // Append new version
-    if mv_n >= MV_MAXVER { return 0 - 1; }
     let mut id = mv_n;
     set_at(mv_key,  id, key);
     set_at(mv_val,  id, val);
