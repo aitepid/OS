@@ -139,7 +139,7 @@ fn kmalloc_init() {
 // Allocate `size` bytes. Returns pointer to usable memory or 0.
 fn kmalloc(size) {
     if heap_initialized == 0 { kmalloc_init(); }
-    if size <= 0 { return 0; }
+    if size <= 0 { size = 1; }  // kmalloc(0): allocate minimum to avoid NULL ambiguity
 
     let mut cls = _slab_find_class(size);
 
@@ -162,6 +162,9 @@ fn kmalloc(size) {
 
     let mut addr = _slab_fl_pop(cls);
     if addr == 0 { return 0; }
+    // Verify block is actually free before handing out (detects free-list corruption)
+    let mut fl_flags = mem_read_u64(addr + 8);
+    if fl_flags % 2 != 0 { return 0; }
     mem_write_u64(addr + 8, cls * 2 + 1);
     slab_alloc_count = slab_alloc_count + 1;
     slab_used_bytes = slab_used_bytes + slab_sizes[cls];
@@ -175,6 +178,8 @@ fn kfree(ptr) {
     let mut total_size = mem_read_u64(addr);
     let mut flags = mem_read_u64(addr + 8);
     let mut cls = flags / 2;
+
+    if flags % 2 == 0 { return 0; }  // already free — double-free guard
 
     if cls == SLAB_CLASS_LARGE {
         // Free whole pages back to buddy allocator

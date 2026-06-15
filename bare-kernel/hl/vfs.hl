@@ -97,6 +97,7 @@ fn _trie_insert_path(path, mount_idx) {
 }
 
 // Split path "/dev/sda" -> ["dev","sda"], "/" -> []
+// Resolves "." and ".." components to prevent path traversal.
 fn _vfs_split_path(path) {
     let mut parts = [];
     let mut cur = "";
@@ -105,7 +106,16 @@ fn _vfs_split_path(path) {
         let mut c = char_at(path, i);
         if c == "/" {
             if len(cur) > 0 {
-                push(parts, cur);
+                if cur == ".." {
+                    if len(parts) > 0 {
+                        let mut np = [];
+                        let mut j = 0;
+                        while j < len(parts) - 1 { push(np, parts[j]); j = j + 1; }
+                        parts = np;
+                    }
+                } else {
+                    if cur != "." { push(parts, cur); }
+                }
                 cur = "";
             }
         } else {
@@ -113,7 +123,18 @@ fn _vfs_split_path(path) {
         }
         i = i + 1;
     }
-    if len(cur) > 0 { push(parts, cur); }
+    if len(cur) > 0 {
+        if cur == ".." {
+            if len(parts) > 0 {
+                let mut np = [];
+                let mut j = 0;
+                while j < len(parts) - 1 { push(np, parts[j]); j = j + 1; }
+                parts = np;
+            }
+        } else {
+            if cur != "." { push(parts, cur); }
+        }
+    }
     return parts;
 }
 

@@ -47,15 +47,36 @@ fn users_init() {
     return 0;
 }
 
+fn _users_write_str(base, s) {
+    let mut i = 0;
+    while i < len(s) && i < 31 {
+        mem_write_byte(base + i, str_char_at(s, i));
+        i = i + 1;
+    }
+    mem_write_byte(base + i, 0);
+    return 0;
+}
+
+fn _users_read_str(base) {
+    let mut s = "";
+    let mut i = 0;
+    while i < 32 {
+        let mut b = mem_read_byte(base + i);
+        if b == 0 { i = 32; } else { s = s + str_from_code(b); i = i + 1; }
+    }
+    return s;
+}
+
 fn user_create(uid, gid, username, home) {
     if user_count >= MAX_USERS { return 0; }
     let mut addr = USER_TABLE + user_count * USER_ENTRY_SIZE;
     mem_write_u64(addr, uid);
     mem_write_u64(addr + 8, gid);
-    mem_write_u64(addr + 16, 1);  // active
-    // if uid == 0: flags |= 2 (root)
-    // write username at addr + 56
-    // write home at addr + 88
+    let mut flags = 1;
+    if uid == 0 { flags = 3; }  // bit 1 = root
+    mem_write_u64(addr + 16, flags);
+    _users_write_str(addr + 56, username);
+    _users_write_str(addr + 88, home);
     user_count = user_count + 1;
     return 1;
 }
@@ -71,10 +92,25 @@ fn user_find(uid) {
     return 0;
 }
 
-fn user_authenticate(username, password_hash) {
-    // Find user by username, compare password hash
-    // Return uid on success, -1 on failure
-    return 0;
+fn user_authenticate(username, password) {
+    // Find user by username, compare stored password (plain-text for now)
+    let mut i = 0;
+    while i < user_count {
+        let mut addr = USER_TABLE + i * USER_ENTRY_SIZE;
+        let mut flags = mem_read_u64(addr + 16);
+        if flags % 2 == 1 {  // active
+            let mut stored_name = _users_read_str(addr + 56);
+            if stored_name == username {
+                let mut stored_pw = _users_read_str(addr + 24);
+                if stored_pw == password {
+                    return mem_read_u64(addr);  // return uid
+                }
+                return 0 - 1;  // wrong password
+            }
+        }
+        i = i + 1;
+    }
+    return 0 - 1;  // user not found
 }
 
 // Set current user (su / login)

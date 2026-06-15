@@ -390,6 +390,7 @@ fn shell_handle(cmd) {
 
     if str_starts_with(cmd, "cat ") {
         let path = str_sub(cmd, 4, len(cmd));
+        if str_find(path, "..") >= 0 { return "Error: invalid path"; }
         let mount_info = vfs_resolve(path);
         let fs_type = mem_read_u64(MOUNT_TABLE + mount_info[0] * 64 + 16);
         if fs_type == 3 {
@@ -429,6 +430,7 @@ fn shell_handle(cmd) {
 
     if str_starts_with(cmd, "rm ") {
         let path = str_sub(cmd, 3, len(cmd));
+        if str_find(path, "..") >= 0 { return "Error: invalid path"; }
         let r = vfs_unlink(path);
         if r == 0 { return "Removed: " + path; }
         return "Error: cannot remove " + path;
@@ -440,6 +442,8 @@ fn shell_handle(cmd) {
         if sp < 0 { return "Usage: cp <src> <dst>"; }
         let src = str_sub(args, 0, sp);
         let dst = str_sub(args, sp + 1, len(args));
+        if str_find(src, "..") >= 0 { return "Error: invalid path"; }
+        if str_find(dst, "..") >= 0 { return "Error: invalid path"; }
         let r = vfs_copy(src, dst);
         if r >= 0 { return "Copied: " + src + " -> " + dst + " (" + to_string(r) + " bytes)"; }
         return "Error: cannot copy " + src;
@@ -1380,6 +1384,7 @@ fn shell_handle_ext(cmd) {
                 if str_char_at(rpath_raw, 0) == 32 { rpath = str_sub(rpath_raw, 1, len(rpath_raw)); }
             }
             let wfd = vfs_open(rpath, 577);  // O_CREAT|O_WRONLY|O_TRUNC
+            if str_find(rpath, "..") >= 0 { return "Error: invalid path"; }
             if wfd < 0 { return "Error: cannot write to " + rpath; }
             vfs_write(wfd, text, len(text));
             vfs_close(wfd);
