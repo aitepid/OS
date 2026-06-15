@@ -258,14 +258,17 @@ fn dns_parse_response(data) {
             }
         }
     }
+    if off >= len(data) { return [0, 0, 0, 0]; }
     let mut rtype = data[off] * 256 + data[off + 1];
     // TTL at off+4..off+7 (4 bytes big-endian)
+    if off + 9 >= len(data) { return [0, 0, 0, 0]; }
     let mut ttl_sec = data[off+4]*16777216 + data[off+5]*65536 + data[off+6]*256 + data[off+7];
     let mut rdlength = data[off + 8] * 256 + data[off + 9];
     off = off + 10;
 
     if rtype == DNS_TYPE_A {
         if rdlength == 4 {
+            if off + 3 >= len(data) { return [0, 0, 0, 0]; }
             let mut ip = [data[off], data[off+1], data[off+2], data[off+3]];
             // Cache the result with TTL (convert seconds -> ticks at 100Hz)
             let mut ttl_ticks = ttl_sec * 100;

@@ -244,7 +244,7 @@ fn swap_find_victim() {
     if _cl_hand < 0 { _cl_hand = _cl_inact_head; }
 
     let mut scanned = 0;
-    let mut limit = _cl_inact_count * 2 + 1;
+    let mut limit = _cl_inact_count + _cl_inact_count + 1;
     while scanned < limit {
         if _cl_hand < 0 { _cl_hand = _cl_inact_head; }
         if _cl_hand < 0 { return FIRST_FREE_PAGE; } // nothing to evict
@@ -287,8 +287,10 @@ fn demand_page(fault_addr) {
             return 0;
         }
         let mut victim_addr = victim * PAGE_SIZE;
-        swap_out(victim_addr, slot);
-        page_free(victim_addr);
+        let mut swap_ok = swap_out(victim_addr, slot);
+        if swap_ok == 0 {
+            page_free(victim_addr);
+        }
         frame = page_alloc();
     }
     if frame == 0 { return 0; }

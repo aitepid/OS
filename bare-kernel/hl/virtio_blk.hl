@@ -146,6 +146,8 @@ fn _vq_free_desc(idx) {
 
 // Internal: write a descriptor
 fn _vq_write_desc(idx, addr, length, flags, next) {
+    if idx < 0 { return 0 - 1; }
+    if idx >= VIRTQ_SIZE { return 0 - 1; }
     let mut base = vq_desc_base + idx * 16;
     // addr (8 bytes, little-endian)
     mem_write_u32(base + 0, addr % 4294967296);
@@ -204,8 +206,11 @@ fn virtio_blk_read(sector, count, buf_addr) {
 
     // Allocate 3 descriptors for the chain: header -> data -> status
     let mut d0 = _vq_alloc_desc();
+    if d0 < 0 { return 0 - 1; }
     let mut d1 = _vq_alloc_desc();
+    if d1 < 0 { _vq_free_desc(d0); return 0 - 1; }
     let mut d2 = _vq_alloc_desc();
+    if d2 < 0 { _vq_free_desc(d1); _vq_free_desc(d0); return 0 - 1; }
 
     // Descriptor 0: request header (16 bytes, device-readable)
     _vq_write_desc(d0, req_header_addr, 16, VIRTQ_DESC_F_NEXT, d1);
@@ -246,8 +251,11 @@ fn virtio_blk_write(sector, count, buf_addr) {
 
     // Allocate 3 descriptors
     let mut d0 = _vq_alloc_desc();
+    if d0 < 0 { return 0 - 1; }
     let mut d1 = _vq_alloc_desc();
+    if d1 < 0 { _vq_free_desc(d0); return 0 - 1; }
     let mut d2 = _vq_alloc_desc();
+    if d2 < 0 { _vq_free_desc(d1); _vq_free_desc(d0); return 0 - 1; }
 
     // Descriptor 0: request header (device-readable)
     _vq_write_desc(d0, req_header_addr, 16, VIRTQ_DESC_F_NEXT, d1);

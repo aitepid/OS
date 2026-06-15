@@ -201,10 +201,12 @@ fn virtio_net_recv_pkt() {
     let mut total_len = mem_read_u32(used_elem + 4);
     rx_last_used = rx_last_used + 1;
 
+    if desc_id >= RX_BUF_COUNT { return []; }
+    if total_len <= VIRTIO_NET_HDR_SIZE { return []; }
     // Read data from buffer (skip virtio_net_header)
     let mut buf = RX_BUF_BASE + desc_id * RX_BUF_SIZE;
     let mut pkt_len = total_len - VIRTIO_NET_HDR_SIZE;
-    if pkt_len <= 0 { return []; }
+    if pkt_len > RX_BUF_SIZE { pkt_len = RX_BUF_SIZE; }
 
     let mut pkt = [];
     let mut i = 0;

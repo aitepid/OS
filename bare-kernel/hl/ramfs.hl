@@ -137,12 +137,16 @@ fn fs_read(file_idx, buf, max_len) {
 
 // VFS-compatible wrappers
 fn ramfs_read(inode, buf, pos, count) {
+    if inode < 0 { return 0; }
+    if inode >= FS_MAX_FILES { return 0; }
     let mut addr = FS_TABLE + inode * FS_ENTRY_SIZE;
     let mut size = mem_read_u64(addr + 72);
     let mut data_off = mem_read_u64(addr + 80);
     if pos >= size { return 0; }
     let mut avail = size - pos;
     if count < avail { avail = count; }
+    if data_off + pos + avail > FS_DATA_SIZE { avail = FS_DATA_SIZE - data_off - pos; }
+    if avail <= 0 { return 0; }
     let mut i = 0;
     while i < avail {
         mem_write_u8(buf + i, mem_read_u8(FS_DATA + data_off + pos + i));
@@ -152,8 +156,12 @@ fn ramfs_read(inode, buf, pos, count) {
 }
 
 fn ramfs_write(inode, data, pos, count) {
+    if inode < 0 { return 0; }
+    if inode >= FS_MAX_FILES { return 0; }
     let mut addr = FS_TABLE + inode * FS_ENTRY_SIZE;
     let mut data_off = mem_read_u64(addr + 80);
+    if data_off + pos + count > FS_DATA_SIZE { count = FS_DATA_SIZE - data_off - pos; }
+    if count <= 0 { return 0; }
     let mut i = 0;
     while i < count {
         mem_write_u8(FS_DATA + data_off + pos + i, mem_read_u8(data + i));

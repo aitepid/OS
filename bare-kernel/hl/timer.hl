@@ -22,7 +22,7 @@ fn uptime_secs() {
 // Get system uptime in milliseconds
 fn uptime_ms() {
     let mut ticks = mem_read_u64(TICK_ADDR);
-    return ticks * 1000 / TICK_HZ;
+    return (ticks / TICK_HZ) * 1000 + (ticks % TICK_HZ) * 1000 / TICK_HZ;
 }
 
 // Get raw tick count
@@ -33,6 +33,8 @@ fn get_ticks() {
 // Sleep for approximately `ms` milliseconds
 // Blocks current task until wakeup tick
 fn sleep_ms(ms) {
+    if ms < 0 { ms = 0; }
+    if ms > 86400000 { ms = 86400000; }
     let mut wake_tick = get_ticks() + ms * TICK_HZ / 1000;
     // Store wakeup tick in task's reserved area (+224)
     // (avoiding +200 pending_mask, +208 blocked_mask, +216 handler_ptr from signal.hl)
@@ -90,6 +92,8 @@ fn timer_register(delay_ms, callback_addr, arg, repeat) {
 }
 
 fn timer_cancel(timer_id) {
+    if timer_id < 0 { return 0 - 1; }
+    if timer_id >= MAX_TIMERS { return 0 - 1; }
     let mut addr = TIMER_TABLE + timer_id * TIMER_ENTRY_SIZE;
     mem_write_u64(addr + 24, 0);
     return 0;
