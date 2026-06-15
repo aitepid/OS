@@ -24,20 +24,17 @@ fn hmac_init() {
 fn _hmac_xor_byte(a, b) {
     let mut result = 0;
     let mut bit = 0;
+    let mut place = 1;
     while bit < 8 {
         let mut ab = a % 2;
         let mut bb = b % 2;
-        if ab == bb {
-            result = result + 0;
-        } else {
-            result = result + 1;
-        }
-        result = result * 2;
+        if ab != bb { result = result + place; }
+        place = place * 2;
         a = a / 2;
         b = b / 2;
         bit = bit + 1;
     }
-    return result / 2;
+    return result;
 }
 
 fn _hmac_pad_key(key, block_size) {
@@ -140,6 +137,33 @@ fn hmac_sha1(key, message) {
 
 fn hmac_get_result() {
     return hmac_result;
+}
+
+fn hmac_sha256(key_bytes, msg_bytes) {
+    // Convert byte arrays to strings then delegate to HMAC-SHA1
+    let mut key_str = "";
+    let mut i = 0;
+    while i < len(key_bytes) { key_str = key_str + str_from_code(key_bytes[i]); i = i + 1; }
+    let mut msg_str = "";
+    i = 0;
+    while i < len(msg_bytes) { msg_str = msg_str + str_from_code(msg_bytes[i]); i = i + 1; }
+    let mut hex = hmac_sha1(key_str, msg_str);
+    // Decode hex → byte array
+    let mut out = [];
+    let mut j = 0;
+    while j + 1 < len(hex) {
+        let mut hi = str_char_code(hex, j);
+        let mut lo = str_char_code(hex, j + 1);
+        let mut hv = 0;
+        if hi >= 48 { if hi <= 57 { hv = hi - 48; } }
+        if hi >= 97 { if hi <= 102 { hv = hi - 97 + 10; } }
+        let mut lv = 0;
+        if lo >= 48 { if lo <= 57 { lv = lo - 48; } }
+        if lo >= 97 { if lo <= 102 { lv = lo - 97 + 10; } }
+        push(out, hv * 16 + lv);
+        j = j + 2;
+    }
+    return out;
 }
 
 fn hmac_selftest() {

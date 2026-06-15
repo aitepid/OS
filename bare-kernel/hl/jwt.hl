@@ -48,9 +48,7 @@ fn _jwt_base64url_decode(data) {
     let mut result = "";
     let mut i = 0;
 
-    while i < len(data) {
-        if i + 4 > len(data) { i = len(data); }
-
+    while i + 4 <= len(data) {
         let mut c1 = _jwt_base64url_decode_char(str_char_code(data, i));
         let mut c2 = _jwt_base64url_decode_char(str_char_code(data, i + 1));
         let mut c3 = _jwt_base64url_decode_char(str_char_code(data, i + 2));
@@ -116,10 +114,14 @@ fn _jwt_extract_claim(payload, claim_name) {
     if pos < 0 { return ""; }
 
     let mut value_start = pos + len(pattern);
-    while value_start < len(payload) {
-        let mut c = str_char_code(payload, value_start);
-        if c == 32 { value_start = value_start + 1; }
-        if c != 32 { value_start = len(payload) + 1; }
+    let mut ws_skip = 1;
+    while ws_skip == 1 {
+        if value_start >= len(payload) { ws_skip = 0; }
+        if ws_skip == 1 {
+            let mut c = str_char_code(payload, value_start);
+            if c != 32 { ws_skip = 0; }
+            if c == 32 { value_start = value_start + 1; }
+        }
     }
 
     if value_start >= len(payload) { return ""; }

@@ -184,12 +184,13 @@ fn imap_select(id, mailbox) {
             if ei > 0 {
                 // Scan back for the number
                 let mut ni = ei - 1;
+                let mut num_start = 0;
                 while ni > 0 {
                     let mut c = str_char_code(resp, ni);
-                    if c < 48 { ni = 0 - 1; }
-                    else { if c > 57 { ni = 0 - 1; } else { ni = ni - 1; } }
+                    if c < 48 { num_start = ni + 1; ni = 0 - 1; }
+                    else { if c > 57 { num_start = ni + 1; ni = 0 - 1; } else { ni = ni - 1; } }
                 }
-                let mut num_s = str_sub(resp, ni + 1, ei);
+                let mut num_s = str_sub(resp, num_start, ei);
                 msg_count = parse_int(num_s);
             }
             if _imap_ok(resp, tag) == 1 {
@@ -239,6 +240,7 @@ fn imap_fetch(id, seq_from, seq_to) {
 
 fn imap_logout(id) {
     if id < 0 { return 0; }
+    if id >= IMAP_MAX { return 0; }
     if imap_active[id] == 0 { return 0; }
     let mut tag = _imap_tag(id);
     _imap_send(id, tag + " LOGOUT");
