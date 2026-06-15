@@ -75,6 +75,7 @@ let MAX_TIMERS = 32;
 
 fn timer_register(delay_ms, callback_addr, arg, repeat) {
     let mut fire_tick = get_ticks() + delay_ms * TICK_HZ / 1000;
+    let mut delay_ticks = delay_ms * TICK_HZ / 1000;
     let mut i = 0;
     while i < MAX_TIMERS {
         let mut addr = TIMER_TABLE + i * TIMER_ENTRY_SIZE;
@@ -83,7 +84,7 @@ fn timer_register(delay_ms, callback_addr, arg, repeat) {
             mem_write_u64(addr, fire_tick);
             mem_write_u64(addr + 8, callback_addr);
             mem_write_u64(addr + 16, arg);
-            mem_write_u64(addr + 24, 1 + repeat * 2);
+            mem_write_u64(addr + 24, 1 + repeat * 2 + delay_ticks * 4294967296);
             return i;
         }
         i = i + 1;
@@ -114,7 +115,8 @@ fn timer_check() {
                 // call cb(arg) -- dispatch via function table
                 if (flags / 2) % 2 == 1 {
                     // Repeat: reschedule at same interval
-                    mem_write_u64(addr, now + (fire - mem_read_u64(addr)));
+                    let mut interval = flags / 4294967296;
+                    mem_write_u64(addr, fire + interval);
                 } else {
                     mem_write_u64(addr + 24, 0);  // one-shot: deactivate
                 }
