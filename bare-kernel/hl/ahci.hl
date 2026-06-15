@@ -194,13 +194,16 @@ fn ahci_build_fis_h2d(cmd_table, ata_cmd, lba, count) {
 
 // Issue a command on a port and wait for completion
 fn ahci_issue_cmd(port, slot) {
-    // Set CI (Command Issue) bit for the slot
-    ahci_port_write(port, 56, 1);  // CI bit 0
-    // Poll until CI clears (command completed)
+    // Compute CI bit for the correct slot
+    let mut ci_mask = 1;
+    let mut s = 0;
+    while s < slot { ci_mask = ci_mask * 2; s = s + 1; }
+    ahci_port_write(port, 56, ci_mask);
+    // Poll until CI bit for this slot clears
     let mut timeout = 100000;
     while timeout > 0 {
         let mut ci = ahci_port_read(port, 56);
-        if ci == 0 { return 1; }  // success
+        if (ci / ci_mask) % 2 == 0 { return 1; }  // success
         timeout = timeout - 1;
     }
     return 0;  // timeout
@@ -208,6 +211,8 @@ fn ahci_issue_cmd(port, slot) {
 
 // Read sectors via AHCI DMA
 fn ahci_read(port, lba, count, buf_addr) {
+    if count == 0 { return 0; }
+    if count > 8388608 { return 0; }  // prevent DMA byte count overflow
     let mut clb = AHCI_CMD_LIST_BASE + port * 1024;
     let mut cmd_table = AHCI_CMD_TABLE_BASE + port * 256;
 
@@ -234,6 +239,8 @@ fn ahci_read(port, lba, count, buf_addr) {
 
 // Write sectors via AHCI DMA
 fn ahci_write(port, lba, count, buf_addr) {
+    if count == 0 { return 0; }
+    if count > 8388608 { return 0; }  // prevent DMA byte count overflow
     let mut clb = AHCI_CMD_LIST_BASE + port * 1024;
     let mut cmd_table = AHCI_CMD_TABLE_BASE + port * 256;
 

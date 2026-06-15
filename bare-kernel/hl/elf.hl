@@ -74,6 +74,13 @@ fn elf_parse_header(data) {
     let mut e_phentsize = elf_read16(data, 54);
     let mut e_phnum = elf_read16(data, 56);
 
+    // Validate header fields
+    if e_entry < 4194304 { return nil; }       // entry must be >= 0x400000 (user space)
+    if e_phnum > 256 { return nil; }           // unreasonable phnum
+    if e_phentsize == 0 { return nil; }
+    if e_phoff >= len(data) { return nil; }
+    if e_phoff + e_phnum * e_phentsize > len(data) { return nil; }
+
     return [e_entry, e_phoff, e_phnum, e_phentsize];
 }
 
@@ -89,7 +96,11 @@ fn elf_load(data) {
 
     let mut i = 0;
     while i < phnum {
+        // Guard against offset overflow and out-of-bounds program header access
+        if phentsz == 0 { return 0; }
+        if i > 4294967295 / phentsz { return 0; }
         let mut off = phoff + i * phentsz;
+        if off + 56 > len(data) { return 0; }
         let mut p_type = elf_read32(data, off);
 
         if p_type == PT_LOAD {
@@ -97,6 +108,9 @@ fn elf_load(data) {
             let mut p_vaddr = elf_read64(data, off + 16);
             let mut p_filesz = elf_read64(data, off + 32);
             let mut p_memsz = elf_read64(data, off + 40);
+
+            // Validate segment data is within the file
+            if p_offset + p_filesz > len(data) { return 0; }
 
             // Allocate and map pages for this segment
             let mut pages_needed = (p_memsz + 4095) / 4096;

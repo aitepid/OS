@@ -216,7 +216,8 @@ fn bcache_read(dev, block) {
 
     let mut sector = block * (BCACHE_BLOCK_SIZE / 512);
     let mut sectors = BCACHE_BLOCK_SIZE / 512;
-    virtio_blk_read(sector, sectors, bcache_data_addr(free_slot));
+    let mut read_ok = virtio_blk_read(sector, sectors, bcache_data_addr(free_slot));
+    if read_ok == 0 { return 0 - 1; }  // disk read failed, don't cache garbage
 
     set_at(bcache_dev, free_slot, dev);
     set_at(bcache_block, free_slot, block);
@@ -232,7 +233,8 @@ fn bcache_read(dev, block) {
 fn bcache_write(dev, block, data_addr) {
     let mut target = bcache_lookup(dev, block);
     if target < 0 {
-        bcache_read(dev, block);
+        let mut rr = bcache_read(dev, block);
+        if rr < 0 { return 0 - 1; }  // disk read failed
         target = bcache_lookup(dev, block);
     }
     if target >= 0 {
