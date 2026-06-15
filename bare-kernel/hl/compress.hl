@@ -58,6 +58,14 @@ fn _comp_write_file(path, sz) {
 fn _comp_rb(off) {  return mem_read_u8(COMP_IN_BUF + off);  }
 fn _comp_wb(off, v) { mem_write_u8(COMP_OUT_BUF + off, v); return 0; }
 
+// 2^n for n in 0..7 (used for LZSS flag-byte bit positions)
+fn _lzss_pow2(n) {
+    let mut r = 1;
+    let mut i = 0;
+    while i < n { r = r * 2; i = i + 1; }
+    return r;
+}
+
 // ============================================================
 // RLE encode
 // ============================================================
@@ -230,7 +238,7 @@ fn compress_lzss(src, dst) {
                 let mut mlen = m[1];
                 if mlen >= 3 {
                     // Back-reference token
-                    flag = flag + (1 * (1 + tok + tok + tok + tok + tok + tok + tok));  // 2^tok
+                    flag = flag + _lzss_pow2(tok);
                     _comp_wb(out, m[0]); out = out + 1;
                     _comp_wb(out, mlen); out = out + 1;
                     i = i + mlen;
@@ -269,13 +277,14 @@ fn decompress_lzss(src, dst) {
         while tok < 8 {
             if i >= in_sz { tok = 8; }
             else {
-                let mut bit = (flag / (1 + tok + tok + tok + tok + tok + tok + tok)) % 2;
+                let mut bit = (flag / _lzss_pow2(tok)) % 2;
                 if bit == 1 {
                     // Back-reference
                     if i + 1 < in_sz {
                         let mut off = _comp_rb(i); i = i + 1;
                         let mut mlen = _comp_rb(i); i = i + 1;
                         let mut src_pos = out - off - 1;
+                        if src_pos < 0 { src_pos = 0; }
                         let mut k = 0;
                         while k < mlen {
                             let mut bv = mem_read_u8(COMP_OUT_BUF + src_pos + k);
@@ -331,6 +340,7 @@ fn compress_stat(path) {
         else { singletons = singletons + real_run; }
         i = i + real_run;
     }
+    if n == 0 { return path + ": empty"; }
     let mut rle_est = runs * 3 + singletons;
 
     return path + ": " + to_string(n) + " bytes"

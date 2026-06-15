@@ -241,6 +241,8 @@ fn vfs_mount_fat16(mount_path, device_id) {
 fn vfs_open(path, flags) {
     let mut mount_info = vfs_resolve(path);
     let mut mount_idx = mount_info[0];
+    if mount_idx < 0 { return 0 - 1; }
+    if mount_idx >= mount_count { return 0 - 1; }
     let mut fs_type = mem_read_u64(MOUNT_TABLE + mount_idx * 64 + 16);
 
     let mut fd = 0;
@@ -311,6 +313,7 @@ fn vfs_read(fd, buf, count) {
         // Write content to caller's buffer if it's a real address
         if buf != 0 {
             let mut ci = 0;
+            if bytes_read > count { bytes_read = count; }
             while ci < bytes_read {
                 mem_write_u8(buf + ci, str_char_at(content, ci));
                 ci = ci + 1;
@@ -364,7 +367,10 @@ fn vfs_seek(fd, offset, whence) {
     let mut size = mem_read_u64(addr + 32);
     let mut new_pos = cur;
     if whence == 0 { new_pos = offset; }
-    if whence == 1 { new_pos = cur + offset; }
+    if whence == 1 {
+        if offset >= 0 && cur > 9223372036854775807 - offset { new_pos = 9223372036854775807; }
+        else { new_pos = cur + offset; }
+    }
     if whence == 2 { new_pos = size + offset; }
     if new_pos < 0 { new_pos = 0; }
     mem_write_u64(addr + 24, new_pos);

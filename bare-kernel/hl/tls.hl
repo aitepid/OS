@@ -86,9 +86,12 @@ fn tls12_sha256_hash(data) {
         let mut wi = 0;
         while wi < 16 {
             let mut off = blk + wi * 4;
+            if off + 3 >= len(msg) { wi = 16; }
+            else {
             let mut word = msg[off] * 16777216 + msg[off+1] * 65536 + msg[off+2] * 256 + msg[off+3];
             push(w, word % 4294967296);
             wi = wi + 1;
+            }
         }
         // Extend to 64 words
         while wi < 64 {
@@ -351,7 +354,7 @@ fn tls_connect(tcp_fd) {
 
     // STATE 1: Send ClientHello
     let mut hello = tls12_client_hello();
-    tcp_send(tcp_fd, hello, len(hello));
+    tcp_send(tcp_fd, hello);
     set_at(_tls_state, sess, TLS_ST_CH_SENT);
 
     // STATE 2: Receive ServerHello
@@ -406,7 +409,7 @@ fn tls_connect(tcp_fd) {
     push(cfin, 20); // Finished message type
     let mut vi = 0;
     while vi < len(verify_data) { push(cfin, verify_data[vi]); vi = vi + 1; }
-    tcp_send(tcp_fd, cfin, len(cfin));
+    tcp_send(tcp_fd, cfin);
     set_at(_tls_state, sess, TLS_ST_CF_SENT);
 
     // STATE 7: Established

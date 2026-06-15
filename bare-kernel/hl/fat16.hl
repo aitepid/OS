@@ -57,9 +57,11 @@ fn cluster_to_sector(cluster) {
 
 // Read FAT entry for a cluster (returns next cluster or 0xFFF8+ for end)
 fn fat16_read_fat(cluster) {
+    if fat_bytes_per_sector == 0 { return 0; }
     let mut fat_offset = cluster * 2;
     let mut fat_sector = fat_table_start + fat_offset / fat_bytes_per_sector;
     let mut offset_in_sector = fat_offset % fat_bytes_per_sector;
+    if offset_in_sector >= fat_bytes_per_sector - 1 { return 0; }
     // Read the FAT sector via block cache
     let mut buf = bcache_read(0, fat_sector);
     // Read 16-bit value at offset
@@ -260,6 +262,7 @@ fn fat16_create_file(name, is_dir) {
                 while ni < 26 { mem_write_u8(buf + off + ni, 0); ni = ni + 1; }
                 // Allocate first cluster
                 let mut cluster = fat16_alloc_cluster();
+                if cluster == 0 { return 0 - 1; }
                 mem_write_u16(buf + off + 26, cluster);
                 // File size = 0
                 mem_write_u32(buf + off + 28, 0);
@@ -318,6 +321,7 @@ fn fat16_write_file(first_cluster, data, data_len) {
 
 // Update file size in root directory entry
 fn fat16_update_size(entry_index, new_size) {
+    if fat_bytes_per_sector == 0 { return 0 - 1; }
     let mut sec = entry_index / (fat_bytes_per_sector / 32);
     let mut off = (entry_index % (fat_bytes_per_sector / 32)) * 32;
     let mut buf = bcache_read(0, fat_root_start + sec);
@@ -338,10 +342,12 @@ fn fat16_delete_file(entry_index) {
     bcache_write(0, fat_root_start + sec, buf);
     // Free cluster chain
     let mut c = cluster;
-    while c >= 2 && c < 65528 {
+    let mut iter = 0;
+    while c >= 2 && c < 65528 && iter < 65536 {
         let mut next = fat16_read_fat(c);
         fat16_write_fat(c, 0);  // free cluster
         c = next;
+        iter = iter + 1;
     }
     return 0;
 }
@@ -361,6 +367,7 @@ fn fat16_format(total_sectors) {
 
     // Write boot sector (sector 0)
     let mut boot_buf = page_alloc();
+    if boot_buf == 0 { return 0 - 1; }
     mem_zero(boot_buf, bps);
     // Jump instruction: EB 3C 90
     mem_write_u8(boot_buf, 235);
@@ -391,6 +398,7 @@ fn fat16_format(total_sectors) {
 
     // Zero FAT tables
     let mut zero_buf = page_alloc();
+    if zero_buf == 0 { page_free(boot_buf); return 0 - 1; }
     mem_zero(zero_buf, bps);
     let mut s = reserved;
     while s < reserved + num_fats * spf {
