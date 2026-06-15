@@ -53,7 +53,9 @@ fn ipc_pipe_write(pipe_idx, data, data_len) {
     let mut write_pos = mem_read_u64(addr + 8);
     let mut read_pos = mem_read_u64(addr + 0);
     let mut written = 0;
-    while written < data_len {
+    let mut safe_len = data_len;
+    if safe_len > len(data) { safe_len = len(data); }
+    while written < safe_len {
         let mut next_pos = (write_pos + 1) % PIPE_BUF_SIZE;
         if next_pos == read_pos { return written; } // buffer full
         mem_write_u8(buf_addr + write_pos, data[written]);
@@ -163,6 +165,9 @@ fn hilbert_recv(x, y, z) {
 
 // Syscall-level IPC aliases
 fn ipc_send(dest_pid, buf_addr, length) {
+    if dest_pid < 0 { return 0; }
+    if length < 0 { return 0; }
+    if length > MQ_MSG_SIZE { length = MQ_MSG_SIZE; }
     // mq_send expects an array; materialize from memory so callers can pass
     // a raw buffer pointer + length (matches the IPC syscall ABI).
     let mut qi = dest_pid % MAX_MQ;

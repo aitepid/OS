@@ -164,11 +164,13 @@ fn sem_timedwait(id, timeout_ticks) {
         }
     }
     set_at(ipc_sem_waiters, id, ipc_sem_waiters[id] - 1);
+    if ipc_sem_waiters[id] < 0 { set_at(ipc_sem_waiters, id, 0); }
     return result;
 }
 
 fn ipc_sem_post(id) {
     if _sem_valid(id) == 0 { return 0 - 1; }
+    if sem_max_vals[id] > 0 && sem_vals[id] >= sem_max_vals[id] { return 0; }
     let mut new_val = sem_vals[id] + 1;
     set_at(sem_vals, id, new_val);
     return new_val;

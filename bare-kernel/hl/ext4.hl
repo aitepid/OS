@@ -133,6 +133,8 @@ fn ext4_read_inode(inode_num) {
 
     // inode_table_block from group descriptor at offset +8
     let mut bgdt_off = group * bgdt_entry_sz;
+    // Validate group is within the 4096-byte BGDT buffer
+    if bgdt_off + bgdt_entry_sz > 4096 { return 0; }
     let mut inode_table_block = mem_read_u32(EXT4_BGDT_BUF + bgdt_off + 8);
 
     // Byte position of this inode within the inode table
@@ -143,7 +145,9 @@ fn ext4_read_inode(inode_num) {
     let mut inode_lba = inode_table_block * secs_per_block + inode_byte / 512;
     let mut inode_sec_off = inode_byte % 512;
 
-    let mut ok_in = ahci_read(ext4_ahci_port, inode_lba, 1, EXT4_INODE_BUF);
+    // Read enough sectors to cover the full inode (may straddle sector boundary)
+    let mut sectors_needed = (inode_sec_off + ext4_inode_size + 511) / 512;
+    let mut ok_in = ahci_read(ext4_ahci_port, inode_lba, sectors_needed, EXT4_INODE_BUF);
     if ok_in == 0 { return 0; }
 
     return EXT4_INODE_BUF + inode_sec_off;
@@ -245,11 +249,15 @@ fn ext4_read_file(inode_num, max_size) {
                 let mut disk_blk = ext[2];
                 let mut secs = blk_count * secs_per_block;
                 let mut dst_addr = EXT4_BLOCK_BUF + written;
+                // Guard against LBA overflow from malicious/corrupted extent
+                if disk_blk > 536870911 { done = 1; }
+                else {
                 let mut ok = ahci_read(ext4_ahci_port, disk_blk * secs_per_block, secs, dst_addr);
                 if ok == 0 { done = 1; }
                 else {
                     written = written + blk_count * ext4_block_size;
                     if written >= read_limit { done = 1; }
+                }
                 }
             }
             ei = ei + 1;
@@ -277,6 +285,8 @@ fn ext4_list_dir(inode_num) {
             let mut rec_len = mem_read_u16(EXT4_BLOCK_BUF + off + 4);
             let mut name_len = mem_read_u8(EXT4_BLOCK_BUF + off + 6);
             let mut ftype = mem_read_u8(EXT4_BLOCK_BUF + off + 7);
+            // Clamp name_len to prevent overread past block buffer
+            if off + 8 + name_len > nbytes { name_len = nbytes - (off + 8); }
 
             if rec_len == 0 { done = 1; }
             else {

@@ -91,7 +91,7 @@ fn fat16_write_fat(cluster, value) {
 
 // Allocate a free cluster from FAT
 fn fat16_alloc_cluster() {
-    let mut max_clusters = fat_sectors_per_fat * fat_bytes_per_sector / 2;
+    let mut max_clusters = fat_sectors_per_fat * (fat_bytes_per_sector / 2);
     let mut c = 2;  // clusters 0,1 are reserved
     while c < max_clusters {
         let mut entry = fat16_read_fat(c);
@@ -289,9 +289,12 @@ fn fat16_write_file(first_cluster, data, data_len) {
             let mut buf = bcache_read(0, sector + si);
             let mut bi = 0;
             while bi < fat_bytes_per_sector && written < data_len {
+                if written >= len(data) { bi = fat_bytes_per_sector; }
+                else {
                 mem_write_u8(buf + bi, data[written]);
                 bi = bi + 1;
                 written = written + 1;
+                }
             }
             bcache_write(0, sector + si, buf);
             si = si + 1;
