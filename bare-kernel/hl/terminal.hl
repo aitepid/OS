@@ -46,10 +46,7 @@ fn term_init() {
     term_cursor_y = 0;
     term_fg_color = 7;
     term_bg_color = 0;
-    // Create window in window manager
-    let mut w = TERM_COLS * TERM_CELL_W;
-    let mut h = TERM_ROWS * TERM_CELL_H;
-    term_wm_window = wm_create_window(50, 50, w, h, "Terminal", 0);
+    term_wm_window = 0 - 1;  // no GUI window in shell mode
     term_clear();
     return 0;
 }
@@ -57,37 +54,12 @@ fn term_init() {
 fn term_clear() {
     term_cursor_x = 0;
     term_cursor_y = 0;
-    // Fill window content with bg color
-    let mut win_x = wm_win_x(term_wm_window);
-    let mut win_y = wm_win_y(term_wm_window) + 24;  // skip titlebar (24px)
-    let mut w = TERM_COLS * TERM_CELL_W;
-    let mut h = TERM_ROWS * TERM_CELL_H;
-    vesa_fill_rect_fast(win_x, win_y, w, h, TERM_COLORS[term_bg_color]);
+    serial_print("\x1b[2J\x1b[H");  // ANSI clear screen + cursor home via serial
     return 0;
 }
 
 fn term_scroll_up() {
-    // Blit rows 1..TERM_ROWS-1 up by one row using direct framebuffer copy
-    let mut win_x = wm_win_x(term_wm_window);
-    let mut win_y = wm_win_y(term_wm_window) + 24;
-    let mut row_bytes = TERM_COLS * TERM_CELL_W * 4;  // 4 bytes per pixel (BGRA)
-    let mut row_px_h = TERM_CELL_H;
-    let mut src_row = 1;
-    while src_row < TERM_ROWS {
-        let mut src_y = win_y + src_row * row_px_h;
-        let mut dst_y = win_y + (src_row - 1) * row_px_h;
-        let mut py = 0;
-        while py < row_px_h {
-            let mut src_addr = vesa_line_addr(src_y + py) + win_x * 4;
-            let mut dst_addr = vesa_line_addr(dst_y + py) + win_x * 4;
-            mem_copy(src_addr, dst_addr, row_bytes);
-            py = py + 1;
-        }
-        src_row = src_row + 1;
-    }
-    // Clear last row
-    let mut last_y = win_y + (TERM_ROWS - 1) * row_px_h;
-    vesa_fill_rect_fast(win_x, last_y, TERM_COLS * TERM_CELL_W, row_px_h, TERM_COLORS[term_bg_color]);
+    // Shell mode: serial terminal handles scrolling natively
     term_cursor_y = TERM_ROWS - 1;
     return 0;
 }
@@ -97,36 +69,29 @@ fn term_putchar(ch) {
         term_cursor_x = 0;
         term_cursor_y = term_cursor_y + 1;
         if term_cursor_y >= TERM_ROWS { term_scroll_up(); }
+        serial_putchar(10);
         return 0;
     }
     if ch == 13 { // carriage return
         term_cursor_x = 0;
+        serial_putchar(13);
         return 0;
     }
     if ch == 8 { // backspace
         if term_cursor_x > 0 {
             term_cursor_x = term_cursor_x - 1;
-            let mut win_x = wm_win_x(term_wm_window);
-            let mut win_y = wm_win_y(term_wm_window) + 24;
-            let mut px = win_x + term_cursor_x * TERM_CELL_W;
-            let mut py = win_y + term_cursor_y * TERM_CELL_H;
-            vesa_fill_rect_fast(px, py, TERM_CELL_W, TERM_CELL_H, TERM_COLORS[term_bg_color]);
+            serial_putchar(8);
         }
         return 0;
     }
     if ch == 9 { // tab
         term_cursor_x = ((term_cursor_x / 8) + 1) * 8;
         if term_cursor_x >= TERM_COLS { term_cursor_x = TERM_COLS - 1; }
+        serial_putchar(9);
         return 0;
     }
 
-    // Draw character at cursor position using font renderer
-    let mut win_x = wm_win_x(term_wm_window);
-    let mut win_y = wm_win_y(term_wm_window) + 24;
-    let mut px = win_x + term_cursor_x * TERM_CELL_W;
-    let mut py = win_y + term_cursor_y * TERM_CELL_H;
-    font_putchar(ch, px, py, TERM_COLORS[term_fg_color], TERM_COLORS[term_bg_color]);
-
+    serial_putchar(ch);
     term_cursor_x = term_cursor_x + 1;
     if term_cursor_x >= TERM_COLS {
         term_cursor_x = 0;

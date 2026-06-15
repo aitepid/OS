@@ -1564,6 +1564,8 @@ fn _ke_font_init() {
 fn _ke_vesa_draw_char(px, py, ch, fg, bg) {
     if ch < 32 { return 0; }
     if ch > 126 { return 0; }
+    if px + 8 > 1024 { return 0; }
+    if py + 16 > 768 { return 0; }
     let mut glyph = 3211520 + (ch - 32) * 16;
     let mut fb = 4244635648;
     let mut row = 0;
@@ -10273,6 +10275,16 @@ fn _start() {
     // Sprint 39: hand off to module-level kernel_init() so 47 GUI modules + 113 kernel modules can run their print()s.
     kernel_init();
 
+    // Sprint 35 第七波：开机直接绘制桌面 + 顶部导航栏，避免 VRAM 残留显示为雪花
+    _ke_cmd_wm();
+    _ke_vesa_fill_rect(0, 0, 1024, 32, 3368652);
+    let mut nx = 8;
+    _ke_vesa_draw_char(nx, 8, 72, 16777215, 3368652); nx = nx + 8;  // H
+    _ke_vesa_draw_char(nx, 8, 105, 16777215, 3368652); nx = nx + 8; // i
+    _ke_vesa_draw_char(nx, 8, 99, 16777215, 3368652); nx = nx + 8;  // c
+    _ke_vesa_draw_char(nx, 8, 79, 16777215, 3368652); nx = nx + 8;  // O
+    _ke_vesa_draw_char(nx, 8, 83, 16777215, 3368652);               // S
+
     // Phase 8: Interactive shell (iteration 25, enhanced iter 75-79)
     _ke_shell();
 
@@ -10369,9 +10381,7 @@ fn kernel_init() {
         print("[4] UEFI GOP framebuffer...");
         uefi_init_framebuffer();
     } else {
-        print("[4] VESA framebuffer...");
-        vesa_auto_init();
-        vesa_info();
+        print("[4] Legacy BIOS: no VESA in shell mode, using VGA text console");
     }
 
     // Phase 5: VFS + ramfs
