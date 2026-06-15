@@ -58,55 +58,8 @@ fn kernel_main() {
     print("  [ok] Filesystem: ramfs + FAT16 + ext4 + VFS + devfs + procfs + inotify + overlayfs");
 
     // === Phase 6: Display ===
-    if is_uefi == 1 {
-        uefi_init_framebuffer();
-    } else {
-        mouse_init();          // mouse.hl -- PS/2 mouse via IRQ12
-        vesa_auto_init();      // vesa.hl -- VESA framebuffer
-    }
-    font_sync_fb();            // font.hl -- sync glyph renderer to current framebuffer
-    gfx_back_init();           // gfx_backbuffer.hl -- double buffer + tile dirty (Sprint G1)
-    gfx_path_init();           // gfx_path.hl       -- path renderer state
-    font_atlas_init();         // font_atlas.hl     -- 13/15/17/22 px ASCII atlas
-    compositor_init();         // compositor.hl     -- surface tree + damage (Sprint G2)
-    gfx_shadow_init();         // gfx_shadow.hl     -- shadow falloff LUT
-    anim_init();               // gfx_anim.hl       -- animation tick + Fluent easing
-    eyecare_init();            // eyecare.hl        -- color-temp LUT post-process
-    input_pointer_init();      // input_pointer.hl  -- unified PointerEvent ring (Sprint G3)
-    input_gesture_init();      // input_gesture.hl  -- Tap/Pan/Swipe/Pinch/Edge recognizer
-    input_touch_init();        // input_touch.hl    -- multi-touch + QEMU mouse bridge
-    input_pen_init();          // input_pen.hl      -- pen pressure/tilt/barrel
-    dnd_init();                // dnd.hl            -- drag-and-drop session
-    al_init();                 // adaptive_layout.hl -- form-factor & density (Sprint G4)
-    widget_core_init();        // widget_core.hl     -- widget table (512 slots)
-    widget_input_init();       // widget_input.hl    -- text-input buffer pool
-    widget_feedback_init();    // widget_feedback.hl -- toast/tooltip slots
-    shell_wallpaper_init();    // shell_wallpaper.hl     -- desktop wallpaper (Sprint G5)
-    shell_topbar_init();       // shell_topbar.hl        -- top status bar
-    shell_dock_init();         // shell_dock.hl          -- bottom dock
-    shell_startmenu_init();    // shell_startmenu.hl     -- start menu
-    shell_spotlight_init();    // shell_spotlight.hl     -- global search
-    shell_controlcenter_init();// shell_controlcenter.hl -- control center
-    shell_lockscreen_init();   // shell_lockscreen.hl    -- lock screen
-    shell_notification_init(); // shell_notification.hl  -- notifications
-    shell_form_init();         // shell_form.hl          -- form-factor shell switcher
-    app_files_init();          // app_files.hl       -- responsive file manager (Sprint G6)
-    app_settings_init();       // app_settings.hl    -- settings center
-    app_terminal_init();       // app_terminal.hl    -- GUI terminal
-    app_texteditor_init();     // app_texteditor.hl  -- text editor
-    app_sysmon_init();         // app_sysmon.hl      -- system monitor
-    display_topology_init();   // display_topology.hl -- multi-display (Sprint G7)
-    ime_init();                // ime.hl             -- input method framework
-    vdesktop_init();           // vdesktop.hl        -- virtual desktops
-    mission_control_init();    // mission_control.hl -- F3 window overview
-    gfx_hidpi_init();          // gfx_hidpi.hl       -- HiDPI scale factor (Sprint G8)
-    a11y_init();               // a11y.hl            -- accessibility
-    anim_tuning_init();        // anim_tuning.hl     -- animation tuning
-    shell_themes_init();       // shell_themes.hl    -- 4 themes
-    visual_audit_init();       // visual_audit.hl    -- Win11 visual checklist
-    wm_init();                 // wm.hl -- window manager, desktop chrome
-    clipboard_init();          // clipboard.hl -- cross-window copy/paste
-    print("  [ok] Devices: keyboard + mouse + VESA/GOP + compositor + pointer/gesture/touch/pen + DnD + WM + clipboard");
+    // Shell mode: text output via serial + VGA console (Phase 12). No framebuffer needed.
+    print("  [ok] Devices: keyboard (PS/2 + USB)");
 
     // === Phase 7: PCI + Storage + Network + Audio ===
     pci_scan();            // pci.hl -- enumerate PCI bus
@@ -119,16 +72,6 @@ fn kernel_main() {
     net_init();            // net.hl -- VirtIO-net + ARP
     dhcp_discover();       // dhcp.hl -- IP address
     netfilter_init();      // netfilter.hl -- packet filter (INPUT/OUTPUT/FORWARD)
-    // VirtIO-GPU: detect, init, and bridge to VESA framebuffer
-    let mut gpu_pci = gpu_detect();
-    if len(gpu_pci) == 3 {
-        let mut gok = gpu_init(gpu_pci[0], gpu_pci[1], gpu_pci[2]);
-        if gok == 1 {
-            vesa_gpu_mode(gpu_fb_base(), gpu_display_w, gpu_display_h);
-            font_sync_fb();    // font: re-sync to new GPU-backed framebuffer
-            print("  [ok] VirtIO-GPU: " + to_string(gpu_display_w) + "x" + to_string(gpu_display_h));
-        }
-    }
     // ext4: mount first AHCI SATA drive as root filesystem via VFS
     let mut e4ok = vfs_mount_ext4("/", 0);
     if e4ok == 1 {
@@ -143,10 +86,8 @@ fn kernel_main() {
     ntp_init();            // ntp.hl -- SNTP time client RFC 4330
     pop3_init();           // pop3.hl -- POP3 email retrieval RFC 1939
     irc_init();            // irc.hl -- IRC client RFC 1459
-    uical_init();          // ui_calendar.hl -- calendar application
     db_init();             // sqlite.hl -- embedded in-memory relational DB
     diff_init();           // diff.hl -- LCS unified diff for VFS files
-    uiclock_init();        // ui_clock.hl -- digital clock widget HH:MM:SS
     b64_init();            // base64.hl -- RFC 4648 Base64 encoder/decoder
     ini_init();            // ini.hl -- INI config file parser/writer
     prof_init();           // profiler.hl -- named counters + span timer
@@ -488,19 +429,7 @@ fn kernel_main() {
     // === Login ===
     login_prompt();        // login.hl -- authenticate user before shell
 
-    // === Open terminal window on desktop ===
-    wm_open_terminal_window();  // wm.hl -- graphical terminal at startup
-
-    // === Initial GUI paint (Sprint 33: wire render to framebuffer) ===
-    shell_wallpaper_paint(vesa_width, vesa_height);
-    shell_topbar_paint(vesa_width);
-    shell_dock_paint(vesa_width, vesa_height);
-    compositor_present();
-    gfx_present();
-    vesa_flip();
-
-    // === Enter interactive shell ===
-    print("HicOS> ");
+    // === Enter interactive shell (shell mode: no GUI desktop) ===
     shell_main();          // shell.hl -- interactive command loop
 
     // === Idle loop (if shell exits) ===

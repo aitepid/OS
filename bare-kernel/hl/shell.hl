@@ -11,9 +11,7 @@
 //   services svc(start/stop/status) kinfo run kill mkdir rm cp mv
 //   history hostname netstat grep disk_info format install advtest
 //   tcploop dnstest heval lsmod kmodtest
-//   UI: sysmon files audiotest settings fm fileman edit editor
 //   Audio: audio vol mute unmute beep  AudioServer: audioserver aus aus-connect/play/stop/vol/beep
-//   GPU: gpu flip dirty
 //   Namespace: ns  ns new  ns info  ns hostname  ns enter  ns del
 //   Seccomp:   seccomp  seccomp new  seccomp deny  seccomp apply
 //   Container: ctr  ctr new  ctr start  ctr stop  ctr rm  ctr exec  ctr info
@@ -790,18 +788,6 @@ fn shell_handle_ext(cmd) {
         return "httpd: tick processed";
     }
 
-    // --- Calculator ---
-    if cmd == "calc" {
-        uicalc_open();
-        return "Calculator opened";
-    }
-
-    // --- Paint ---
-    if cmd == "paint" {
-        uipaint_open();
-        return "Paint opened";
-    }
-
     // --- JSON ---
     if str_starts_with(cmd, "json parse ") {
         let s = str_sub(cmd, 11, len(cmd));
@@ -935,18 +921,6 @@ fn shell_handle_ext(cmd) {
         return regex_replace(pat, text, repl);
     }
 
-    // --- Browser ---
-    if cmd == "browse" {
-        uibrowse_open();
-        return "Browser opened";
-    }
-    if str_starts_with(cmd, "browse ") {
-        let url = str_sub(cmd, 7, len(cmd));
-        if uibrowse_is_open() == 0 { uibrowse_open(); }
-        uibrowse_navigate(url);
-        return "Navigating to " + url;
-    }
-
     // --- SMTP ---
     if cmd == "smtp" { return smtp_list(); }
     if str_starts_with(cmd, "smtp connect ") {
@@ -1036,25 +1010,6 @@ fn shell_handle_ext(cmd) {
         let id = parse_int(str_sub(cmd, 9, len(cmd)));
         cron_disable(id);
         return "cron[" + to_string(id) + "] disabled";
-    }
-
-    // --- Image Viewer ---
-    if cmd == "imgview" {
-        uiimg_open();
-        return "Image viewer opened — use: imgview <path.bmp>";
-    }
-    if str_starts_with(cmd, "imgview ") {
-        let arg = str_sub(cmd, 8, len(cmd));
-        if str_starts_with(arg, "zoom ") {
-            let z = parse_int(str_sub(arg, 5, len(arg)));
-            if z != 1 { if z != 2 { return "Error: zoom must be 1 or 2"; } }
-            uiimg_zoom = z;
-            return "zoom set to " + to_string(z) + "x";
-        }
-        if uiimg_is_open() == 0 { uiimg_open(); }
-        let r = uiimg_load(arg);
-        if r == 0 { return "Error: failed to load " + arg; }
-        return "Loaded: " + arg;
     }
 
     // --- NTP ---
@@ -1221,42 +1176,6 @@ fn shell_handle_ext(cmd) {
     if str_starts_with(cmd, "irc status ") {
         let id = parse_int(str_sub(cmd, 11, len(cmd)));
         return irc_status(id);
-    }
-
-    // --- Calendar ---
-    if cmd == "calendar" { uical_open(); return "Calendar opened"; }
-    if cmd == "cal" { uical_open(); return "Calendar opened"; }
-    if cmd == "cal next"  { if uical_is_open() == 0 { uical_open(); }
-        uical_goto(uical_month % 12 + 1, uical_year + uical_month / 12);
-        return "Calendar: next month"; }
-    if cmd == "cal prev"  { if uical_is_open() == 0 { uical_open(); }
-        let pm = uical_month - 1;
-        let py = uical_year;
-        if pm < 1 { let pm = 12; let py = py - 1; }
-        uical_goto(pm, py);
-        return "Calendar: prev month"; }
-    if cmd == "cal today" { if uical_is_open() == 0 { uical_open(); }
-        uical_open();   // re-opens and syncs to today
-        return "Calendar: today"; }
-    if str_starts_with(cmd, "cal add ") {
-        let args = str_sub(cmd, 8, len(cmd));
-        let sp = str_find(args, " ");
-        if sp < 0 { return "Usage: cal add <day> <text>"; }
-        let day  = parse_int(str_sub(args, 0, sp));
-        let text = str_sub(args, sp + 1, len(args));
-        let r = uical_add_event(day, uical_month, uical_year, text);
-        if r < 0 { return "Error: event table full"; }
-        return "Event added: day " + to_string(day) + " — " + text;
-    }
-    if str_starts_with(cmd, "cal goto ") {
-        let args = str_sub(cmd, 9, len(cmd));
-        let sp = str_find(args, " ");
-        if sp < 0 { return "Usage: cal goto <month> <year>"; }
-        let mo = parse_int(str_sub(args, 0, sp));
-        let yr = parse_int(str_sub(args, sp + 1, len(args)));
-        if uical_is_open() == 0 { uical_open(); }
-        uical_goto(mo, yr);
-        return "Calendar: " + to_string(mo) + "/" + to_string(yr);
     }
 
     // --- Compress ---
@@ -1443,47 +1362,9 @@ fn shell_handle_ext(cmd) {
         kmod_selftest();
         return "";
     }
-    if cmd == "sysmon" {
-        uismon_open();
-        return "System Monitor opened";
-    }
-    if cmd == "files" {
-        uifiles_open();
-        return "File Manager opened";
-    }
     if cmd == "audiotest" {
         ac97_beep(440, 500);
         return "Audio test: 440 Hz 500 ms";
-    }
-    if cmd == "settings" {
-        uisettings_open();
-        return "Settings opened";
-    }
-    if str_starts_with(cmd, "edit ") {
-        let path = str_sub(cmd, 5, len(cmd));
-        uitxed_open(path);
-        return "Editor opened: " + path;
-    }
-    if cmd == "editor" {
-        uitxed_open("");
-        return "Editor opened (new file)";
-    }
-    if cmd == "gpu" {
-        if gpu_initialized == 1 {
-            print("GPU: " + to_string(gpu_display_w) + "x" + to_string(gpu_display_h) +
-                  " fb=0x" + format_hex(gpu_fb_base(), 8) + " [active]");
-            print(vesa_dirty_info());
-        } else {
-            print("GPU: not initialized");
-        }
-        return "";
-    }
-    if cmd == "gpu flip" {
-        vesa_flip();
-        return "GPU: full-screen flip submitted";
-    }
-    if cmd == "gpu dirty" {
-        return vesa_dirty_info();
     }
     if cmd == "ext4" {
         if ext4_ready == 1 {
@@ -1573,15 +1454,6 @@ fn shell_handle_ext(cmd) {
         }
         sys_inotify_close(inst);
         return "";
-    }
-    if cmd == "fm" || cmd == "fileman" {
-        // Open graphical file manager window
-        uifiles_init();
-        let win_id = uifiles_open();
-        if win_id < 0 {
-            return "Failed to open file manager";
-        }
-        return "File manager opened (window " + to_string(win_id) + ")";
     }
 
     // === SQLite commands ===
@@ -1686,28 +1558,6 @@ fn shell_handle_ext(cmd) {
         let ta = str_sub(args, 0, sp);
         let tb = str_sub(args, sp + 1, len(args));
         return diff_strings(ta, tb);
-    }
-
-    // === Clock commands ===
-    if cmd == "clock" {
-        uiclock_open();
-        return "Clock opened";
-    }
-    if cmd == "clock close" {
-        uiclock_close();
-        return "Clock closed";
-    }
-    if cmd == "clock time" {
-        return uiclock_get_time_str();
-    }
-    if str_starts_with(cmd, "clock alarm ") {
-        let args = str_sub(cmd, 12, len(cmd));
-        let sp = str_find(args, " ");
-        if sp < 0 { return "Usage: clock alarm <HH> <MM>"; }
-        let h = parse_int(str_sub(args, 0, sp));
-        let m = parse_int(str_sub(args, sp + 1, len(args)));
-        uiclock_set_alarm(h, m);
-        return "Alarm set for " + to_string(h) + ":" + to_string(m);
     }
 
     // === Base64 commands ===
@@ -1856,12 +1706,6 @@ fn shell_handle_ext(cmd) {
             count = parse_int(str_sub(args, sp + 1, len(args)));
         }
         return ping_host(host, count);
-    }
-
-    // === Task manager commands ===
-    if cmd == "taskman" {
-        uitaskman_open();
-        return "Task Manager opened";
     }
 
     // === Traceroute commands ===
