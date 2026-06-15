@@ -121,7 +121,7 @@ fn _x509_read_int_hex(data, pos) {
         let mut b = data[pos + i];
         let mut hi = b / 16;
         let mut lo = b - hi * 16;
-        result = result + substr(hex_chars, hi, 1) + substr(hex_chars, lo, 1);
+        result = result + str_sub(hex_chars, hi, hi + 1) + str_sub(hex_chars, lo, lo + 1);
         i = i + 1;
     }
     return result;
@@ -150,7 +150,7 @@ fn _x509_read_string(data, pos) {
     let mut result = "";
     let mut i = 0;
     while i < str_len {
-        result = result + to_char(data[pos + i]);
+        result = result + str_from_code(data[pos + i]);
         i = i + 1;
     }
     return result;
@@ -178,7 +178,8 @@ fn _x509_parse_oid(data, pos) {
         while b >= 128 {
             value = value * 128 + (b - 128);
             i = i + 1;
-            b = data[pos + i];
+            if i >= oid_len { b = 0; }
+            if i < oid_len { b = data[pos + i]; }
         }
         value = value * 128 + b;
         oid_str = oid_str + "." + to_string(value);
@@ -363,7 +364,7 @@ fn x509_parse_pem(pem_str) {
     let mut i = 0;
     // Find start marker
     while i < slen - 27 {
-        if substr(pem_str, i, 27) == start_marker { start = i + 27; i = slen; }
+        if str_sub(pem_str, i, i + 27) == start_marker { start = i + 27; i = slen; }
         i = i + 1;
     }
     if start == 0 { return 1; }
@@ -382,7 +383,7 @@ fn x509_parse_pem(pem_str) {
         let mut c = pem_str[i];
         if c != 10 { if c != 13 { if c != 32 {
             if c == 45 {   // '-'
-                if substr(pem_str, i, 25) == end_marker { i = slen - 1; }
+                if str_sub(pem_str, i, i + 25) == end_marker { i = slen - 1; }
             }
             if i != slen - 1 { b64_data = b64_data + to_char(c); }
         }}}

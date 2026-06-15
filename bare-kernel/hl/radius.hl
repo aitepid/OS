@@ -46,7 +46,7 @@ fn radius_clear() {
     radius_len = 0;
     let mut i = 0;
     while i < 1024 {
-        mem_write_byte(RADIUS_BUF + i, 0);
+        mem_write_u8(RADIUS_BUF + i, 0);
         i = i + 1;
     }
     return 0;
@@ -56,7 +56,7 @@ fn _radius_put(byte) {
     if radius_len >= RADIUS_BUF_SZ {
         return 0;
     }
-    mem_write_byte(RADIUS_BUF + radius_len, byte);
+    mem_write_u8(RADIUS_BUF + radius_len, byte);
     radius_len = radius_len + 1;
     return 0;
 }
@@ -102,10 +102,10 @@ fn _radius_add_string_attr(type, value) {
 
 fn _radius_add_int_attr(type, value) {
     let mut data = "";
-    data = data + chr((value / 16777216) % 256);
-    data = data + chr((value / 65536) % 256);
-    data = data + chr((value / 256) % 256);
-    data = data + chr(value % 256);
+    data = data + str_from_code((value / 16777216) % 256);
+    data = data + str_from_code((value / 65536) % 256);
+    data = data + str_from_code((value / 256) % 256);
+    data = data + str_from_code(value % 256);
     _radius_add_attribute(type, data);
     return 0;
 }
@@ -113,7 +113,7 @@ fn _radius_add_int_attr(type, value) {
 fn _radius_encrypt_password(password, authenticator) {
     let mut padded = password;
     while len(padded) % 16 != 0 {
-        padded = padded + chr(0);
+        padded = padded + str_from_code(0);
     }
 
     let mut result = "";
@@ -142,11 +142,11 @@ fn _radius_encrypt_password(password, authenticator) {
             }
 
             if i % 2 == 0 {
-                hash_bytes = hash_bytes + chr(digit * 16);
+                hash_bytes = hash_bytes + str_from_code(digit * 16);
             } else {
                 let mut last_pos = len(hash_bytes) - 1;
                 let mut last_byte = str_char_code(hash_bytes, last_pos);
-                hash_bytes = str_sub(hash_bytes, 0, last_pos) + chr(last_byte + digit);
+                hash_bytes = str_sub(hash_bytes, 0, last_pos) + str_from_code(last_byte + digit);
             }
 
             i = i + 1;
@@ -156,7 +156,7 @@ fn _radius_encrypt_password(password, authenticator) {
         while j < 16 {
             let mut pwd_byte = str_char_code(padded, block * 16 + j);
             let mut hash_byte = str_char_code(hash_bytes, j);
-            result = result + chr((pwd_byte + hash_byte) % 256);
+            result = result + str_from_code((pwd_byte + hash_byte) % 256);
             j = j + 1;
         }
 
@@ -180,10 +180,10 @@ fn radius_create_access_request(username, password) {
 
     _radius_add_string_attr(RADIUS_ATTR_USER_NAME, username);
 
-    let mut authenticator = str_sub("", 0, 16);
+    let mut authenticator = "";
     let mut i = 0;
     while i < 16 {
-        authenticator = authenticator + chr(mem_read_byte(RADIUS_BUF + auth_pos + i));
+        authenticator = authenticator + str_from_code(mem_read_u8(RADIUS_BUF + auth_pos + i));
         i = i + 1;
     }
 
@@ -194,8 +194,8 @@ fn radius_create_access_request(username, password) {
     _radius_add_int_attr(RADIUS_ATTR_SERVICE_TYPE, 1);
 
     let mut total_len = radius_len;
-    mem_write_byte(RADIUS_BUF + length_pos, total_len / 256);
-    mem_write_byte(RADIUS_BUF + length_pos + 1, total_len % 256);
+    mem_write_u8(RADIUS_BUF + length_pos, total_len / 256);
+    mem_write_u8(RADIUS_BUF + length_pos + 1, total_len % 256);
 
     radius_identifier = (radius_identifier + 1) % 256;
 
@@ -243,8 +243,8 @@ fn radius_get_packet() {
     let mut result = "";
     let mut i = 0;
     while i < radius_len {
-        let mut c = mem_read_byte(RADIUS_BUF + i);
-        result = result + chr(c);
+        let mut c = mem_read_u8(RADIUS_BUF + i);
+        result = result + str_from_code(c);
         i = i + 1;
     }
     return result;
@@ -263,14 +263,14 @@ fn radius_test() {
         return 0 - 1;
     }
 
-    if mem_read_byte(RADIUS_BUF) == RADIUS_CODE_ACCESS_REQUEST {
+    if mem_read_u8(RADIUS_BUF) == RADIUS_CODE_ACCESS_REQUEST {
         print("  [ok] RADIUS packet code: Access-Request (1)");
     } else {
         print("  [fail] RADIUS packet code incorrect");
         return 0 - 1;
     }
 
-    let mut packet_len = mem_read_byte(RADIUS_BUF + 2) * 256 + mem_read_byte(RADIUS_BUF + 3);
+    let mut packet_len = mem_read_u8(RADIUS_BUF + 2) * 256 + mem_read_u8(RADIUS_BUF + 3);
     if packet_len == req_len {
         print("  [ok] RADIUS packet length: " + to_string(packet_len));
     } else {

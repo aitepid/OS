@@ -36,6 +36,7 @@ let mut fat_table_start = 0;    // sector of first FAT
 fn fat16_init(boot_sector) {
     if len(boot_sector) < 64 { return 0; }
     fat_bytes_per_sector = boot_sector[11] + boot_sector[12] * 256;
+    if fat_bytes_per_sector == 0 { return 0; }
     fat_sectors_per_cluster = boot_sector[13];
     fat_reserved_sectors = boot_sector[14] + boot_sector[15] * 256;
     fat_num_fats = boot_sector[16];
@@ -146,7 +147,7 @@ fn fat16_list_root() {
                     let mut ni = 0;
                     while ni < 8 {
                         let mut c = mem_read_u8(buf + off + ni);
-                        if c != 32 { name = name + chr(c); }
+                        if c != 32 { name = name + str_from_code(c); }
                         ni = ni + 1;
                     }
                     let mut ext_first = mem_read_u8(buf + off + 8);
@@ -155,7 +156,7 @@ fn fat16_list_root() {
                         ni = 8;
                         while ni < 11 {
                             let mut c = mem_read_u8(buf + off + ni);
-                            if c != 32 { name = name + chr(c); }
+                            if c != 32 { name = name + str_from_code(c); }
                             ni = ni + 1;
                         }
                     }
@@ -232,7 +233,7 @@ fn fat16_create_file(name, is_dir) {
                 ni = 0;
                 while ni < 8 {
                     if ni < base_end {
-                        let mut c = ord(char_at(name, ni));
+                        let mut c = str_char_code(name, ni);
                         // Convert to uppercase
                         if c >= 97 && c <= 122 { c = c - 32; }
                         mem_write_u8(buf + off + ni, c);
@@ -245,7 +246,7 @@ fn fat16_create_file(name, is_dir) {
                 ni = 0;
                 while ni < 3 {
                     if ext_start >= 0 && ext_start + 1 + ni < len(name) {
-                        let mut c = ord(char_at(name, ext_start + 1 + ni));
+                        let mut c = str_char_code(name, ext_start + 1 + ni);
                         if c >= 97 && c <= 122 { c = c - 32; }
                         mem_write_u8(buf + off + 8 + ni, c);
                     } else {
@@ -332,6 +333,7 @@ fn fat16_update_size(entry_index, new_size) {
 
 // Delete a file from root directory
 fn fat16_delete_file(entry_index) {
+    if fat_bytes_per_sector == 0 { return 0 - 1; }
     let mut sec = entry_index / (fat_bytes_per_sector / 32);
     let mut off = (entry_index % (fat_bytes_per_sector / 32)) * 32;
     let mut buf = bcache_read(0, fat_root_start + sec);

@@ -33,33 +33,27 @@ fn blake2_hash_data(data, dlen) {
     // Initialize state with IVs
     _blake2_init_state(BLAKE2_DIGEST_SIZE);
 
-    // Process full blocks
+    // Process full blocks (leave last block for finalization)
     let mut pos = 0;
-    while pos + BLAKE2_BLOCK_SIZE <= dlen {
+    while pos + BLAKE2_BLOCK_SIZE < dlen {
         set_at(blake2_counter, 0, blake2_counter[0] + BLAKE2_BLOCK_SIZE);
         _blake2_compress(data, pos, 0);
         pos = pos + BLAKE2_BLOCK_SIZE;
     }
 
-    // Process final (partial) block
-    if pos < dlen {
-        let mut i = 0;
-
-        // Copy remaining bytes into final block buffer
-        while pos + i < dlen {
-            set_at(blake2_final_block, i, data[pos + i]);
-            i = i + 1;
-        }
-
-        // Pad remainder with zeros
-        while i < BLAKE2_BLOCK_SIZE {
-            set_at(blake2_final_block, i, 0);
-            i = i + 1;
-        }
-
-        set_at(blake2_counter, 0, blake2_counter[0] + (dlen - pos));
-        _blake2_compress(blake2_final_block, 0, 1);
+    // Process final block unconditionally (handles partial and block-aligned input)
+    let mut remaining = dlen - pos;
+    let mut i = 0;
+    while i < remaining {
+        set_at(blake2_final_block, i, data[pos + i]);
+        i = i + 1;
     }
+    while i < BLAKE2_BLOCK_SIZE {
+        set_at(blake2_final_block, i, 0);
+        i = i + 1;
+    }
+    set_at(blake2_counter, 0, blake2_counter[0] + remaining);
+    _blake2_compress(blake2_final_block, 0, 1);
 
     // Extract hash bytes from state
     _blake2_finalize();
