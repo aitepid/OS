@@ -2183,7 +2183,9 @@ emit_hlt
 buf_emit 0x48; buf_emit 0x83; buf_emit 0x3C; buf_emit 0x25
 buf_emit32 0x300020; buf_emit 0
 $je_no_heartbeat_main = buf_len
-buf_emit 0x74; buf_emit 0  # je skip_heartbeat (patched)
+# Heartbeat indicator disabled: unconditionally skip the A/B char print
+# (kept timer flag logic intact, only the noisy serial output is suppressed)
+buf_emit 0xEB; buf_emit 0  # jmp skip_heartbeat (patched)
 # Clear heartbeat flag
 buf_emit 0x48; buf_emit 0xC7; buf_emit 0x04; buf_emit 0x25; buf_emit32 0x300020; buf_emit32 0
 # Print alternating task indicator based on [0x300030]: task0='A' task1='B'
@@ -2197,6 +2199,33 @@ emit_mov_edx_imm32 $COM1; emit_out_dx_al
 # skip_heartbeat:
 $skip_hb_off = buf_len
 buf_set ($je_no_heartbeat_main + 1) ([byte](($skip_hb_off - $je_no_heartbeat_main - 2) -band 0xFF))
+
+# === Serial RX poll: allow serial console input (COM1 RX ready check) ===
+# Poll LSR bit0 (RX data ready); if no data, skip
+emit_mov_edx_imm32 ($COM1 + 5)  # mov edx, COM1+5 (LSR)
+emit_in_al_dx                    # in al, dx
+emit_test_al_imm8 1              # test al, 0x01 (RX ready)
+$je_serial_no_rx = buf_len
+buf_emit 0x74; buf_emit 0        # je serial_no_rx (patched)
+# Read byte from COM1
+emit_mov_edx_imm32 $COM1
+emit_in_al_dx                    # al = serial char
+# movzx rax, al
+buf_emit 0x48; buf_emit 0x0F; buf_emit 0xB6; buf_emit 0xC0
+# Skip NUL
+buf_emit 0x84; buf_emit 0xC0     # test al, al
+$je_serial_no_rx2 = buf_len
+buf_emit 0x74; buf_emit 0        # je serial_no_rx (patched)
+# mov rbx, rax (ASCII char in RBX, same state as keyboard-after-lookup)
+buf_emit 0x48; buf_emit 0x89; buf_emit 0xC3
+# jmp key_ascii_common (near jump, patched below)
+buf_emit 0xE9
+$jmp_key_ascii = buf_len
+buf_emit32 0
+# serial_no_rx:
+$serial_no_rx_off = buf_len
+buf_set ($je_serial_no_rx + 1) ([byte](($serial_no_rx_off - $je_serial_no_rx - 2) -band 0xFF))
+buf_set ($je_serial_no_rx2 + 1) ([byte](($serial_no_rx_off - $je_serial_no_rx2 - 2) -band 0xFF))
 
 # cmp qword [0x300010], 0 (key_ready)
 buf_emit 0x48; buf_emit 0x83; buf_emit 0x3C; buf_emit 0x25
@@ -2233,11 +2262,30 @@ buf_emit ([byte]($jz_rel -band 0xFF))
 
 # Save ASCII char in RBX
 buf_emit 0x48; buf_emit 0x89; buf_emit 0xC3  # mov rbx, rax
+# key_ascii_common: serial RX path jumps here (RBX already = ASCII char)
+$key_ascii_common = buf_len
+# Patch serial RX near jump to key_ascii_common
+$rel_key_ascii = $key_ascii_common - ($jmp_key_ascii + 4)
+$bytes_ka = [System.BitConverter]::GetBytes([int32]$rel_key_ascii)
+for ($p = 0; $p -lt 4; $p++) { buf_set ($jmp_key_ascii + $p) $bytes_ka[$p] }
 
 # === Check Backspace (ASCII 8 or 127) ===
 buf_emit 0x80; buf_emit 0xFB; buf_emit 8  # cmp bl, 8
+$je_bs_8 = buf_len
+buf_emit 0x0F; buf_emit 0x84; buf_emit32 0  # je backspace (near, patched)
+buf_emit 0x80; buf_emit 0xFB; buf_emit 0x7F  # cmp bl, 0x7F (DEL)
+$je_bs_7f = buf_len
+buf_emit 0x0F; buf_emit 0x84; buf_emit32 0  # je backspace (near, patched)
 $jne_not_bs = buf_len
 buf_emit 0x0F; buf_emit 0x85; buf_emit32 0  # jne not_bs (near, patched)
+# backspace: patch both je targets to fall through here
+$bs_target = buf_len
+$rel_bs8 = $bs_target - ($je_bs_8 + 6)
+$bytes_bs8 = [System.BitConverter]::GetBytes([int32]$rel_bs8)
+for ($p = 0; $p -lt 4; $p++) { buf_set ($je_bs_8 + 2 + $p) $bytes_bs8[$p] }
+$rel_bs7f = $bs_target - ($je_bs_7f + 6)
+$bytes_bs7f = [System.BitConverter]::GetBytes([int32]$rel_bs7f)
+for ($p = 0; $p -lt 4; $p++) { buf_set ($je_bs_7f + 2 + $p) $bytes_bs7f[$p] }
 # Load index
 buf_emit 0x48; buf_emit 0x8B; buf_emit 0x0C; buf_emit 0x25; buf_emit32 0x300880  # mov rcx, [0x300880]
 # If index == 0, nothing to delete -> jmp loop_start
@@ -2252,10 +2300,11 @@ foreach ($bsc in @(8, 32, 8)) {
     buf_emit 0x74; buf_emit 0xF6
     emit_mov_edx_imm32 $COM1; emit_mov_al_imm8 $bsc; emit_out_dx_al
 }
-# Erase character on VGA: call vga_putchar with BL=8 (backspace)
+# Erase character on VGA: call vga_putchar with BL=8 (backspace) — disabled
+# Pure serial shell: VGA echo hangs. Serial BS+SP+BS erase above is sufficient.
 buf_emit 0xB3; buf_emit 8  # mov bl, 8
-buf_emit 0x48; buf_emit 0xB8; buf_emit32 $vga_putchar_off; buf_emit32 0  # mov rax, vga_putchar
-buf_emit 0xFF; buf_emit 0xD0  # call rax
+for ($vn = 0; $vn -lt 6; $vn++) { buf_emit 0x90 }  # 6x NOP replaces mov rax,imm64
+buf_emit 0x90; buf_emit 0x90  # 2x NOP replaces call rax
 # jmp loop_start
 buf_emit 0xE9; buf_emit32_signed ($loop_start - (buf_len) - 4)
 # not_bs: patch jne
@@ -2311,9 +2360,9 @@ buf_emit 0x74; buf_emit 0xF6
 buf_emit 0x48; buf_emit 0x89; buf_emit 0xD8  # mov rax, rbx
 emit_mov_edx_imm32 $COM1
 emit_out_dx_al
-# Echo character via VGA
-buf_emit 0x48; buf_emit 0xB8; buf_emit32 $vga_putchar_off; buf_emit32 0  # mov rax, vga_putchar
-buf_emit 0xFF; buf_emit 0xD0  # call rax
+# Echo character via VGA: disabled (pure serial shell, vga_putchar hangs)
+for ($vn = 0; $vn -lt 6; $vn++) { buf_emit 0x90 }  # 6x NOP replaces 12-byte mov rax,imm64
+buf_emit 0x90; buf_emit 0x90  # 2x NOP replaces call rax
 # jmp loop_start
 buf_emit 0xE9; buf_emit32_signed ($loop_start - (buf_len) - 4)
 
@@ -2328,10 +2377,10 @@ for ($p = 0; $p -lt 4; $p++) { buf_set ($jmp_to_dispatch + $p) $bytes_d[$p] }
 
 # Print CR+LF (serial + VGA)
 emit_serial_string "`r`n" $COM1
-# VGA newline: call vga_putchar with BL=10
+# VGA newline: call vga_putchar with BL=10 (disabled, pure serial shell)
 buf_emit 0xB3; buf_emit 10  # mov bl, 10 (LF)
-buf_emit 0x48; buf_emit 0xB8; buf_emit32 $vga_putchar_off; buf_emit32 0
-buf_emit 0xFF; buf_emit 0xD0  # call rax
+for ($vn = 0; $vn -lt 6; $vn++) { buf_emit 0x90 }  # 6x NOP replaces mov rax,imm64
+buf_emit 0x90; buf_emit 0x90  # 2x NOP replaces call rax
 # Null-terminate buffer: mov rcx,[0x300880]; mov rdi,0x300800; add rdi,rcx; mov byte [rdi],0
 buf_emit 0x48; buf_emit 0x8B; buf_emit 0x0C; buf_emit 0x25; buf_emit32 0x300880
 buf_emit 0x48; buf_emit 0xBF; buf_emit32 0x300800; buf_emit32 0
