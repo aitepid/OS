@@ -102,7 +102,7 @@ $requiredScripts = @(
     'scripts/qemu-boot-test.ps1',
     'scripts/full-gate.ps1',
     'scripts/validate-workspace.ps1',
-    'scripts/hl-bootstrap-build-test.ps1'
+    'scripts/hl_pipeline.py'
 )
 foreach ($s in $requiredScripts) {
     if (Test-Path $s) {

@@ -116,7 +116,7 @@ Kernel (sectors 2+)            ; native x86_64
 
 ## Known Limits
 
-- The shipped `hicos-hl.img` contains a **handwritten machine-code kernel** emitted by `rebuild-image.ps1`. The H-L compiler pipeline (`scripts/hl-compile-pipeline.ps1`) can build `kernel.bin` from `bare-kernel/hl/*.hl`, but its output is not yet linked into the boot image — closing this gap is the current focus.
+- The shipped `hicos-hl.img` combines a handwritten machine-code kernel emitted by `rebuild-image.ps1` with a **H-L kernel** compiled by the Python pipeline (`scripts/hl_pipeline.py`) from `bare-kernel/hl/*.hl`. `kernel.bin` is linked at `0x120000` and entered via `CALL _start` from the handwritten kernel; verified interactive in QEMU.
 - Boot is BIOS-based; `BOOTX64.EFI` exists but the UEFI path is not fully validated.
 - Network commands are present in the shell but depend on device setup in QEMU.
 

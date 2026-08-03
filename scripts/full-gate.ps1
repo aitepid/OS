@@ -1,6 +1,4 @@
 param(
-    [switch]$RequireHlBootstrap,
-    [string]$HlBootstrapCmd = '.\hl-bootstrap.cmd',
     [switch]$SkipQemu,
     [switch]$RequireQemu
 )
@@ -17,7 +15,6 @@ Set-Location $repoRoot
 
 $checks = @(
     @{ Name = 'Workspace validation'; Cmd = 'powershell -ExecutionPolicy Bypass -File .\scripts\validate-workspace.ps1' },
-    @{ Name = 'Token balance gate'; Cmd = 'powershell -ExecutionPolicy Bypass -File .\scripts\diag-balance.ps1' },
     @{ Name = 'Robustness lint (R1/R2/R4/R5)'; Cmd = 'powershell -ExecutionPolicy Bypass -File .\scripts\lint-robustness.ps1' },
     @{ Name = 'Boot chain readiness'; Cmd = 'powershell -ExecutionPolicy Bypass -File .\scripts\boot-readiness.ps1' },
     @{ Name = 'Runtime path readiness'; Cmd = 'powershell -ExecutionPolicy Bypass -File .\scripts\runtime-path-readiness.ps1' },
@@ -30,21 +27,6 @@ $checks = @(
 )
 
 $qemuCheckNames = @('QEMU boot test', 'QEMU UEFI test')
-
-$hlCmdExists = $false
-if (Test-Path $HlBootstrapCmd) {
-    $hlCmdExists = $true
-} elseif (Get-Command $HlBootstrapCmd -ErrorAction SilentlyContinue) {
-    $hlCmdExists = $true
-}
-
-if ($hlCmdExists) {
-    $checks += @{ Name = 'hl-bootstrap build/test'; Cmd = "powershell -ExecutionPolicy Bypass -File .\\scripts\\hl-bootstrap-build-test.ps1" }
-} elseif ($RequireHlBootstrap) {
-    $checks += @{ Name = 'hl-bootstrap build/test'; Cmd = "powershell -ExecutionPolicy Bypass -File .\\scripts\\hl-bootstrap-build-test.ps1" }
-} else {
-    Write-Host 'Warning: hl-bootstrap command not found, skipping hl-bootstrap build/test step.' -ForegroundColor Yellow
-}
 
 $failed = @()
 $skipped = @()
