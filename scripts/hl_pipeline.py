@@ -1132,13 +1132,18 @@ class IRBuilder:
             el = self.lbl()
             end = self.lbl()
             self.emit(IR_JZ, c, el, 0)
+            # Each branch has its own block scope.  Restore the outer mapping
+            # before lowering else so declarations in then cannot leak across.
+            old_vars = self.vars.copy()
             for s in node[2]:
                 self.lower_stmt(s)
+            self.vars = old_vars.copy()
             self.emit(IR_JMP, end, 0, 0)
             self.emit(IR_LABEL, el, 0, 0)
             if node[3] is not None:
                 for s in node[3]:
                     self.lower_stmt(s)
+            self.vars = old_vars
             self.emit(IR_LABEL, end, 0, 0)
             return
         if nt == 'While':
@@ -1147,8 +1152,10 @@ class IRBuilder:
             self.emit(IR_LABEL, lp, 0, 0)
             c = self.lower_expr(node[1])
             self.emit(IR_JZ, c, end, 0)
+            old_vars = self.vars.copy()
             for s in node[2]:
                 self.lower_stmt(s)
+            self.vars = old_vars
             self.emit(IR_JMP, lp, 0, 0)
             self.emit(IR_LABEL, end, 0, 0)
             return
@@ -1167,8 +1174,10 @@ class IRBuilder:
                 self.lower_stmt(s)
             return
         if nt == 'Block':
+            old_vars = self.vars.copy()
             for s in node[1]:
                 self.lower_stmt(s)
+            self.vars = old_vars
             return
         if nt == 'IndexAssign':
             return
@@ -1244,7 +1253,7 @@ class IRBuilder:
                 used.add(s1)
             if isinstance(s2, int):
                 used.add(s2)
-            if op in (IR_JZ, IR_JNZ, IR_RET):
+            if op in (IR_JZ, IR_JNZ, IR_RET, IR_PRINT):
                 used.add(self.dst[i])
         for i in range(len(self.op)):
             if self.dead[i]:
@@ -1326,6 +1335,22 @@ def parse_int(s):
 REG_POOL = [0, 1, 2, 3, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]  # RAX RCX RDX RBX RSI RDI R8-R15
 ABI_REGS = [7, 6, 2, 1, 8, 9]  # RDI RSI RDX RCX R8 R9
 
+# Registers clobbered by each IR instruction type.  Generated functions do NOT
+# preserve callee-saved regs (no prologue save), so a call may clobber every
+# GPR except RSP/RBP.  Any vreg live across one of these points must be spilled.
+DESTROY_REGS = {
+    IR_CALL: set(range(16)) - {4, 5},
+    IR_ARG: None,  # handled per arg index
+    IR_RET: set(),
+    IR_PRINT: {0, 1, 2, 6, 7, 8, 9, 10, 11},
+    IR_PORT_OUT: {0, 2}, IR_PORT_IN: {0, 2},
+    IR_PORT_OUT32: {0, 2}, IR_PORT_IN32: {0, 2},
+    IR_MEM_STORE8: {0, 7}, IR_MEM_LOAD64: {0, 7}, IR_MEM_STORE64: {0, 7},
+    IR_LIDT: {7},
+    IR_MEM_STORE32: {0, 7}, IR_MEM_LOAD32: {0, 7}, IR_MEM_LOAD8: {0, 7},
+    IR_DIV: {0, 1, 2}, IR_MOD: {0, 1, 2},
+}
+
 
 class Codegen:
     def __init__(self, kern_syms, module_name):
@@ -1335,22 +1360,117 @@ class Codegen:
         self.ra_spill_map = {}
         self.ra_spill_top = 0
         self.ra_free = list(REG_POOL)
+        self.ra_saved = {}
+        self.last_use = {}
         self.buf = bytearray()
         self.mod_symbols = []
         self.mod_relocs = []
         self.mod_strings = []
 
+    def src_vregs(self, op, dst, s1, s2):
+        if op in (IR_CONST, IR_STR_CONST, IR_LABEL, IR_JMP):
+            return []
+        if op == IR_CALL:
+            return [s2] if isinstance(s2, int) else []
+        if op in (IR_JZ, IR_JNZ):
+            return [dst] if isinstance(dst, int) else []
+        if op in (IR_SHL, IR_SHR):
+            return [s1] if isinstance(s1, int) else []
+        out = []
+        if isinstance(s1, int):
+            out.append(s1)
+        if isinstance(s2, int):
+            out.append(s2)
+        return out
+
     def ra_alloc(self, vreg):
+        if os.environ.get('HL_TRACE_RA'):
+            print('  ra_alloc(%s) free=%s' % (vreg, [hex(x) for x in self.ra_free]))
         if vreg in self.ra_map:
-            return self.ra_map[vreg]
-        if self.ra_free:
-            r = self.ra_free.pop()
+            r = self.ra_map[vreg]
+            if r >= 0 and vreg in self.ra_saved:
+                off = self.ra_saved.pop(vreg)
+                self.x86_mov_reg_mem(r, off)
+                return r
+            if r >= 0:
+                return r
+            r = self.ra_take_reg()
+            self.x86_mov_reg_mem(r, self.ra_spill_map[vreg])
             self.ra_map[vreg] = r
+            self.ra_saved.pop(vreg, None)
             return r
-        self.ra_map[vreg] = -1
-        self.ra_spill_top += 8
-        self.ra_spill_map[vreg] = self.ra_spill_top
-        return -1
+        r = self.ra_take_reg()
+        if os.environ.get('HL_TRACE_RA'):
+            print('    -> alloc r%d' % r)
+        self.ra_map[vreg] = r
+        return r
+
+    def ra_take_reg(self):
+        if self.ra_free:
+            return self.ra_free.pop()
+        for old_vreg, r in self.ra_map.items():
+            if r >= 0:
+                self.spill_vreg(old_vreg, r)
+                self.ra_map[old_vreg] = -1
+                return r
+        raise RuntimeError('register allocator has no evictable register')
+
+    def x86_mov_reg_mem(self, r, off):
+        # mov r64, [rsp + disp32]
+        # r sits in the modrm reg field (REX.R), the SIB base stays RSP (REX.B=0).
+        rex = 0x48
+        if r >= 8:
+            rex |= 4
+        self.x86_byte(rex)
+        self.x86_byte(0x8B)
+        self.x86_byte(0x84 + ((r & 7) << 3))
+        self.x86_byte(0x24)
+        self.x86_imm32(off)
+
+    def x86_mov_mem_reg(self, r, off):
+        # mov [rsp + disp32], r64
+        # r sits in the modrm reg field (REX.R), the SIB base stays RSP (REX.B=0).
+        rex = 0x48
+        if r >= 8:
+            rex |= 4
+        self.x86_byte(rex)
+        self.x86_byte(0x89)
+        self.x86_byte(0x84 + ((r & 7) << 3))
+        self.x86_byte(0x24)
+        self.x86_imm32(off)
+
+    def spill_vreg(self, vreg, r):
+        # Save vreg's register value to its stack slot and mark it for reload
+        # on next use.  The register mapping is retained so it stays reserved.
+        off = self.ra_spill_map.get(vreg)
+        if off is None:
+            self.ra_spill_top += 8
+            off = self.ra_spill_top
+            self.ra_spill_map[vreg] = off
+        self.x86_mov_mem_reg(r, off)
+        self.ra_saved[vreg] = off
+
+    def pre_destroy(self, i, op, dst, arg_idx=None):
+        # Clobber registers before an instruction that destroys them.  Any
+        # live vreg resident in a destroyed register is spilled to the stack.
+        if op == IR_ARG:
+            if not (0 <= arg_idx < 6):
+                return
+            regs = {ABI_REGS[arg_idx]}
+            exclude = set()
+        elif op in DESTROY_REGS:
+            regs = DESTROY_REGS[op]
+            if not regs:
+                return
+            exclude = {dst}
+        else:
+            return
+        for vreg, r in list(self.ra_map.items()):
+            if r in regs and r >= 0:
+                if vreg in exclude:
+                    continue
+                if self.last_use.get(vreg, -1) > i:
+                    self.spill_vreg(vreg, r)
 
     # --- byte emitters ---
     def x86_byte(self, b):
@@ -1427,6 +1547,16 @@ class Codegen:
         self.x86_byte(0x0F)
         self.x86_byte(0xB6)
         self.x86_byte(0xC0)
+
+    def x86_test_rr(self, r):
+        # test r64, r64 sets flags from the lowered boolean value.  Branches
+        # must not reuse flags left by the comparison that produced it.
+        rex = 0x48
+        if r >= 8:
+            rex |= 5
+        self.x86_byte(rex)
+        self.x86_byte(0x85)
+        self.x86_byte(0xC0 + ((r & 7) << 3) + (r & 7))
 
     def x86_neg_r(self, r):
         rex = 0x48
@@ -1513,7 +1643,8 @@ class Codegen:
         dst = ir.dst[idx]
         s1 = ir.src1[idx]
         s2 = ir.src2[idx]
-        rd = self.ra_alloc(dst)
+        self.pre_destroy(idx, op, dst, arg_idx=dst)
+        rd = -1 if op in (IR_LABEL, IR_ARG, IR_JMP, IR_JZ, IR_JNZ) else self.ra_alloc(dst)
         if op == IR_CONST:
             if rd >= 0:
                 self.x86_mov_reg_imm(rd, s1)
@@ -1585,9 +1716,21 @@ class Codegen:
             self.x86_byte(0xE9)
             self.x86_imm32(0)
         elif op == IR_JZ:
+            cond_reg = self.ra_alloc(dst)
+            if cond_reg >= 0:
+                self.x86_test_rr(cond_reg)
             self.x86_byte(0x0F)
             self.x86_byte(0x84)
             self.x86_imm32(0)
+            return len(self.buf) - 4
+        elif op == IR_JNZ:
+            cond_reg = self.ra_alloc(dst)
+            if cond_reg >= 0:
+                self.x86_test_rr(cond_reg)
+            self.x86_byte(0x0F)
+            self.x86_byte(0x85)
+            self.x86_imm32(0)
+            return len(self.buf) - 4
         elif op == IR_RET:
             r1 = self.ra_alloc(dst)
             if r1 is not None and r1 >= 0 and r1 != 0:
@@ -1595,8 +1738,12 @@ class Codegen:
             self.x86_epilogue()
             self.x86_ret()
         elif op == IR_CALL:
+            site = len(self.buf) + 1
             self.x86_byte(0xE8)
             self.x86_imm32(0)
+            if rd >= 0 and rd != 0:
+                self.x86_mov_rr(rd, 0)
+            return site
         elif op == IR_ARG:
             arg_idx = dst
             val_reg = self.ra_alloc(s1)
@@ -1611,7 +1758,7 @@ class Codegen:
                 if rd != src_reg:
                     self.x86_mov_rr(rd, src_reg)
         elif op == IR_PRINT:
-            src_reg = self.ra_alloc(s1)
+            src_reg = self.ra_alloc(dst)
             if src_reg >= 0 and 'serial_puts' in self.kern_syms:
                 if src_reg != 6:
                     self.x86_mov_rr(6, src_reg)
@@ -1734,6 +1881,24 @@ class Codegen:
                 self.x86_byte(0x07)
                 if rd >= 0 and rd != 0:
                     self.x86_mov_rr(rd, 0)
+        elif op in (IR_DIV, IR_MOD):
+            r1 = self.ra_alloc(s1)
+            r2 = self.ra_alloc(s2)
+            if rd >= 0 and r1 >= 0 and r2 >= 0:
+                # mov rcx, r2 ; mov rax, r1 ; xor rdx, rdx ; div rcx
+                if r2 != 1:
+                    self.x86_mov_rr(1, r2)
+                if r1 != 0:
+                    self.x86_mov_rr(0, r1)
+                self.x86_byte(0x48)
+                self.x86_byte(0x31)
+                self.x86_byte(0xD2)
+                self.x86_byte(0x48)
+                self.x86_byte(0xF7)
+                self.x86_byte(0xF1)
+                src_r = 2 if op == IR_MOD else 0
+                if rd != src_r:
+                    self.x86_mov_rr(rd, src_r)
         elif op == IR_NOP:
             self.x86_byte(0x90)
 
@@ -1742,6 +1907,7 @@ class Codegen:
         self.ra_spill_map = {}
         self.ra_spill_top = 0
         self.ra_free = list(REG_POOL)
+        self.ra_saved = {}
         self.buf = bytearray()
         self.mod_symbols = []
         self.mod_relocs = []
@@ -1749,8 +1915,46 @@ class Codegen:
         self.x86_prologue()
         label_offsets = {}
         jmp_sites = []
+        last_use = {}
+        for j in range(len(ir.op)):
+            if ir.dead[j]:
+                continue
+            for s in self.src_vregs(ir.op[j], ir.dst[j], ir.src1[j], ir.src2[j]):
+                last_use[s] = j
+        # Extend last_use across loop backedges.  A vreg used inside a loop
+        # body is live again after the backedge, so it must be considered
+        # live (and spilled) at every call inside the loop, not just up to
+        # its linear last use -- otherwise a call clobbers the register and
+        # the next iteration reads the corrupted value.
+        label_idx = {}
+        for j in range(len(ir.op)):
+            if ir.dead[j]:
+                continue
+            if ir.op[j] == IR_LABEL:
+                label_idx[ir.dst[j]] = j
+        backs = []
+        for j in range(len(ir.op)):
+            if ir.dead[j]:
+                continue
+            if ir.op[j] == IR_JMP and isinstance(ir.dst[j], int):
+                tgt = label_idx.get(ir.dst[j])
+                if tgt is not None and tgt < j:
+                    backs.append((j, tgt))
+        for j, t in backs:
+            used = set()
+            for k in range(t, j + 1):
+                if ir.dead[k]:
+                    continue
+                for s in self.src_vregs(ir.op[k], ir.dst[k], ir.src1[k], ir.src2[k]):
+                    if isinstance(s, int):
+                        used.add(s)
+            for s in used:
+                if last_use.get(s, 0) <= j:
+                    last_use[s] = j
+        self.last_use = last_use
         # map label -> fn name for IR_LABEL
         fn_label_to_name = {v: k for k, v in ir.fns.items()}
+
         for i in range(len(ir.op)):
             if ir.dead[i]:
                 continue
@@ -1763,6 +1967,7 @@ class Codegen:
                     self.ra_spill_map = {}
                     self.ra_spill_top = 0
                     self.ra_free = list(REG_POOL)
+                    self.ra_saved = {}
                     self.x86_prologue()
                 else:
                     label_offsets[lbl] = len(self.buf)
@@ -1770,13 +1975,10 @@ class Codegen:
                 cnt = len(self.buf)
                 jmp_sites.append([cnt + 1, ir.dst[i]])
             elif ir.op[i] in (IR_JZ, IR_JNZ):
-                cnt = len(self.buf)
                 tgt = ir.src1[i]
                 if not isinstance(tgt, int):
                     tgt = int(tgt)
-                jmp_sites.append([cnt + 2, tgt])
             if ir.op[i] == IR_CALL:
-                call_site = len(self.buf) + 1
                 fn_label = ir.src1[i]
                 fn_name = ''
                 if isinstance(fn_label, str) and fn_label != '':
@@ -1786,9 +1988,37 @@ class Codegen:
                         if v == fn_label:
                             fn_name = k
                             break
-                if fn_name != '':
+                pre_len = len(self.buf)
+                call_site = self.emit_ir(i, ir)
+                if call_site is not None and fn_name != '':
                     self.mod_relocs.append([call_site, fn_name, 'rel32'])
-            self.emit_ir(i, ir)
+                if os.environ.get('HL_TRACE_EMIT') and ir.op[i] == 25:
+                    print('CALL emit idx=%d fn=%s callsite=%d (buf %d->%d) bytes=%s' % (
+                        i, fn_name, call_site, pre_len, len(self.buf),
+                        self.buf[pre_len:pre_len+12].hex()))
+            else:
+                branch_site = self.emit_ir(i, ir)
+                if ir.op[i] in (IR_JZ, IR_JNZ) and branch_site is not None:
+                    jmp_sites.append([branch_site, tgt])
+            if os.environ.get('HL_TRACE_RA'):
+                print('  emit idx=%d op=%d' % (i, ir.op[i]))
+            for s in self.src_vregs(ir.op[i], ir.dst[i], ir.src1[i], ir.src2[i]):
+                if last_use.get(s) == i and s in self.ra_map:
+                    r = self.ra_map.pop(s)
+                    self.ra_saved.pop(s, None)
+                    if r >= 0:
+                        self.ra_free.append(r)
+                    if os.environ.get('HL_TRACE_RA'):
+                        print('    release src %d (r%d) free=%s' % (s, r, [hex(x) for x in self.ra_free]))
+            if ir.op[i] not in (IR_LABEL, IR_ARG, IR_PARAM, IR_CALL, IR_JMP, IR_JZ, IR_JNZ, IR_RET):
+                d = ir.dst[i]
+                if isinstance(d, int) and d not in last_use and d in self.ra_map:
+                    r = self.ra_map.pop(d)
+                    self.ra_saved.pop(d, None)
+                    if r >= 0:
+                        self.ra_free.append(r)
+                    if os.environ.get('HL_TRACE_RA'):
+                        print('    release dst %d (r%d) free=%s' % (d, r, [hex(x) for x in self.ra_free]))
         # backpatch jump rel32
         for site, tgt_lbl in jmp_sites:
             if tgt_lbl in label_offsets:
@@ -1833,6 +2063,7 @@ BUILTINS = [
     'uiinst_handle_key', 'uifiles_handle_key', 'uiterm_handle_key',
     'ui_dialog_show', 'mixer_set_master_volume', 'aho_corasick_init',
     'ir_lower_stmts', 'ir_lower_reset', 'ir_optimize',
+    'f', 'int',
 ]
 
 NOOP_STUB = bytes([0x55, 0x48, 0x89, 0xE5, 0x31, 0xC0, 0x5D, 0xC3])
@@ -2018,7 +2249,8 @@ def main():
         try:
             ast = parser.p_program()
         except Exception:
-            pass
+            if os.environ.get('HL_STRICT'):
+                raise
         node_count = parser.nodes
         parse_errors = parser.errors
 
@@ -2034,8 +2266,39 @@ def main():
         try:
             ir.lower_module(ast)
         except Exception:
-            pass
+            if os.environ.get('HL_STRICT'):
+                raise
+        # Dump IR before optimization
+        if (name == 'kernel_entry.hl' or name == 'mem.hl') and os.environ.get('HL_DUMP_IR'):
+            irnames = {}
+            for k, v in list(globals().items()):
+                if k.startswith('IR_') and isinstance(v, int):
+                    irnames[v] = k
+            lbl2fn = {v: k for k, v in ir.fns.items()}
+            print('=== IR dump BEFORE opt %s ===' % name)
+            for i in range(len(ir.op)):
+                if ir.dead[i]:
+                    continue
+                tag = ''
+                if ir.op[i] == 24:
+                    tag = '  ;; fn %s' % lbl2fn.get(ir.dst[i], '?')
+                print('  %4d %-16s dst=%s s1=%s s2=%s%s' % (i, irnames.get(ir.op[i], str(ir.op[i])), ir.dst[i], ir.src1[i], ir.src2[i], tag))
         ir_opt = ir.optimize()
+        if (name == 'kernel_entry.hl' or name == 'mem.hl') and os.environ.get('HL_DUMP_IR'):
+            irnames = {}
+            for k, v in list(globals().items()):
+                if k.startswith('IR_') and isinstance(v, int):
+                    irnames[v] = k
+            lbl2fn = {v: k for k, v in ir.fns.items()}
+            print('=== IR dump AFTER opt %s ===' % name)
+            for i in range(len(ir.op)):
+                if ir.dead[i]:
+                    continue
+                tag = ''
+                if ir.op[i] == 24:
+                    tag = '  ;; fn %s' % lbl2fn.get(ir.dst[i], '?')
+                print('  %4d %-16s dst=%s s1=%s s2=%s%s' % (i, irnames.get(ir.op[i], str(ir.op[i])), ir.dst[i], ir.src1[i], ir.src2[i], tag))
+
         ir_total = len(ir.op)
         ir_live = ir.live_count()
 
@@ -2044,7 +2307,8 @@ def main():
         try:
             x86_bytes = codegen.compile_module(ir)
         except Exception:
-            pass
+            if os.environ.get('HL_STRICT'):
+                raise
         if x86_bytes > 0:
             linker.modules.append({
                 'name': name,
@@ -2096,7 +2360,8 @@ def main():
             try:
                 ir.lower_module(ast)
             except Exception:
-                pass
+                if os.environ.get('HL_STRICT'):
+                    raise
             ir_opt = ir.optimize()
             ir_total = len(ir.op)
             ir_live = ir.live_count()
@@ -2105,7 +2370,8 @@ def main():
             try:
                 x86_bytes = codegen.compile_module(ir)
             except Exception:
-                pass
+                if os.environ.get('HL_STRICT'):
+                    raise
             if x86_bytes > 0:
                 linker.modules.append({
                     'name': extra,
@@ -2140,6 +2406,11 @@ def main():
         with open(kernel_bin, 'wb') as f:
             f.write(linker.combined)
         bin_size = len(linker.combined)
+    if os.environ.get('HL_DUMP_SYMBOLS'):
+        print('=== FUNC TABLE ===')
+        for name, off in sorted(linker.global_syms.items(), key=lambda x: x[1]):
+            print('  0x%06X  %s' % (off, name))
+
 
     entry_file = os.path.join(REPO_ROOT, 'bare-kernel', 'kernel.entry')
     if '_start' in linker.global_syms:

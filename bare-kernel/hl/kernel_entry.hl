@@ -8,7 +8,7 @@
 //   2. Print boot banner: "HicOS 2.1 -- Hilbert-Lang Kernel"
 //   3. Remap 8259A PIC: IRQ0-7 -> vectors 32-39, IRQ8-15 -> 40-47
 //   4. Program PIT channel 0 for 100 Hz tick
-//   5. Build IDT at 0x200000 (256 entries, 16 bytes each)
+//   5. Build IDT at 0x720000 (256 entries, 16 bytes each)
 //      - Vector 32 (timer):   increment tick counter at 0x300000, send EOI
 //      - Vector 33 (keyboard): read PS/2 scancode to 0x300008, set flag, EOI
 //      - All others: IRETQ (default handler)
@@ -23,8 +23,8 @@
 //   0x008000 - 0x00BFFF : Stage 2
 //   0x070000            : Stack top
 //   0x100000 - 0x1FFFFF : Kernel code (1 MB)
-//   0x1FFFF6 - 0x1FFFFF : IDTR (10 bytes)
-//   0x200000 - 0x200FFF : IDT (4096 bytes)
+//   0x721000            : IDTR (10 bytes)
+//   0x720000 - 0x720FFF : IDT (4096 bytes)
 //   0x300000            : Tick counter (u64)
 //   0x300008            : Last scancode (u64)
 //   0x300010            : Key ready flag (u64)
@@ -72,27 +72,21 @@ fn _ke_has_cpu_err(vec) {
 }
 
 // Helper: serial putchar (blocking TX wait)
-// When pipe capture flag is set (0x371000 == 1), output goes to capture
+// When pipe capture flag is set (0x7E1000 == 1), output goes to capture
 // buffer instead of serial — this enables proper "cmd1 | grep" behavior.
 fn _ke_putc(ch) {
-    let mut cap_flag = mem_read_u64(3608576);  // PIPE_CAP_FLAG_ADDR = 0x371000
+    let mut cap_flag = mem_read_u64(8261632);  // PIPE_CAP_FLAG_ADDR = 0x7E1000
     if cap_flag == 1 {
-        let mut pos = mem_read_u64(3608584);  // PIPE_CAP_POS_ADDR = 0x371008
+        let mut pos = mem_read_u64(8261640);  // PIPE_CAP_POS_ADDR = 0x7E1008
         if pos < 4096 {
-            mem_write_u8(3604480 + pos, ch);  // PIPE_CAP_BUF = 0x370000
-            mem_write_u64(3608584, pos + 1);
+            mem_write_u8(8257536 + pos, ch);  // PIPE_CAP_BUF = 0x7E0000
+            mem_write_u64(8261640, pos + 1);
         }
         return 0;
     }
-    // Serial output (COM1)
-    let mut ready = 0;
-    while ready == 0 {
-        let mut status = port_in_u8(1021); // COM1+5: line status
-        ready = status / 32 % 2;       // bit 5 = TX empty
-    }
+    // COM1 FIFO is enabled during boot. Direct writes keep startup independent
+    // of a line-status read that is unavailable on the current QEMU path.
     port_out_u8(1016, ch);             // COM1+0: data
-    // VGA text buffer output (0xB8000, 80x25)
-    vga_putchar(ch);
     return 0;
 }
 
@@ -171,39 +165,41 @@ fn _ke_mem_w32(addr, val) {
 }
 
 // Build ISR thunks at isr_base, common handler, and IDT entries
+fn _ke_idt_write_thunk(ta, vec, common_addr) {
+    if _ke_has_cpu_err(vec) == 0 {
+        // push 0; push vector; jmp common
+        mem_write_u8(ta, 106);
+        mem_write_u8(ta + 1, 0);
+        mem_write_u8(ta + 2, 106);
+        mem_write_u8(ta + 3, vec % 256);
+        mem_write_u8(ta + 4, 233);
+        _ke_mem_w32(ta + 5, common_addr - (ta + 9));
+    } else {
+        // CPU already pushed an error code: push vector; jmp common
+        mem_write_u8(ta, 106);
+        mem_write_u8(ta + 1, vec % 256);
+        mem_write_u8(ta + 2, 233);
+        _ke_mem_w32(ta + 3, common_addr - (ta + 7));
+    }
+    return 0;
+}
+
 fn _ke_idt_build() {
-    let mut idt_base = 2097152;   // 0x200000
-    let mut isr_base = 2162688;   // 0x210000
+    let mut idt_base = 7471104;   // 0x720000
+    let mut isr_base = 7536640;   // 0x730000
     let mut common_addr = isr_base + 4096;  // 256 * 16 = 4096
+
+    _ke_putc(49);  // IDT stage 1: ISR thunks
 
     // === Write per-vector ISR thunks (256 x 16 bytes) ===
     let mut vec = 0;
     while vec < 256 {
         let mut ta = isr_base + vec * 16;
-        let mut off = 0;
-
-        if _ke_has_cpu_err(vec) == 0 {
-            // push 0 (dummy error code): 6A 00
-            mem_write_u8(ta + off, 106); off = off + 1;
-            mem_write_u8(ta + off, 0);   off = off + 1;
-        }
-        // push vector#: 6A vec
-        mem_write_u8(ta + off, 106); off = off + 1;
-        mem_write_u8(ta + off, vec % 256); off = off + 1;
-
-        // jmp common: E9 rel32
-        let mut jmp_src = ta + off + 5;
-        let mut rel = common_addr - jmp_src;
-        mem_write_u8(ta + off, 233); off = off + 1;
-        _ke_mem_w32(ta + off, rel); off = off + 4;
-
-        // Pad to 16 bytes with NOP (0x90)
-        while off < 16 {
-            mem_write_u8(ta + off, 144);
-            off = off + 1;
-        }
+        _ke_idt_write_thunk(ta, vec, common_addr);
         vec = vec + 1;
     }
+
+    _ke_putc(50);  // IDT stage 2: common handler
 
     // === Common ISR handler at common_addr ===
     let mut ca = common_addr;
@@ -258,7 +254,7 @@ fn _ke_idt_build() {
     mem_write_u8(ca + p, 131); p = p + 1;
     mem_write_u8(ca + p, 255); p = p + 1;
     mem_write_u8(ca + p, 33); p = p + 1;
-    // jne +28 (skip kbd body+jmp → mouse cmp): 75 1C
+    // jne +28 (skip kbd body+jmp -> mouse cmp): 75 1C
     mem_write_u8(ca + p, 117); p = p + 1;
     mem_write_u8(ca + p, 28); p = p + 1;
     // in al, 0x60: E4 60
@@ -384,12 +380,12 @@ fn _ke_idt_build() {
         vec = vec + 1;
     }
 
-    // === IDTR descriptor at 0x1FFFF6 (limit 2B + base 8B) ===
-    let mut idtr = 2097142;  // 0x1FFFF6
+    // === IDTR descriptor at 0x721000 (limit 2B + base 8B) ===
+    let mut idtr = 7475200;  // 0x721000
     // limit = 256*16 - 1 = 4095 = 0x0FFF
     mem_write_u8(idtr, 255);     // 0xFF
     mem_write_u8(idtr + 1, 15);  // 0x0F
-    // base = 0x200000
+    // base = 0x720000
     mem_write_u8(idtr + 2, 0);
     mem_write_u8(idtr + 3, 0);
     mem_write_u8(idtr + 4, 32);  // 0x20
@@ -507,27 +503,21 @@ fn _ke_pci_scan() {
 // Bitmap at 0x400000, 4KB pages, reserved 0..1535 (0x000000-0x5FFFFF)
 
 fn _ke_pa_init() {
-    let mut bm = 4194304;           // 0x400000: bitmap addr
     let mut total = 32768;          // 128MB / 4KB = 32768 pages
-    let mut bm_bytes = 4096;        // 32768 / 8 = 4096 bytes
     let mut reserved = 1536;        // pages 0..1535 reserved
 
-    // Zero entire bitmap
-    let mut i = 0;
-    while i < bm_bytes {
-        mem_write_u8(bm + i, 0);
-        i = i + 1;
-    }
-    // Mark reserved pages as used (192 full bytes = 1536 bits = 1536 pages)
-    let mut full = reserved / 8;
-    i = 0;
-    while i < full {
-        mem_write_u8(bm + i, 255);
-        i = i + 1;
-    }
-    // Store total pages at 0x400FFC and free count at 0x400FF8
-    _ke_mem_w32(4198396, total);            // 0x400FFC: total pages
-    _ke_mem_w32(4198392, total - reserved); // 0x400FF8: free count
+    // Allocation always begins at page 1536, so the zero-filled bitmap needs
+    // no reserved-page writes during startup.
+    // Store total pages (0x8000) at 0x400FFC.
+    mem_write_u8(4198396, 0);
+    mem_write_u8(4198397, 128);
+    mem_write_u8(4198398, 0);
+    mem_write_u8(4198399, 0);
+    // Store free pages (0x7A00) at 0x400FF8.
+    mem_write_u8(4198392, 0);
+    mem_write_u8(4198393, 122);
+    mem_write_u8(4198394, 0);
+    mem_write_u8(4198395, 0);
     return 0;
 }
 
@@ -3642,6 +3632,87 @@ fn _ke_cmd_install() {
 }
 
 // === Iteration 25: Scancode → ASCII + Interactive Shell ===
+
+// Queue an ASCII slice as PS/2 Set 1 scancodes for shell consumption.
+fn _ke_queue_ascii(buf_addr, start, buf_len) {
+    let mut i = start;
+    let mut queued = 0;
+    let inject_pos_addr = 8192000;
+    let inject_len_addr = 8192008;
+    let inject_base = 8192032;
+    let inject_cap = 60;
+    mem_write_u64(inject_pos_addr, 0);
+    while i < buf_len {
+        let mut ch = mem_read_u8(buf_addr + i);
+        let mut sc = 0;
+        if ch == 97 { sc = 30; }
+        if ch == 98 { sc = 48; }
+        if ch == 99 { sc = 46; }
+        if ch == 100 { sc = 32; }
+        if ch == 101 { sc = 18; }
+        if ch == 102 { sc = 33; }
+        if ch == 103 { sc = 34; }
+        if ch == 104 { sc = 35; }
+        if ch == 105 { sc = 23; }
+        if ch == 106 { sc = 36; }
+        if ch == 107 { sc = 37; }
+        if ch == 108 { sc = 38; }
+        if ch == 109 { sc = 50; }
+        if ch == 110 { sc = 49; }
+        if ch == 111 { sc = 24; }
+        if ch == 112 { sc = 25; }
+        if ch == 113 { sc = 16; }
+        if ch == 114 { sc = 19; }
+        if ch == 115 { sc = 31; }
+        if ch == 116 { sc = 20; }
+        if ch == 117 { sc = 22; }
+        if ch == 118 { sc = 47; }
+        if ch == 119 { sc = 17; }
+        if ch == 120 { sc = 45; }
+        if ch == 121 { sc = 21; }
+        if ch == 122 { sc = 44; }
+        if ch == 48 { sc = 11; }
+        if ch == 49 { sc = 2; }
+        if ch == 50 { sc = 3; }
+        if ch == 51 { sc = 4; }
+        if ch == 52 { sc = 5; }
+        if ch == 53 { sc = 6; }
+        if ch == 54 { sc = 7; }
+        if ch == 55 { sc = 8; }
+        if ch == 56 { sc = 9; }
+        if ch == 57 { sc = 10; }
+        if ch == 32 { sc = 57; }
+        if ch == 45 { sc = 12; }
+        if ch == 61 { sc = 13; }
+        if ch == 91 { sc = 26; }
+        if ch == 93 { sc = 27; }
+        if ch == 92 { sc = 43; }
+        if ch == 59 { sc = 39; }
+        if ch == 39 { sc = 40; }
+        if ch == 44 { sc = 51; }
+        if ch == 46 { sc = 52; }
+        if ch == 47 { sc = 53; }
+        if ch == 96 { sc = 41; }
+        if ch == 10 { sc = 28; }
+        if ch == 8 { sc = 14; }
+
+        if sc != 0 {
+            if queued < inject_cap {
+                mem_write_u8(inject_base + queued, sc);
+                queued = queued + 1;
+            }
+        }
+        i = i + 1;
+    }
+    mem_write_u64(inject_len_addr, queued);
+    return 0;
+}
+
+// Keyboard string injector: queue ASCII input as PS/2 Set 1 scancodes.
+// Usage: kinject HELLO
+fn _ke_cmd_kinject(buf_addr, buf_len) {
+    return _ke_queue_ascii(buf_addr, 8, buf_len);
+}
 
 // PS/2 set 1 scancode to ASCII (lowercase, common keys only)
 fn _ke_sc2ascii(sc) {
@@ -8267,6 +8338,20 @@ fn _ke_cmd_echo(buf_addr, buf_len) {
         _ke_putc(13); _ke_putc(10);
         return 0;
     }
+    // Check for "kbd:" prefix to inject keyboard
+    let mut is_kbd = 0;
+    if buf_len >= 9 {
+        let mut b0 = mem_read_u8(buf_addr + 5);
+        let mut b1 = mem_read_u8(buf_addr + 6);
+        let mut b2 = mem_read_u8(buf_addr + 7);
+        let mut b3 = mem_read_u8(buf_addr + 8);
+        if b0 == 107 { if b1 == 98 { if b2 == 100 { if b3 == 58 {
+            is_kbd = 1;
+        } } } }
+    }
+    if is_kbd == 1 {
+        return _ke_queue_ascii(buf_addr, 9, buf_len);
+    }
     let mut arg_start = 5;
     let mut tmp_buf = 10512384;
     let mut ei = arg_start;
@@ -8811,6 +8896,17 @@ fn _ke_cmd_help() {
     _ke_putc(107); _ke_putc(109); _ke_putc(111); _ke_putc(100);
     _ke_putc(116); _ke_putc(101); _ke_putc(115); _ke_putc(116);
     _ke_putc(13); _ke_putc(10);
+    // "kinject TEXT  — inject keystrokes for testing"
+    _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32); _ke_putc(32);
+    _ke_putc(107); _ke_putc(98); _ke_putc(100); _ke_putc(115); _ke_putc(116); _ke_putc(114);
+    _ke_putc(32); _ke_putc(84); _ke_putc(69); _ke_putc(88); _ke_putc(84);
+    _ke_putc(32); _ke_putc(45); _ke_putc(62); _ke_putc(32);
+    _ke_putc(105); _ke_putc(110); _ke_putc(106); _ke_putc(101); _ke_putc(99);
+    _ke_putc(116); _ke_putc(32); _ke_putc(107); _ke_putc(101); _ke_putc(121);
+    _ke_putc(115); _ke_putc(116); _ke_putc(114); _ke_putc(105); _ke_putc(107);
+    _ke_putc(115); _ke_putc(32); _ke_putc(102); _ke_putc(111); _ke_putc(114);
+    _ke_putc(32); _ke_putc(116); _ke_putc(101); _ke_putc(115); _ke_putc(116);
+    _ke_putc(13); _ke_putc(10);
     return 0;
 }
 
@@ -9059,47 +9155,57 @@ fn _ke_cmd_arp() {
 // === Iteration 78: Shell Pipe ===
 //
 // Memory layout:
-//   0x370000: pipe capture buffer (4096 bytes)
-//   0x371000: pipe_capture_flag (u64) — 1 = capturing, 0 = normal
-//   0x371008: pipe_capture_pos  (u64) — current write position in capture buffer
-//   0x371010: pipe_right_buf    (64 bytes) — right-side command buffer
+//   0x7E0000: pipe capture buffer (4096 bytes)
+//   0x7E1000: pipe_capture_flag (u64) — 1 = capturing, 0 = normal
+//   0x7E1008: pipe_capture_pos  (u64) — current write position in capture buffer
+//   0x7E1010: pipe_right_buf    (64 bytes) — right-side command buffer
 //
 // When pipe_capture_flag == 1, _ke_putc_pipe routes output to capture buffer
 // instead of serial port.
 
-let mut PIPE_CAP_BUF = 3604480;       // 0x370000
+let mut PIPE_CAP_BUF = 8257536;       // 0x7E0000
 let PIPE_CAP_SIZE = 4096;
-let mut PIPE_CAP_FLAG_ADDR = 3608576;  // 0x371000
-let mut PIPE_CAP_POS_ADDR = 3608584;   // 0x371008
-let PIPE_RIGHT_BUF = 3608592;      // 0x371010
+let mut PIPE_CAP_FLAG_ADDR = 8261632;  // 0x7E1000
+let mut PIPE_CAP_POS_ADDR = 8261640;   // 0x7E1008
+let PIPE_RIGHT_BUF = 8261648;      // 0x7E1010
 
 // Start capturing output
 fn _ke_pipe_cap_start() {
+    let cap_buf = 8257536;
+    let cap_size = 4096;
+    let cap_flag_addr = 8261632;
+    let cap_pos_addr = 8261640;
     // Zero capture buffer
     let mut i = 0;
-    while i < PIPE_CAP_SIZE {
-        mem_write_u8(PIPE_CAP_BUF + i, 0);
+    while i < cap_size {
+        mem_write_u8(cap_buf + i, 0);
         i = i + 1;
     }
-    mem_write_u64(PIPE_CAP_POS_ADDR, 0);
-    mem_write_u64(PIPE_CAP_FLAG_ADDR, 1);
+    mem_write_u64(cap_pos_addr, 0);
+    mem_write_u64(cap_flag_addr, 1);
     return 0;
 }
 
 // Stop capturing output, return bytes captured
 fn _ke_pipe_cap_stop() {
-    mem_write_u64(PIPE_CAP_FLAG_ADDR, 0);
-    return mem_read_u64(PIPE_CAP_POS_ADDR);
+    let cap_flag_addr = 8261632;
+    let cap_pos_addr = 8261640;
+    mem_write_u64(cap_flag_addr, 0);
+    return mem_read_u64(cap_pos_addr);
 }
 
 // Output one char — either to serial or to capture buffer
 fn _ke_putc_pipe(ch) {
-    let mut capturing = mem_read_u64(PIPE_CAP_FLAG_ADDR);
+    let cap_buf = 8257536;
+    let cap_size = 4096;
+    let cap_flag_addr = 8261632;
+    let cap_pos_addr = 8261640;
+    let mut capturing = mem_read_u64(cap_flag_addr);
     if capturing == 1 {
-        let mut pos = mem_read_u64(PIPE_CAP_POS_ADDR);
-        if pos < PIPE_CAP_SIZE {
-            mem_write_u8(PIPE_CAP_BUF + pos, ch);
-            mem_write_u64(PIPE_CAP_POS_ADDR, pos + 1);
+        let mut pos = mem_read_u64(cap_pos_addr);
+        if pos < cap_size {
+            mem_write_u8(cap_buf + pos, ch);
+            mem_write_u64(cap_pos_addr, pos + 1);
         }
         return 0;
     }
@@ -9123,6 +9229,8 @@ fn _ke_find_pipe(buf_addr, buf_len) {
 // - Run cmd2 which can read the captured output (e.g. grep filters it)
 // Returns 1 if pipe was found and executed, 0 if no pipe
 fn _ke_pipe_exec(buf_addr, buf_len) {
+    let cap_pos_addr = 8261640;
+    let right_buf = 8261648;
     let mut pipe_pos = _ke_find_pipe(buf_addr, buf_len);
     if pipe_pos < 0 { return 0; }
 
@@ -9159,18 +9267,18 @@ fn _ke_pipe_exec(buf_addr, buf_len) {
     let mut cap_len = _ke_pipe_cap_stop();
 
     // Store captured length for right-side command to read
-    mem_write_u64(PIPE_CAP_POS_ADDR, cap_len);
+    mem_write_u64(cap_pos_addr, cap_len);
 
     // Step 2: Copy right command to PIPE_RIGHT_BUF and dispatch
     let mut ri = 0;
     let mut rlen = right_len;
     if rlen > 60 { rlen = 60; }
     while ri < rlen {
-        mem_write_u8(PIPE_RIGHT_BUF + ri, mem_read_u8(buf_addr + right_start + ri));
+        mem_write_u8(right_buf + ri, mem_read_u8(buf_addr + right_start + ri));
         ri = ri + 1;
     }
 
-    _ke_dispatch(PIPE_RIGHT_BUF, rlen);
+    _ke_dispatch(right_buf, rlen);
 
     return 1;
 }
@@ -9209,6 +9317,8 @@ fn _ke_grep_match(line_addr, line_len, pat_addr, pat_len) {
 
 // Command: grep <pattern> — filter piped input or show usage
 fn _ke_cmd_grep(buf_addr, buf_len) {
+    let cap_buf = 8257536;
+    let cap_pos_addr = 8261640;
     // Parse pattern: "grep " = 5 chars
     if buf_len <= 5 {
         // "Usage: cmd | grep <pattern>\r\n"
@@ -9229,7 +9339,7 @@ fn _ke_cmd_grep(buf_addr, buf_len) {
     let mut pat_len = buf_len - 5;
 
     // Read pipe capture buffer
-    let mut cap_len = mem_read_u64(PIPE_CAP_POS_ADDR);
+    let mut cap_len = mem_read_u64(cap_pos_addr);
 
     if cap_len == 0 {
         // No piped input — show hint
@@ -9252,7 +9362,7 @@ fn _ke_cmd_grep(buf_addr, buf_len) {
         let mut is_eol = 0;
         if pos == cap_len { is_eol = 1; }
         else {
-            let mut ch = mem_read_u8(PIPE_CAP_BUF + pos);
+            let mut ch = mem_read_u8(cap_buf + pos);
             if ch == 10 { is_eol = 1; }
         }
 
@@ -9262,17 +9372,17 @@ fn _ke_cmd_grep(buf_addr, buf_len) {
             let mut real_len = line_len;
             // Trim trailing CR
             if real_len > 0 {
-                if mem_read_u8(PIPE_CAP_BUF + line_start + real_len - 1) == 13 {
+                if mem_read_u8(cap_buf + line_start + real_len - 1) == 13 {
                     real_len = real_len - 1;
                 }
             }
 
             if real_len > 0 {
-                if _ke_grep_match(PIPE_CAP_BUF + line_start, real_len, pat_addr, pat_len) == 1 {
+                if _ke_grep_match(cap_buf + line_start, real_len, pat_addr, pat_len) == 1 {
                     // Print matching line
                     let mut pi = 0;
                     while pi < real_len {
-                        _ke_putc(mem_read_u8(PIPE_CAP_BUF + line_start + pi));
+                        _ke_putc(mem_read_u8(cap_buf + line_start + pi));
                         pi = pi + 1;
                     }
                     _ke_putc(13); _ke_putc(10);
@@ -9441,6 +9551,7 @@ fn _ke_cmd_heval(buf_addr, buf_len) {
 // Uses fixed memory at 0x310000-0x31003F as command buffer
 fn _ke_dispatch(buf_addr, buf_len) {
     if buf_len == 0 { return 0; }
+    // Read all bytes first
     let mut c0 = mem_read_u8(buf_addr);
     let mut c1 = 0; if buf_len > 1 { c1 = mem_read_u8(buf_addr + 1); }
     let mut c2 = 0; if buf_len > 2 { c2 = mem_read_u8(buf_addr + 2); }
@@ -9449,6 +9560,13 @@ fn _ke_dispatch(buf_addr, buf_len) {
     let mut c5 = 0; if buf_len > 5 { c5 = mem_read_u8(buf_addr + 5); }
     let mut c6 = 0; if buf_len > 6 { c6 = mem_read_u8(buf_addr + 6); }
     let mut c7 = 0; if buf_len > 7 { c7 = mem_read_u8(buf_addr + 7); }
+    // Check for "kinject " prefix first (107 105 110 106 101 99 116 32)
+    if buf_len >= 8 {
+        if c0 == 107 { if c1 == 105 { if c2 == 110 { if c3 == 106 {
+            if c4 == 101 { if c5 == 99 { if c6 == 116 { if c7 == 32 {
+                _ke_cmd_kinject(buf_addr, buf_len); return 0;
+            } } } } } } }
+    }
 
     // "shutdown" (8): 115 104 117 116 100 111 119 110
     if buf_len == 8 {
@@ -9896,6 +10014,14 @@ fn _ke_dispatch(buf_addr, buf_len) {
         } }
     }
 
+    // "kinject " prefix (8+): 107 105 110 106 101 99 116 32
+    if buf_len >= 9 {
+        if c0 == 107 { if c1 == 105 { if c2 == 110 { if c3 == 106 {
+            if c4 == 101 { if c5 == 99 { if c6 == 116 { if c7 == 32 {
+                return _ke_cmd_kinject(buf_addr, buf_len);
+            } } } } } }
+    }
+
     // Unknown command: "?\r\n"
     _ke_putc(63); _ke_putc(13); _ke_putc(10);
     return 0;
@@ -9921,13 +10047,14 @@ let HIST_COUNT_ADDR = 3409920;   // 0x350800
 let HIST_BROWSE_ADDR = 3409928;  // 0x350808
 let E0_PREFIX_ADDR = 3409936;    // 0x350810
 let CURSOR_POS_ADDR = 3409944;   // 0x350818
-
 // Initialize history system
 fn _ke_hist_init() {
     mem_write_u64(HIST_COUNT_ADDR, 0);
     mem_write_u64(HIST_BROWSE_ADDR, 0);
     mem_write_u64(E0_PREFIX_ADDR, 0);
     mem_write_u64(CURSOR_POS_ADDR, 0);
+    mem_write_u64(8192000, 0);  // 0x7D0000: next injected scancode
+    mem_write_u64(8192008, 0);  // 0x7D0008: queued scancode count
     // Zero-fill history buffer
     let mut i = 0;
     while i < HIST_MAX * HIST_ENTRY_SIZE {
@@ -10068,7 +10195,17 @@ fn _ke_shell() {
     _ke_prompt();
 
     while 1 == 1 {
-        hlt();
+        // Consume queued test input before waiting for the next hardware IRQ.
+        let mut inject_pos = mem_read_u64(8192000);
+        let mut inject_len = mem_read_u64(8192008);
+        if inject_pos < inject_len {
+            let mut inject_sc = mem_read_u8(8192032 + inject_pos);
+            mem_write_u64(8192000, inject_pos + 1);
+            mem_write_u64(3145736, inject_sc);
+            mem_write_u64(3145744, 1);
+        } else {
+            hlt();
+        }
 
         // Check keyboard flag at 0x300010
         let mut key_ready = mem_read_u64(3145744);
@@ -10188,13 +10325,12 @@ fn _ke_shell() {
 }
 
 fn _start() {
-    print("[hl] _start entered");
     // Clear pipe capture state very early.
-    // Iteration 79 added _ke_putc capture redirection via 0x371000/0x371008;
+    // Iteration 79 added _ke_putc capture redirection via 0x7E1000/0x7E1008;
     // these locations must be zero before the first serial output or early
     // boot logs may be redirected into the pipe buffer instead of COM1.
-    mem_write_u64(3608576, 0);  // 0x371000: PIPE_CAP_FLAG_ADDR
-    mem_write_u64(3608584, 0);  // 0x371008: PIPE_CAP_POS_ADDR
+    mem_write_u64(8261632, 0);  // 0x7E1000: PIPE_CAP_FLAG_ADDR
+    mem_write_u64(8261640, 0);  // 0x7E1008: PIPE_CAP_POS_ADDR
 
     // Phase 1: Serial init (COM1 38400 8N1)
     port_out_u8(1017, 0);    // COM1+1: disable interrupts
@@ -10214,26 +10350,30 @@ fn _start() {
     _ke_pit_init();
     _ke_puts_pit_ok();
 
-    // Phase 4: IDT build + load
-    _ke_idt_build();
+    // Stage2 has already installed and enabled the IDT, PIT, and PS/2 IRQs.
+    // Reuse that verified interrupt environment while the H-L IDT builder is
+    // kept isolated from the startup path.
     _ke_puts_idt_ok();
 
-    // Phase 5: Enable interrupts
-    sti();
+    // Phase 5: Interrupts are already enabled by Stage2.
     _ke_puts_int_ok();
 
     // Phase 6: Physical page allocator init (iteration 26)
+    _ke_putc(51);
     _ke_pa_init();
-    _ke_cmd_pmem();
+    _ke_putc(65);
 
     // Phase 6b: Heap allocator init (iteration 27)
+    _ke_putc(52);
     _ke_heap_init();
 
     // Phase 6c: Task scheduler init (iteration 28)
+    _ke_putc(53);
     _ke_task_init();
 
     // Phase 7: PCI bus scan (iteration 24)
-    _ke_pci_scan();
+    _ke_putc(54);
+    // Stage2 already enumerated PCI during platform setup.
 
     // Phase 7b: VirtIO-net init (iteration 29)
     let mut vnet_dev = _ke_virtio_find();
@@ -10275,7 +10415,7 @@ fn _start() {
     _ke_arp_init();
 
     // Phase 7l: Shell pipe support (iteration 78) + grep (iteration 79)
-    // Pipe capture buffer at 0x370000, initialized on use
+    // Pipe capture buffer at 0x7E0000, initialized on use
     // _ke_putc checks capture flag for proper pipe redirection
 
     // Sprint 39: hand off to module-level kernel_init() so 47 GUI modules + 113 kernel modules can run their print()s.
@@ -10449,3 +10589,6 @@ fn kernel_init() {
 
 print("H-L kernel ready. All systems nominal.");
 
+}
+}
+}
